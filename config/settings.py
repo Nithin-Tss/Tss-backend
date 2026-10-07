@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'tenancy',
     'customers',
     'catalog',
+    'inventory',
 ]
 
 AUTH_USER_MODEL = "identity.User"
