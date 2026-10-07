@@ -42,6 +42,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'identity',
     'tenancy',
+    'customers',
+    'catalog',
 ]
 
 AUTH_USER_MODEL = "identity.User"
