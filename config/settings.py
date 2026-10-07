@@ -45,6 +45,13 @@ INSTALLED_APPS = [
     'customers',
     'catalog',
     'inventory',
+    'purchasing',
+    'commerce',
+    'payments',
+    'orders',
+    'delivery',
+
+    'fulfillment',
 ]
 
 AUTH_USER_MODEL = "identity.User"
