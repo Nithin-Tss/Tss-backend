@@ -157,7 +157,7 @@ MAILERS = {
 # Allow the Next.js frontend to call the API from the browser
 CORS_ALLOWED_ORIGINS = os.getenv(
     'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:3000',
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173',
 ).split(',')
 CORS_ALLOW_HEADERS = [
     'accept',
