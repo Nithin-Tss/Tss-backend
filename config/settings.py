@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'gift_cards',
     'fulfillment',
     'themes',
+    
 ]
 
 AUTH_USER_MODEL = "identity.User"
