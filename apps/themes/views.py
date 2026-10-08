@@ -14,6 +14,7 @@ from apps.catalog.services import ACTIVE
 from apps.core.permissions import IsStoreMember
 from apps.tenancy.models import Store
 
+from .customizer import read_settings, save_settings, validate_settings
 from .rendering import render_page, shop_url
 from .schemas import public_schema, resolve, validate_custom_data
 from .services import (
@@ -86,6 +87,24 @@ class ThemeSettingsView(StoreThemeView):
         store_theme.custom_data = validate_custom_data(request.data)
         store_theme.save(update_fields=["custom_data", "updated_at"])
         return Response(resolve(store_theme.custom_data), status=status.HTTP_200_OK)
+
+
+class ThemeCustomizerView(StoreThemeView):
+    """
+    GET  /api/v1/themes/customizer/   current colors, fonts and button radius
+    POST /api/v1/themes/customizer/   save any subset of them into theme_data
+    """
+
+    def get(self, request):
+        return Response(read_settings(self.store_theme().theme))
+
+    def post(self, request):
+        clean, errors = validate_settings(request.data)
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+        theme = self.store_theme().theme
+        save_settings(theme, clean)
+        return Response(read_settings(theme))
 
 
 class ThemeSchemaView(APIView):
