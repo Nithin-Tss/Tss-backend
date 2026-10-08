@@ -1,6 +1,3 @@
-from django.shortcuts import render
-
-# Create your views here.
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -17,7 +14,13 @@ class SignupView(APIView):
             return Response(
                 {
                     "message": "Signup validation successful.",
-                    "data": serializer.validated_data,
+                    "data": {
+                        "firstName": serializer.validated_data["firstName"],
+                        "lastName": serializer.validated_data["lastName"],
+                        "email": serializer.validated_data["email"],
+                        "mobileNumber": serializer.validated_data["mobileNumber"],
+                        "agreeTerms": serializer.validated_data["agreeTerms"],
+                    },
                 },
                 status=status.HTTP_200_OK,
             )
@@ -37,7 +40,10 @@ class LoginView(APIView):
             return Response(
                 {
                     "message": "Login validation successful.",
-                    "data": serializer.validated_data,
+                    "data": {
+                        "email": serializer.validated_data["email"],
+                        "rememberMe": serializer.validated_data["rememberMe"],
+                    },
                 },
                 status=status.HTTP_200_OK,
             )

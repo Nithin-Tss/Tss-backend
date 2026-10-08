@@ -1,7 +1,14 @@
 asgiref==3.12.1
-Django==6.1.2
+babel==2.18.0
 django-cors-headers==4.9.0
+Django==6.1.2
 djangorestframework==3.18.3
+importlib_resources==7.1.0
+MarkupSafe==3.0.4
 psycopg2-binary==2.9.13
+python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
+python-liquid==2.3.4
+pytz==2026.5
+six==1.17.0
 sqlparse==0.6.0
