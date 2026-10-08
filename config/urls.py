@@ -22,6 +22,10 @@ urlpatterns = [
     path("api/v1/auth/", include("apps.identity.urls")),
     path("api/v1/stores/", include("apps.tenancy.urls")),
     path("api/v1/catalog/", include("apps.catalog.urls")),
+    path("api/v1/customers/", include("apps.customers.urls")),
+    path("api/v1/orders/", include("apps.orders.urls")),
+    path("api/v1/inventory/", include("apps.inventory.urls")),
+    path("api/v1/discounts/", include("apps.discounts.urls")),
     path("api/v1/themes/", include("apps.themes.urls")),
     # Public storefronts, rendered from each store's theme
     path("s/", include("apps.themes.storefront_urls")),

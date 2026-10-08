@@ -19,14 +19,17 @@ class OrderItemSerializer(serializers.ModelSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
+    channel = serializers.SerializerMethodField()
+    items_count = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
         fields = [
-            "id", "order_number", "customer", "customer_name", "sales_channel", "currency_code",
+            "id", "order_number", "customer", "customer_name", "sales_channel", "channel", "currency_code",
             "subtotal", "discount_amount", "tax_amount", "shipping_amount", "total",
             "status", "fulfillment_status", "delivery_status", "delivery_method",
-            "items", "created_at", "updated_at",
+            "items", "items_count", "tags", "created_at", "updated_at",
         ]
         # Totals and statuses are calculated by the system, never typed in.
         read_only_fields = [f for f in fields if f != "delivery_method"]
@@ -38,7 +41,16 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, order):
         c = order.customer
-        return " ".join(filter(None, [c.first_name, c.last_name])) or c.email if c else ""
+        return " ".join(filter(None, [c.first_name, c.last_name])) or (c.email if c else "")
+
+    def get_channel(self, order):
+        return order.sales_channel.name if order.sales_channel else "Online Store"
+
+    def get_items_count(self, order):
+        return sum(i.quantity for i in order.items.all() if not i.is_deleted)
+
+    def get_tags(self, order):
+        return getattr(order, "tags", []) if hasattr(order, "tags") else []
 
 
 class OrderLineInputSerializer(StoreScopedSerializerMixin, serializers.Serializer):
@@ -81,14 +93,19 @@ class DraftOrderDetailSerializer(StoreScopedSerializerMixin, serializers.ModelSe
 
 
 class DraftOrderSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
-    details = DraftOrderDetailSerializer(many=True)
+    details = DraftOrderDetailSerializer(many=True, required=False)
     created_by = serializers.CharField(source="created_by_user.email", read_only=True)
+    customer_name = serializers.SerializerMethodField()
 
     class Meta:
         model = DraftOrder
         fields = [
-            "id", "draft_number", "customer", "po_number", "status", "total", "currency_code",
+            "id", "draft_number", "customer", "customer_name", "po_number", "status", "total", "currency_code",
             "order", "created_by", "details", "created_at", "updated_at",
         ]
         read_only_fields = ["draft_number", "status", "total", "order", "created_by"]
         extra_kwargs = {"currency_code": {"default": "INR"}}
+
+    def get_customer_name(self, draft):
+        c = draft.customer
+        return " ".join(filter(None, [c.first_name, c.last_name])) or (c.email if c else "")

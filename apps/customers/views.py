@@ -10,7 +10,10 @@ from .serializers import CustomerAddressSerializer, CustomerSerializer
 class CustomerViewSet(StoreScopedViewSet):
     """/api/v1/customers/  ?search=name or email"""
 
-    queryset = Customer.objects.prefetch_related("addresses").order_by("-created_at")
+    queryset = (
+        Customer.objects.prefetch_related("addresses", "orders")
+        .order_by("-created_at")
+    )
     serializer_class = CustomerSerializer
 
     def get_queryset(self):
