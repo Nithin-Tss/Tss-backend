@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }}{% if page_title != shop.name %} · {{ shop.name }}{% endif %}</title>
+  {% render 'styles', settings: settings %}
+</head>
+<body class="template-{{ template }}">
+  {% if settings.announcement != blank %}
+    <div class="announcement">{{ settings.announcement }}</div>
+  {% endif %}
+
+  {% render 'header', shop: shop, collections: collections %}
+
+  <main id="main">
+    {{ content_for_layout }}
+  </main>
+
+  {% render 'footer', shop: shop %}
+</body>
+</html>

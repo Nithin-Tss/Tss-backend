@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
+    'apps.core',
     'apps.identity',
     'apps.tenancy',
     'apps.customers',
@@ -165,3 +166,15 @@ CORS_ALLOW_HEADERS = [
     'content-type',
     'x-store-id',
 ]
+
+
+# API: every endpoint needs a signed-in user unless the view says otherwise.
+# Store-owned endpoints also need the X-Store-Id header (see apps/core/permissions.py).
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'apps.core.authentication.BearerTokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}

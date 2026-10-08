@@ -1,0 +1,100 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section">
+  <div class="page-width product">
+    <div class="product__media">
+      <div class="product__main-image ratio-{{ s.image_ratio }}">
+        {%- if product.featured_image -%}
+          <img src="{{ product.featured_image }}" alt="{{ product.title }}" data-main-image>
+        {%- else -%}
+          <div class="placeholder" style="width:100%;height:100%">No image</div>
+        {%- endif -%}
+      </div>
+
+      {%- if product.images.size > 1 -%}
+        <div class="product__thumbs">
+          {%- for image in product.images -%}
+            <button class="product__thumb" type="button" data-src="{{ image }}"
+              aria-label="Show image {{ forloop.index }}" aria-current="{% if forloop.first %}true{% else %}false{% endif %}">
+              <img src="{{ image }}" alt="" loading="lazy">
+            </button>
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+    </div>
+
+    <div class="product__info">
+      {%- if s.show_vendor and product.vendor != blank -%}
+        <p class="product__meta">{{ product.vendor }}</p>
+      {%- endif -%}
+      <h1>{{ product.title }}</h1>
+      <div class="product__price" data-price>{% render 'price', product: product %}</div>
+
+      <form class="product__form" data-product-form>
+        {%- if product.variants.size > 1 -%}
+          <label class="field">
+            <span>Option</span>
+            <select name="variant" data-variant>
+              {%- for variant in product.variants -%}
+                <option value="{{ variant.id }}" data-price="{{ variant.price | money }}" data-sku="{{ variant.sku }}">
+                  {{ variant.sku | default: 'Option' }}{% if variant.sku == blank %} {{ forloop.index }}{% endif %} — {{ variant.price | money }}
+                </option>
+              {%- endfor -%}
+            </select>
+          </label>
+        {%- elsif product.variants.size == 1 -%}
+          <input type="hidden" name="variant" value="{{ product.variants.first.id }}">
+        {%- endif -%}
+
+        {%- if s.show_quantity -%}
+          <label class="field">
+            <span>Quantity</span>
+            <input type="number" name="quantity" value="1" min="1" max="99">
+          </label>
+        {%- endif -%}
+
+        <button class="button" type="submit"{% if product.variants.size == 0 %} disabled{% endif %}>Add to cart</button>
+        <p class="product__notice" role="status" data-notice></p>
+      </form>
+
+      {%- if s.show_sku and product.variants.first.sku != blank -%}
+        <p class="product__meta">SKU: <span data-sku>{{ product.variants.first.sku }}</span></p>
+      {%- endif -%}
+
+      {%- if product.description != blank -%}
+        <div class="product__description">{{ product.description }}</div>
+      {%- endif -%}
+    </div>
+  </div>
+</section>
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var main = root.querySelector("[data-main-image]");
+
+    root.querySelectorAll(".product__thumb").forEach(function (thumb) {
+      thumb.addEventListener("click", function () {
+        if (main) main.src = thumb.dataset.src;
+        root.querySelectorAll(".product__thumb").forEach(function (t) {
+          t.setAttribute("aria-current", t === thumb ? "true" : "false");
+        });
+      });
+    });
+
+    var select = root.querySelector("[data-variant]");
+    if (select) {
+      select.addEventListener("change", function () {
+        var option = select.selectedOptions[0];
+        root.querySelector("[data-price]").innerHTML = '<span class="price"></span>';
+        root.querySelector("[data-price] .price").textContent = option.dataset.price;
+        var sku = root.querySelector("[data-sku]");
+        if (sku) sku.textContent = option.dataset.sku;
+      });
+    }
+
+    // The cart (commerce app) has no API yet, so the button only explains that.
+    root.querySelector("[data-product-form]").addEventListener("submit", function (event) {
+      event.preventDefault();
+      root.querySelector("[data-notice]").textContent = "Cart and checkout are coming soon.";
+    });
+  })();
+</script>

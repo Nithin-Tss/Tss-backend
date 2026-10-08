@@ -1,0 +1,8 @@
+{%- comment -%} Usage: {% render 'price', product: product %} {%- endcomment -%}
+{%- if product.price == nil -%}
+  <span class="price price--muted">Price on request</span>
+{%- elsif product.price_varies -%}
+  <span class="price">From {{ product.price | money }}</span>
+{%- else -%}
+  <span class="price">{{ product.price | money }}</span>
+{%- endif -%}

@@ -1,0 +1,9 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section">
+  <div class="page-width">
+    <div class="rich-text align-{{ s.text_alignment }}">
+      {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+      {%- if s.text != blank -%}<p>{{ s.text }}</p>{%- endif -%}
+    </div>
+  </div>
+</section>

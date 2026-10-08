@@ -1,0 +1,49 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section carousel" data-autoplay="{{ s.autoplay }}">
+  <div class="page-width">
+    <div class="carousel__header">
+      {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+      {%- if section.products.size > 2 -%}
+        <div class="carousel__controls">
+          <button class="carousel__btn" type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button>
+          <button class="carousel__btn" type="button" data-dir="1" aria-label="Scroll right">&#8250;</button>
+        </div>
+      {%- endif -%}
+    </div>
+
+    {%- if section.products.size == 0 -%}
+      <div class="empty-state">Products you publish will appear here.</div>
+    {%- else -%}
+      <div class="carousel__track" tabindex="0" aria-label="{{ s.heading | default: 'Products' }}">
+        {%- for product in section.products -%}
+          {% render 'product-card', product: product, show_vendor: s.show_vendor %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+  </div>
+</section>
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var track = root.querySelector(".carousel__track");
+    if (!track) return;
+
+    function step(dir) {
+      var card = track.firstElementChild;
+      var width = card ? card.getBoundingClientRect().width + 24 : track.clientWidth;
+      var atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
+      if (dir > 0 && atEnd) track.scrollTo({ left: 0, behavior: "smooth" });
+      else track.scrollBy({ left: dir * width, behavior: "smooth" });
+    }
+
+    root.querySelectorAll(".carousel__btn").forEach(function (btn) {
+      btn.addEventListener("click", function () { step(Number(btn.dataset.dir)); });
+    });
+
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (root.dataset.autoplay === "true" && !reduce) {
+      var timer = setInterval(function () { step(1); }, 4000);
+      root.addEventListener("mouseenter", function () { clearInterval(timer); });
+    }
+  })();
+</script>

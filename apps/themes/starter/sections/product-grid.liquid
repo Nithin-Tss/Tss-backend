@@ -1,0 +1,16 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section">
+  <div class="page-width">
+    {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+
+    {%- if section.products.size == 0 -%}
+      <div class="empty-state">Products you publish will appear here.</div>
+    {%- else -%}
+      <div class="product-grid product-grid--{{ s.columns }}">
+        {%- for product in section.products -%}
+          {% render 'product-card', product: product, show_vendor: s.show_vendor %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+  </div>
+</section>

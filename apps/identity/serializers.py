@@ -1,4 +1,10 @@
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 from rest_framework import serializers
+
+User = get_user_model()
 
 
 class SignupSerializer(serializers.Serializer):
@@ -57,7 +63,14 @@ class SignupSerializer(serializers.Serializer):
         return value
 
     def validate_email(self, value):
-        return value.strip().lower()
+        value = value.strip().lower()
+
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError(
+                "An account with this email already exists."
+            )
+
+        return value
 
     def validate_mobileNumber(self, value):
         value = value.strip()
@@ -83,7 +96,35 @@ class SignupSerializer(serializers.Serializer):
                 "confirmPassword": "Passwords do not match."
             })
 
+        candidate = User(
+            email=data["email"],
+            first_name=data["firstName"],
+            last_name=data["lastName"],
+        )
+
+        try:
+            validate_password(data["password"], user=candidate)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({
+                "password": error.messages
+            })
+
         return data
+
+    def create(self, validated_data):
+        try:
+            return User.objects.create_user(
+                email=validated_data["email"],
+                password=validated_data["password"],
+                first_name=validated_data["firstName"],
+                last_name=validated_data["lastName"],
+                phone=validated_data["mobileNumber"],
+            )
+        except IntegrityError:
+            # Two signups with the same email at the same moment.
+            raise serializers.ValidationError({
+                "email": "An account with this email already exists."
+            })
 
 
 class LoginSerializer(serializers.Serializer):
@@ -103,4 +144,19 @@ class LoginSerializer(serializers.Serializer):
     )
 
     def validate_email(self, value):
-        return value.strip().lower()    
+        return value.strip().lower()
+
+    def validate(self, data):
+        user = authenticate(
+            self.context.get("request"),
+            username=data["email"],
+            password=data["password"],
+        )
+
+        if user is None:
+            raise serializers.ValidationError(
+                "Invalid email or password."
+            )
+
+        data["user"] = user
+        return data

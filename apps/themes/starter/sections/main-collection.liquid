@@ -1,0 +1,16 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section">
+  <div class="page-width">
+    <h1 class="section-heading">{{ collection.name }}</h1>
+
+    {%- if collection.products.size == 0 -%}
+      <div class="empty-state">No products in this collection yet.</div>
+    {%- else -%}
+      <div class="product-grid product-grid--{{ s.columns }}">
+        {%- for product in collection.products -%}
+          {% render 'product-card', product: product, show_vendor: s.show_vendor %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+  </div>
+</section>

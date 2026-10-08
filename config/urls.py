@@ -20,5 +20,9 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/v1/auth/", include("apps.identity.urls")),
+    path("api/v1/stores/", include("apps.tenancy.urls")),
+    path("api/v1/catalog/", include("apps.catalog.urls")),
     path("api/v1/themes/", include("apps.themes.urls")),
+    # Public storefronts, rendered from each store's theme
+    path("s/", include("apps.themes.storefront_urls")),
 ]

@@ -1,0 +1,14 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="hero hero--{{ s.height }}{% if s.image_url != blank %} hero--image{% else %} placeholder{% endif %}">
+  {%- if s.image_url != blank -%}
+    <img src="{{ s.image_url }}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">
+    <div class="hero__overlay" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }}"></div>
+  {%- endif -%}
+  <div class="page-width hero__content align-{{ s.text_alignment }}">
+    {%- if s.heading != blank -%}<h1>{{ s.heading }}</h1>{%- endif -%}
+    {%- if s.subheading != blank -%}<p>{{ s.subheading }}</p>{%- endif -%}
+    {%- if s.button_label != blank -%}
+      <a class="button" href="{{ s.button_link | link }}">{{ s.button_label }}</a>
+    {%- endif -%}
+  </div>
+</section>

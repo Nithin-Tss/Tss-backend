@@ -1,0 +1,74 @@
+{%- assign s = section.settings -%}
+{%- if section.blocks.size == 0 -%}
+  <section class="section"><div class="page-width"><div class="empty-state">Add slides to this slideshow.</div></div></section>
+{%- else -%}
+<section id="section-{{ section.id }}" class="slideshow" aria-roledescription="carousel" aria-label="Slideshow"
+  data-autoplay="{{ s.autoplay }}" data-interval="{{ s.interval }}">
+  <div class="slideshow__track">
+    {%- for block in section.blocks -%}
+      {%- assign b = block.settings -%}
+      <div class="slideshow__slide hero hero--{{ s.height }}{% if b.image_url != blank %} hero--image{% else %} placeholder{% endif %}"
+        role="group" aria-roledescription="slide" aria-label="{{ forloop.index }} of {{ forloop.length }}">
+        {%- if b.image_url != blank -%}
+          <img src="{{ b.image_url }}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"{% unless forloop.first %} loading="lazy"{% endunless %}>
+          <div class="hero__overlay" style="opacity:.3"></div>
+        {%- endif -%}
+        <div class="page-width hero__content align-{{ b.text_alignment }}">
+          {%- if b.heading != blank -%}<h1>{{ b.heading }}</h1>{%- endif -%}
+          {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
+          {%- if b.button_label != blank -%}
+            <a class="button" href="{{ b.button_link | link }}">{{ b.button_label }}</a>
+          {%- endif -%}
+        </div>
+      </div>
+    {%- endfor -%}
+  </div>
+
+  {%- if section.blocks.size > 1 -%}
+    <button class="slideshow__arrow slideshow__arrow--prev" type="button" aria-label="Previous slide">&#8249;</button>
+    <button class="slideshow__arrow slideshow__arrow--next" type="button" aria-label="Next slide">&#8250;</button>
+    <div class="slideshow__dots">
+      {%- for block in section.blocks -%}
+        <button class="slideshow__dot" type="button" aria-label="Go to slide {{ forloop.index }}"></button>
+      {%- endfor -%}
+    </div>
+  {%- endif -%}
+</section>
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var track = root.querySelector(".slideshow__track");
+    var dots = root.querySelectorAll(".slideshow__dot");
+    var count = track.children.length;
+    var index = 0;
+    var timer = null;
+
+    function go(i) {
+      index = (i + count) % count;
+      track.style.transform = "translateX(" + (-100 * index) + "%)";
+      dots.forEach(function (d, n) { d.setAttribute("aria-current", n === index ? "true" : "false"); });
+    }
+
+    function start() {
+      var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (root.dataset.autoplay !== "true" || count < 2 || reduce) return;
+      stop();
+      timer = setInterval(function () { go(index + 1); }, Number(root.dataset.interval) * 1000);
+    }
+
+    function stop() { if (timer) clearInterval(timer); timer = null; }
+
+    var prev = root.querySelector(".slideshow__arrow--prev");
+    var next = root.querySelector(".slideshow__arrow--next");
+    if (prev) prev.addEventListener("click", function () { go(index - 1); start(); });
+    if (next) next.addEventListener("click", function () { go(index + 1); start(); });
+    dots.forEach(function (d, n) { d.addEventListener("click", function () { go(n); start(); }); });
+    root.addEventListener("mouseenter", stop);
+    root.addEventListener("mouseleave", start);
+    root.addEventListener("focusin", stop);
+
+    go(0);
+    start();
+  })();
+</script>
+{%- endif -%}

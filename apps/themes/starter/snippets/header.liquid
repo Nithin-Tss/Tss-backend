@@ -1,0 +1,12 @@
+<header class="site-header">
+  <div class="page-width site-header__inner">
+    <a class="site-header__logo" href="{{ shop.url }}/">{{ shop.name }}</a>
+    <nav class="site-header__nav" aria-label="Main">
+      <a href="{{ shop.url }}/">Home</a>
+      <a href="{{ shop.url }}/collections/all">Shop all</a>
+      {% for collection in collections limit: 4 %}
+        <a href="{{ collection.url }}">{{ collection.name }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
