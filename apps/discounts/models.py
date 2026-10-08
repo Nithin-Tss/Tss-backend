@@ -2,9 +2,9 @@ import uuid
 
 from django.db import models
 
-from catalog.models import Product
-from orders.models import Order
-from tenancy.models import Store
+from apps.catalog.models import Product
+from apps.orders.models import Order
+from apps.tenancy.models import Store
 
 
 class Discount(models.Model):

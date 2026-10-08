@@ -2,9 +2,9 @@ import uuid
 
 from django.db import models
 
-from catalog.models import Product, ProductVariant
-from customers.models import Customer
-from tenancy.models import Store
+from apps.catalog.models import Product, ProductVariant
+from apps.customers.models import Customer
+from apps.tenancy.models import Store
 
 
 class Wishlist(models.Model):

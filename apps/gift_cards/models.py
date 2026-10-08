@@ -2,12 +2,12 @@ import uuid
 
 from django.db import models
 
-from commerce.models import Checkout
-from customers.models import Customer
-from orders.models import Order
-from payments.models import Payment
-from tenancy.models import Store
-from identity.models import User
+from apps.commerce.models import Checkout
+from apps.customers.models import Customer
+from apps.orders.models import Order
+from apps.payments.models import Payment
+from apps.tenancy.models import Store
+from apps.identity.models import User
 
 
 class GiftCard(models.Model):
