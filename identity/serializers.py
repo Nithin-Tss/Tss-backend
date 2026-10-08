@@ -103,4 +103,4 @@ class LoginSerializer(serializers.Serializer):
     )
 
     def validate_email(self, value):
-        return value.strip().lower()
+        return value.strip().lower()    
