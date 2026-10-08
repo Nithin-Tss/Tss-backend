@@ -1,6 +1,6 @@
 """
 URL configuration for config project.
-
+ 
 The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/6.1/topics/http/urls/
 Examples:
@@ -16,13 +16,9 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
-
+ 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/v1/auth/", include("apps.identity.urls")),
-    path("api/v1/stores/", include("apps.tenancy.urls")),
-    path("api/v1/catalog/", include("apps.catalog.urls")),
     path("api/v1/themes/", include("apps.themes.urls")),
-    # Public storefronts, rendered from each store's theme
-    path("s/", include("apps.themes.storefront_urls")),
 ]
