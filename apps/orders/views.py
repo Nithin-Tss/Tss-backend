@@ -30,7 +30,11 @@ class OrderViewSet(
     Orders are never deleted - cancel them instead.
     """
 
-    queryset = Order.objects.select_related("customer").prefetch_related("items").order_by("-created_at")
+    queryset = (
+        Order.objects.select_related("customer", "sales_channel")
+        .prefetch_related("items")
+        .order_by("-created_at")
+    )
     serializer_class = OrderSerializer
     http_method_names = ["get", "post", "patch", "head", "options"]
 
@@ -65,7 +69,11 @@ class DraftOrderViewSet(StoreScopedViewSet):
     POST /api/v1/orders/drafts/<id>/complete/    turn the draft into a real order
     """
 
-    queryset = DraftOrder.objects.prefetch_related("details").select_related("created_by_user").order_by("-created_at")
+    queryset = (
+        DraftOrder.objects.prefetch_related("details")
+        .select_related("created_by_user", "customer")
+        .order_by("-created_at")
+    )
     serializer_class = DraftOrderSerializer
 
     def _save_details(self, draft, details):
