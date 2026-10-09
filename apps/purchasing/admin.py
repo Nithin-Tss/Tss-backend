@@ -1,6 +1,7 @@
 from django.contrib import admin
 from .models import PurchaseOrder, PurchaseOrderItem
 
-# Register your models here.
+
+# Registering models
 admin.site.register(PurchaseOrder)
 admin.site.register(PurchaseOrderItem)

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import ( Location, InventoryItem, Transfer, TransferItem, )
 
-# Register your models here.
+# Registering models
 admin.site.register(Location) 
 admin.site.register(InventoryItem)
 admin.site.register(Transfer) 

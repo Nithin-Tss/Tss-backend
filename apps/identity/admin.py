@@ -5,7 +5,7 @@ from django.contrib.auth.forms import AdminUserCreationForm, UserChangeForm
 
 from .models import User, normalize_email
 
-
+# Registering models
 class UniqueEmailMixin:
     """Emails are unique regardless of letter case."""
 
