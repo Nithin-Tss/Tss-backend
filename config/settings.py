@@ -32,15 +32,29 @@ SECRET_KEY = (
     or 'django-insecure-secret-key'
 )
 
+
+def env_bool(name, default=False):
+    return os.getenv(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def env_list(name, default=''):
+    return [item.strip() for item in os.getenv(name, default).split(',') if item.strip()]
+
+
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Off unless .env says DJANGO_DEBUG=True, so a missing .env never exposes debug pages.
+DEBUG = env_bool('DJANGO_DEBUG', default=False)
 
 # Login tokens (JWT) are signed with SECRET_KEY: with the built-in fallback
 # anyone could forge them, so it is only allowed while developing.
 if SECRET_KEY == 'django-insecure-secret-key' and not DEBUG:
     raise ImproperlyConfigured('Set DJANGO_SECRET_KEY in .env before running with DEBUG off.')
 
-ALLOWED_HOSTS = []
+# Domains this backend may be served on, e.g. "api.example.com"
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1' if DEBUG else '')
+
+# Frontend origins allowed to send forms/cookies to this backend (must include https://)
+CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 
 
 # Application definition
@@ -169,10 +183,10 @@ MAILERS = {
 
 
 # Allow the Next.js frontend to call the API from the browser
-CORS_ALLOWED_ORIGINS = os.getenv(
+CORS_ALLOWED_ORIGINS = env_list(
     'CORS_ALLOWED_ORIGINS',
     'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173',
-).split(',')
+)
 CORS_ALLOW_HEADERS = [
     'accept',
     'authorization',
@@ -238,3 +252,24 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
     'django.contrib.auth.hashers.ScryptPasswordHasher',
 ]
+
+
+# Production security (only when DEBUG is off, so local http:// still works)
+# https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+# Secure session/CSRF cookies are set with the session settings above.
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+SECURE_REFERRER_POLICY = 'same-origin'
+
+if not DEBUG:
+    # Send every http:// request to https://
+    SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', default=True)
+    # Behind a proxy/load balancer that terminates HTTPS (Render, Railway, Nginx...)
+    # set DJANGO_BEHIND_PROXY=True, otherwise the redirect above loops forever.
+    if env_bool('DJANGO_BEHIND_PROXY', default=False):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    # Tell browsers to only ever use HTTPS for this site
+    SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_HSTS_INCLUDE_SUBDOMAINS', default=False)
+    SECURE_HSTS_PRELOAD = False

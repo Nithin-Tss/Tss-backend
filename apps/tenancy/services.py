@@ -5,6 +5,8 @@ from .models import Store, StoreMembership
 
 ACTIVE = "active"
 OWNER = "owner"
+CLOSED = "closed"
+REMOVED = "removed"
 
 
 def stores_for_user(user):
@@ -56,3 +58,16 @@ def create_store(owner, store_name, store_slug=None):
     )
 
     return store
+
+
+@transaction.atomic
+def close_store(store):
+    """
+    "Delete" a store. Its products, orders and so on reference it with
+    PROTECT, so the rows stay; the store is marked closed and every
+    membership removed, which hides it from all lists and makes every
+    X-Store-Id request for it fail (IsStoreMember needs an active membership).
+    """
+    store.status = CLOSED
+    store.save(update_fields=["status", "updated_at"])
+    store.memberships.update(status=REMOVED)
