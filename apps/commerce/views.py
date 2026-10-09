@@ -1,14 +1,12 @@
-from rest_framework import mixins
-
 from apps.core.viewsets import StoreScopedViewSet
 
 from .models import Cart, Checkout
 from .serializers import CartSerializer, CheckoutSerializer
 
 
-class CartViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedViewSet):
+class CartViewSet(StoreScopedViewSet):
     """
-    GET /api/v1/commerce/carts/?status=   shoppers' carts (read-only for staff).
+    GET /api/v1/carts/?status=   shoppers' carts (read-only for staff).
     Shoppers create and change carts through the storefront cart API (next phase).
     """
 
@@ -23,8 +21,8 @@ class CartViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedV
         return qs
 
 
-class CheckoutViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedViewSet):
-    """GET /api/v1/commerce/checkouts/?abandoned=true   (read-only for staff)"""
+class CheckoutViewSet(StoreScopedViewSet):
+    """GET /api/v1/checkouts/?abandoned=true   (read-only for staff)"""
 
     queryset = Checkout.objects.prefetch_related("items").order_by("-updated_at")
     serializer_class = CheckoutSerializer
