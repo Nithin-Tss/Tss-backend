@@ -1,5 +1,5 @@
 from django.db import transaction
-from rest_framework import mixins, viewsets
+from rest_framework import mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response

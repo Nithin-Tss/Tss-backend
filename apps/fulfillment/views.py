@@ -1,4 +1,4 @@
-from rest_framework import mixins, status, viewsets
+from rest_framework import mixins, status
 from rest_framework.response import Response
 
 from apps.core.viewsets import StoreScopedGenericViewSet
