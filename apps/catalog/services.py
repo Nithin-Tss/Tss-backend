@@ -206,3 +206,84 @@ def delete_variant(variant):
         variant.delete()
     except ProtectedError:
         raise ProductInUse("This variant is used by orders or inventory, so it can't be deleted.")
+
+
+def _name_map(model, store, names):
+    """Existing and newly created rows for `names`, in two queries."""
+    found = {o.name: o for o in model.objects.filter(store=store, name__in=names)}
+    missing = [model(store=store, name=n) for n in names if n not in found]
+    model.objects.bulk_create(missing)
+    found.update({o.name: o for o in missing})
+    return found
+
+
+@transaction.atomic
+def import_products(store, rows):
+    """
+    Create many products at once from validated rows (see ProductInputSerializer).
+
+    Rows whose SKU, or title when there is no SKU, already exist in the store
+    (or earlier in `rows`) are skipped, so importing the same file twice is safe.
+    Returns (created, skipped).
+    """
+    skus = {(r.get("sku") or "").strip() for r in rows} - {""}
+    titles = {r["title"] for r in rows}
+    seen_skus = set(
+        ProductVariant.objects.filter(product__store=store, sku__in=skus).values_list("sku", flat=True)
+    )
+    seen_titles = set(
+        Product.objects.filter(store=store, title__in=titles).values_list("title", flat=True)
+    )
+
+    fresh = []
+    for row in rows:
+        sku = (row.get("sku") or "").strip()
+        if sku and sku in seen_skus:
+            continue
+        if not sku and row["title"] in seen_titles:
+            continue
+        if sku:
+            seen_skus.add(sku)
+        else:
+            seen_titles.add(row["title"])
+        fresh.append((row, sku))
+
+    if not fresh:
+        return 0, len(rows)
+
+    def names(key):
+        return {n.strip() for row, _ in fresh for n in row.get(key) or [] if n.strip()}
+
+    categories = _name_map(
+        Category, store, {(row.get("category") or "").strip() for row, _ in fresh} - {""}
+    )
+    collections = _name_map(Collection, store, names("collections"))
+    tags = _name_map(Tag, store, names("tags"))
+
+    products, variants, product_collections, product_tags = [], [], [], []
+    for row, sku in fresh:
+        product = Product(
+            store=store,
+            title=row["title"],
+            status=row.get("status") or DRAFT,
+            description=row.get("description", ""),
+            product_type=row.get("product_type", ""),
+            vendor=row.get("vendor", ""),
+            seo_title=row.get("seo_title", ""),
+            seo_description=row.get("seo_description", ""),
+            category=categories.get((row.get("category") or "").strip()),
+        )
+        products.append(product)
+        variants.append(
+            ProductVariant(product=product, sku=sku or None, price=_price(row.get("price")))
+        )
+        for name in {n.strip() for n in row.get("collections") or [] if n.strip()}:
+            product_collections.append(ProductCollection(product=product, collection=collections[name]))
+        for name in {n.strip() for n in row.get("tags") or [] if n.strip()}:
+            product_tags.append(ProductTag(product=product, tag=tags[name]))
+
+    Product.objects.bulk_create(products)
+    ProductVariant.objects.bulk_create(variants)
+    ProductCollection.objects.bulk_create(product_collections)
+    ProductTag.objects.bulk_create(product_tags)
+    return len(products), len(rows) - len(products)
