@@ -1,3 +1,5 @@
 from django.contrib import admin
+from .models import Fulfillment, FulfillmentItem
 
-# Register your models here.
+admin.site.register(Fulfillment) 
+admin.site.register(FulfillmentItem)
