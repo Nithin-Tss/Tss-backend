@@ -180,6 +180,17 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
+# Sender of account emails (password reset, email verification)
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@localhost')
+
+# Links in those emails open the frontend (see apps/identity/email_links.py)
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
+# How long the links work
+PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', 60 * 60))  # 1 hour
+EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60 * 24 * 3))  # 3 days
+
+# No email provider yet: emails are printed in the runserver console.
 MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
@@ -215,6 +226,8 @@ REST_FRAMEWORK = {
     # Slows down password guessing on sign-in / sign-up (see identity views)
     'DEFAULT_THROTTLE_RATES': {
         'auth': '10/min',
+        # Password reset / verification emails: stops mailbox flooding
+        'email': '5/hour',
     },
 }
 
