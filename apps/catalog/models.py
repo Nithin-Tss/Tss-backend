@@ -391,14 +391,14 @@ class ProductReview(models.Model):
         related_name="product_reviews",
     )
 
-    # order_item = models.ForeignKey(
-    #     "orders.OrderItem",
-    #     on_delete=models.PROTECT,
-    #     db_column="order_item_id",
-    #     related_name="product_reviews",
-    #     null=True,
-    #     blank=True,
-    # )
+    order_item = models.ForeignKey(
+       "orders.OrderItem",
+        on_delete=models.PROTECT,
+         db_column="order_item_id",
+        related_name="product_reviews",
+        null=True,
+        blank=True,
+    )
 
     rating = models.SmallIntegerField()
 
