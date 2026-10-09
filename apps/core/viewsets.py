@@ -2,7 +2,7 @@ from functools import lru_cache
 
 from django.db.models import ProtectedError
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
@@ -42,9 +42,10 @@ def has_field(model, name):
     return any(f.name == name for f in model._meta.concrete_fields)
 
 
-class StoreScopedViewSet(viewsets.ModelViewSet):
+class StoreScopedGenericViewSet(viewsets.GenericViewSet):
     """
-    Base viewset for every store-owned resource.
+    Base viewset for every store-owned resource. Has no actions of its own:
+    add DRF mixins for the ones you want, or use StoreScopedViewSet for full CRUD.
 
     - Only rows of the current store are visible (found via store_path, or
       set `store_lookup` by hand).
@@ -87,6 +88,17 @@ class StoreScopedViewSet(viewsets.ModelViewSet):
                 instance.delete()
             except ProtectedError:
                 raise ValidationError("This is still used by other records, so it can't be deleted.")
+
+
+class StoreScopedViewSet(
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    mixins.ListModelMixin,
+    StoreScopedGenericViewSet,
+):
+    """Full CRUD on a store-owned resource (the store-scoped ModelViewSet)."""
 
 
 class StoreScopedSerializerMixin:

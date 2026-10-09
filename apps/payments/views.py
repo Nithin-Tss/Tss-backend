@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from apps.core.viewsets import StoreScopedViewSet
+from apps.core.viewsets import StoreScopedGenericViewSet
 from apps.orders.models import Order
 from apps.orders.services import CANCELLED
 
@@ -16,7 +16,7 @@ class PaymentViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
-    StoreScopedViewSet,
+    StoreScopedGenericViewSet,
 ):
     """
     /api/v1/payments/?order=<id>             list, retrieve

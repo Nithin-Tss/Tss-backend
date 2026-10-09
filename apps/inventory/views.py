@@ -5,7 +5,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.core.numbering import next_number
-from apps.core.viewsets import StoreScopedViewSet
+from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 from . import services
 from .models import InventoryItem, Location, Transfer, TransferItem
@@ -29,7 +29,7 @@ class LocationViewSet(StoreScopedViewSet):
 class InventoryItemViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
-    StoreScopedViewSet,
+    StoreScopedGenericViewSet,
 ):
     """
     GET  /api/v1/inventory/items/?product=&variant=&location=
