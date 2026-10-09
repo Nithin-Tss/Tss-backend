@@ -7,7 +7,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.core.numbering import next_number
-from apps.core.viewsets import StoreScopedViewSet
+from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 from . import services
 from .models import DraftOrder, DraftOrderDetail, Order
@@ -21,7 +21,7 @@ class OrderViewSet(
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
     mixins.UpdateModelMixin,
-    StoreScopedViewSet,
+    StoreScopedGenericViewSet,
 ):
     """
     /api/v1/orders/            list (?status=, ?fulfillment_status=, ?customer=), create a manual order
