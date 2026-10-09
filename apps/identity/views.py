@@ -1,14 +1,16 @@
-from django.contrib.auth.models import update_last_login
+from django.contrib.auth import SESSION_KEY, login, logout, update_session_auth_hash
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from apps.core.tokens import issue_tokens, refresh_tokens
+from apps.core.tokens import (
+    REMEMBER_CLAIM, SessionStore, SESSION_CLAIM, end_token_session, issue_tokens, refresh_tokens,
+)
 from apps.tenancy.services import stores_for_user
 
-from .serializers import LoginSerializer, SignupSerializer
+from .serializers import ChangePasswordSerializer, LoginSerializer, SignupSerializer
 
 
 def session_payload(user, tokens=None):
@@ -27,6 +29,16 @@ def session_payload(user, tokens=None):
         payload.update(tokens)  # "access" and "refresh"
 
     return payload
+
+
+def start_session(request, user, remember_me=False):
+    """
+    Sign the user in to a Django session too (cookie "sessionid"), for
+    browser clients and /admin/. Also records last_login.
+    """
+    login(request._request, user, backend="django.contrib.auth.backends.ModelBackend")
+    # 0 = ends when the browser closes; None = SESSION_COOKIE_AGE (30 days)
+    request.session.set_expiry(None if remember_me else 0)
 
 
 class PublicAuthView(APIView):
@@ -55,7 +67,7 @@ class SignupView(PublicAuthView):
             )
 
         user = serializer.save()
-        update_last_login(None, user)
+        start_session(request, user)
 
         return Response(
             {
@@ -82,11 +94,9 @@ class LoginView(PublicAuthView):
             )
 
         user = serializer.validated_data["user"]
-        update_last_login(None, user)
-        tokens = issue_tokens(
-            user,
-            remember_me=serializer.validated_data["rememberMe"],
-        )
+        remember_me = serializer.validated_data["rememberMe"]
+        start_session(request, user, remember_me=remember_me)
+        tokens = issue_tokens(user, remember_me=remember_me)
 
         return Response(
             {
@@ -108,6 +118,75 @@ class RefreshView(PublicAuthView):
         serializer = RefreshSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return Response(refresh_tokens(serializer.validated_data["refresh"]))
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=False, allow_blank=True)
+
+
+class LogoutView(APIView):
+    """
+    POST /api/v1/auth/logout/  {refresh}  -> 204
+
+    Ends this sign-in: its access and refresh tokens stop working at once,
+    and the session cookie (if any) is cleared. Works even with an expired
+    access token, so the client can always sign out.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = LogoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if serializer.validated_data.get("refresh"):
+            end_token_session(serializer.validated_data["refresh"])
+
+        logout(request._request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChangePasswordView(APIView):
+    """
+    POST /api/v1/auth/password/  {currentPassword, newPassword, confirmPassword}
+    -> {access, refresh}
+
+    Signs out every other device (their tokens and sessions stop working);
+    this one gets fresh tokens and keeps its session.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.set_password(serializer.validated_data["newPassword"])
+        user.save(update_fields=["password", "updated_at"])
+
+        # Cookie clients: keep this browser's session signed in.
+        if request.session.get(SESSION_KEY) == str(user.pk):
+            update_session_auth_hash(request._request, user)
+
+        # JWT clients: replace this device's sign-in with a fresh one, keeping
+        # "remember me" if it had it.
+        remember_me = False
+
+        if request.auth is not None and hasattr(request.auth, "get"):
+            remember_me = bool(request.auth.get(REMEMBER_CLAIM))
+            SessionStore(session_key=request.auth.get(SESSION_CLAIM)).delete()
+
+        return Response({
+            "message": "Password changed.",
+            **issue_tokens(user, remember_me=remember_me),
+        })
 
 
 class MeView(APIView):
