@@ -160,3 +160,47 @@ class LoginSerializer(serializers.Serializer):
 
         data["user"] = user
         return data
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    currentPassword = serializers.CharField(
+        required=True,
+        write_only=True
+    )
+
+    newPassword = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8
+    )
+
+    confirmPassword = serializers.CharField(
+        required=True,
+        write_only=True
+    )
+
+    def validate_currentPassword(self, value):
+        if not self.context["request"].user.check_password(value):
+            raise serializers.ValidationError(
+                "Current password is incorrect."
+            )
+
+        return value
+
+    def validate(self, data):
+        if data["newPassword"] != data["confirmPassword"]:
+            raise serializers.ValidationError({
+                "confirmPassword": "Passwords do not match."
+            })
+
+        try:
+            validate_password(
+                data["newPassword"],
+                user=self.context["request"].user,
+            )
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({
+                "newPassword": error.messages
+            })
+
+        return data

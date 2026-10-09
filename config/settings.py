@@ -184,8 +184,11 @@ CORS_ALLOW_HEADERS = [
 # API: every endpoint needs a signed-in user unless the view says otherwise.
 # Store-owned endpoints also need the X-Store-Id header (see apps/core/permissions.py).
 REST_FRAMEWORK = {
+    # A JWT ("Authorization: Bearer ...") or the Django session cookie set at
+    # sign-in; session requests must also send the CSRF token.
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.core.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -212,6 +215,19 @@ SIMPLE_JWT = {
 }
 # "Remember me" keeps the refresh token for longer (see apps/core/tokens.py)
 JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
+
+
+# Django sessions (django_session table): the cookie session for /admin/ and
+# browser sign-in, and the server-side record behind each JWT sign-in, which
+# makes sign-out and single-use refresh tokens work (see apps/core/tokens.py).
+# Without "remember me" the cookie ends when the browser closes.
+# Remove expired rows now and then with: python manage.py clearsessions
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_COOKIE_AGE = int(JWT_REMEMBER_ME_REFRESH_LIFETIME.total_seconds())
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 
 # Password hashing: Argon2 for new passwords. Older PBKDF2 hashes still work

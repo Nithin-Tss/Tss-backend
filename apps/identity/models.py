@@ -4,12 +4,21 @@ from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.db import models
 
 
+def normalize_email(email):
+    """Emails are stored lower-case, so sign-in is case-insensitive."""
+    return (email or "").strip().lower()
+
+
 class UserManager(BaseUserManager):
+    def get_by_natural_key(self, username):
+        # Used by sign-in (API and /admin/): any letter case finds the account.
+        return self.get(email__iexact=normalize_email(username))
+
     def create_user(self, email, password=None, **extra_fields):
+        email = normalize_email(email)
+
         if not email:
             raise ValueError("Email is required.")
-
-        email = self.normalize_email(email)
 
         user = self.model(
             email=email,
@@ -66,6 +75,7 @@ class User(AbstractBaseUser):
         blank=True,
     )
 
+    # Platform admin: may use the Django admin site (/admin/).
     is_owner = models.BooleanField(
         default=False,
     )
@@ -105,14 +115,26 @@ class User(AbstractBaseUser):
         return self.is_owner
 
     @property
+    def is_superuser(self):
+        return self.is_owner
+
+    @property
     def is_active(self):
+        # No such column in identity.users: every account can sign in.
         return True
 
     def has_perm(self, perm, obj=None):
         return self.is_owner
 
+    def has_perms(self, perm_list, obj=None):
+        return all(self.has_perm(perm, obj) for perm in perm_list)
+
     def has_module_perms(self, app_label):
         return self.is_owner
+
+    def clean(self):
+        super().clean()
+        self.email = normalize_email(self.email)
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}".strip()

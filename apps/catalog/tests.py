@@ -106,6 +106,7 @@ class ProductApiTests(APITestCase):
 
     def test_requires_auth(self):
         self.client.credentials()
+        self.client.cookies.clear()  # sign-up also left a session cookie
         self.assertIn(self.client.get(URL).status_code, (401, 403))
 
 

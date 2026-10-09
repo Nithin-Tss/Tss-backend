@@ -197,4 +197,5 @@ class StoreIsolationTest(StoreClientMixin, APITestCase):
 
         # and nothing needs a login? No - everything does.
         self.client.credentials()
+        self.client.cookies.clear()  # sign-up also left a session cookie
         self.ok("get", "/api/v1/orders/", expect=401)
