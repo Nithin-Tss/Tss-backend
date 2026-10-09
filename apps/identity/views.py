@@ -1,4 +1,5 @@
-from django.contrib.auth import SESSION_KEY, login, logout, update_session_auth_hash
+from django.contrib.auth import SESSION_KEY, get_user_model, login, logout, update_session_auth_hash
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -10,7 +11,12 @@ from apps.core.tokens import (
 )
 from apps.tenancy.services import stores_for_user
 
-from .serializers import ChangePasswordSerializer, LoginSerializer, SignupSerializer
+from .email_links import send_password_reset_email, send_verification_email
+from .serializers import (
+    ChangePasswordSerializer, LoginSerializer, PasswordResetConfirmSerializer,
+    PasswordResetLinkSerializer, PasswordResetRequestSerializer, SignupSerializer,
+    VerifyEmailSerializer,
+)
 
 
 def session_payload(user, tokens=None):
@@ -21,6 +27,7 @@ def session_payload(user, tokens=None):
             "firstName": user.first_name,
             "lastName": user.last_name,
             "mobileNumber": user.phone,
+            "emailVerified": user.email_verified_at is not None,
         },
         "stores": stores_for_user(user),
     }
@@ -54,6 +61,12 @@ class PublicAuthView(APIView):
         return 'Bearer realm="api"'
 
 
+def mark_email_verified(user):
+    if user.email_verified_at is None:
+        user.email_verified_at = timezone.now()
+        user.save(update_fields=["email_verified_at", "updated_at"])
+
+
 class SignupView(PublicAuthView):
     """POST /api/v1/auth/signup/  -> {user, stores, access, refresh}"""
 
@@ -68,6 +81,7 @@ class SignupView(PublicAuthView):
 
         user = serializer.save()
         start_session(request, user)
+        send_verification_email(user)
 
         return Response(
             {
@@ -196,3 +210,100 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(session_payload(request.user))
+
+
+# ---------------------------------------------------------------- password reset
+
+class PasswordResetRequestView(PublicAuthView):
+    """
+    POST /api/v1/auth/password-reset/  {email}  -> 200
+
+    Emails a reset link if an account has this email. The answer is the same
+    either way, so it can't be used to find out who has an account.
+    """
+
+    throttle_scope = "email"
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = get_user_model().objects.filter(
+            email__iexact=serializer.validated_data["email"],
+        ).first()
+
+        if user is not None:
+            send_password_reset_email(user)
+
+        return Response({
+            "message": "If an account exists for this email, we've sent a link to reset the password.",
+        })
+
+
+class PasswordResetValidateView(PublicAuthView):
+    """
+    POST /api/v1/auth/password-reset/validate/  {uid, token}  -> 200 or 400
+
+    Lets the reset page say "link expired" before the user types a password.
+    """
+
+    def post(self, request):
+        serializer = PasswordResetLinkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response({"valid": True, "email": serializer.validated_data["user"].email})
+
+
+class PasswordResetConfirmView(PublicAuthView):
+    """
+    POST /api/v1/auth/password-reset/confirm/
+         {uid, token, newPassword, confirmPassword}  -> 200
+
+    Sets the new password. The link then stops working, and every device
+    signed in with the old password is signed out. Opening the link also
+    proves the email address, so it counts as verified.
+    """
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data["user"]
+        user.set_password(serializer.validated_data["newPassword"])
+        user.save(update_fields=["password", "updated_at"])
+        mark_email_verified(user)
+
+        return Response({"message": "Your password has been reset. Please sign in."})
+
+
+# ------------------------------------------------------------ email verification
+
+class VerifyEmailView(PublicAuthView):
+    """
+    POST /api/v1/auth/verify-email/  {token}  -> 200
+
+    No sign-in needed: the link may be opened on another device.
+    """
+
+    def post(self, request):
+        serializer = VerifyEmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        mark_email_verified(serializer.validated_data["user"])
+        return Response({"message": "Email verified.", "emailVerified": True})
+
+
+class ResendVerificationEmailView(APIView):
+    """POST /api/v1/auth/verify-email/resend/  -> 200 (signed in)"""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email"
+
+    def post(self, request):
+        if request.user.email_verified_at is not None:
+            return Response({"message": "Your email is already verified.", "emailVerified": True})
+
+        send_verification_email(request.user)
+        return Response({
+            "message": f"We've sent a verification link to {request.user.email}.",
+            "emailVerified": False,
+        })

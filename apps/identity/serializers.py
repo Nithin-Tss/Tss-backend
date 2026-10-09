@@ -4,6 +4,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from rest_framework import serializers
 
+from .email_links import user_for_email_verification, user_for_password_reset
+
 User = get_user_model()
 
 
@@ -203,4 +205,83 @@ class ChangePasswordSerializer(serializers.Serializer):
                 "newPassword": error.messages
             })
 
+        return data
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(
+        required=True
+    )
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class PasswordResetLinkSerializer(serializers.Serializer):
+    """The uid and token from a password reset link."""
+
+    uid = serializers.CharField(
+        required=True
+    )
+
+    token = serializers.CharField(
+        required=True
+    )
+
+    def validate(self, data):
+        user = user_for_password_reset(data["uid"], data["token"])
+
+        if user is None:
+            raise serializers.ValidationError({
+                "token": "This reset link is invalid or has expired. Please request a new one."
+            })
+
+        data["user"] = user
+        return data
+
+
+class PasswordResetConfirmSerializer(PasswordResetLinkSerializer):
+    newPassword = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8
+    )
+
+    confirmPassword = serializers.CharField(
+        required=True,
+        write_only=True
+    )
+
+    def validate(self, data):
+        data = super().validate(data)
+
+        if data["newPassword"] != data["confirmPassword"]:
+            raise serializers.ValidationError({
+                "confirmPassword": "Passwords do not match."
+            })
+
+        try:
+            validate_password(data["newPassword"], user=data["user"])
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({
+                "newPassword": error.messages
+            })
+
+        return data
+
+
+class VerifyEmailSerializer(serializers.Serializer):
+    token = serializers.CharField(
+        required=True
+    )
+
+    def validate(self, data):
+        user = user_for_email_verification(data["token"])
+
+        if user is None:
+            raise serializers.ValidationError({
+                "token": "This verification link is invalid or has expired. Please request a new one."
+            })
+
+        data["user"] = user
         return data

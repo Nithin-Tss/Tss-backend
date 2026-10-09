@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     ThemeCustomizerView,
     ThemeFilesView,
+    ThemeImageView,
+    ThemePreviewView,
     ThemeRenameView,
     ThemeSchemaView,
     ThemeSettingsView,
@@ -44,6 +46,18 @@ urlpatterns = [
         "schema/",
         ThemeSchemaView.as_view(),
         name="theme_schema",
+    ),
+
+    path(
+        "images/",
+        ThemeImageView.as_view(),
+        name="theme_images",
+    ),
+
+    path(
+        "preview/",
+        ThemePreviewView.as_view(),
+        name="theme_preview",
     ),
 ]
  
