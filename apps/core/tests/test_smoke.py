@@ -9,7 +9,7 @@ class SmokeTest(APITestCase):
             "mobileNumber": "9876543210", "agreeTerms": True,
         }, format="json")
         self.assertEqual(r.status_code, 201, r.content)
-        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + r.json()["token"])
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + r.json()["access"])
 
         r = self.client.post("/api/v1/stores/", {"storeName": "Asha Shop"}, format="json")
         self.assertEqual(r.status_code, 201, r.content)

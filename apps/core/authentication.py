@@ -1,30 +1,22 @@
 from rest_framework import exceptions
-from rest_framework.authentication import BaseAuthentication, get_authorization_header
+from rest_framework_simplejwt import authentication
 
-from .tokens import user_from_token
+from .tokens import fingerprint_matches
 
 
-class BearerTokenAuthentication(BaseAuthentication):
-    """Reads `Authorization: Bearer <token>`."""
+class JWTAuthentication(authentication.JWTAuthentication):
+    """
+    Reads "Authorization: Bearer <access token>".
 
-    keyword = "Bearer"
+    simplejwt already rejects bad signatures, expired tokens and refresh
+    tokens used as access tokens; this also rejects tokens issued before
+    the user's last password change.
+    """
 
-    def authenticate(self, request):
-        parts = get_authorization_header(request).split()
+    def get_user(self, validated_token):
+        user = super().get_user(validated_token)
 
-        if not parts or parts[0].decode().lower() != self.keyword.lower():
-            return None
-
-        if len(parts) != 2:
-            raise exceptions.AuthenticationFailed("Invalid Authorization header.")
-
-        user = user_from_token(parts[1].decode())
-
-        if user is None:
+        if not fingerprint_matches(user, validated_token):
             raise exceptions.AuthenticationFailed("Session expired. Please sign in again.")
 
-        return (user, None)
-
-    def authenticate_header(self, request):
-        # Makes DRF answer 401 (not 403) when the token is missing or bad.
-        return self.keyword
+        return user

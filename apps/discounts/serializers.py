@@ -26,7 +26,11 @@ class DiscountSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
             "starts_at", "ends_at", "usage_limit", "per_customer_limit", "is_active",
             "codes", "products", "times_used", "created_at", "updated_at",
         ]
-        extra_kwargs = {"value": {"min_value": 0}, "is_active": {"default": True}}
+        extra_kwargs = {
+            "value": {"min_value": 0},
+            "is_active": {"default": True},
+            "starts_at": {"required": False},  # defaults to now
+        }
 
     def get_times_used(self, discount):
         return times_used(discount)

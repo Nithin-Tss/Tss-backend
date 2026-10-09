@@ -14,6 +14,12 @@ urlpatterns = [
     path("inventory/", include("apps.inventory.urls")),
     path("discounts/", include("apps.discounts.urls")),
     path("themes/", include("apps.themes.urls")),
+    path("payments/", include("apps.payments.urls")),
+    path("gift-cards/", include("apps.gift_cards.urls")),
+    path("fulfillments/", include("apps.fulfillment.urls")),
+    path("delivery/", include("apps.delivery.urls")),
+    path("wishlists/", include("apps.wishlist.urls")),
+    path("purchase-orders/", include("apps.purchasing.urls")),
     # Commerce: /api/v1/carts/, /api/v1/checkouts/ (staff, read-only)
     path("", include("apps.commerce.urls")),
     # Shoppers: /api/v1/storefront/<store_slug>/cart/ ...

@@ -11,7 +11,10 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -26,6 +29,11 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', default='django-insecure-secret-key'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
+
+# Login tokens (JWT) are signed with SECRET_KEY: with the built-in fallback
+# anyone could forge them, so it is only allowed while developing.
+if SECRET_KEY == 'django-insecure-secret-key' and not DEBUG:
+    raise ImproperlyConfigured('Set DJANGO_SECRET_KEY in .env before running with DEBUG off.')
 
 ALLOWED_HOSTS = []
 
@@ -172,9 +180,40 @@ CORS_ALLOW_HEADERS = [
 # Store-owned endpoints also need the X-Store-Id header (see apps/core/permissions.py).
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'apps.core.authentication.BearerTokenAuthentication',
+        'apps.core.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # Slows down password guessing on sign-in / sign-up (see identity views)
+    'DEFAULT_THROTTLE_RATES': {
+        'auth': '10/min',
+    },
 }
+
+
+# JWT login tokens (djangorestframework-simplejwt)
+# - access:  sent with every API request; short-lived
+# - refresh: only used to get a new access token; long-lived
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'UPDATE_LAST_LOGIN': False,
+}
+# "Remember me" keeps the refresh token for longer (see apps/core/tokens.py)
+JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
+
+
+# Password hashing: Argon2 for new passwords. Older PBKDF2 hashes still work
+# and are upgraded to Argon2 automatically the next time that user signs in.
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.ScryptPasswordHasher',
+]

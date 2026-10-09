@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import Payment, PaymentTransaction
@@ -28,7 +30,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 class RecordPaymentSerializer(serializers.Serializer):
     order = serializers.UUIDField()
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.01"))
     provider = serializers.ChoiceField(choices=PROVIDERS, default="manual")
     reference = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
