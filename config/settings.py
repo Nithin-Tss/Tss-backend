@@ -131,6 +131,14 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD"),
         "HOST": os.getenv("DB_HOST", "127.0.0.1"),
         "PORT": os.getenv("DB_PORT", "5432"),
+        # Reuse connections, but verify them first so a connection the pooler dropped isn't reused
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
+        "OPTIONS": {
+            # Supabase expects SSL; fail fast instead of hanging on network hiccups
+            "sslmode": os.getenv("DB_SSLMODE", "require"),
+            "connect_timeout": 10,
+        },
     }
 }
 
