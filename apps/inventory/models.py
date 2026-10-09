@@ -123,6 +123,13 @@ class Transfer(models.Model):
         verbose_name = "Inventory Transfer"
         verbose_name_plural = "Inventory Transfers"
 
+        indexes = [
+            models.Index(
+                fields=["store", "-created_at"],
+                name="trf_store_created_idx",
+            ),
+        ]
+
     def __str__(self):
         return self.transfer_number
 

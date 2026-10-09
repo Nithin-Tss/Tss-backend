@@ -69,6 +69,13 @@ class Cart(models.Model):
         verbose_name = "Cart"
         verbose_name_plural = "Carts"
 
+        indexes = [
+            models.Index(
+                fields=["store", "is_deleted", "-updated_at"],
+                name="cart_store_del_upd_idx",
+            ),
+        ]
+
     def __str__(self):
         return str(self.id)
 
@@ -265,6 +272,14 @@ class Checkout(models.Model):
         db_table = '"commerce"."checkouts"'
         verbose_name = "Checkout"
         verbose_name_plural = "Checkouts"
+
+        indexes = [
+            models.Index(
+                fields=["store", "is_deleted", "-updated_at"],
+                name="chk_store_del_upd_idx",
+            ),
+        ]
+
 
     def __str__(self):
         return str(self.id)

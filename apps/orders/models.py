@@ -63,6 +63,13 @@ class Order(models.Model):
         verbose_name = "Order"
         verbose_name_plural = "Orders"
 
+        indexes = [
+            models.Index(
+                fields=["store", "-created_at"],
+                name="ord_store_created_idx",
+            ),
+        ]
+
     def __str__(self):
         return self.order_number
 
@@ -193,6 +200,13 @@ class DraftOrder(models.Model):
         db_table = '"orders"."draft_orders"'
         verbose_name = "Draft Order"
         verbose_name_plural = "Draft Orders"
+
+        indexes = [
+            models.Index(
+                fields=["store", "-created_at"],
+                name="drf_store_created_idx",
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["order"],

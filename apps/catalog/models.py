@@ -111,6 +111,17 @@ class Product(models.Model):
         verbose_name = "Product"
         verbose_name_plural = "Products"
 
+        indexes = [
+            models.Index(
+                fields=["store", "-created_at"],
+                name="prd_store_created_idx",
+            ),
+            models.Index(
+                fields=["store", "status", "-created_at"],
+                name="prd_store_stat_date_idx",
+            ),
+        ]
+
     def __str__(self):
         return self.title
 
@@ -147,6 +158,13 @@ class ProductVariant(models.Model):
         db_table = '"catalog"."product_variants"'
         verbose_name = "Product Variant"
         verbose_name_plural = "Product Variants"
+
+        indexes = [
+            models.Index(
+                fields=["product", "created_at"],
+                name="pvar_prod_created_idx",
+            ),
+        ]
 
     def __str__(self):
         return self.sku or str(self.id)
