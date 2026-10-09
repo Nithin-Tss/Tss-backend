@@ -18,3 +18,6 @@ DATABASES = {
 MIGRATION_MODULES = {app.split(".")[-1]: None for app in INSTALLED_APPS}
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+# The test client speaks plain http; don't redirect it to https.
+SECURE_SSL_REDIRECT = False
