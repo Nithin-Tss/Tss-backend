@@ -201,3 +201,151 @@ class StoreIsolationTest(StoreClientMixin, APITestCase):
         self.client.credentials()
         self.client.cookies.clear()  # sign-up also left a session cookie
         self.ok("get", "/api/v1/orders/", expect=401)
+
+
+class HomeSectionsTest(StoreClientMixin, APITestCase):
+    """Theme customizer: sections saved per store and rendered on the home page in order."""
+
+    def home(self, slug):
+        r = self.client.get(f"/s/{slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def index(self, order, sections):
+        return {"templates": {"index": {"order": order, "sections": sections}}}
+
+    def test_sections_render_in_order_and_hidden_ones_are_skipped(self):
+        _, store = self.sign_up("theme@example.com", "Theme Shop")
+        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Picked lamp", "status": "active", "price": "5"}, expect=201)
+        self.ok("post", "/api/v1/catalog/products/", {"title": "Other chair", "status": "active", "price": "5"}, expect=201)
+
+        saved = self.ok("put", "/api/v1/themes/settings/", self.index(
+            ["about", "picks", "promo", "slides"],
+            {
+                "about": {"type": "rich-text", "settings": {
+                    "heading": "Our story",
+                    "text": "<p><strong>Hand made</strong></p><script>alert(1)</script><a href='javascript:x'>bad</a>",
+                }},
+                "picks": {"type": "product-grid", "settings": {"heading": "Staff picks", "products": [product["id"]]}},
+                "promo": {"type": "hero", "hidden": True, "settings": {"heading": "Secret sale"}},
+                "slides": {"type": "slideshow", "settings": {"heading": "Lookbook"}, "blocks": [
+                    {"type": "slide", "settings": {"heading": "Spring", "button_link": "/collections/all"}},
+                ]},
+            },
+        ))
+        self.assertTrue(saved["templates"]["index"]["sections"]["promo"]["hidden"])
+
+        html = self.home(store["storeSlug"])
+        self.assertLess(html.index("Our story"), html.index("Staff picks"))
+        self.assertLess(html.index("Staff picks"), html.index("Lookbook"))
+        self.assertIn("<strong>Hand made</strong>", html)
+        self.assertNotIn("alert(1)", html)
+        self.assertNotIn("javascript:", html)
+        self.assertNotIn("Secret sale", html)
+        self.assertIn("Picked lamp", html)
+        self.assertNotIn("Other chair", html)  # only the chosen product
+
+    def test_all_hidden_shows_default_layout(self):
+        _, store = self.sign_up("empty@example.com", "Empty Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(
+            ["x"], {"x": {"type": "hero", "hidden": True, "settings": {"heading": "Hidden one"}}},
+        ))
+        html = self.home(store["storeSlug"])
+        self.assertNotIn("Hidden one", html)
+        self.assertIn("Welcome to our store", html)
+
+    def test_custom_section_blocks_render_in_order(self):
+        _, store = self.sign_up("custom@example.com", "Custom Shop")
+        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Blue vase", "status": "active", "price": "9"}, expect=201)
+        collection = self.ok("post", "/api/v1/catalog/collections/", {"name": "Summer"}, expect=201)
+
+        self.ok("put", "/api/v1/themes/settings/", self.index(["story", "quiet"], {
+            "story": {"type": "custom", "settings": {"heading": "Our story"}, "blocks": [
+                {"type": "heading", "settings": {"text": "Since 1999", "size": "large"}},
+                {"type": "text", "settings": {"body": "<p>Made <em>by hand</em></p><script>bad()</script>"}},
+                {"type": "button", "settings": {"label": "Visit", "link": "/collections/all", "style": "outline"}},
+                {"type": "products", "settings": {"products": [product["id"]]}},
+                {"type": "collections", "settings": {"collections": [collection["id"]]}},
+                {"type": "html", "settings": {"html": (
+                    '<div onclick="steal()">Hi<img src="x" onerror="steal()"></div>'
+                    '<iframe src="https://evil.example/x"></iframe>'
+                    '<iframe src="https://www.google.com/maps/embed?pb=1"></iframe><script>steal()</script>'
+                )}},
+            ]},
+            "quiet": {"type": "custom", "settings": {"heading": "No title shown", "show_heading": False}, "blocks": [
+                {"type": "heading", "settings": {"text": "Quiet section"}},
+            ]},
+        }))
+
+        html = self.home(store["storeSlug"])
+        order = ["Our story", "Since 1999", "by hand", "Visit", "Blue vase", 'class="tss-collection"', "Quiet section"]
+        positions = [html.index(text) for text in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("No title shown", html)
+        for bad in ("bad()", "steal()", "onclick", "onerror", "evil.example"):
+            self.assertNotIn(bad, html)
+        self.assertIn("https://www.google.com/maps/embed?pb=1", html)
+
+    def test_custom_blocks_are_validated(self):
+        self.sign_up("valid@example.com", "Valid Shop")
+        bad_block = self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "marquee", "settings": {}},
+        ]}})
+        self.ok("put", "/api/v1/themes/settings/", bad_block, expect=400)
+
+    def test_preview_renders_draft_without_saving(self):
+        _, store = self.sign_up("draft@example.com", "Draft Shop")
+        r = self.ok("post", "/api/v1/themes/preview/", self.index(
+            ["d"], {"d": {"type": "hero", "settings": {"heading": "Draft banner"}}},
+        ))
+        self.assertIn("Draft banner", r["html"])
+        self.assertIn("<base href=", r["html"])
+        self.assertNotIn("Draft banner", self.home(store["storeSlug"]))
+
+        self.ok("post", "/api/v1/themes/preview/", self.index(["d"], {"d": {"type": "nope"}}), expect=400)
+
+    def test_preview_marks_sections_for_dragging(self):
+        self.sign_up("drag@example.com", "Drag Shop")
+        r = self.client.post("/api/v1/themes/preview/?scroll=240&selected=a", self.index(["a", "b"], {
+            "a": {"type": "custom", "settings": {"heading": "First"}},
+            "b": {"type": "hero", "settings": {"heading": "Second"}},
+        }), format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        html = r.json()["html"]
+        self.assertIn('data-tss-section="a"', html)
+        self.assertIn('data-tss-section="b"', html)
+        self.assertIn('"scroll": 240', html)
+        self.assertLess(html.index("First"), html.index("Second"))
+
+    def test_preview_config_cannot_break_out_of_script(self):
+        self.sign_up("xss@example.com", "Xss Shop")
+        r = self.client.post(
+            "/api/v1/themes/preview/?selected=a</script><img src=x onerror=alert(1)>",
+            self.index(["a"], {"a": {"type": "custom", "settings": {"heading": "Safe"}}}),
+            format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        html = r.json()["html"]
+        self.assertNotIn("a</script>", html)
+        self.assertNotIn("<img src=x", html)
+
+    def test_theme_image_upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.sign_up("img@example.com", "Image Shop")
+        png = SimpleUploadedFile("banner.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        r = self.client.post("/api/v1/themes/images/", {"image": png}, format="multipart")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertIn("/media/themes/", r.json()["url"])
+
+        bad = SimpleUploadedFile("banner.png", b"plain text")
+        self.assertEqual(self.client.post("/api/v1/themes/images/", {"image": bad}, format="multipart").status_code, 400)
+
+    def test_each_store_keeps_its_own_sections(self):
+        _, store_a = self.sign_up("a1@example.com", "Shop A")
+        self.ok("put", "/api/v1/themes/settings/", self.index(
+            ["h"], {"h": {"type": "custom", "settings": {"heading": "Only in A"}}},
+        ))
+        _, store_b = self.sign_up("b1@example.com", "Shop B")
+        self.assertIn("Only in A", self.home(store_a["storeSlug"]))
+        self.assertNotIn("Only in A", self.home(store_b["storeSlug"]))
