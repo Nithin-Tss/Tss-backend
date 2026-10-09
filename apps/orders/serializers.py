@@ -41,7 +41,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, order):
         c = order.customer
-        return " ".join(filter(None, [c.first_name, c.last_name])) or (c.email if c else "")
+        if c is None:
+            return ""
+        return " ".join(filter(None, [c.first_name, c.last_name])) or c.email
 
     def get_channel(self, order):
         return order.sales_channel.name if order.sales_channel else "Online Store"

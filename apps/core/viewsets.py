@@ -100,6 +100,12 @@ class StoreScopedViewSet(
 ):
     """Full CRUD on a store-owned resource (the store-scoped ModelViewSet)."""
 
+    # The DRF mixins above define their own perform_create / perform_destroy
+    # and come first in the lookup order, so without these two lines the
+    # store would never be set on new rows and DELETE would hard-delete.
+    perform_create = StoreScopedGenericViewSet.perform_create
+    perform_destroy = StoreScopedGenericViewSet.perform_destroy
+
 
 class StoreScopedSerializerMixin:
     """

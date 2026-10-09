@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.inventory.models import InventoryItem
@@ -10,12 +11,13 @@ VARIANTS = "/api/v1/catalog/variants/"
 
 
 def signup(client, email):
+    cache.clear()  # sign-ups are rate limited; each test starts with a fresh allowance
     r = client.post("/api/v1/auth/signup/", {
         "firstName": "A", "lastName": "B", "email": email,
         "password": "Sturdy-pass-123", "confirmPassword": "Sturdy-pass-123",
         "mobileNumber": "9876543210", "agreeTerms": True,
     }, format="json")
-    token = r.json()["token"]
+    token = r.json()["access"]
     client.credentials(HTTP_AUTHORIZATION="Bearer " + token)
     r = client.post("/api/v1/stores/", {"storeName": "Shop " + email}, format="json")
     return token, r.json()["storeId"]
