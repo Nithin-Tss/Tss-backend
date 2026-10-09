@@ -3,11 +3,13 @@ End-to-end tests: all apps working as one system.
 
     python manage.py test --settings=config.test_settings
 """
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 
 class StoreClientMixin:
     def sign_up(self, email, store_name):
+        cache.clear()  # sign-ups are rate limited; give every sign-up a fresh allowance
         r = self.client.post("/api/v1/auth/signup/", {
             "firstName": "Test", "lastName": "User", "email": email,
             "password": "Sturdy-pass-123", "confirmPassword": "Sturdy-pass-123",
