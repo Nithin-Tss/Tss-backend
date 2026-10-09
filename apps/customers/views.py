@@ -1,8 +1,8 @@
-from django.db import transaction
 from django.db.models import Q
 
 from apps.core.viewsets import StoreScopedViewSet
 
+from . import services
 from .models import Customer, CustomerAddress
 from .serializers import CustomerAddressSerializer, CustomerSerializer
 
@@ -40,19 +40,8 @@ class CustomerAddressViewSet(StoreScopedViewSet):
             qs = qs.filter(customer=self.request.query_params["customer"])
         return qs
 
-    @transaction.atomic
     def perform_create(self, serializer):
-        address = serializer.save()
-        self._one_default(address)
+        services.save_address(serializer)
 
-    @transaction.atomic
     def perform_update(self, serializer):
-        address = serializer.save()
-        self._one_default(address)
-
-    def _one_default(self, address):
-        """A customer has at most one default address per type."""
-        if address.is_default:
-            CustomerAddress.objects.filter(
-                customer=address.customer, address_type=address.address_type
-            ).exclude(pk=address.pk).update(is_default=False)
+        services.save_address(serializer)

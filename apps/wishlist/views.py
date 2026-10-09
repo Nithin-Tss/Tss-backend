@@ -1,5 +1,6 @@
 from apps.core.viewsets import StoreScopedViewSet
 
+from . import services
 from .models import Wishlist, WishlistItem
 from .serializers import WishlistItemSerializer, WishlistSerializer
 
@@ -29,3 +30,6 @@ class WishlistItemViewSet(StoreScopedViewSet):
         if self.request.query_params.get("wishlist"):
             qs = qs.filter(wishlist=self.request.query_params["wishlist"])
         return qs
+
+    def perform_create(self, serializer):
+        services.add_item(serializer)

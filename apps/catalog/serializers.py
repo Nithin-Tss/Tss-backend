@@ -1,11 +1,13 @@
 from rest_framework import serializers
 
-from .models import Collection, Product
+from apps.core.viewsets import StoreScopedSerializerMixin
+
+from .models import Collection, Product, ProductVariant
 from .services import STATUSES
 
 
 class VariantInputSerializer(serializers.Serializer):
-    title = serializers.CharField(required=False, allow_blank=True)
+    id = serializers.UUIDField(required=False)
     sku = serializers.CharField(required=False, allow_blank=True, max_length=100)
     price = serializers.DecimalField(
         max_digits=12,
@@ -120,3 +122,20 @@ class CollectionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Collection
         fields = ["id", "name"]
+
+
+class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
+    """A variant on its own: /catalog/variants/."""
+
+    price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
+    sku = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=100)
+
+    class Meta:
+        model = ProductVariant
+        fields = ["id", "product", "sku", "price", "created_at", "updated_at"]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def validate_product(self, value):
+        if self.instance and value.pk != self.instance.product_id:
+            raise serializers.ValidationError("A variant can't be moved to another product.")
+        return value

@@ -1,14 +1,24 @@
-from django.db import transaction
-from django.db.models import ProtectedError
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.core.viewsets import StoreScopedViewSet
 
-from .models import Collection, Product
-from .serializers import CollectionSerializer, ProductInputSerializer, ProductSerializer
-from .services import save_product
+from .models import Collection, Product, ProductVariant
+from .serializers import (
+    CollectionSerializer,
+    ProductInputSerializer,
+    ProductSerializer,
+    VariantSerializer,
+)
+from .services import (
+    ProductInUse,
+    create_variant,
+    delete_product,
+    delete_variant,
+    save_product,
+    update_variant,
+)
 
 
 class ProductViewSet(StoreScopedViewSet):
@@ -31,10 +41,8 @@ class ProductViewSet(StoreScopedViewSet):
 
         try:
             product = save_product(request.store, data.validated_data, product)
-        except ProtectedError:
-            raise ValidationError(
-                {"variants": "A variant that is used by orders or inventory can't be removed."}
-            )
+        except ProductInUse as e:
+            raise ValidationError({"variants": str(e)})
 
         return self.get_queryset().get(pk=product.pk)
 
@@ -48,19 +56,38 @@ class ProductViewSet(StoreScopedViewSet):
 
     def perform_destroy(self, instance):
         try:
-            with transaction.atomic():
-                self._delete(instance)
-        except ProtectedError:
-            raise ValidationError(
-                "This product is used by orders or inventory. Set it to Draft instead."
-            )
+            delete_product(instance)
+        except ProductInUse as e:
+            raise ValidationError(str(e))
 
-    def _delete(self, instance):
-        instance.product_collections.all().delete()
-        instance.product_tags.all().delete()
-        instance.images.all().delete()
-        instance.variants.all().delete()
-        instance.delete()
+
+class VariantViewSet(StoreScopedViewSet):
+    """
+    /api/v1/catalog/variants/  ?product=<id>   list, create
+    /api/v1/catalog/variants/<id>/             retrieve, update, delete
+    """
+
+    queryset = ProductVariant.objects.select_related("product").order_by("created_at")
+    serializer_class = VariantSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.query_params.get("product"):
+            qs = qs.filter(product=self.request.query_params["product"])
+        return qs
+
+    def perform_create(self, serializer):
+        data = serializer.validated_data
+        serializer.instance = create_variant(data["product"], data)
+
+    def perform_update(self, serializer):
+        serializer.instance = update_variant(serializer.instance, serializer.validated_data)
+
+    def perform_destroy(self, instance):
+        try:
+            delete_variant(instance)
+        except ProductInUse as e:
+            raise ValidationError(str(e))
 
 
 class CollectionViewSet(StoreScopedViewSet):
