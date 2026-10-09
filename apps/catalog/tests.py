@@ -197,3 +197,90 @@ class ProductServiceTests(APITestCase):
         with self.assertRaises(ProductInUse):
             delete_product(p)
         self.assertTrue(Product.objects.filter(pk=p.pk).exists())
+
+
+class ProductFormSchemaTests(APITestCase):
+    """The "Add product" form: photos, category, stock, channels, template and status."""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "form@example.com")
+        self.token = token
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+
+    def upload(self, content, name="photo.png"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return self.client.post(
+            f"{URL}images/", {"image": SimpleUploadedFile(name, content)}, format="multipart"
+        )
+
+    def test_full_form_saves_everything(self):
+        urls = [self.upload(self.PNG).json()["url"] for _ in range(2)]
+        parent = self.client.post("/api/v1/catalog/categories/", {"name": "Wine"}, format="json").json()
+        child = self.client.post(
+            "/api/v1/catalog/categories/", {"name": "White", "parent": parent["id"]}, format="json"
+        ).json()
+        channels = self.client.get("/api/v1/catalog/sales-channels/").json()
+        self.assertEqual([c["name"] for c in channels], ["Online Store", "Point of Sale"])
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "Shop"}, format="json").json()
+
+        r = self.client.post(URL, {
+            "title": "Chardonnay", "status": "archived", "price": "19.50", "sku": "CH-1",
+            "category_id": child["id"], "theme_template": "featured",
+            "images": list(reversed(urls)), "sales_channels": [channels[0]["id"]],
+            "location": location["id"], "quantity": 7, "tags": ["dry"],
+        }, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        body = r.json()
+
+        self.assertEqual(body["status"], "archived")
+        self.assertEqual(body["category"], "White")
+        self.assertEqual(body["theme_template"], "featured")
+        self.assertEqual([i["url"] for i in body["images"]], list(reversed(urls)))
+        self.assertEqual(body["sales_channels"], [channels[0]["id"]])
+        self.assertEqual(body["price"], "19.50")
+
+        stock = self.client.get(f"/api/v1/inventory/items/?product={body['id']}").json()
+        self.assertEqual([(s["location"], s["available"]) for s in stock], [(location["id"], 7)])
+
+    def test_only_name_required(self):
+        r = self.client.post(URL, {"title": "Bare"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()["status"], "draft")
+
+    def test_field_errors(self):
+        r = self.client.post(URL, {
+            "title": " ", "status": "deleted", "theme_template": "nope",
+            "quantity": 3, "images": ["javascript:alert(1)"],
+        }, format="json")
+        self.assertEqual(r.status_code, 400)
+        errors = r.json()
+        for field in ("title", "status", "theme_template", "images"):
+            self.assertIn(field, errors)
+
+        r = self.client.post(URL, {"title": "No location", "quantity": 3}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("location", r.json())
+
+    def test_upload_checks_type_and_size(self):
+        self.assertEqual(self.upload(self.PNG).status_code, 201)
+        # A text file renamed to .png is still rejected
+        self.assertEqual(self.upload(b"not really an image", "fake.png").status_code, 400)
+        self.assertEqual(self.upload(self.PNG + b"\x00" * (5 * 1024 * 1024), "big.png").status_code, 400)
+
+    def test_cannot_use_other_stores_records(self):
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "Mine"}, format="json").json()
+        category = self.client.post("/api/v1/catalog/categories/", {"name": "Mine"}, format="json").json()
+        channel = self.client.get("/api/v1/catalog/sales-channels/").json()[0]
+
+        _, other_store = signup(self.client, "other@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION=self.client._credentials["HTTP_AUTHORIZATION"], HTTP_X_STORE_ID=other_store)
+        r = self.client.post(URL, {
+            "title": "Sneaky", "location": location["id"], "quantity": 1,
+            "category_id": category["id"], "sales_channels": [channel["id"]],
+        }, format="json")
+        self.assertEqual(r.status_code, 400)
+        for field in ("location", "category_id", "sales_channels"):
+            self.assertIn(field, r.json())

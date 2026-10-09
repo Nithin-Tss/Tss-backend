@@ -171,6 +171,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Uploaded files (product photos). Served by Django only while DEBUG is on;
+# in production the web server or a storage bucket serves MEDIA_URL.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration

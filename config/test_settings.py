@@ -21,3 +21,8 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 # The test client speaks plain http; don't redirect it to https.
 SECURE_SSL_REDIRECT = False
+
+# Uploads go to a throwaway folder, never the real media directory.
+import tempfile  # noqa: E402
+
+MEDIA_ROOT = tempfile.mkdtemp(prefix="tss-test-media-")

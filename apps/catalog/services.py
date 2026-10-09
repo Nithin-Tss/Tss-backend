@@ -4,19 +4,41 @@ from django.db import transaction
 from django.db.models import ProtectedError
 from rest_framework.exceptions import ValidationError
 
+from apps.inventory.services import set_available
+
 from .models import (
     Category,
     Collection,
     Product,
     ProductCollection,
+    ProductImage,
+    ProductSalesChannel,
     ProductTag,
     ProductVariant,
+    SalesChannel,
     Tag,
 )
 
 ACTIVE = "active"
 DRAFT = "draft"
-STATUSES = (ACTIVE, DRAFT)
+ARCHIVED = "archived"
+STATUSES = (ACTIVE, DRAFT, ARCHIVED)
+
+# Product page templates a theme can render (Product.theme_template)
+THEME_TEMPLATES = ("default", "featured", "minimal")
+
+# Every store sells through these unless it adds its own
+DEFAULT_CHANNELS = (("Online Store", "online"), ("Point of Sale", "pos"))
+
+
+def sales_channels_for(store):
+    """The store's sales channels, creating the default ones the first time."""
+    channels = SalesChannel.objects.filter(store=store)
+    if not channels.exists():
+        SalesChannel.objects.bulk_create(
+            [SalesChannel(store=store, name=name, type=kind) for name, kind in DEFAULT_CHANNELS]
+        )
+    return SalesChannel.objects.filter(store=store).order_by("created_at")
 
 
 class ProductInUse(Exception):
@@ -52,13 +74,16 @@ def save_product(store, data, product=None):
     """
     product = product or Product(store=store)
 
-    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description"):
+    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template"):
         if field in data:
             setattr(product, field, data[field])
 
     product.status = data.get("status", product.status or DRAFT)
 
-    if "category" in data:
+    # category_id: picked from the store's categories; category: a name (older clients)
+    if "category_id" in data:
+        product.category = data["category_id"]
+    elif "category" in data:
         name = (data["category"] or "").strip()
         product.category = _named(Category, store, name) if name else None
 
@@ -77,11 +102,28 @@ def save_product(store, data, product=None):
         for name in {n.strip() for n in data["tags"] if n.strip()}:
             ProductTag.objects.create(product=product, tag=_named(Tag, store, name))
 
-    if "variants" in data or "price" in data:
+    if "images" in data:
+        # The list order is the display order; the first image is the main one
+        product.images.all().delete()
+        ProductImage.objects.bulk_create(
+            [ProductImage(product=product, url=url, position=i) for i, url in enumerate(data["images"])]
+        )
+
+    if "sales_channels" in data:
+        ProductSalesChannel.objects.filter(product=product).delete()
+        ProductSalesChannel.objects.bulk_create(
+            [ProductSalesChannel(product=product, sales_channel=c) for c in dict.fromkeys(data["sales_channels"])]
+        )
+
+    if "variants" in data or "price" in data or not product.variants.exists():
         try:
             _replace_variants(product, data)
         except ProtectedError:
             raise ProductInUse("A variant that is used by orders or inventory can't be removed.")
+
+    # Opening stock for the chosen location, on the product's first variant
+    if data.get("location") is not None and data.get("quantity") is not None:
+        set_available(product.variants.order_by("created_at").first(), data["location"], data["quantity"])
 
     return product
 
@@ -92,6 +134,7 @@ def delete_product(product):
     try:
         product.product_collections.all().delete()
         product.product_tags.all().delete()
+        product.product_sales_channels.all().delete()
         product.images.all().delete()
         product.variants.all().delete()
         product.delete()
