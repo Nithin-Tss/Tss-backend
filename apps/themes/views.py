@@ -250,19 +250,33 @@ class ThemeImageView(StoreThemeView):
         return Response({"url": url}, status=status.HTTP_201_CREATED)
 
 
-# Added to the customizer preview only. Every section gets a drag handle; a drop
-# tells the customizer where the section should go. The page has no access to
-# the admin (sandboxed iframe), so it can only send these messages.
+# Added to the customizer preview only (the Home page). The page has no access to
+# the admin (sandboxed iframe), so it can only send messages.
+#
+# Edit mode, switched by the customizer's "Edit mode" button ({type: "mode"}):
+# - Off (the default): the page is the real store. No outlines, labels or drag
+#   handles; links, buttons, slideshows and forms work; clicks send nothing.
+# - On: hovering a section or block outlines it (sections show their name);
+#   a click selects it instead of following links or pressing buttons, and
+#   tells the customizer, which opens its settings. Empty space unselects;
+#   Escape unselects. Sections can be dragged to a new place by their handle.
 PREVIEW_EDITOR = """
 <style>
 [data-tss-section]{position:relative}
-[data-tss-section]:hover{outline:2px dashed rgba(20,27,45,.35);outline-offset:-2px}
-[data-tss-section].tss-selected{outline:2px solid #141b2d;outline-offset:-2px}
+.tss-edit [data-tss-section]:hover{outline:1px solid #141b2d;outline-offset:-1px}
+.tss-edit [data-tss-section].tss-selected{outline:2px solid #141b2d;outline-offset:-2px}
+.tss-edit [data-tss-section]:hover::before,.tss-edit [data-tss-section].tss-selected::before{
+  content:attr(data-tss-label);position:absolute;top:0;left:0;z-index:51;max-width:60%;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;padding:3px 8px;border-bottom-right-radius:6px;
+  background:#141b2d;color:#fff;font:600 11px/1.4 system-ui,sans-serif;pointer-events:none}
+.tss-edit [data-tss-block]{position:relative}
+.tss-edit [data-tss-block]:hover{outline:1px solid rgba(20,27,45,.55);outline-offset:2px}
+.tss-edit [data-tss-block].tss-block-selected{outline:2px solid #141b2d;outline-offset:2px}
 .tss-handle{position:absolute;top:10px;right:10px;z-index:50;display:none;align-items:center;gap:6px;
   padding:6px 10px;border:0;border-radius:8px;background:#141b2d;color:#fff;font:600 12px/1 system-ui,sans-serif;
   cursor:grab;touch-action:none;box-shadow:0 4px 12px rgba(20,27,45,.25)}
-[data-tss-section]:hover>.tss-handle,.tss-selected>.tss-handle{display:inline-flex}
-@media (hover:none){.tss-handle{display:inline-flex}}
+.tss-edit [data-tss-section]:hover>.tss-handle,.tss-edit .tss-selected>.tss-handle{display:inline-flex}
+@media (hover:none){.tss-edit .tss-handle{display:inline-flex}}
 .tss-dragging{opacity:.35}
 .tss-drop-line{position:absolute;left:0;right:0;height:4px;margin-top:-2px;background:#141b2d;border-radius:4px;
   box-shadow:0 0 0 3px rgba(20,27,45,.15);z-index:60;pointer-events:none;display:none}
@@ -271,6 +285,8 @@ PREVIEW_EDITOR = """
 (function () {
   var config = __CONFIG__;
   var selected = config.selected;
+  var selectedBlock = null;
+  var editing = false;
   var pendingImages = {};
   function send(message) { message.source = "tss-preview"; parent.postMessage(message, "*"); }
   function all() { return [].slice.call(document.querySelectorAll("[data-tss-section]")); }
@@ -280,12 +296,44 @@ PREVIEW_EDITOR = """
   line.className = "tss-drop-line";
   document.body.appendChild(line);
 
-  function select(id) {
-    selected = id;
-    all().forEach(function (el) { el.classList.toggle("tss-selected", el.getAttribute("data-tss-section") === id); });
+  // Outlines, labels and handles only show with the "tss-edit" class (see the styles above)
+  function setMode(on) {
+    editing = Boolean(on);
+    document.documentElement.classList.toggle("tss-edit", editing);
   }
 
-  // Drag handle and click-to-select on a section
+  function select(id, block, scroll) {
+    selected = id || "";
+    selectedBlock = block === undefined || block === null ? null : Number(block);
+    all().forEach(function (el) { el.classList.toggle("tss-selected", el.getAttribute("data-tss-section") === selected); });
+    document.querySelectorAll(".tss-block-selected").forEach(function (el) { el.classList.remove("tss-block-selected"); });
+    var section = selected ? byId(selected) : null;
+    if (section && selectedBlock !== null) {
+      var blockEl = section.querySelector('[data-tss-block="' + selectedBlock + '"]');
+      if (blockEl) blockEl.classList.add("tss-block-selected");
+    }
+    // Picked in the customizer's sections list: bring it into view
+    if (scroll && editing && section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Edit mode: a click selects the section or block under it, and does nothing else
+  document.addEventListener("click", function (e) {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.target.closest(".tss-handle")) return;
+    var section = e.target.closest("[data-tss-section]");
+    if (!section) { send({ type: "select", id: "", block: null }); return; }
+    var blockEl = e.target.closest("[data-tss-block]");
+    var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
+  }, true);
+  document.addEventListener("submit", function (e) { if (editing) e.preventDefault(); }, true);
+  document.addEventListener("keydown", function (e) {
+    if (editing && e.key === "Escape") send({ type: "escape" });
+  });
+
+  // Drag handle (Edit mode only: the handle is hidden otherwise)
   function enhance(el) {
     if (el.__tssReady) return;
     el.__tssReady = true;
@@ -296,11 +344,7 @@ PREVIEW_EDITOR = """
     handle.setAttribute("aria-label", "Drag to move this section");
     handle.innerHTML = "&#10303; Move";
     el.appendChild(handle);
-    handle.addEventListener("pointerdown", function (e) { startDrag(e, el, id); });
-    el.addEventListener("click", function (e) {
-      if (e.target.closest(".tss-handle") || e.target.closest("a,button,input,select,textarea,video,iframe")) return;
-      send({ type: "select", id: id });
-    });
+    handle.addEventListener("pointerdown", function (e) { if (editing) startDrag(e, el, id); });
   }
 
   function startDrag(e, el, id) {
@@ -398,7 +442,7 @@ PREVIEW_EDITOR = """
       else if (!place(fresh, message.index)) { send({ type: "need-reload" }); return; }
       runScripts(fresh);
       enhance(fresh);
-      select(selected);
+      select(selected, selectedBlock);
     });
   }
 
@@ -428,7 +472,8 @@ PREVIEW_EDITOR = """
     if (m.type === "patch") patch(m);
     else if (m.type === "remove") { var el = byId(m.id); if (el) el.remove(); }
     else if (m.type === "order") reorder(m.ids || []);
-    else if (m.type === "select") select(m.id);
+    else if (m.type === "select") select(m.id, m.block, m.scroll);
+    else if (m.type === "mode") setMode(m.edit);
     else if (m.type === "fonts") addFonts(m.html);
     else if (m.type === "pending-image") { pendingImages[m.url] = m.dataUrl; swapPending(document); }
   });
@@ -443,6 +488,9 @@ PREVIEW_EDITOR = """
     clearTimeout(timer);
     timer = setTimeout(function () { send({ type: "scroll", y: Math.round(window.scrollY) }); }, 80);
   }, { passive: true });
+
+  // Edit mode off, a link opened another store page inside the preview: the customizer is told
+  window.addEventListener("pagehide", function () { send({ type: "leaving" }); });
 
   send({ type: "ready" });
 })();
@@ -475,7 +523,8 @@ class ThemePreviewView(StoreThemeView):
             html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
 
         # Store links are site-relative (/s/<slug>/...); resolve them against the API host
-        base = f'<base href="{escape(request.build_absolute_uri("/"))}" target="_blank">'
+        # With Edit mode off, links open inside the preview, like on the real store
+        base = f'<base href="{escape(request.build_absolute_uri("/"))}" target="_self">'
         html = html.replace("<head>", "<head>" + base, 1) if "<head>" in html else base + html
 
         try:
