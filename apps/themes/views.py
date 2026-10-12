@@ -18,8 +18,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.catalog.models import Collection, Product
-from apps.catalog.services import ACTIVE
+from apps.catalog.models import Collection
+from apps.catalog.services import published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import IsStoreMember
 from apps.tenancy.models import Store
@@ -556,6 +556,7 @@ def _storefront(render):
         try:
             html = render(
                 store,
+                request.GET,
                 **kwargs,
             )
 
@@ -592,7 +593,7 @@ def _storefront(render):
 
 
 @_storefront
-def storefront_home(store):
+def storefront_home(store, params):
     return render_page(
         store,
         "index",
@@ -602,21 +603,11 @@ def storefront_home(store):
 @_storefront
 def storefront_product(
     store,
+    params,
     product_id,
 ):
-    product = (
-        Product.objects
-        .filter(
-            store=store,
-            pk=product_id,
-            status=ACTIVE,
-        )
-        .prefetch_related(
-            "images",
-            "variants",
-        )
-        .first()
-    )
+    # Same rule as the product lists: Active and on the Online Store
+    product = published_products(store).filter(pk=product_id).first()
 
     if product is None:
         raise Http404(
@@ -630,9 +621,19 @@ def storefront_product(
     )
 
 
+def _listing(params):
+    """?sort=newest|price-asc|price-desc&page=N"""
+    try:
+        page_number = int(params.get("page", 1))
+    except ValueError:
+        page_number = 1
+    return {"sort": params.get("sort", "newest"), "page_number": page_number}
+
+
 @_storefront
 def storefront_collection(
     store,
+    params,
     collection_id=None,
 ):
     if collection_id is None:
@@ -643,6 +644,7 @@ def storefront_collection(
                 "name": "All products",
                 "obj": None,
             },
+            **_listing(params),
         )
 
     collection = get_object_or_404(
@@ -658,4 +660,5 @@ def storefront_collection(
             "name": collection.name,
             "obj": collection,
         },
+        **_listing(params),
     )

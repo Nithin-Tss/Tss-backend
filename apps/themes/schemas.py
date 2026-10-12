@@ -146,6 +146,17 @@ SECTIONS = {
     },
 }
 
+# Home page "All products" grid: every Active product on the Online Store, newest
+# first, 12 at a time with "Load more", and "View all" to the all-products page
+ALL_PRODUCTS_SETTINGS = {
+    "heading": "All products",
+    "source": "newest",
+    "limit": 12,
+    "load_more": True,
+    "view_all_label": "View all",
+    "view_all_link": "/collections/all",
+}
+
 DEFAULT_TEMPLATES = {
     "index": {
         "order": ["slideshow", "featured", "carousel", "hero", "about"],
@@ -178,7 +189,7 @@ DEFAULT_TEMPLATES = {
                     },
                 ],
             },
-            "featured": {"type": "product-grid", "settings": {}},
+            "featured": {"type": "product-grid", "settings": ALL_PRODUCTS_SETTINGS},
             "carousel": {"type": "product-carousel", "settings": {"heading": "Trending now"}},
             "hero": {
                 "type": "hero",
@@ -833,6 +844,10 @@ def _product_list_settings(layout, limit, heading):
         "collection": dict(_COLLECTION, group="content", label="Collection", show_if={"source": "collection"}),
         "products": _opt("content", "products", "Products", [], max=12, show_if={"source": "products"}),
         "limit": _opt("content", "range", "Number of products", limit, min=2, max=12),
+        "load_more": _opt(
+            "content", "checkbox", "Show \"Load more\" button", False,
+            help="Shows the number of products above first, then more on each click.",
+        ),
         "view_all_label": _opt("content", "text", "\"View all\" button text", "", help="Leave empty to hide it."),
         "view_all_link": _opt("content", "url", "\"View all\" link", "/collections/all"),
         "layout": _choice("layout", "Display as", ["grid", "carousel"], layout, ui="segmented"),

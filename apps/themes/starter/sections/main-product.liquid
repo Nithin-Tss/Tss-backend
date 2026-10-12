@@ -27,7 +27,11 @@
         <p class="product__meta">{{ product.vendor }}</p>
       {%- endif -%}
       <h1>{{ product.title }}</h1>
-      <div class="product__price" data-price>{% render 'price', product: product %}</div>
+      <div class="product__price" data-price>{% render 'price', product: product %}{% if product.is_sold_out %} <span class="price price--muted">Sold out</span>{% endif %}</div>
+      {%- assign shown_variant = product.variants.first -%}
+      <p class="product__stock{% if product.is_sold_out %} product__stock--out{% elsif shown_variant.available_total <= 5 %} product__stock--few{% endif %}" data-stock>
+        {%- if product.is_sold_out %}Sold out{% elsif shown_variant.available_total <= 5 %}Only a few left{% else %}In stock{% endif -%}
+      </p>
 
       <form class="product__form" data-product-form>
         {%- if product.variants.size > 1 -%}
@@ -35,7 +39,7 @@
             <span>Option</span>
             <select name="variant" data-variant>
               {%- for variant in product.variants -%}
-                <option value="{{ variant.id }}" data-price="{{ variant.price | money }}" data-sku="{{ variant.sku }}">
+                <option value="{{ variant.id }}" data-price="{{ variant.price | money }}" data-sku="{{ variant.sku }}" data-available="{{ variant.available_total }}">
                   {{ variant.sku | default: 'Option' }}{% if variant.sku == blank %} {{ forloop.index }}{% endif %} — {{ variant.price | money }}
                 </option>
               {%- endfor -%}
@@ -48,11 +52,14 @@
         {%- if s.show_quantity -%}
           <label class="field">
             <span>Quantity</span>
-            <input type="number" name="quantity" value="1" min="1" max="99">
+            <input type="number" name="quantity" value="1" min="1" max="99" data-quantity{% if product.is_sold_out %} disabled{% endif %}>
           </label>
         {%- endif -%}
 
-        <button class="button" type="submit"{% if product.variants.size == 0 %} disabled{% endif %}>Add to cart</button>
+        {%- comment -%} Sold out: one disabled "Sold out" button instead of "Add to cart" {%- endcomment -%}
+        <button class="button" type="submit" data-add{% if product.is_sold_out or shown_variant.available_total <= 0 %} disabled{% endif %}>
+          {%- if product.is_sold_out or shown_variant.available_total <= 0 %}Sold out{% else %}Add to cart{% endif -%}
+        </button>
         <p class="product__notice" role="status" data-notice></p>
       </form>
 
@@ -88,6 +95,17 @@
         root.querySelector("[data-price] .price").textContent = option.dataset.price;
         var sku = root.querySelector("[data-sku]");
         if (sku) sku.textContent = option.dataset.sku;
+
+        // Stock of the chosen option
+        var left = Number(option.dataset.available);
+        var add = root.querySelector("[data-add]");
+        var qty = root.querySelector("[data-quantity]");
+        var stock = root.querySelector("[data-stock]");
+        add.disabled = left <= 0;
+        add.textContent = left <= 0 ? "Sold out" : "Add to cart";
+        if (qty) qty.disabled = left <= 0;
+        stock.textContent = left <= 0 ? "Sold out" : left <= 5 ? "Only a few left" : "In stock";
+        stock.className = "product__stock" + (left <= 0 ? " product__stock--out" : left <= 5 ? " product__stock--few" : "");
       });
     }
 

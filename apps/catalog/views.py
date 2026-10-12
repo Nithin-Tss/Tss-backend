@@ -188,7 +188,9 @@ class ProductViewSet(StoreScopedViewSet):
 
         valid, errors = [], []
         for index, row in enumerate(rows):
-            serializer = ProductInputSerializer(data=row, context=self.get_serializer_context())
+            serializer = ProductInputSerializer(
+                data=row, context={**self.get_serializer_context(), "location_optional": True}
+            )
             if serializer.is_valid():
                 if not (serializer.validated_data.get("sku") or "").strip():
                     errors.append({"index": index, "message": "sku: SKU is required."})

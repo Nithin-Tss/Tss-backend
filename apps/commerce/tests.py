@@ -5,7 +5,10 @@ from django.urls import include, path
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
-from apps.catalog.models import Product, ProductVariant
+from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
+from apps.catalog.services import online_channels
+from apps.inventory.models import Location
+from apps.inventory.services import set_available
 from apps.tenancy.models import Store
 
 from . import services
@@ -23,6 +26,11 @@ class CommerceTestBase(APITestCase):
         self.store = Store.objects.create(store_name="Shop", store_slug="shop", status="active")
         self.product = Product.objects.create(store=self.store, title="Tee", status="active")
         self.variant = ProductVariant.objects.create(product=self.product, sku="TEE-1", price=Decimal("499.00"))
+        # Shoppers can only buy what is on the Online Store and in stock
+        for channel in online_channels(self.store):
+            ProductSalesChannel.objects.create(product=self.product, sales_channel=channel)
+        self.location = Location.objects.create(store=self.store, name="Main warehouse")
+        set_available(self.variant, self.location, 10)
 
 
 class CartServiceTests(CommerceTestBase):
@@ -46,6 +54,20 @@ class CartServiceTests(CommerceTestBase):
         cart = services.get_or_create_cart(self.store, session_id="s1")
         with self.assertRaises(ValidationError):
             services.add_item(cart, self.product, 1)
+
+    def test_sold_out_is_blocked_with_a_message(self):
+        cart = services.get_or_create_cart(self.store, session_id="s1")
+        item = services.add_item(cart, self.product, 10)
+        with self.assertRaises(ValidationError) as raised:
+            services.set_quantity(cart, item.pk, 11)
+        self.assertIn("Only 10 of Tee left", str(raised.exception))
+
+        set_available(self.variant, self.location, 0)
+        with self.assertRaises(ValidationError) as raised:
+            services.add_item(cart, self.product, 1)
+        self.assertIn("Tee is sold out", str(raised.exception))
+        with self.assertRaises(ValidationError):
+            services.start_checkout(cart)  # ran out after it was added
 
     def test_zero_quantity_removes_line(self):
         cart = services.get_or_create_cart(self.store, session_id="s1")

@@ -5,6 +5,7 @@ from django.db import models
 from apps.commerce.models import Checkout
 from apps.customers.models import Customer
 from apps.tenancy.models import Store
+from apps.orders.models import Order
 
 
 class Payment(models.Model):
@@ -30,13 +31,13 @@ class Payment(models.Model):
         blank=True,
     )
 
-    # Deferred until orders.Order exists.
-    # The final database design requires this to become:
-    # order_id UUID FK -> orders.orders.id, NULL
-    order_id = models.UUIDField(
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.PROTECT,
+        db_column="order_id",
+        related_name="payments",
         null=True,
         blank=True,
-        db_column="order_id",
     )
 
     customer = models.ForeignKey(
