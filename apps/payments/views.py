@@ -32,7 +32,7 @@ class PaymentViewSet(
     def get_queryset(self):
         qs = super().get_queryset()
         if self.request.query_params.get("order"):
-            qs = qs.filter(order_id=self.request.query_params["order"])
+            qs = qs.filter(order=self.request.query_params["order"])
         return qs
 
     def create(self, request, *args, **kwargs):

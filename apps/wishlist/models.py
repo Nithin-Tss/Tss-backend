@@ -5,7 +5,7 @@ from django.db import models
 from apps.catalog.models import Product, ProductVariant
 from apps.customers.models import Customer
 from apps.tenancy.models import Store
-
+#wishlisht changes
 
 class Wishlist(models.Model):
     id = models.UUIDField(
