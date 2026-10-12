@@ -28,7 +28,7 @@ def refunded_total(payment):
 def record_payment(store, order, amount, provider="manual", currency=None, reference=None):
     payment = Payment.objects.create(
         store=store,
-        order_id=order.pk,
+        order=order,
         customer=order.customer,
         currency=currency or order.currency_code,
         amount=amount,
@@ -74,6 +74,6 @@ def refund(payment, amount, reason=None):
 def paid_total(order):
     """Captured minus refunded, across all payments for this order."""
     total = Decimal("0.00")
-    for payment in Payment.objects.filter(order_id=order.pk, is_deleted=False):
+    for payment in Payment.objects.filter(order=order, is_deleted=False):
         total += payment.amount - refunded_total(payment)
     return total
