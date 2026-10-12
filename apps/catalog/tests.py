@@ -573,3 +573,75 @@ def published_products_for(store_id):
     from .services import published_products
 
     return published_products(Store.objects.get(pk=store_id))
+
+
+class BackToAdminBarTests(APITestCase):
+    """"View store" opens the storefront with a "Back to admin" bar, for the store's own users only."""
+
+    def setUp(self):
+        from django.conf import settings
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "bar@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.back = settings.FRONTEND_URL.rstrip("/") + "/admin/online-store/products?page=2"
+
+    def view_store(self, return_url=None, path="/"):
+        r = self.client.post("/api/v1/themes/storefront-link/", {"path": path, "return_url": return_url or self.back}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        url = r.json()["url"]
+        landing = self.client.get(url[url.index("/s/"):])  # swaps the token for this visit's cookie
+        self.assertEqual(landing.status_code, 302)
+        self.assertNotIn("admin_bar", landing["Location"])  # the token doesn't stay in the address bar
+        return landing["Location"]
+
+    def page(self, path=None, **headers):
+        return self.client.get(path or f"/s/{self.store.store_slug}/", **headers).content.decode()
+
+    def test_member_sees_bar_with_way_back(self):
+        self.assertEqual(self.view_store(), f"/s/{self.store.store_slug}/")
+        html = self.page()
+        self.assertIn('id="tss-admin-bar"', html)
+        self.assertIn(f'href="{self.back.replace("&", "&amp;")}"', html)
+        self.assertIn("Back to admin", html)
+        self.assertIn(f"<span>{self.store.store_name}</span>", html)
+        self.assertLess(html.index('id="tss-admin-bar"'), html.index('class="site-header"'))  # above the store's header
+        self.assertIn('id="tss-admin-bar"', self.page(f"/s/{self.store.store_slug}/collections/all"))  # every page
+
+    def test_visitors_and_previews_never_see_it(self):
+        self.view_store()
+        self.assertNotIn("tss-admin-bar", self.page(HTTP_SEC_FETCH_DEST="iframe"))  # customizer preview
+
+        from rest_framework.test import APIClient
+        shopper = APIClient()
+        self.assertNotIn("tss-admin-bar", shopper.get(f"/s/{self.store.store_slug}/").content.decode())
+        forged = shopper.get(f"/s/{self.store.store_slug}/?admin_bar=not-a-real-token")
+        self.assertNotIn("tss_admin_bar", forged.cookies)
+
+    def test_only_while_still_a_member(self):
+        self.view_store()
+        self.store.memberships.update(status="removed")
+        self.assertNotIn("tss-admin-bar", self.page())
+
+    def test_hide_for_this_visit(self):
+        self.view_store()
+        r = self.client.get(f"/s/{self.store.store_slug}/collections/all?admin_bar_hide=1")
+        self.assertEqual(r["Location"], f"/s/{self.store.store_slug}/collections/all")
+        self.assertNotIn("tss-admin-bar", self.page())
+
+    def test_unknown_return_page_goes_to_admin_home(self):
+        from django.conf import settings
+
+        self.view_store(return_url="https://evil.example.com/phish")
+        self.assertIn(f'href="{settings.FRONTEND_URL.rstrip("/")}/admin/online-store/home"', self.page())
+
+    def test_link_for_one_store_does_not_work_on_another(self):
+        r = self.client.post("/api/v1/themes/storefront-link/", {"return_url": self.back}, format="json")
+        token = r.json()["url"].split("admin_bar=")[1]
+        token2, other_id = signup(self.client, "bar-other@example.com")
+        from apps.tenancy.models import Store
+
+        other = Store.objects.get(pk=other_id)
+        self.client.get(f"/s/{other.store_slug}/?admin_bar={token}")
+        self.assertNotIn("tss-admin-bar", self.client.get(f"/s/{other.store_slug}/").content.decode())

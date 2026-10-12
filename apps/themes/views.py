@@ -1,9 +1,12 @@
 import json
+import re
 import uuid
+from urllib.parse import urlencode
 
 from django.conf import settings
+from django.core import signing
 from django.core.files.storage import default_storage
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.http import require_GET
@@ -22,7 +25,7 @@ from apps.catalog.models import Collection
 from apps.catalog.services import published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import IsStoreMember
-from apps.tenancy.models import Store
+from apps.tenancy.models import Store, StoreMembership
 
 from .customizer import read_settings, save_settings, validate_settings
 from .rendering import render_page, shop_url
@@ -534,6 +537,131 @@ def theme_css(request, theme_id):
 # Storefront
 # ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# "Back to admin" bar
+#
+# "View store" in the admin asks StorefrontLinkView for a link with a
+# short-lived signed token. The storefront swaps it for a cookie limited to
+# that store's pages (this browser session), then shows a slim bar on top of
+# every store page - only while the user is still an active member of the
+# store (owner, admin or staff). Shoppers and logged-out visitors never have
+# the cookie, so they never see the bar.
+# ------------------------------------------------------------
+
+ADMIN_BAR_SALT = "themes.admin-bar"
+ADMIN_BAR_COOKIE = "tss_admin_bar"
+ADMIN_BAR_LINK_AGE = 5 * 60  # seconds the "View store" link works
+ADMIN_BAR_VISIT_AGE = 12 * 60 * 60  # a visit lasts at most this long
+ADMIN_HOME = "/admin/online-store/home"
+
+
+def _admin_origins():
+    return [o.rstrip("/") for o in [settings.FRONTEND_URL, *getattr(settings, "CORS_ALLOWED_ORIGINS", [])] if o]
+
+
+def _safe_return_url(url):
+    """An admin page on this site's frontend; otherwise the admin Home."""
+    url = str(url or "")
+    if any(url == o or url.startswith(o + "/") for o in _admin_origins()):
+        return url
+    return settings.FRONTEND_URL.rstrip("/") + ADMIN_HOME
+
+
+def _member_visit(store, data):
+    """The signed visit data if it is for this store and the user still belongs to it."""
+    if not isinstance(data, dict) or data.get("s") != str(store.store_id):
+        return None
+    active = StoreMembership.objects.filter(user_id=data.get("u"), store=store, status="active").exists()
+    return data if active else None
+
+
+def _admin_visit(request, store):
+    try:
+        data = signing.loads(request.COOKIES.get(ADMIN_BAR_COOKIE, ""), salt=ADMIN_BAR_SALT, max_age=ADMIN_BAR_VISIT_AGE)
+    except signing.BadSignature:
+        return None
+    return _member_visit(store, data)
+
+
+def _admin_bar_redirect(request, store):
+    """
+    ?admin_bar=<token>: start a visit (sets the cookie). ?admin_bar_hide=1: hide
+    the bar for the rest of the visit. Either way, go on to the clean URL.
+    """
+    params = request.GET.copy()
+    token = params.pop("admin_bar", [None])[0]
+    hide = params.pop("admin_bar_hide", None) is not None
+    response = HttpResponseRedirect(request.path + (f"?{params.urlencode()}" if params else ""))
+
+    if token is not None:
+        try:
+            visit = _member_visit(store, signing.loads(token, salt=ADMIN_BAR_SALT, max_age=ADMIN_BAR_LINK_AGE))
+        except signing.BadSignature:
+            visit = None
+    else:
+        visit = _admin_visit(request, store)
+
+    if visit is not None:
+        response.set_cookie(
+            ADMIN_BAR_COOKIE,
+            signing.dumps({**visit, "h": hide}, salt=ADMIN_BAR_SALT),
+            path=f"/s/{store.store_slug}/",  # this store's pages only
+            httponly=True,
+            samesite="Lax",
+            secure=request.is_secure(),
+        )
+    return response
+
+
+ADMIN_BAR_HTML = """<div id="tss-admin-bar" role="region" aria-label="Store admin">
+<style>
+#tss-admin-bar{{position:relative;z-index:2147483000;display:flex;align-items:center;gap:8px;height:40px;padding:0 6px 0 8px;
+background:#141b2d;color:#fff;font:500 14px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;box-sizing:border-box}}
+#tss-admin-bar a,#tss-admin-bar button{{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:0;border-radius:6px;
+background:transparent;color:#fff;font:inherit;text-decoration:none;cursor:pointer;white-space:nowrap;transition:background .15s}}
+#tss-admin-bar a:hover,#tss-admin-bar button:hover,#tss-admin-bar a:focus-visible,#tss-admin-bar button:focus-visible{{background:rgba(255,255,255,.14);outline:none}}
+#tss-admin-bar span{{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}}
+#tss-admin-bar button{{padding:0 10px;font-size:20px;line-height:1}}
+</style>
+<a href="{back}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>Back to admin</a>
+<span>{name}</span>
+<button type="button" aria-label="Hide this bar" title="Hide for this visit"
+onclick="document.getElementById('tss-admin-bar').remove();var u=new URL(location.href);u.searchParams.set('admin_bar_hide','1');location.replace(u.href)">&times;</button>
+</div>"""
+
+
+def _with_admin_bar(html, store, visit):
+    """The bar goes first inside <body>, in the page flow: it pushes the store's own header down."""
+    bar = ADMIN_BAR_HTML.format(back=escape(_safe_return_url(visit.get("r"))), name=escape(store.store_name))
+    html, found = re.subn(r"<body\b[^>]*>", lambda m: m.group(0) + bar, str(html), count=1, flags=re.IGNORECASE)
+    return html if found else bar + html
+
+
+class StorefrontLinkView(APIView):
+    """
+    POST /api/v1/themes/storefront-link/  {"path": "/products/<id>", "return_url": "<admin page>"}
+    -> {"url": ...}: the active store's storefront, with the "Back to admin" bar for this user.
+    """
+
+    permission_classes = [IsAuthenticated, IsStoreMember]
+
+    def post(self, request):
+        path = str(request.data.get("path") or "/")
+        if not path.startswith("/") or path.startswith("//"):
+            path = "/"
+        token = signing.dumps(
+            {
+                "u": str(request.user.pk),
+                "s": str(request.store.store_id),
+                "r": _safe_return_url(request.data.get("return_url")),
+            },
+            salt=ADMIN_BAR_SALT,
+        )
+        url = request.build_absolute_uri(shop_url(request.store) + path)
+        return Response({"url": url + ("&" if "?" in url else "?") + urlencode({"admin_bar": token})})
+
+
 def _storefront(render):
     """
     Wraps a public storefront view.
@@ -552,6 +680,9 @@ def _storefront(render):
             Store,
             store_slug=store_slug,
         )
+
+        if "admin_bar" in request.GET or "admin_bar_hide" in request.GET:
+            return _admin_bar_redirect(request, store)
 
         try:
             html = render(
@@ -574,6 +705,12 @@ def _storefront(render):
             )
 
             status_code = 500
+
+        # Store members who came from "View store" get the "Back to admin" bar.
+        # Never inside a frame (the customizer's live preview).
+        visit = _admin_visit(request, store)
+        if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
+            html = _with_admin_bar(html, store, visit)
 
         response = HttpResponse(
             html,

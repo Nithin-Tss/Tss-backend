@@ -8,6 +8,7 @@ from .views import (
     ThemeRenameView,
     ThemeSchemaView,
     ThemeSettingsView,
+    StorefrontLinkView,
     theme_css,
 )
  
@@ -58,6 +59,12 @@ urlpatterns = [
         "preview/",
         ThemePreviewView.as_view(),
         name="theme_preview",
+    ),
+
+    path(
+        "storefront-link/",
+        StorefrontLinkView.as_view(),
+        name="theme_storefront_link",
     ),
 ]
  
