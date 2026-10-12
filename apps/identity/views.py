@@ -205,7 +205,7 @@ class ChangePasswordView(APIView):
 
 class MeView(APIView):
     """
-    GET   /api/v1/auth/me/  the signed-in user and their stores
+    GET    /api/v1/auth/me/  the signed-in user and their stores
     PATCH /api/v1/auth/me/  {firstName, lastName, email, mobileNumber} (any of them)
                             -> {user, stores}
 
