@@ -50,6 +50,8 @@ from .services import (
 
     delete_variant,
 
+    import_products,
+
     sales_channels_for,
 
     save_product,
@@ -63,6 +65,8 @@ from .services import (
 # Product photos: JPG, PNG or WEBP up to 5MB, checked by their first bytes, not the file name
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
+MAX_BULK_ROWS = 500
 
 IMAGE_SIGNATURES = {"jpg": (b"\xff\xd8\xff",), "png": (b"\x89PNG\r\n\x1a\n",)}
 
@@ -167,6 +171,32 @@ class ProductViewSet(StoreScopedViewSet):
             raise ValidationError(str(e))
 
 
+
+    @action(detail=False, methods=["post"], url_path="bulk")
+    def bulk(self, request):
+        """
+        POST /api/v1/catalog/products/bulk/  {"products": [row, ...]}  (up to 500 rows)
+        -> {"created": n, "skipped": n, "errors": [{"index": i, "message": "..."}]}
+        Used by the admin "Import products" popup. Invalid rows are reported, not fatal.
+        """
+        rows = request.data.get("products")
+        if not isinstance(rows, list) or not rows:
+            raise ValidationError({"products": "Send a non-empty list of products."})
+        if len(rows) > MAX_BULK_ROWS:
+            raise ValidationError({"products": f"Send at most {MAX_BULK_ROWS} products per request."})
+
+        valid, errors = [], []
+        for index, row in enumerate(rows):
+            serializer = ProductInputSerializer(data=row, context=self.get_serializer_context())
+            if serializer.is_valid():
+                valid.append(serializer.validated_data)
+                continue
+            field, messages = next(iter(serializer.errors.items()))
+            message = messages[0] if isinstance(messages, list) else str(messages)
+            errors.append({"index": index, "message": f"{field}: {message}"})
+
+        created, skipped = import_products(request.store, valid) if valid else (0, 0)
+        return Response({"created": created, "skipped": skipped, "errors": errors})
 
     @action(detail=False, methods=["post"], url_path="images", parser_classes=[MultiPartParser])
 
