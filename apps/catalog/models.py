@@ -103,6 +103,34 @@ class Product(models.Model):
         blank=True,
     )
 
+    # Created 10 more empty text fields for further use.
+    food_recommendations = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    storage_suggestions = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    allergens = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    
+    column1 = models.TextField(null=True, blank=True)
+    column2 = models.TextField(null=True, blank=True)
+    column3 = models.TextField(null=True, blank=True)
+    column4 = models.TextField(null=True, blank=True)
+    column5 = models.TextField(null=True, blank=True)
+    column6 = models.TextField(null=True, blank=True)
+    column7 = models.TextField(null=True, blank=True)
+
+
+
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
