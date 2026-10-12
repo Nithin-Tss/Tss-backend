@@ -16,6 +16,8 @@ class Store(models.Model):
         unique=True,
     )
     status = models.CharField(max_length=30)
+    # Names the owner gave the generic product columns, e.g. {"column1": "Ingredients"}
+    field_labels = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
