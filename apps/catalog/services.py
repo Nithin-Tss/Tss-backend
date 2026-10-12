@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import PROTECT, ProtectedError
 from rest_framework.exceptions import ValidationError
 
 from apps.inventory.services import set_available
@@ -148,18 +148,50 @@ def save_product(store, data, product=None):
     return product
 
 
-@transaction.atomic
 def delete_product(product):
-    """Delete a product and everything hanging off it, or raise ProductInUse."""
+    """Delete a product and everything hanging off it, or raise ProductInUse (nothing is removed then)."""
     try:
-        product.product_collections.all().delete()
-        product.product_tags.all().delete()
-        product.product_sales_channels.all().delete()
-        product.images.all().delete()
-        product.variants.all().delete()
-        product.delete()
+        with transaction.atomic():
+            product.product_collections.all().delete()
+            product.product_tags.all().delete()
+            product.product_sales_channels.all().delete()
+            product.images.all().delete()
+            product.variants.all().delete()
+            product.delete()
     except ProtectedError:
         raise ProductInUse("This product is used by orders or inventory. Set it to Draft instead.")
+
+
+def _protected_product_ids(ids):
+    """Ids among `ids` whose product, or one of its variants, a PROTECT foreign key still points at."""
+    children = (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant)
+    blocked = set()
+    for rel in Product._meta.related_objects:
+        if rel.on_delete is PROTECT and rel.related_model not in children:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids})
+                           .values_list(rel.field.name, flat=True))
+    for rel in ProductVariant._meta.related_objects:
+        if rel.on_delete is PROTECT:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
+                           .values_list(f"{rel.field.name}__product_id", flat=True))
+    return blocked
+
+
+def delete_products(store, ids):
+    """
+    Delete the store's products with these ids in a handful of queries.
+    Products used by orders or inventory are left alone.
+    Returns (deleted count, titles of those kept).
+    """
+    products = {p.pk: p.title for p in Product.objects.filter(store=store, pk__in=ids)}
+    blocked = _protected_product_ids(list(products))
+    free = [pk for pk in products if pk not in blocked]
+    if free:
+        with transaction.atomic():
+            for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
+                model.objects.filter(product__in=free).delete()
+            Product.objects.filter(pk__in=free).delete()
+    return len(free), sorted(products[pk] for pk in blocked)
 
 
 def _apply_variant(variant, row, default_price=None):

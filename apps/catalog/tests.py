@@ -76,6 +76,23 @@ class ProductApiTests(APITestCase):
         self.assertEqual(self.client.get(f"{URL}{p['id']}/").status_code, 404)
         self.assertFalse(Product.objects.filter(pk=p["id"]).exists())
 
+    def test_bulk_delete(self):
+        a, b, c = self.create(title="A"), self.create(title="B"), self.create(title="C")
+        r = self.client.post(URL + "bulk-delete/", {"ids": [a["id"], b["id"]]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {"deleted": 2, "blocked": []})
+        self.assertEqual(list(Product.objects.values_list("title", flat=True)), ["C"])
+        self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": []}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": ["x"]}, format="json").status_code, 400)
+
+    def test_bulk_delete_keeps_stocked_products(self):
+        stocked, plain = self.create(title="Stocked", collections=["C"]), self.create(title="Plain")
+        variant = ProductVariant.objects.get(pk=stocked["variants"][0]["id"])
+        self.stock(variant)
+        r = self.client.post(URL + "bulk-delete/", {"ids": [stocked["id"], plain["id"]]}, format="json")
+        self.assertEqual(r.json(), {"deleted": 1, "blocked": ["Stocked"]})
+        self.assertEqual(self.client.get(f"{URL}{stocked['id']}/").json()["collections"], ["C"])
+
     def test_delete_blocked_when_stocked(self):
         p = self.create()
         variant = ProductVariant.objects.get(pk=p["variants"][0]["id"])
