@@ -9,7 +9,8 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.catalog.services import ACTIVE as PRODUCT_ACTIVE
+from apps.catalog.services import published_products
+from apps.inventory.services import sellable
 
 from .models import Cart, CartItem, Checkout, CheckoutItem
 
@@ -54,6 +55,15 @@ def _open_cart(cart):
     return cart
 
 
+def _check_stock(product, variant, quantity):
+    """Quantity 0 (or no stock record) is sold out; never sell more than is available."""
+    in_stock = sellable(variant) if variant is not None else 0
+    if in_stock <= 0:
+        raise ValidationError({"product": f"{product.title} is sold out."})
+    if quantity > in_stock:
+        raise ValidationError({"quantity": f"Only {in_stock} of {product.title} left."})
+
+
 @transaction.atomic
 def add_item(cart, product, quantity, variant=None):
     """Add a product to the cart; adding it again raises the quantity."""
@@ -61,7 +71,8 @@ def add_item(cart, product, quantity, variant=None):
 
     if quantity < 1:
         raise ValidationError({"quantity": "Must be at least 1."})
-    if product.store_id != cart.store_id or product.status != PRODUCT_ACTIVE:
+    # Same rule as the storefront: Active and on the Online Store
+    if product.store_id != cart.store_id or not published_products(cart.store).filter(pk=product.pk).exists():
         raise ValidationError({"product": "This product isn't available."})
     if variant is not None and variant.product_id != product.pk:
         raise ValidationError({"variant": f"Doesn't belong to {product.title}."})
@@ -69,6 +80,7 @@ def add_item(cart, product, quantity, variant=None):
         variant = product.variants.order_by("created_at").first()
 
     item = CartItem.objects.filter(cart=cart, product=product, variant=variant, is_deleted=False).first()
+    _check_stock(product, variant, quantity + (item.quantity if item else 0))
 
     if item:
         item.quantity += quantity
@@ -101,6 +113,7 @@ def set_quantity(cart, item_id, quantity):
         item.deleted_at = timezone.now()
         item.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
     else:
+        _check_stock(item.product, item.variant, quantity)
         item.quantity = quantity
         item.save(update_fields=["quantity", "updated_at"])
     return item
@@ -125,6 +138,9 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
 
     if not items:
         raise ValidationError("The cart is empty.")
+    # Stock may have run out since the items were added
+    for item in items:
+        _check_stock(item.product, item.variant, item.quantity)
 
     checkout = Checkout.objects.filter(cart=cart, status=CHECKOUT_OPEN, is_deleted=False).first()
 

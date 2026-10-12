@@ -498,3 +498,78 @@ class AllProductsStorefrontTests(APITestCase):
         self.assertIn("Old import", self.page("collections/all"))
         self.assertNotIn("Shop only", self.page("collections/all"))  # an owner's choice is kept
         self.assertEqual(kept_off["sales_channels"], [self.channels["pos"]])
+
+
+class SoldOutBadgeTests(APITestCase):
+    """Quantity 0 shows "Sold out" on the product card and the product page; stock above 0 does not."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "soldout@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+
+    def product(self, title, sku, quantity):
+        body = {"title": title, "status": "active", "price": "10", "sku": sku}
+        if quantity is not None:
+            body.update(location=self.location["id"], quantity=quantity)
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def html(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}").content.decode()
+
+    def card(self, listing, title):
+        start = listing.rindex('<a class="product-card', 0, listing.index(f'product-card__title">{title}<'))
+        return listing[start:listing.index("</a>", start)]
+
+    def test_quantity_zero_shows_sold_out_and_ten_does_not(self):
+        empty = self.product("Empty vase", "SO-0", 0)
+        stocked = self.product("Full vase", "SO-10", 10)
+        listing = self.html("collections/all")
+
+        card = self.card(listing, "Empty vase")
+        self.assertIn("product-card--sold-out", card)
+        self.assertIn('product-card__badge">Sold out</span>', card)
+        self.assertIn(f'href="/s/{self.slug}/products/{empty["id"]}"', card)  # still clickable
+        self.assertNotIn("Sold out", self.card(listing, "Full vase"))
+
+        page = self.html(f"products/{empty['id']}")
+        self.assertRegex(page, r"data-add disabled>\s*Sold out")
+        self.assertIn("data-quantity disabled", page)
+        self.assertNotRegex(page, r"data-add>\s*Add to cart")  # the button itself
+
+        page = self.html(f"products/{stocked['id']}")
+        # ("Sold out" still appears on this page: the "You may also like" card of the empty vase)
+        self.assertNotIn('price--muted">Sold out', page)
+        self.assertNotIn("data-add disabled", page)
+        self.assertRegex(page, r"data-add>\s*Add to cart")
+        self.assertRegex(page, r"data-stock>\s*In stock")
+
+    def test_few_left_and_no_stock_record(self):
+        few = self.product("Last ones", "SO-3", 3)
+        self.assertRegex(self.html(f"products/{few['id']}"), r"data-stock>\s*Only a few left")
+
+        untracked = self.product("Never stocked", "SO-NONE", None)  # no stock record at all
+        self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
+        self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add disabled>\s*Sold out")
+
+    def test_stock_value_is_a_number(self):
+        from apps.themes.rendering import product_drop
+
+        self.product("Counted", "SO-7", 7)
+        product = published_products_for(self.store_id).get(title="Counted")
+        drop = product_drop(product, "/s/x")
+        self.assertIs(type(drop["available_total"]), int)
+        self.assertEqual((drop["available_total"], drop["is_sold_out"]), (7, False))
+
+
+def published_products_for(store_id):
+    from apps.tenancy.models import Store
+
+    from .services import published_products
+
+    return published_products(Store.objects.get(pk=store_id))

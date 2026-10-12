@@ -93,7 +93,10 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .cards--bordered .product-card{border:1px solid var(--line,rgba(0,0,0,.12))}
 .product-card__rating{font-size:13px;color:#B7791F}.product-card__rating span{color:var(--muted)}
 .product-card__media{position:relative}
-.product-card__badge{position:absolute;top:10px;left:10px;z-index:1;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--bg,#fff);color:var(--text,#161C2C);box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.product-card__badge{position:absolute;top:10px;left:10px;z-index:1;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#141b2d;color:#fff}
+.product-card--sold-out .product-card__media img,.product-card--sold-out .product-card__media .placeholder{opacity:.6}
+.product__stock{font-size:14px;font-weight:600;margin:-12px 0 16px}
+.product__stock--few{color:#B45309}.product__stock--out{color:var(--muted)}
 .product-list__more{display:flex;justify-content:center;margin-top:28px}
 .pagination{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:32px}
 .collection-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}
@@ -504,17 +507,21 @@ SORTS = {
 }
 
 
-def _sold_out(variants):
-    """Every variant has a stock record and none has any available: quantity 0 is "Sold out"."""
-    items = [i for v in variants for i in v.inventory_items.all()]
-    tracked = bool(variants) and all(v.inventory_items.all() for v in variants)
-    return tracked and sum(i.available for i in items) <= 0
+# "Only a few left" at this quantity or lower
+FEW_LEFT = 5
+
+
+def _available(variant):
+    """Available stock of one variant over all locations; no stock record counts as 0."""
+    return sum(max(item.available, 0) for item in variant.inventory_items.all())
 
 
 def product_drop(product, base_url):
     images = [i.url for i in sorted(product.images.all(), key=lambda i: i.position)]
     variants = sorted(product.variants.all(), key=lambda v: v.created_at)
     prices = [v.price for v in variants]
+    stock = {v.id: _available(v) for v in variants}
+    available_total = sum(stock.values())
 
     return {
         "id": str(product.id),
@@ -529,11 +536,15 @@ def product_drop(product, base_url):
         "images": images,
         "featured_image": images[0] if images else None,
         "tags": [pt.tag.name for pt in product.product_tags.all()],
-        "sold_out": _sold_out(variants),
+        # Stock for the templates: a number and a true/false. Quantity 0 (or no stock record) is sold out.
+        "available_total": available_total,
+        "is_sold_out": available_total <= 0,
+        "few_left": 0 < available_total <= FEW_LEFT,
+        "sold_out": available_total <= 0,  # older name, kept for theme copies that still use it
         "rating": round(float(product.avg_rating), 1) if getattr(product, "avg_rating", None) else None,
         "review_count": getattr(product, "review_count", 0) or 0,
         "variants": [
-            {"id": str(v.id), "sku": v.sku or "", "price": v.price}
+            {"id": str(v.id), "sku": v.sku or "", "price": v.price, "available_total": stock[v.id]}
             for v in variants
         ],
     }

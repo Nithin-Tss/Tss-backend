@@ -8,12 +8,18 @@ consistent:  on_hand = available + committed + unavailable
 A variant with no inventory rows is "not tracked": it never blocks a sale.
 """
 from django.db import transaction
+from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
 from .models import InventoryItem, Location
 
 # Where stock goes when none is chosen (imports) and the store has no location yet
 DEFAULT_LOCATION = "Main warehouse"
+
+
+def sellable(variant):
+    """Units of `variant` a shopper can buy: available stock over all locations, 0 with no stock record."""
+    return InventoryItem.objects.filter(variant=variant).aggregate(total=Sum("available"))["total"] or 0
 
 
 def default_location(store):
