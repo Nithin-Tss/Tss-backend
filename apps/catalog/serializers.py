@@ -63,7 +63,9 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), required=False, allow_null=True
     )
-    theme_template = serializers.ChoiceField(choices=THEME_TEMPLATES, required=False)
+    theme_template = serializers.ChoiceField(
+        choices=THEME_TEMPLATES, required=False, allow_null=True, allow_blank=True
+    )
     images = serializers.ListField(
         child=serializers.CharField(max_length=2000),
         required=False,
@@ -85,7 +87,11 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
 
     def to_internal_value(self, data):
         if hasattr(data, "get"):
-            blanks = {k: None for k in ("price", "quantity", "location", "category_id") if data.get(k) == ""}
+            blanks = {
+                k: None
+                for k in ("price", "quantity", "location", "category_id", "theme_template")
+                if data.get(k) == ""
+            }
             if blanks:
                 data = {**data, **blanks}
         return super().to_internal_value(data)
@@ -199,9 +205,92 @@ class SalesChannelSerializer(serializers.ModelSerializer):
 
 
 class CollectionSerializer(serializers.ModelSerializer):
+    products_count = serializers.SerializerMethodField()
+    sales_channels = serializers.SerializerMethodField()
+    sales_channels_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Collection
-        fields = ["id", "name"]
+        fields = [
+            "id",
+            "name",
+            "description",
+            "image_url",
+            "conditions",
+            "theme_template",
+            "seo_title",
+            "seo_description",
+            "products_count",
+            "sales_channels",
+            "sales_channels_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def get_products_count(self, obj):
+        if hasattr(obj, "products_count_annotated"):
+            return obj.products_count_annotated
+        return obj.product_collections.count()
+
+    def get_sales_channels_count(self, obj):
+        if hasattr(obj, "sales_channels_count_annotated"):
+            return obj.sales_channels_count_annotated
+        return obj.collection_sales_channels.count()
+
+    def get_sales_channels(self, obj):
+        channels = [
+            csc.sales_channel
+            for csc in obj.collection_sales_channels.select_related("sales_channel").all()
+        ]
+        return [
+            {"id": str(c.id), "name": c.name, "type": c.type}
+            for c in channels
+        ]
+
+    def create(self, validated_data):
+        sales_channels_data = self.initial_data.get("sales_channels", None)
+        instance = super().create(validated_data)
+        self._sync_sales_channels(instance, sales_channels_data, creating=True)
+        return instance
+
+    def update(self, instance, validated_data):
+        sales_channels_data = self.initial_data.get("sales_channels", None)
+        instance = super().update(instance, validated_data)
+        if sales_channels_data is not None:
+            self._sync_sales_channels(instance, sales_channels_data, creating=False)
+        return instance
+
+    def _sync_sales_channels(self, instance, sales_channels_data, creating=False):
+        import uuid
+        from apps.catalog.models import CollectionSalesChannel, SalesChannel
+        from apps.catalog.services import online_channels
+
+        if sales_channels_data is not None:
+            instance.collection_sales_channels.all().delete()
+            channel_ids = []
+            for item in sales_channels_data:
+                if isinstance(item, dict) and "id" in item:
+                    channel_ids.append(item["id"])
+                elif isinstance(item, (str, uuid.UUID)):
+                    channel_ids.append(item)
+            channels = SalesChannel.objects.filter(
+                store=instance.store, id__in=channel_ids
+            )
+            CollectionSalesChannel.objects.bulk_create(
+                [
+                    CollectionSalesChannel(collection=instance, sales_channel=c)
+                    for c in channels
+                ]
+            )
+        elif creating:
+            channels = online_channels(instance.store)
+            CollectionSalesChannel.objects.bulk_create(
+                [
+                    CollectionSalesChannel(collection=instance, sales_channel=c)
+                    for c in channels
+                ]
+            )
 
 
 class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):

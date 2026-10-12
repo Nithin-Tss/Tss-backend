@@ -335,8 +335,19 @@ class CollectionViewSet(StoreScopedViewSet):
 
     permission_resource = "products"
     queryset = Collection.objects.order_by("name")
-
     serializer_class = CollectionSerializer
+
+    def get_queryset(self):
+        from django.db.models import Count
+        return (
+            super()
+            .get_queryset()
+            .annotate(
+                products_count_annotated=Count("product_collections", distinct=True),
+                sales_channels_count_annotated=Count("collection_sales_channels", distinct=True),
+            )
+            .prefetch_related("collection_sales_channels__sales_channel")
+        )
 
 
 

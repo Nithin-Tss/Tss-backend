@@ -258,6 +258,12 @@ class Collection(models.Model):
     )
 
     name = models.CharField(max_length=255)
+    description = models.TextField(default="", blank=True)
+    image_url = models.CharField(max_length=500, default="", blank=True)
+    conditions = models.JSONField(default=list, blank=True)
+    theme_template = models.CharField(max_length=100, default="Default collection", blank=True)
+    seo_title = models.CharField(max_length=255, default="", blank=True)
+    seo_description = models.TextField(default="", blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -425,6 +431,45 @@ class ProductSalesChannel(models.Model):
                 name="uq_product_sales_channel",
             )
         ]
+
+
+class CollectionSalesChannel(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    collection = models.ForeignKey(
+        Collection,
+        on_delete=models.CASCADE,
+        db_column="collection_id",
+        related_name="collection_sales_channels",
+    )
+
+    sales_channel = models.ForeignKey(
+        SalesChannel,
+        on_delete=models.CASCADE,
+        db_column="sales_channel_id",
+        related_name="collection_sales_channels",
+    )
+
+    class Meta:
+        db_table = '"catalog"."collection_sales_channels"'
+        verbose_name = "Collection Sales Channel"
+        verbose_name_plural = "Collection Sales Channels"
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["collection", "sales_channel"],
+                name="uq_collection_sales_channel",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.collection.name} - {self.sales_channel.name}"
+
+
 class ProductReview(models.Model):
     id = models.UUIDField(
         primary_key=True,
