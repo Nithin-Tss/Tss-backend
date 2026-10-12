@@ -329,6 +329,17 @@ PREVIEW_EDITOR = """
     var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
   }, true);
+  // Edit mode: right-click opens the customizer's menu (Edit code) for the section or block under it
+  document.addEventListener("contextmenu", function (e) {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var section = e.target.closest("[data-tss-section]");
+    if (!section) { send({ type: "select", id: "", block: null }); return; }
+    var blockEl = e.target.closest("[data-tss-block]");
+    var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
+  }, true);
   document.addEventListener("submit", function (e) { if (editing) e.preventDefault(); }, true);
   document.addEventListener("keydown", function (e) {
     if (editing && e.key === "Escape") send({ type: "escape" });
