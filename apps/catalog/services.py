@@ -52,6 +52,22 @@ def _price(value):
         return Decimal("0.00")
 
 
+def check_skus(store, skus, exclude_product=None, exclude_variant=None):
+    """Raise a ValidationError naming any SKU that repeats in `skus` or is already used in the store."""
+    skus = [s for s in skus if s]
+    repeated = sorted({s for s in skus if skus.count(s) > 1})
+    if repeated:
+        raise ValidationError({"variants": f"SKU {', '.join(repeated)} is used more than once."})
+    taken = ProductVariant.objects.filter(product__store=store, sku__in=skus)
+    if exclude_product is not None:
+        taken = taken.exclude(product=exclude_product)
+    if exclude_variant is not None:
+        taken = taken.exclude(pk=exclude_variant.pk)
+    used = sorted(taken.values_list("sku", flat=True))
+    if used:
+        raise ValidationError({"sku": f"SKU {', '.join(used)} is already used by another variant."})
+
+
 def _named(model, store, name, field="name"):
     obj, _ = model.objects.get_or_create(store=store, **{field: name})
     return obj
@@ -120,6 +136,10 @@ def save_product(store, data, product=None):
             _replace_variants(product, data)
         except ProtectedError:
             raise ProductInUse("A variant that is used by orders or inventory can't be removed.")
+        skus = list(product.variants.values_list("sku", flat=True))
+        if not all(skus):
+            raise ValidationError({"sku": "Every product needs a SKU."})
+        check_skus(store, skus, exclude_product=product)
 
     # Opening stock for the chosen location, on the product's first variant
     if data.get("location") is not None and data.get("quantity") is not None:
@@ -144,7 +164,8 @@ def delete_product(product):
 
 def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
-    variant.sku = (row.get("sku") or "").strip() or None
+    if "sku" in row:
+        variant.sku = (row["sku"] or "").strip() or None
     variant.save()
     return variant
 
@@ -159,7 +180,7 @@ def _replace_variants(product, data):
     Either way, variants referenced by orders or inventory keep their ids.
     """
     rows = data.get("variants") or [
-        {"price": data.get("price"), "sku": data.get("sku", "")}
+        {"price": data.get("price"), **({"sku": data["sku"]} if "sku" in data else {})}
     ]
     existing = list(product.variants.order_by("created_at"))
     default_price = data.get("price")

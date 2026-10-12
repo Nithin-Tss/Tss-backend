@@ -20,7 +20,7 @@ class SmokeTest(APITestCase):
         )
 
         r = self.client.post("/api/v1/catalog/products/", {
-            "title": "Linen Shirt", "status": "active", "price": "1499", "collections": ["Summer"],
+            "title": "Linen Shirt", "sku": "LS-1", "status": "active", "price": "1499", "collections": ["Summer"],
         }, format="json")
         self.assertEqual(r.status_code, 201, r.content)
 

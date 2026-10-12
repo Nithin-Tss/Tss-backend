@@ -30,7 +30,8 @@ class ProductApiTests(APITestCase):
         self.client.credentials(**self.auth, HTTP_X_STORE_ID=self.store_id)
 
     def create(self, **extra):
-        body = {"title": "Shirt", "status": "active", "price": "10", **extra}
+        title = extra.get("title", "Shirt")
+        body = {"title": title, "sku": "SKU-" + title.upper(), "status": "active", "price": "10", **extra}
         r = self.client.post(URL, body, format="json")
         self.assertEqual(r.status_code, 201, r.content)
         return r.json()
@@ -134,7 +135,7 @@ class VariantApiTests(APITestCase):
         self.assertEqual(self.client.delete(f"{VARIANTS}{self.first}/").status_code, 400)
 
     def test_cannot_move_to_other_product(self):
-        other = self.client.post(URL, {"title": "Hat", "price": "3"}, format="json").json()
+        other = self.client.post(URL, {"title": "Hat", "sku": "SKU-HAT", "price": "3"}, format="json").json()
         r = self.client.patch(f"{VARIANTS}{self.first}/", {"product": other["id"]}, format="json")
         self.assertEqual(r.status_code, 400)
 
@@ -147,6 +148,44 @@ class VariantApiTests(APITestCase):
 
     def test_negative_price_rejected(self):
         r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_duplicate_sku_rejected_across_products(self):
+        self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1"}, format="json")
+        r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "1", "sku": "A-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post(URL, {"title": "Other", "price": "1", "sku": "A-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(Product.objects.filter(title="Other").count(), 0)
+
+    def test_variant_can_keep_its_own_sku(self):
+        self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1"}, format="json")
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1", "price": "5"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_duplicate_sku_within_payload_rejected(self):
+        r = self.client.post(URL, {"title": "Two", "variants": [
+            {"sku": "D", "price": "1"}, {"sku": "D", "price": "2"}]}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_sku_required(self):
+        r = self.client.post(URL, {"title": "No sku", "price": "1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("sku", r.json())
+        self.assertEqual(Product.objects.filter(title="No sku").count(), 0)
+        r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post(URL + "bulk/", {"products": [{"title": "x"}]}, format="json")
+        self.assertEqual(r.json()["created"], 0)
+        self.assertEqual(len(r.json()["errors"]), 1)
+
+    def test_price_update_keeps_sku(self):
+        r = self.client.patch(f"{URL}{self.product['id']}/", {"price": "20"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["sku"], "S1")
+
+    def test_bulk_rejects_non_object_body(self):
+        r = self.client.post(URL + "bulk/", [{"title": "x"}], format="json")
         self.assertEqual(r.status_code, 400)
 
     def test_product_update_matches_by_id(self):
@@ -182,13 +221,13 @@ class ProductServiceTests(APITestCase):
         self.store = Store.objects.get(pk=store_id)
 
     def test_save_product_creates_variant(self):
-        p = save_product(self.store, {"title": "T", "price": "5"})
+        p = save_product(self.store, {"title": "T", "sku": "SKU-T", "price": "5"})
         self.assertEqual(p.variants.get().price, 5)
         self.assertEqual(p.status, "draft")
 
     def test_delete_product_raises_when_in_use(self):
         from apps.inventory.models import Location
-        p = save_product(self.store, {"title": "T", "price": "5"})
+        p = save_product(self.store, {"title": "T", "sku": "SKU-T", "price": "5"})
         loc = Location.objects.create(store=self.store, name="Main")
         InventoryItem.objects.create(
             variant=p.variants.get(), location=loc, available=1, committed=0,
@@ -289,7 +328,7 @@ class ProductFormSchemaTests(APITestCase):
         self.assertEqual(self.client.patch(f"{URL}{created['id']}/", {"title": "Hijack"}, format="json").status_code, 404)
 
     def test_only_name_required(self):
-        r = self.client.post(URL, {"title": "Bare"}, format="json")
+        r = self.client.post(URL, {"title": "Bare", "sku": "SKU-BARE"}, format="json")
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()["status"], "draft")
 
@@ -303,7 +342,7 @@ class ProductFormSchemaTests(APITestCase):
         for field in ("title", "status", "theme_template", "images"):
             self.assertIn(field, errors)
 
-        r = self.client.post(URL, {"title": "No location", "quantity": 3}, format="json")
+        r = self.client.post(URL, {"title": "No location", "sku": "SKU-NO-LOCATION", "quantity": 3}, format="json")
         self.assertEqual(r.status_code, 400)
         self.assertIn("location", r.json())
 

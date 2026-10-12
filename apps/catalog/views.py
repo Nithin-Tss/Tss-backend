@@ -179,7 +179,7 @@ class ProductViewSet(StoreScopedViewSet):
         -> {"created": n, "skipped": n, "errors": [{"index": i, "message": "..."}]}
         Used by the admin "Import products" popup. Invalid rows are reported, not fatal.
         """
-        rows = request.data.get("products")
+        rows = request.data.get("products") if isinstance(request.data, dict) else None
         if not isinstance(rows, list) or not rows:
             raise ValidationError({"products": "Send a non-empty list of products."})
         if len(rows) > MAX_BULK_ROWS:
@@ -189,11 +189,16 @@ class ProductViewSet(StoreScopedViewSet):
         for index, row in enumerate(rows):
             serializer = ProductInputSerializer(data=row, context=self.get_serializer_context())
             if serializer.is_valid():
+                if not (serializer.validated_data.get("sku") or "").strip():
+                    errors.append({"index": index, "message": "sku: SKU is required."})
+                    continue
                 valid.append(serializer.validated_data)
                 continue
-            field, messages = next(iter(serializer.errors.items()))
-            message = messages[0] if isinstance(messages, list) else str(messages)
-            errors.append({"index": index, "message": f"{field}: {message}"})
+            parts = []
+            for field, messages in serializer.errors.items():
+                message = messages[0] if isinstance(messages, list) else str(messages)
+                parts.append(f"{field}: {message}")
+            errors.append({"index": index, "message": "; ".join(parts)})
 
         created, skipped = import_products(request.store, valid) if valid else (0, 0)
         return Response({"created": created, "skipped": skipped, "errors": errors})
