@@ -1,3 +1,4 @@
+
 import uuid
 
 from django.db import models
@@ -62,11 +63,16 @@ class Order(models.Model):
         db_table = '"orders"."orders"'
         verbose_name = "Order"
         verbose_name_plural = "Orders"
-
         indexes = [
             models.Index(
                 fields=["store", "-created_at"],
                 name="ord_store_created_idx",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["store", "order_number"],
+                name="uq_order_store_number",
             ),
         ]
 
@@ -101,35 +107,16 @@ class OrderItem(models.Model):
         blank=True,
     )
     product_name = models.CharField(max_length=255)
-    sku = models.CharField(
-        max_length=100,
-        null=True,
-        blank=True,
-    )
+    sku = models.CharField(max_length=100, null=True, blank=True)
     quantity = models.IntegerField()
-    unit_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
-    discount_amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
-    tax_amount = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
-    total = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField()
-    deleted_at = models.DateTimeField(
-        null=True,
-        blank=True,
-    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = '"orders"."order_items"'
@@ -171,10 +158,7 @@ class DraftOrder(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=30)
-    total = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     currency_code = models.CharField(max_length=3)
 
     # Optional link to the normal order created after conversion.
@@ -186,7 +170,6 @@ class DraftOrder(models.Model):
         null=True,
         blank=True,
     )
-
     created_by_user = models.ForeignKey(
         User,
         on_delete=models.PROTECT,
@@ -200,7 +183,6 @@ class DraftOrder(models.Model):
         db_table = '"orders"."draft_orders"'
         verbose_name = "Draft Order"
         verbose_name_plural = "Draft Orders"
-
         indexes = [
             models.Index(
                 fields=["store", "-created_at"],
@@ -211,6 +193,10 @@ class DraftOrder(models.Model):
             models.UniqueConstraint(
                 fields=["order"],
                 name="uq_draft_order_order",
+            ),
+            models.UniqueConstraint(
+                fields=["store", "draft_number"],
+                name="uq_draft_store_number",
             ),
         ]
 
@@ -248,20 +234,14 @@ class DraftOrderDetail(models.Model):
     )
     title = models.CharField(max_length=255)
     quantity = models.IntegerField()
-    unit_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     discount_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         null=True,
         blank=True,
     )
-    total = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-    )
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
