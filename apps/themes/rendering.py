@@ -21,13 +21,13 @@ from apps.catalog.models import Collection
 from apps.catalog.services import published_products
 from apps.orders.models import OrderItem
 
-from .schemas import FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
 from .services import get_store_theme, theme_files
 
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
     ("fallback-hero", {"type": "hero", "settings": {"height": "small"}}),
-    ("fallback-products", {"type": "product-grid", "settings": {}}),
+    ("fallback-products", {"type": "product-grid", "settings": ALL_PRODUCTS_SETTINGS}),
 ]
 
 # Reviews that count towards a product's rating
@@ -92,6 +92,11 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-list[style*="--card-bg"] .product-card{background:var(--card-bg)}
 .cards--bordered .product-card{border:1px solid var(--line,rgba(0,0,0,.12))}
 .product-card__rating{font-size:13px;color:#B7791F}.product-card__rating span{color:var(--muted)}
+.product-card__media{position:relative}
+.product-card__badge{position:absolute;top:10px;left:10px;z-index:1;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--bg,#fff);color:var(--text,#161C2C);box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.product-list__more{display:flex;justify-content:center;margin-top:28px}
+.pagination{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:32px}
+.collection-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}
 .product-card__tags{display:flex;flex-wrap:wrap;gap:6px}
 .product-card__tags span{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--muted)}
 .product-card__cta{min-height:38px;padding:0 16px;font-size:14px;align-self:flex-start}
@@ -489,6 +494,23 @@ def _best_sellers(store, base_url, limit):
     return [product_drop(p, base_url) for p in qs[:limit]]
 
 
+# Products a "Load more" grid can reveal, and products per all-products page
+LOAD_MORE_MAX = 96
+PAGE_SIZE = 24
+SORTS = {
+    "newest": None,  # the catalog's own order
+    "price-asc": lambda d: (d["price"] is None, d["price"] or 0),
+    "price-desc": lambda d: (d["price"] is None, -(d["price"] or 0)),
+}
+
+
+def _sold_out(variants):
+    """Every variant has a stock record and none has any available: quantity 0 is "Sold out"."""
+    items = [i for v in variants for i in v.inventory_items.all()]
+    tracked = bool(variants) and all(v.inventory_items.all() for v in variants)
+    return tracked and sum(i.available for i in items) <= 0
+
+
 def product_drop(product, base_url):
     images = [i.url for i in sorted(product.images.all(), key=lambda i: i.position)]
     variants = sorted(product.variants.all(), key=lambda v: v.created_at)
@@ -507,6 +529,7 @@ def product_drop(product, base_url):
         "images": images,
         "featured_image": images[0] if images else None,
         "tags": [pt.tag.name for pt in product.product_tags.all()],
+        "sold_out": _sold_out(variants),
         "rating": round(float(product.avg_rating), 1) if getattr(product, "avg_rating", None) else None,
         "review_count": getattr(product, "review_count", 0) or 0,
         "variants": [
@@ -821,11 +844,13 @@ def _error_box(where, error):
     )
 
 
-def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None):
+def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
+                sort="newest", page_number=1):
     """
     page: "index", "product" or "collection".
     product: a catalog Product (product page).
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
+    sort, page_number: the collection page's order (see SORTS) and page (PAGE_SIZE products each).
     custom_data: unsaved section data to render instead of the saved one (customizer preview).
     editor: wrap each section in a marker the customizer preview uses for drag and drop.
     only_section: return just that section's HTML (customizer preview updates one section in place).
@@ -846,10 +871,20 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     collection_drop = None
 
     if page == "collection":
+        sort = sort if sort in SORTS else "newest"
+        products = _products(store, base_url, collection=collection["obj"])
+        if SORTS[sort]:
+            products.sort(key=SORTS[sort])
+        pages = max(1, -(-len(products) // PAGE_SIZE))
+        page_number = min(max(1, page_number), pages)
         collection_drop = {
             "name": collection["name"],
             "url": f"{base_url}/collections/{collection['obj'].id if collection['obj'] else 'all'}",
-            "products": _products(store, base_url, collection=collection["obj"], limit=200),
+            "products": products[(page_number - 1) * PAGE_SIZE:page_number * PAGE_SIZE],
+            "products_count": len(products),
+            "sort": sort,
+            "page": page_number,
+            "pages": pages,
         }
 
     common = {
@@ -909,6 +944,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 source = ss.get("source", "collection")
                 chosen = ss.get("products") or []
                 limit = ss.get("limit")
+                # "Load more": render more cards than `limit`; the template shows `limit` first
+                if ss.get("load_more") and ss.get("layout") == "grid" and source != "products":
+                    limit = LOAD_MORE_MAX
                 exclude = product.pk if product else None
                 # Products picked before "source" existed still show
                 if source == "products" or (source == "collection" and chosen and not ss.get("collection")):

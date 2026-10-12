@@ -97,6 +97,9 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         return value
 
     def validate(self, data):
+        # Imports may leave the location out: their stock goes to the store's first location
+        if self.context.get("location_optional"):
+            return data
         if data.get("quantity") is not None and data.get("location") is None:
             raise serializers.ValidationError({"location": "Choose a location for this stock."})
         return data

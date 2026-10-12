@@ -10,7 +10,16 @@ A variant with no inventory rows is "not tracked": it never blocks a sale.
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from .models import InventoryItem
+from .models import InventoryItem, Location
+
+# Where stock goes when none is chosen (imports) and the store has no location yet
+DEFAULT_LOCATION = "Main warehouse"
+
+
+def default_location(store):
+    """The store's first location, created if it has none."""
+    location = Location.objects.filter(store=store).order_by("created_at").first()
+    return location or Location.objects.create(store=store, name=DEFAULT_LOCATION)
 
 
 def _item(variant, location):

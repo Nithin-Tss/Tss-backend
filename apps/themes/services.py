@@ -34,14 +34,22 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 2
+STARTER_REVISION = 3
 STARTER_UPGRADES = {
     "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
     "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
-    "sections/product-grid.liquid": {"b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184"},
+    "sections/product-grid.liquid": {
+        "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
+        "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
+    },
     "sections/product-carousel.liquid": {"0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4"},
     "sections/rich-text.liquid": {"37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b"},
-    "snippets/product-card.liquid": {"bc624bf8346fce0c29de1419f3d32ad1f66f052fe75ec9830685f219aee43eff"},
+    "snippets/product-card.liquid": {
+        "bc624bf8346fce0c29de1419f3d32ad1f66f052fe75ec9830685f219aee43eff",
+        "386b5a2d330ef931de50ce9fa6f66cb49f0bae00b23582dfd4e27b6a84ad3723",
+    },
+    # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
+    "sections/main-collection.liquid": {"80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5"},
 }
 
 

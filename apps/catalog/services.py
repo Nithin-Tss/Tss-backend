@@ -1,10 +1,10 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import PROTECT, ProtectedError
+from django.db.models import Exists, OuterRef, PROTECT, ProtectedError
 from rest_framework.exceptions import ValidationError
 
-from apps.inventory.services import set_available
+from apps.inventory.services import default_location, set_available
 
 from .models import (
     Category,
@@ -28,7 +28,8 @@ STATUSES = (ACTIVE, DRAFT, ARCHIVED)
 THEME_TEMPLATES = ("default", "featured", "minimal")
 
 # Every store sells through these unless it adds its own
-DEFAULT_CHANNELS = (("Online Store", "online"), ("Point of Sale", "pos"))
+ONLINE = "online"
+DEFAULT_CHANNELS = (("Online Store", ONLINE), ("Point of Sale", "pos"))
 
 
 def sales_channels_for(store):
@@ -74,12 +75,41 @@ def _named(model, store, name, field="name"):
 
 
 def published_products(store):
-    """Products a shopper may see on the storefront."""
+    """
+    Products a shopper may see on the storefront: the store's Active products
+    with the Online Store channel ticked. Draft and Archived stay hidden.
+    """
+    on_online_store = ProductSalesChannel.objects.filter(product=OuterRef("pk"), sales_channel__type=ONLINE)
     return (
         Product.objects.filter(store=store, status=ACTIVE)
-        .prefetch_related("images", "variants")
+        .filter(Exists(on_online_store))
+        .prefetch_related("images", "variants__inventory_items")
         .order_by("-created_at")
     )
+
+
+def online_channels(store):
+    return [c for c in sales_channels_for(store) if c.type == ONLINE]
+
+
+@transaction.atomic
+def link_active_products_to_online_store(store=None):
+    """
+    One-time fix for products imported before imports set a channel: Active
+    products with no sales channel at all are put on the Online Store.
+    Products with any channel ticked are left as the owner set them.
+    Returns how many products were linked.
+    """
+    unlisted = Product.objects.filter(status=ACTIVE, product_sales_channels__isnull=True)
+    if store is not None:
+        unlisted = unlisted.filter(store=store)
+    links, channels = [], {}
+    for product in unlisted.select_related("store"):
+        if product.store_id not in channels:
+            channels[product.store_id] = online_channels(product.store)
+        links += [ProductSalesChannel(product=product, sales_channel=c) for c in channels[product.store_id]]
+    ProductSalesChannel.objects.bulk_create(links)
+    return len({link.product_id for link in links})
 
 
 @transaction.atomic
@@ -88,6 +118,7 @@ def save_product(store, data, product=None):
     Create or update a product from the admin form, including its
     category, collections, tags and variants, as one unit.
     """
+    creating = product is None
     product = product or Product(store=store)
 
     for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template"):
@@ -129,6 +160,11 @@ def save_product(store, data, product=None):
         ProductSalesChannel.objects.filter(product=product).delete()
         ProductSalesChannel.objects.bulk_create(
             [ProductSalesChannel(product=product, sales_channel=c) for c in dict.fromkeys(data["sales_channels"])]
+        )
+    elif creating:
+        # Like the Add product page: new products go on the Online Store unless channels are given
+        ProductSalesChannel.objects.bulk_create(
+            [ProductSalesChannel(product=product, sales_channel=c) for c in online_channels(store)]
         )
 
     if "variants" in data or "price" in data or not product.variants.exists():
@@ -277,6 +313,9 @@ def import_products(store, rows):
 
     Rows whose SKU, or title when there is no SKU, already exist in the store
     (or earlier in `rows`) are skipped, so importing the same file twice is safe.
+    Every product gets a price (0.00 when the file has none) and a stock record
+    at the row's location or the store's first one (quantity 0 when the file has
+    none). Active products are put on the Online Store channel, as in Shopify.
     Returns (created, skipped).
     """
     skus = {(r.get("sku") or "").strip() for r in rows} - {""}
@@ -339,4 +378,14 @@ def import_products(store, rows):
     ProductVariant.objects.bulk_create(variants)
     ProductCollection.objects.bulk_create(product_collections)
     ProductTag.objects.bulk_create(product_tags)
+
+    online = online_channels(store)
+    ProductSalesChannel.objects.bulk_create(
+        [ProductSalesChannel(product=p, sales_channel=c) for p in products if p.status == ACTIVE for c in online]
+    )
+
+    fallback = default_location(store)
+    for variant, (row, _) in zip(variants, fresh):
+        set_available(variant, row.get("location") or fallback, row.get("quantity") or 0)
+
     return len(products), len(rows) - len(products)

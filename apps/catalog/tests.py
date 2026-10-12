@@ -383,3 +383,118 @@ class ProductFormSchemaTests(APITestCase):
         self.assertEqual(r.status_code, 400)
         for field in ("location", "category_id", "sales_channels"):
             self.assertIn(field, r.json())
+
+
+class AllProductsStorefrontTests(APITestCase):
+    """The storefront's "All products" grid (home page) and the all-products page."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "all@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    def product(self, title, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"ALL-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def page(self, path=""):
+        r = self.client.get(f"/s/{self.slug}/{path}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def test_home_lists_active_online_products_with_sold_out_badge(self):
+        self.product("Shown lamp")
+        self.product("Empty vase", quantity=0)
+        self.product("Draft chair", status="draft")
+        self.product("Archived desk", status="archived")
+        self.product("Shop-only rug", sales_channels=[self.channels["pos"]])
+
+        html = self.page()  # nothing saved for the home page: the default layout
+        self.assertIn(">All products</h2>", html)
+        self.assertIn("Shown lamp", html)
+        self.assertRegex(html, r'product-card__badge">Sold out</span>(?s:.)*Empty vase')
+        for hidden in ("Draft chair", "Archived desk", "Shop-only rug"):
+            self.assertNotIn(hidden, html)
+        self.assertIn(f'href="/s/{self.slug}/collections/all">View all', html)
+
+    def test_home_shows_12_then_load_more(self):
+        for i in range(15):
+            self.product(f"Item {i:02d}")
+        html = self.page()
+        self.assertEqual(html.count('<div data-more style="display:none">'), 3)  # 12 shown, 3 waiting
+        self.assertIn("data-load-more>Load more</button>", html)
+
+    def test_empty_store_says_no_products_yet(self):
+        self.assertIn("No products yet.", self.page())
+        self.assertIn("No products yet.", self.page("collections/all"))
+
+    def test_all_products_page_sorts_and_pages(self):
+        self.product("Cheap", price="1")
+        self.product("Dear", price="99")
+        self.product("Middle", price="50")
+
+        def order(query=""):
+            html = self.page(f"collections/all{query}")
+            return sorted(("Cheap", "Dear", "Middle"), key=lambda t: html.index(f">{t}<"))
+
+        self.assertIn('<h1 class="section-heading">All products</h1>', self.page("collections/all"))
+        self.assertEqual(order(), ["Middle", "Dear", "Cheap"])  # newest first
+        self.assertEqual(order("?sort=price-asc"), ["Cheap", "Middle", "Dear"])
+        self.assertEqual(order("?sort=price-desc"), ["Dear", "Middle", "Cheap"])
+
+        for i in range(24):
+            self.product(f"Bulk {i:02d}")
+        html = self.page("collections/all?page=2")
+        self.assertIn("Page 2 of 2", html)
+        self.assertIn(">Cheap<", html)  # 27 products: the oldest 3 are on page 2
+
+    def test_only_this_stores_products(self):
+        self.product("Mine")
+        token, other = signup(self.client, "other-all@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other)
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "W"}, format="json").json()
+        self.client.post(URL, {"title": "Theirs", "status": "active", "price": "1", "sku": "THEIRS-1",
+                               "location": location["id"], "quantity": 1}, format="json")
+        html = self.page("collections/all")
+        self.assertIn("Mine", html)
+        self.assertNotIn("Theirs", html)
+
+    def test_import_links_active_products_with_price_and_stock(self):
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4},
+            {"title": "Imported draft", "status": "draft", "sku": "IMP-D"},
+        ]}, format="json")
+        self.assertEqual(r.json()["created"], 2, r.content)
+
+        active = Product.objects.get(title="Imported active")
+        draft = Product.objects.get(title="Imported draft")
+        self.assertEqual(list(active.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
+        self.assertFalse(draft.product_sales_channels.exists())
+        self.assertEqual(str(active.variants.get().price), "0.00")
+        self.assertEqual(InventoryItem.objects.get(variant__product=active).available, 4)
+        self.assertEqual(InventoryItem.objects.get(variant__product=draft).available, 0)
+        self.assertIn("Imported active", self.page("collections/all"))
+
+    def test_one_time_fix_links_unlisted_active_products(self):
+        from .models import ProductSalesChannel
+        from .services import link_active_products_to_online_store
+
+        before = self.product("Old import")
+        kept_off = self.product("Shop only", sales_channels=[self.channels["pos"]])
+        ProductSalesChannel.objects.filter(product_id=before["id"]).delete()  # as imports used to leave it
+        self.assertNotIn("Old import", self.page("collections/all"))
+
+        self.assertEqual(link_active_products_to_online_store(), 1)
+        self.assertEqual(link_active_products_to_online_store(), 0)  # running it again changes nothing
+        self.assertIn("Old import", self.page("collections/all"))
+        self.assertNotIn("Shop only", self.page("collections/all"))  # an owner's choice is kept
+        self.assertEqual(kept_off["sales_channels"], [self.channels["pos"]])

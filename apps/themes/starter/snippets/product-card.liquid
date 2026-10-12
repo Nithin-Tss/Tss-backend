@@ -6,6 +6,8 @@
 {%- endcomment -%}
 <a class="product-card" href="{{ product.url }}">
   <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}">
+    {%- comment -%} Quantity 0: still listed, marked "Sold out" {%- endcomment -%}
+    {%- if product.sold_out -%}<span class="product-card__badge">Sold out</span>{%- endif -%}
     {%- if product.featured_image -%}
       <img src="{{ product.featured_image }}" alt="{{ product.title }}" loading="lazy">
     {%- else -%}
