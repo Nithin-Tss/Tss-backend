@@ -245,6 +245,49 @@ class ProductFormSchemaTests(APITestCase):
         stock = self.client.get(f"/api/v1/inventory/items/?product={body['id']}").json()
         self.assertEqual([(s["location"], s["available"]) for s in stock], [(location["id"], 7)])
 
+    def test_edit_form_updates_in_place(self):
+        """What the shared form sends in edit mode: a PATCH that never creates a second product."""
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "Shop"}, format="json").json()
+        channels = self.client.get("/api/v1/catalog/sales-channels/").json()
+        created = self.client.post(URL, {
+            "title": "Chardonnay", "price": "19.50", "sku": "CH-1", "location": location["id"], "quantity": 7,
+        }, format="json").json()
+        # A second variant (e.g. from an import or the variants API) must survive the edit
+        extra = self.client.post(VARIANTS, {"product": created["id"], "sku": "CH-2", "price": "30"}, format="json").json()
+        first = created["variants"][0]["id"]
+        url = self.upload(self.PNG).json()["url"]
+
+        r = self.client.patch(f"{URL}{created['id']}/", {
+            "title": "Chardonnay Reserve", "description": "Oaky.", "status": "active",
+            "images": [url], "location": location["id"], "quantity": 3,
+            "category_id": None, "product_type": "White wine", "vendor": "Sipnow",
+            "collections": ["Summer"], "tags": ["oak"], "sales_channels": [channels[1]["id"]],
+            "theme_template": "minimal", "seo_title": "Reserve", "seo_description": "Buy it.",
+            "variants": [
+                {"id": first, "sku": "CH-1R", "price": "21.00"},
+                {"id": extra["id"], "sku": "CH-2", "price": "30.00"},
+            ],
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+
+        self.assertEqual(Product.objects.filter(store_id=self.store_id).count(), 1)
+        self.assertEqual(body["id"], created["id"])
+        self.assertEqual((body["title"], body["status"], body["theme_template"]), ("Chardonnay Reserve", "active", "minimal"))
+        self.assertEqual(body["sales_channels"], [channels[1]["id"]])
+        self.assertEqual([i["url"] for i in body["images"]], [url])
+        self.assertEqual(
+            [(v["id"], v["sku"], v["price"]) for v in body["variants"]],
+            [(first, "CH-1R", "21.00"), (extra["id"], "CH-2", "30.00")],
+        )
+        stock = self.client.get(f"/api/v1/inventory/items/?product={created['id']}").json()
+        self.assertEqual([(s["variant"], s["available"]) for s in stock], [(first, 3)])
+
+        # Another store can't edit it
+        token, other_store = signup(self.client, "edit-other@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_store)
+        self.assertEqual(self.client.patch(f"{URL}{created['id']}/", {"title": "Hijack"}, format="json").status_code, 404)
+
     def test_only_name_required(self):
         r = self.client.post(URL, {"title": "Bare"}, format="json")
         self.assertEqual(r.status_code, 201, r.content)
