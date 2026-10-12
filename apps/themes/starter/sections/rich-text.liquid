@@ -1,9 +1,19 @@
 {%- assign s = section.settings -%}
 <section id="section-{{ section.id }}" class="section">
   <div class="page-width">
-    <div class="rich-text align-{{ s.text_alignment }}">
-      {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
-      {%- if s.text != blank -%}<p>{{ s.text }}</p>{%- endif -%}
+    <div class="rich-text rich-text--{{ s.text_width }} rich-text--size-{{ s.text_size }} rich-text--lh-{{ s.line_spacing }} rich-text--quote-{{ s.quote_style }} align-{{ s.text_alignment }}{% if s.image_url != blank %} rich-text--image rich-text--image-{{ s.image_position }}{% endif %}">
+      {%- if s.image_url != blank -%}
+        <div class="rich-text__image"><img src="{{ s.image_url }}" alt="" loading="lazy"></div>
+      {%- endif -%}
+      <div class="rich-text__content">
+        {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+        {%- if s.text != blank -%}
+          <div class="rich-text__body{% if s.text_columns == '2' %} rich-text__body--2col{% endif %}">{{ s.text }}</div>
+        {%- endif -%}
+        {%- if s.button_label != blank -%}
+          <a class="button rich-text__button" href="{{ s.button_link | link }}">{{ s.button_label }}</a>
+        {%- endif -%}
+      </div>
     </div>
   </div>
 </section>

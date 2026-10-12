@@ -26,7 +26,8 @@ from apps.tenancy.models import Store
 
 from .customizer import read_settings, save_settings, validate_settings
 from .rendering import render_page, shop_url
-from .schemas import public_schema, resolve, validate_custom_data
+from .rendering import _collect_fonts, google_fonts_link
+from .schemas import PAGES, public_schema, resolve, validate_custom_data
 from .services import (
     delete_path,
     generate_css_variables,
@@ -122,6 +123,44 @@ class ThemeSettingsView(StoreThemeView):
         return Response(
             resolve(self.store_theme().custom_data)
         )
+
+    def patch(self, request):
+        """
+        PATCH /api/v1/themes/settings/  only what changed (the customizer autosaves this way):
+        {"settings": {...}, "templates": {"index": {"order": [...], "sections": {"<id>": {...} | null}}}}
+        null removes a section. The merged result is validated like a full save.
+        """
+        body = request.data
+        if not isinstance(body, dict):
+            raise ValidationError("Expected an object.")
+
+        store_theme = self.store_theme()
+        merged = resolve(store_theme.custom_data)
+
+        if body.get("settings") is not None:
+            if not isinstance(body["settings"], dict):
+                raise ValidationError({"settings": "Expected an object."})
+            merged["settings"].update(body["settings"])
+
+        templates = body.get("templates") or {}
+        if not isinstance(templates, dict):
+            raise ValidationError({"templates": "Expected an object."})
+
+        for page, changes in templates.items():
+            if page not in PAGES or not isinstance(changes, dict):
+                raise ValidationError({"templates": f"Unknown page: {page}."})
+            target = merged["templates"][page]
+            for section_id, section in (changes.get("sections") or {}).items():
+                if section is None:
+                    target["sections"].pop(section_id, None)
+                else:
+                    target["sections"][section_id] = section
+            if "order" in changes:
+                target["order"] = changes["order"]
+
+        store_theme.custom_data = validate_custom_data(merged)
+        store_theme.save(update_fields=["custom_data", "updated_at"])
+        return Response({"saved": True})
 
     def put(self, request):
         store_theme = self.store_theme()
@@ -228,17 +267,26 @@ PREVIEW_EDITOR = """
 <script>
 (function () {
   var config = __CONFIG__;
+  var selected = config.selected;
+  var pendingImages = {};
   function send(message) { message.source = "tss-preview"; parent.postMessage(message, "*"); }
+  function all() { return [].slice.call(document.querySelectorAll("[data-tss-section]")); }
+  function byId(id) { return all().filter(function (el) { return el.getAttribute("data-tss-section") === id; })[0]; }
 
-  var sections = [].slice.call(document.querySelectorAll("[data-tss-section]"));
   var line = document.createElement("div");
   line.className = "tss-drop-line";
   document.body.appendChild(line);
 
-  sections.forEach(function (el) {
-    var id = el.getAttribute("data-tss-section");
-    if (id === config.selected) el.classList.add("tss-selected");
+  function select(id) {
+    selected = id;
+    all().forEach(function (el) { el.classList.toggle("tss-selected", el.getAttribute("data-tss-section") === id); });
+  }
 
+  // Drag handle and click-to-select on a section
+  function enhance(el) {
+    if (el.__tssReady) return;
+    el.__tssReady = true;
+    var id = el.getAttribute("data-tss-section");
     var handle = document.createElement("button");
     handle.type = "button";
     handle.className = "tss-handle";
@@ -246,12 +294,11 @@ PREVIEW_EDITOR = """
     handle.innerHTML = "&#10303; Move";
     el.appendChild(handle);
     handle.addEventListener("pointerdown", function (e) { startDrag(e, el, id); });
-
     el.addEventListener("click", function (e) {
       if (e.target.closest(".tss-handle") || e.target.closest("a,button,input,select,textarea,video,iframe")) return;
       send({ type: "select", id: id });
     });
-  });
+  }
 
   function startDrag(e, el, id) {
     e.preventDefault();
@@ -261,6 +308,7 @@ PREVIEW_EDITOR = """
     function move(ev) {
       target = null;
       var y = ev.clientY;
+      var sections = all();
       for (var i = 0; i < sections.length; i++) {
         var other = sections[i];
         if (other === el) continue;
@@ -274,7 +322,6 @@ PREVIEW_EDITOR = """
         }
       }
       if (!target) line.style.display = "none";
-      // Scroll while dragging near the top or bottom edge
       if (y < 60) window.scrollBy(0, -12);
       else if (y > window.innerHeight - 60) window.scrollBy(0, 12);
     }
@@ -293,13 +340,108 @@ PREVIEW_EDITOR = """
     window.addEventListener("pointercancel", end);
   }
 
-  // Keep the scroll position when the preview refreshes after an edit
+  // ---- small updates from the customizer (no reload) ----
+
+  function swapPending(root) {
+    Object.keys(pendingImages).forEach(function (url) {
+      root.querySelectorAll('img[src="' + url + '"],video[poster="' + url + '"]').forEach(function (node) {
+        node.setAttribute(node.tagName === "VIDEO" ? "poster" : "src", pendingImages[url]);
+      });
+      root.querySelectorAll('source[srcset="' + url + '"]').forEach(function (node) { node.setAttribute("srcset", pendingImages[url]); });
+    });
+  }
+
+  // Wait (briefly) for new images so swapping a section never flashes empty
+  function preload(root, done) {
+    var imgs = [].slice.call(root.querySelectorAll("img[src]"));
+    var left = imgs.length, finished = false;
+    function finish() { if (!finished) { finished = true; done(); } }
+    if (!left) return finish();
+    imgs.forEach(function (img) {
+      var probe = new Image();
+      probe.onload = probe.onerror = function () { if (--left <= 0) finish(); };
+      probe.src = img.getAttribute("src");
+    });
+    setTimeout(finish, 700);
+  }
+
+  function runScripts(root) {
+    root.querySelectorAll("script").forEach(function (old) {
+      var fresh = document.createElement("script");
+      fresh.textContent = old.textContent;
+      old.replaceWith(fresh);
+    });
+  }
+
+  function place(el, index) {
+    var others = all().filter(function (x) { return x !== el; });
+    if (!others.length) return false;
+    if (index >= others.length) others[others.length - 1].after(el);
+    else others[Math.max(0, index)].before(el);
+    return true;
+  }
+
+  function patch(message) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = message.html;
+    var fresh = tpl.content.querySelector("[data-tss-section]");
+    var old = byId(message.id);
+    if (!fresh) { if (old) old.remove(); return; }
+    swapPending(fresh);
+    fresh.querySelectorAll(".tss-anim-fade,.tss-anim-slide-up").forEach(function (x) { x.classList.add("tss-in"); });
+    preload(fresh, function () {
+      var current = byId(message.id);
+      if (current) current.replaceWith(fresh);
+      else if (!place(fresh, message.index)) { send({ type: "need-reload" }); return; }
+      runScripts(fresh);
+      enhance(fresh);
+      select(selected);
+    });
+  }
+
+  function reorder(ids) {
+    var first = all()[0];
+    if (!first) return;
+    var marker = document.createComment("tss");
+    first.before(marker);
+    ids.forEach(function (id) { var el = byId(id); if (el) marker.before(el); });
+    marker.remove();
+  }
+
+  function addFonts(html) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = html || "";
+    tpl.content.querySelectorAll("link[rel=stylesheet]").forEach(function (link) {
+      var href = link.getAttribute("href");
+      var exists = [].some.call(document.querySelectorAll("link[rel=stylesheet]"), function (l) { return l.getAttribute("href") === href; });
+      if (!exists) document.head.appendChild(link);
+    });
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== parent) return;
+    var m = e.data;
+    if (!m || m.source !== "tss-editor") return;
+    if (m.type === "patch") patch(m);
+    else if (m.type === "remove") { var el = byId(m.id); if (el) el.remove(); }
+    else if (m.type === "order") reorder(m.ids || []);
+    else if (m.type === "select") select(m.id);
+    else if (m.type === "fonts") addFonts(m.html);
+    else if (m.type === "pending-image") { pendingImages[m.url] = m.dataUrl; swapPending(document); }
+  });
+
+  all().forEach(enhance);
+  select(selected);
+
+  // Keep the scroll position when the preview fully reloads
   if (config.scroll) window.scrollTo(0, config.scroll);
   var timer = null;
   window.addEventListener("scroll", function () {
     clearTimeout(timer);
     timer = setTimeout(function () { send({ type: "scroll", y: Math.round(window.scrollY) }); }, 80);
   }, { passive: true });
+
+  send({ type: "ready" });
 })();
 </script>
 """
@@ -314,6 +456,15 @@ class ThemePreviewView(StoreThemeView):
 
     def post(self, request):
         clean = validate_custom_data(request.data)
+
+        # ?section=<id>: just that section, to swap into the open preview (plus the fonts it may need)
+        section_id = request.query_params.get("section")
+        if section_id:
+            try:
+                html = render_page(request.store, "index", custom_data=clean, editor=True, only_section=section_id)
+            except LiquidError as error:
+                html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
+            return Response({"html": html, "fonts": google_fonts_link(_collect_fonts(resolve(clean)))})
 
         try:
             html = render_page(request.store, "index", custom_data=clean, editor=True)

@@ -263,7 +263,7 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
             "story": {"type": "custom", "settings": {"heading": "Our story"}, "blocks": [
                 {"type": "heading", "settings": {"text": "Since 1999", "size": "large"}},
                 {"type": "text", "settings": {"body": "<p>Made <em>by hand</em></p><script>bad()</script>"}},
-                {"type": "button", "settings": {"label": "Visit", "link": "/collections/all", "style": "outline"}},
+                {"type": "button", "settings": {"label": "Visit", "link": "/collections/all", "b_style": "outline"}},
                 {"type": "products", "settings": {"products": [product["id"]]}},
                 {"type": "collections", "settings": {"collections": [collection["id"]]}},
                 {"type": "html", "settings": {"html": (
@@ -349,3 +349,353 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         _, store_b = self.sign_up("b1@example.com", "Shop B")
         self.assertIn("Only in A", self.home(store_a["storeSlug"]))
         self.assertNotIn("Only in A", self.home(store_b["storeSlug"]))
+
+
+class SectionOptionsTest(StoreClientMixin, APITestCase):
+    """Customizer options: layout/style/advanced on every section, plus per-type options."""
+
+    def home(self, slug):
+        r = self.client.get(f"/s/{slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def index(self, order, sections):
+        return {"templates": {"index": {"order": order, "sections": sections}}}
+
+    def test_common_options_wrap_every_section(self):
+        _, store = self.sign_up("opts@example.com", "Opts Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["about"], {"about": {"type": "rich-text", "settings": {
+            "heading": "Wrapped", "width": "narrow", "spacing_top": 80, "spacing_bottom": 8, "padding_x": 40,
+            "content_alignment": "right", "background_color": "#ffeedd", "text_color": "#112233",
+            "heading_size": "large", "heading_weight": "semibold", "border_radius": 12, "divider": "both",
+            "visibility": "mobile", "animation": "slide-up", "anchor_id": "#Our-Story", "css_class": "promo  dark",
+        }}}))
+        html = self.home(store["storeSlug"])
+        self.assertIn('id="our-story"', html)
+        for part in ("tss-w-narrow", "tss-hs-large", "tss-hw-semibold", "tss-vis-mobile", "tss-div-both",
+                     "tss-align-right", "tss-anim-slide-up", "promo dark", "--tss-pt:80px", "--tss-pb:8px",
+                     "--tss-px:40px", "--tss-radius:12px", "--tss-bg:#FFEEDD", "--tss-color:#112233"):
+            self.assertIn(part, html)
+
+    def test_invalid_options_are_rejected(self):
+        self.sign_up("badopts@example.com", "Bad Opts")
+        for settings in (
+            {"anchor_id": "has space"},
+            {"background_color": "red"},
+            {"css_class": "x\" onclick=\"y"},
+            {"spacing_top": 500},
+            {"width": "huge"},
+        ):
+            self.ok("put", "/api/v1/themes/settings/", self.index(["a"], {"a": {"type": "custom", "settings": settings}}), expect=400)
+
+    def test_hero_options(self):
+        _, store = self.sign_up("hero@example.com", "Hero Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["h"], {"h": {"type": "hero", "settings": {
+            "label_text": "New in", "heading": "Big news", "button_label": "Shop", "button_new_tab": True,
+            "button2_label": "Learn more", "button2_link": "/collections/all", "height": "custom", "custom_height": 700,
+            "vertical_position": "bottom", "text_max_width": 500, "image_url": "https://img.example/a.jpg",
+            "mobile_image_url": "https://img.example/m.jpg", "overlay_color": "#102030", "b_style": "outline",
+            "b_bg": "#ff0000", "image_position": "top",
+        }}}))
+        html = self.home(store["storeSlug"])
+        for part in ("New in", "Learn more", 'target="_blank"', "min-height:700px", "hero--v-bottom",
+                     "max-width: 500px", 'srcset="https://img.example/m.jpg"', "background: #102030",
+                     "tss-btn", "--b-bg:transparent", "--b-tx:#FF0000", "object-position:top"):
+            self.assertIn(part, html)
+
+    def test_product_list_sources_and_layout(self):
+        _, store = self.sign_up("lists@example.com", "List Shop")
+        cheap = self.ok("post", "/api/v1/catalog/products/", {"title": "Rarely bought", "status": "active", "price": "1"}, expect=201)
+        popular = self.ok("post", "/api/v1/catalog/products/", {"title": "Best seller lamp", "status": "active", "price": "2", "tags": ["cosy"]}, expect=201)
+        self.ok("post", "/api/v1/orders/", {"items": [{"product": popular["id"], "quantity": 5}]}, expect=201)
+        self.ok("post", "/api/v1/orders/", {"items": [{"product": cheap["id"], "quantity": 1}]}, expect=201)
+
+        self.ok("put", "/api/v1/themes/settings/", self.index(["best"], {"best": {"type": "product-grid", "settings": {
+            "source": "best_sellers", "limit": 2, "layout": "carousel", "columns": 5, "columns_mobile": 1,
+            "gap": 10, "image_ratio": "portrait", "show_tags": True, "show_price": False, "show_add_to_cart": True,
+            "view_all_label": "See everything", "card_hover": "lift", "card_border": True,
+        }}}))
+        html = self.home(store["storeSlug"])
+        self.assertLess(html.index("Best seller lamp"), html.index("Rarely bought"))
+        for part in ("product-list--carousel", "--cols: 5", "--cols-mobile: 1", "--gap: 10px",
+                     "product-card__media--portrait", "cosy", "product-card__cta", "See everything",
+                     "card-hover--lift", "cards--bordered"):
+            self.assertIn(part, html)
+        self.assertNotIn('class="price"', html)
+
+    def test_rich_text_options(self):
+        _, store = self.sign_up("rich@example.com", "Rich Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["r"], {"r": {"type": "rich-text", "settings": {
+            "text": "<h3>Title</h3><blockquote>Quote</blockquote>", "button_label": "Read more",
+            "image_url": "https://img.example/r.jpg", "image_position": "right", "text_columns": "2",
+            "text_size": "large", "line_spacing": "relaxed", "quote_style": "highlighted", "text_width": "wide",
+        }}}))
+        html = self.home(store["storeSlug"])
+        for part in ("<h3>Title</h3>", "<blockquote>Quote</blockquote>", "Read more", "rich-text--image-right",
+                     "rich-text__body--2col", "rich-text--size-large", "rich-text--lh-relaxed",
+                     "rich-text--quote-highlighted", "rich-text--wide"):
+            self.assertIn(part, html)
+
+    def test_old_saved_values_still_load(self):
+        _, store = self.sign_up("old@example.com", "Old Shop")
+        from apps.tenancy.models import Store
+        from apps.themes.services import get_store_theme
+
+        store_theme = get_store_theme(Store.objects.get(pk=store["storeId"]))
+        store_theme.custom_data = self.index(["g"], {"g": {"type": "product-grid", "settings": {
+            "limit": 24, "columns": 9, "text_alignment": "left",
+        }}})
+        store_theme.save()
+        resolved = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["g"]["settings"]
+        self.assertEqual((resolved["limit"], resolved["columns"]), (12, 6))
+        self.ok("put", "/api/v1/themes/settings/", self.ok("get", "/api/v1/themes/settings/"))  # saves cleanly
+        self.home(store["storeSlug"])
+
+    def test_untouched_starter_files_are_upgraded(self):
+        import hashlib
+
+        from apps.tenancy.models import Store
+        from apps.themes import services
+
+        _, store = self.sign_up("upgrade@example.com", "Upgrade Shop")
+        store_theme = services.get_store_theme(Store.objects.get(pk=store["storeId"]))
+        theme = store_theme.theme
+        old = "<section>old hero</section>"
+        edited = "<section>my own hero</section>"
+        theme.files.filter(file_path="sections/hero.liquid").update(content=old)
+        theme.files.filter(file_path="sections/rich-text.liquid").update(content=edited)
+        theme.theme_data = {**theme.theme_data, "starter_revision": 1}
+        theme.save()
+
+        upgrades = {
+            "sections/hero.liquid": {hashlib.sha256(old.encode()).hexdigest()},
+            "sections/rich-text.liquid": {"not-this-content"},
+        }
+        original = services.STARTER_UPGRADES
+        services.STARTER_UPGRADES = upgrades
+        try:
+            services.get_store_theme(Store.objects.get(pk=store["storeId"]))
+        finally:
+            services.STARTER_UPGRADES = original
+
+        files = dict(theme.files.values_list("file_path", "content"))
+        self.assertEqual(files["sections/hero.liquid"], services.starter_files()["sections/hero.liquid"])
+        self.assertEqual(files["sections/rich-text.liquid"], edited)  # edited by the owner: left alone
+
+
+class SectionBlocksTest(StoreClientMixin, APITestCase):
+    """Blocks inside sections: all block types, hiding, layout, and blocks in ready-made sections."""
+
+    def home(self, slug):
+        r = self.client.get(f"/s/{slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def index(self, order, sections):
+        return {"templates": {"index": {"order": order, "sections": sections}}}
+
+    def test_every_block_type_renders(self):
+        _, store = self.sign_up("blocks@example.com", "Blocks Shop")
+        blocks = [
+            {"type": "divider", "settings": {"line_style": "dashed", "thickness": 3, "color": "#ff0000"}},
+            {"type": "spacer", "settings": {"height": 64}},
+            {"type": "icon_text", "settings": {"icon": "truck", "title": "Fast delivery", "text": "2 days", "icon_position": "left"}},
+            {"type": "list", "settings": {"items": "Soft\n\nWarm\n", "list_style": "checks"}},
+            {"type": "quote", "settings": {"text": "Love it", "author": "Asha", "quote_style": "highlighted"}},
+            {"type": "social", "settings": {"instagram": "https://instagram.com/shop", "x": "https://x.com/shop"}},
+            {"type": "countdown", "settings": {"title": "Ends soon", "end": "2030-01-01T10:00", "expired_text": "Over"}},
+            {"type": "accordion", "settings": {"items": "Q one?\nA one.\n\nQ two?\nA two.", "open_first": True}},
+            {"type": "map", "settings": {"address": "MG Road, Bengaluru", "height": 300}},
+            {"type": "video", "settings": {"url": "https://cdn.example/clip.mp4", "autoplay": True}},
+            {"type": "button", "settings": {"label": "Go", "link": "/collections/all", "new_tab": True}},
+            {"type": "heading", "hidden": True, "settings": {"text": "Secret heading"}},
+        ]
+        self.ok("put", "/api/v1/themes/settings/", self.index(["c"], {"c": {"type": "custom", "settings": {
+            "heading": "All blocks", "columns": 3, "block_gap": 12, "vertical_align": "center",
+        }, "blocks": blocks}}))
+        html = self.home(store["storeSlug"])
+
+        for part in ("--tss-line:3px", "--tss-line-style:dashed", "--tss-line-color:#FF0000", "height:64px",
+                     "tss-icon-text--left", "Fast delivery", "tss-list--checks", "<li>Soft</li><li>Warm</li>",
+                     "tss-quote--highlighted", "Asha", "Instagram", 'href="https://x.com/shop"',
+                     'data-tss-countdown="2030-01-01T10:00"', "<details open><summary>Q one?</summary>",
+                     "maps?q=MG%20Road%2C%20Bengaluru&amp;output=embed", "--tss-map-h:300px",
+                     'src="https://cdn.example/clip.mp4"', "autoplay muted loop", 'target="_blank"',
+                     "--tss-cols:3", "--tss-gap:12px", "--tss-valign:center"):
+            self.assertIn(part, html)
+        self.assertNotIn("Secret heading", html)
+
+    def test_block_spacing_alignment_width(self):
+        _, store = self.sign_up("blockopts@example.com", "Block Opts")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "heading", "settings": {"text": "Styled", "spacing_top": 24, "spacing_bottom": 8,
+                                              "alignment": "right", "width": "full"}},
+        ]}}))
+        html = self.home(store["storeSlug"])
+        for part in ("tss-bw-full", "tss-balign-right", "--tss-bpt:24px", "--tss-bpb:8px"):
+            self.assertIn(part, html)
+
+    def test_blocks_in_ready_made_sections(self):
+        _, store = self.sign_up("heroblocks@example.com", "Hero Blocks")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["h", "s"], {
+            "h": {"type": "hero", "settings": {"heading": "Banner"}, "blocks": [
+                {"type": "quote", "settings": {"text": "Under the banner"}},
+            ]},
+            "s": {"type": "slideshow", "settings": {}, "blocks": [
+                {"type": "slide", "settings": {"heading": "Slide one"}},
+                {"type": "slide", "hidden": True, "settings": {"heading": "Hidden slide"}},
+                {"type": "text", "settings": {"body": "<p>After the slides</p>"}},
+            ]},
+        }))
+        html = self.home(store["storeSlug"])
+        self.assertLess(html.index("Banner"), html.index("Under the banner"))
+        self.assertLess(html.index("Slide one"), html.index("After the slides"))
+        self.assertNotIn("Hidden slide", html)
+        # The text block isn't drawn as a slide
+        self.assertEqual(html.count('aria-roledescription="slide"'), 1)
+
+    def test_block_validation(self):
+        self.sign_up("blockbad@example.com", "Block Bad")
+        bad = [
+            self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
+                {"type": "countdown", "settings": {"end": "next friday"}}]}}),
+            self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
+                {"type": "heading", "hidden": "yes", "settings": {}}]}}),
+            self.index(["c"], {"c": {"type": "custom", "settings": {"columns": 6}}}),
+            self.index(["s"], {"s": {"type": "slideshow", "settings": {}, "blocks": [
+                {"type": "slide", "settings": {}} for _ in range(9)]}}),
+        ]
+        for body in bad:
+            self.ok("put", "/api/v1/themes/settings/", body, expect=400)
+
+
+class TypographyTest(StoreClientMixin, APITestCase):
+    """Fonts, text options, button options and theme defaults."""
+
+    def home(self, slug):
+        r = self.client.get(f"/s/{slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def test_theme_defaults_and_only_used_fonts_load(self):
+        _, store = self.sign_up("fonts@example.com", "Fonts Shop")
+        self.ok("put", "/api/v1/themes/settings/", {
+            "settings": {"heading_font": "playfair", "body_font": "inter", "base_font_size": 18,
+                         "button_style": "outline", "button_bg": "#123456", "button_radius": "square",
+                         "button_hover": "lift"},
+            "templates": {"index": {"order": ["c"], "sections": {"c": {"type": "custom", "settings": {}, "blocks": [
+                {"type": "heading", "settings": {"text": "Hello", "t_font": "oswald"}},
+            ]}}}},
+        })
+        html = self.home(store["storeSlug"])
+        self.assertIn("fonts.googleapis.com/css2?family=Inter:wght@", html)
+        self.assertIn("family=Oswald:wght@", html)
+        self.assertIn("family=Playfair+Display:wght@", html)
+        self.assertNotIn("family=Poppins", html)  # not used, not loaded
+        for part in ('--tss-heading-font:"Playfair Display",Georgia,serif', '--tss-body-font:"Inter",system-ui,sans-serif',
+                     "--tss-base-size:18px", "--b-bg:transparent", "--b-tx:#123456", "--b-r:0px", "--b-ht:translateY(-2px)"):
+            self.assertIn(part, html)
+
+    def test_block_text_options(self):
+        _, store = self.sign_up("text@example.com", "Text Shop")
+        self.ok("put", "/api/v1/themes/settings/", {"templates": {"index": {"order": ["c"], "sections": {"c": {
+            "type": "custom", "settings": {}, "blocks": [{"type": "quote", "settings": {
+                "text": "Styled quote", "t_font": "lora", "t_size": 30, "t_size_mobile": 18, "t_weight": "300",
+                "t_italic": True, "t_underline": True, "t_strike": True, "t_transform": "uppercase",
+                "t_color": "#334455", "t_line_height": "1.8", "t_letter_spacing": 2, "t_word_spacing": 6,
+                "t_align": "justify", "t_shadow": "soft", "t_link_color": "#ff8800", "t_link_hover": True,
+            }}]}}}}})
+        html = self.home(store["storeSlug"])
+        for part in ("font-family:&#34;Lora&#34;,Georgia,serif", "tss-fs", "--t-fsd:30px", "--t-fsm:18px", "font-weight:300",
+                     "font-style:italic", "text-decoration:underline line-through", "text-transform:uppercase",
+                     "color:#334455", "line-height:1.8", "letter-spacing:2px", "word-spacing:6px", "text-align:justify",
+                     "text-shadow:0 1px 2px", "--t-link:#FF8800", "tss-link-hover"):
+            self.assertIn(part, html)
+
+    def test_button_block_options(self):
+        _, store = self.sign_up("buttons@example.com", "Button Shop")
+        self.ok("put", "/api/v1/themes/settings/", {"templates": {"index": {"order": ["c"], "sections": {"c": {
+            "type": "custom", "settings": {}, "blocks": [{"type": "button", "settings": {
+                "label": "Email us", "link": "mailto:hello@example.com", "b_icon": "mail", "b_icon_position": "left",
+                "b_style": "soft", "b_bg": "#00aa55", "b_hover_bg": "#008844", "b_size": "large", "b_radius": "rounded",
+                "b_border_width": 2, "b_full_width": True, "b_font": "poppins", "b_font_size": 18, "b_weight": "700",
+                "b_transform": "uppercase", "b_shadow": "strong", "b_hover": "grow", "b_speed": 300, "b_align": "center",
+            }}]}}}}})
+        html = self.home(store["storeSlug"])
+        for part in ('href="mailto:hello@example.com"', "tss-btn", "tss-bi-left", "tss-ba-center",
+                     "color-mix(in srgb, #00AA55 14%, transparent)", "--b-hbg:#008844", "--b-mh:56px", "--b-r:12px",
+                     "--b-bw:2px", "--b-w:100%", "Poppins", "--b-fs:18px", "--b-fw:700", "--b-tt:uppercase",
+                     "--b-sh:0 10px 24px", "--b-ht:scale(1.04)", "--b-sp:300ms", "--b-icon:url(", "family=Poppins"):
+            self.assertIn(part, html)
+
+    def test_typography_validation(self):
+        self.sign_up("typobad@example.com", "Typo Bad")
+        cases = [
+            {"settings": {"heading_font": "comic-sans"}},
+            {"templates": {"index": {"order": ["c"], "sections": {"c": {"type": "custom", "settings": {}, "blocks": [
+                {"type": "heading", "settings": {"t_size": 5}}]}}}}},
+            {"templates": {"index": {"order": ["c"], "sections": {"c": {"type": "custom", "settings": {}, "blocks": [
+                {"type": "button", "settings": {"link": "javascript:alert(1)"}}]}}}}},
+        ]
+        for body in cases:
+            self.ok("put", "/api/v1/themes/settings/", body, expect=400)
+        ok = {"templates": {"index": {"order": ["c"], "sections": {"c": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "button", "settings": {"link": "tel:+919876543210"}},
+            {"type": "button", "settings": {"link": "#faq"}}]}}}}}
+        self.ok("put", "/api/v1/themes/settings/", ok)
+
+
+class LivePreviewAndAutosaveTest(StoreClientMixin, APITestCase):
+    """The customizer's fast path: one-section previews and partial saves."""
+
+    def index(self, order, sections):
+        return {"templates": {"index": {"order": order, "sections": sections}}}
+
+    def test_single_section_preview(self):
+        self.sign_up("one@example.com", "One Shop")
+        body = self.index(["a", "b"], {
+            "a": {"type": "custom", "settings": {"heading": "First one"}},
+            "b": {"type": "custom", "settings": {"heading": "Second one", "t_heading_font": "lora"}},
+        })
+        r = self.ok("post", "/api/v1/themes/preview/?section=b", body)
+        self.assertIn('data-tss-section="b"', r["html"])
+        self.assertIn("Second one", r["html"])
+        self.assertNotIn("First one", r["html"])
+        self.assertNotIn("<html", r["html"])
+        self.assertIn("family=Lora", r["fonts"])
+
+        hidden = self.index(["a"], {"a": {"type": "custom", "hidden": True, "settings": {"heading": "Gone"}}})
+        self.assertNotIn("Gone", self.ok("post", "/api/v1/themes/preview/?section=a", hidden)["html"])
+
+    def test_partial_save_merges_changes(self):
+        _, store = self.sign_up("patch@example.com", "Patch Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["a", "b"], {
+            "a": {"type": "custom", "settings": {"heading": "Keep me"}},
+            "b": {"type": "custom", "settings": {"heading": "Remove me"}},
+        }))
+
+        self.ok("patch", "/api/v1/themes/settings/", {
+            "settings": {"accent_color": "#AA0000"},
+            "templates": {"index": {
+                "order": ["c", "a"],
+                "sections": {"b": None, "c": {"type": "custom", "settings": {"heading": "Brand new"}}},
+            }},
+        })
+        saved = self.ok("get", "/api/v1/themes/settings/")
+        index = saved["templates"]["index"]
+        self.assertEqual(index["order"], ["c", "a"])
+        self.assertEqual(set(index["sections"]), {"a", "c"})
+        self.assertEqual(index["sections"]["a"]["settings"]["heading"], "Keep me")
+        self.assertEqual(saved["settings"]["accent_color"], "#AA0000")
+        html = self.client.get(f"/s/{store['storeSlug']}/").content.decode()
+        self.assertLess(html.index("Brand new"), html.index("Keep me"))
+        self.assertNotIn("Remove me", html)
+
+    def test_partial_save_is_validated(self):
+        self.sign_up("patchbad@example.com", "Patch Bad")
+        for body in (
+            {"templates": {"index": {"sections": {"x": {"type": "custom", "settings": {}}}}}},  # not in order
+            {"templates": {"nowhere": {}}},
+            {"settings": {"accent_color": "red"}},
+        ):
+            self.ok("patch", "/api/v1/themes/settings/", body, expect=400)
