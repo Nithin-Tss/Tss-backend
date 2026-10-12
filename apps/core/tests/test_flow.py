@@ -175,7 +175,7 @@ class StoreIsolationTest(StoreClientMixin, APITestCase):
 
     def test_stores_are_isolated(self):
         token_a, store_a = self.sign_up("a@example.com", "Store A")
-        product_a = self.ok("post", "/api/v1/catalog/products/", {"title": "A-only", "price": "10"}, expect=201)
+        product_a = self.ok("post", "/api/v1/catalog/products/", {"title": "A-only", "sku": "SKU-A-ONLY", "price": "10"}, expect=201)
         customer_a = self.ok("post", "/api/v1/customers/", {"first_name": "Alice"}, expect=201)
         location_a = self.ok("post", "/api/v1/inventory/locations/", {"name": "A warehouse"}, expect=201)
 
@@ -216,8 +216,8 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
 
     def test_sections_render_in_order_and_hidden_ones_are_skipped(self):
         _, store = self.sign_up("theme@example.com", "Theme Shop")
-        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Picked lamp", "status": "active", "price": "5"}, expect=201)
-        self.ok("post", "/api/v1/catalog/products/", {"title": "Other chair", "status": "active", "price": "5"}, expect=201)
+        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Picked lamp", "sku": "SKU-PICKED-LAMP", "status": "active", "price": "5"}, expect=201)
+        self.ok("post", "/api/v1/catalog/products/", {"title": "Other chair", "sku": "SKU-OTHER-CHAIR", "status": "active", "price": "5"}, expect=201)
 
         saved = self.ok("put", "/api/v1/themes/settings/", self.index(
             ["about", "picks", "promo", "slides"],
@@ -256,7 +256,7 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
 
     def test_custom_section_blocks_render_in_order(self):
         _, store = self.sign_up("custom@example.com", "Custom Shop")
-        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Blue vase", "status": "active", "price": "9"}, expect=201)
+        product = self.ok("post", "/api/v1/catalog/products/", {"title": "Blue vase", "sku": "SKU-BLUE-VASE", "status": "active", "price": "9"}, expect=201)
         collection = self.ok("post", "/api/v1/catalog/collections/", {"name": "Summer"}, expect=201)
 
         self.ok("put", "/api/v1/themes/settings/", self.index(["story", "quiet"], {
@@ -405,8 +405,8 @@ class SectionOptionsTest(StoreClientMixin, APITestCase):
 
     def test_product_list_sources_and_layout(self):
         _, store = self.sign_up("lists@example.com", "List Shop")
-        cheap = self.ok("post", "/api/v1/catalog/products/", {"title": "Rarely bought", "status": "active", "price": "1"}, expect=201)
-        popular = self.ok("post", "/api/v1/catalog/products/", {"title": "Best seller lamp", "status": "active", "price": "2", "tags": ["cosy"]}, expect=201)
+        cheap = self.ok("post", "/api/v1/catalog/products/", {"title": "Rarely bought", "sku": "SKU-RARELY-BOUGHT", "status": "active", "price": "1"}, expect=201)
+        popular = self.ok("post", "/api/v1/catalog/products/", {"title": "Best seller lamp", "sku": "SKU-BEST-SELLER-LAMP", "status": "active", "price": "2", "tags": ["cosy"]}, expect=201)
         self.ok("post", "/api/v1/orders/", {"items": [{"product": popular["id"], "quantity": 5}]}, expect=201)
         self.ok("post", "/api/v1/orders/", {"items": [{"product": cheap["id"], "quantity": 1}]}, expect=201)
 
