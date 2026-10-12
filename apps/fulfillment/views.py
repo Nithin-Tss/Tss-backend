@@ -19,6 +19,7 @@ class FulfillmentViewSet(
     POST /api/v1/fulfillments/   {order, items: [{order_item, quantity}]}  (no items = everything left)
     """
 
+    permission_resource = "fulfillment"
     queryset = Fulfillment.objects.select_related("order").prefetch_related("items__order_item").order_by("-created_at")
     serializer_class = FulfillmentSerializer
     http_method_names = ["get", "post", "head", "options"]

@@ -19,8 +19,7 @@ from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
-
+load_dotenv(BASE_DIR / ".env", override=True)
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
@@ -132,8 +131,12 @@ DATABASES = {
         "HOST": os.getenv("DB_HOST", "127.0.0.1"),
         "PORT": os.getenv("DB_PORT", "5432"),
         # Reuse connections, but verify them first so a connection the pooler dropped isn't reused
-        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+        # Default 0 (close per request): Supabase's pooler has a small client cap, and
+        # persistent per-thread connections exhaust it (EMAXCONNSESSION)
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "0")),
         "CONN_HEALTH_CHECKS": True,
+        # Required when DB_PORT is 6543 (Supabase transaction pooler)
+        "DISABLE_SERVER_SIDE_CURSORS": True,
         "OPTIONS": {
             # Supabase expects SSL; fail fast instead of hanging on network hiccups
             "sslmode": os.getenv("DB_SSLMODE", "require"),

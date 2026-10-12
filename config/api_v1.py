@@ -5,9 +5,13 @@ v1 keeps working unchanged.
 """
 from django.urls import include, path
 
+from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
+
 urlpatterns = [
     path("auth/", include("apps.identity.urls")),
     path("stores/", include("apps.tenancy.urls")),
+    path("members/", include(members_urlpatterns)),
+    path("roles/", include(roles_urlpatterns)),
     path("catalog/", include("apps.catalog.urls")),
     path("customers/", include("apps.customers.urls")),
     path("orders/", include("apps.orders.urls")),

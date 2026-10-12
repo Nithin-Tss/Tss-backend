@@ -317,6 +317,31 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         self.assertIn('"scroll": 240', html)
         self.assertLess(html.index("First"), html.index("Second"))
 
+    def test_preview_supports_edit_mode(self):
+        """Labels and block indexes for Edit mode; links stay inside the preview; the public store is untouched."""
+        _, store = self.sign_up("editmode@example.com", "Edit Mode Shop")
+        body = self.index(["story", "hero"], {
+            "story": {"type": "custom", "settings": {"heading": "Our story"}, "blocks": [
+                {"type": "heading", "settings": {"text": "Since 1999"}},
+                {"type": "heading", "hidden": True, "settings": {"text": "Hidden one"}},
+                {"type": "text", "settings": {"body": "<p>Made by hand</p>"}},
+            ]},
+            "hero": {"type": "hero", "settings": {"heading": ""}},
+        })
+        html = self.ok("post", "/api/v1/themes/preview/", body)["html"]
+        self.assertIn('data-tss-section="story" data-tss-label="Our story"', html)
+        self.assertIn('data-tss-section="hero" data-tss-label="Hero banner"', html)  # no heading: the section type
+        self.assertIn('data-tss-block="0"', html)
+        self.assertIn('data-tss-block="2"', html)  # indexes match the saved list, hidden blocks included
+        self.assertNotIn('data-tss-block="1"', html)
+        self.assertIn('target="_self"', html)  # Edit mode off: links open inside the preview
+        self.assertIn('m.type === "mode"', html)
+
+        self.ok("put", "/api/v1/themes/settings/", body)
+        public = self.home(store["storeSlug"])
+        self.assertNotIn("data-tss-section", public)
+        self.assertNotIn("tss-edit", public)
+
     def test_preview_config_cannot_break_out_of_script(self):
         self.sign_up("xss@example.com", "Xss Shop")
         r = self.client.post(

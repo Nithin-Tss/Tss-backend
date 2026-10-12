@@ -17,6 +17,7 @@ from .serializers import (
 class DeliveryGatewayViewSet(StoreScopedViewSet):
     """/api/v1/delivery/gateways/  delivery partners (courier companies, own van, ...)"""
 
+    permission_resource = "shipping"
     queryset = DeliveryGateway.objects.order_by("name")
     serializer_class = DeliveryGatewaySerializer
 
@@ -33,6 +34,7 @@ class ShipmentViewSet(
     POST /api/v1/delivery/shipments/<id>/events/    {status, location, description}  ("delivered" completes it)
     """
 
+    permission_resource = "fulfillment"
     queryset = Shipment.objects.select_related("delivery_gateway", "fulfillment").prefetch_related(
         "items__order_item", "tracking_events"
     ).order_by("-created_at")

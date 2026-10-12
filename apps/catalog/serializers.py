@@ -4,7 +4,7 @@ from apps.core.viewsets import StoreScopedSerializerMixin
 
 from apps.inventory.models import Location
 
-from .models import Category, Collection, Product, ProductVariant, SalesChannel
+from .models import EXTRA_FIELDS, Category, Collection, Product, ProductVariant, SalesChannel
 from .services import STATUSES, THEME_TEMPLATES, check_skus
 
 
@@ -77,6 +77,12 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
     )
     quantity = serializers.IntegerField(min_value=0, required=False, allow_null=True)
 
+    def get_fields(self):
+        fields = super().get_fields()
+        for name in EXTRA_FIELDS:
+            fields[name] = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+        return fields
+
     def to_internal_value(self, data):
         if hasattr(data, "get"):
             blanks = {k: None for k in ("price", "quantity", "location", "category_id") if data.get(k) == ""}
@@ -134,6 +140,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "id", "title", "status", "description", "category", "category_id", "product_type",
             "vendor", "seo_title", "seo_description", "theme_template", "price", "sku",
             "collections", "tags", "variants", "images", "sales_channels", "createdAt", "updatedAt",
+            *EXTRA_FIELDS,
         ]
 
     def _variants(self, product):

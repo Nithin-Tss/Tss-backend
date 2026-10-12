@@ -25,6 +25,8 @@ class PaymentViewSet(
     Payments are never edited or deleted - refund instead.
     """
 
+    permission_resource = "orders"
+    action_permissions = {"refund": "orders.refund"}
     queryset = Payment.objects.prefetch_related("transactions").order_by("-created_at")
     serializer_class = PaymentSerializer
     http_method_names = ["get", "post", "head", "options"]

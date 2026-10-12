@@ -16,6 +16,8 @@ class DiscountViewSet(StoreScopedViewSet):
     POST /api/v1/discounts/check/      {code, subtotal} -> how much the code takes off
     """
 
+    permission_resource = "discounts"
+    action_permissions = {"check": "discounts.view"}
     queryset = Discount.objects.order_by("-created_at")
     serializer_class = DiscountSerializer
 

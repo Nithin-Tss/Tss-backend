@@ -799,9 +799,11 @@ def _block_html(block, store, env, base_url):
 def _render_blocks(blocks, store, env, base_url, theme=None):
     """Visible blocks in order, each in a wrapper with its own spacing, alignment and width."""
     parts = []
-    for block in blocks:
+    for position, block in enumerate(blocks):
         if block.get("hidden"):
             continue
+        # The block's index in its section, so the customizer preview can open it on click
+        index = block.get("_index", position)
         inner = _block_html(block, store, env, base_url)
         if not inner:
             continue
@@ -818,7 +820,9 @@ def _render_blocks(blocks, store, env, base_url, theme=None):
             b_classes, b_style = button_attrs(b, theme or {})
             classes += b_classes
             style += b_style
-        parts.append(f'<div class="{escape(" ".join(classes))}" style="{escape(";".join(style))}">{inner}</div>')
+        parts.append(
+            f'<div class="{escape(" ".join(classes))}" style="{escape(";".join(style))}" data-tss-block="{int(index)}">{inner}</div>'
+        )
     return parts
 
 
@@ -935,7 +939,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         wrap = editor and section_id in real_ids
 
         if wrap:
-            html.append(Markup(f'<div data-tss-section="{escape(section_id)}">'))
+            # The customizer preview labels a section with the name the sections list shows
+            label = section["settings"].get("heading") or SECTIONS.get(section["type"], {}).get("name", "")
+            html.append(Markup(f'<div data-tss-section="{escape(section_id)}" data-tss-label="{escape(label)}">'))
         html.append(_wrap_attrs(section_id, raw_section["settings"], theme_button))
 
         if section["type"] == "custom":
@@ -948,7 +954,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             # The template sees only its own blocks (e.g. slides); visible ones only
             all_blocks = section.get("blocks", [])
             section["blocks"] = [b for b in all_blocks if b["type"] not in GENERIC_BLOCK_TYPES and not b.get("hidden")]
-            extra_blocks = [b for b in all_blocks if b["type"] in GENERIC_BLOCK_TYPES]
+            extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
 
             if SECTIONS[section["type"]].get("uses_products"):
                 ss = section["settings"]

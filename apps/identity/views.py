@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from apps.core.tokens import (
     REMEMBER_CLAIM, SessionStore, SESSION_CLAIM, end_token_session, issue_tokens, refresh_tokens,
 )
+from apps.tenancy.access import accept_invitations
 from apps.tenancy.services import stores_for_user
 
 from .email_links import send_password_reset_email, send_verification_email
@@ -65,6 +66,9 @@ def mark_email_verified(user):
     if user.email_verified_at is None:
         user.email_verified_at = timezone.now()
         user.save(update_fields=["email_verified_at", "updated_at"])
+
+    # Access offered to this address before it had an account is claimed now
+    accept_invitations(user)
 
 
 class SignupView(PublicAuthView):
@@ -205,7 +209,7 @@ class ChangePasswordView(APIView):
 
 class MeView(APIView):
     """
-    GET   /api/v1/auth/me/  the signed-in user and their stores
+    GET    /api/v1/auth/me/  the signed-in user and their stores
     PATCH /api/v1/auth/me/  {firstName, lastName, email, mobileNumber} (any of them)
                             -> {user, stores}
 
