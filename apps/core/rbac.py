@@ -172,3 +172,20 @@ def permission_for(area, method, action=None, overrides=None):
     if method == "DELETE" and has_delete(area):
         return _key(area, DELETE)
     return _key(area, MANAGE)
+
+
+# Which area owns a model's records, for checking that a request that points at
+# another area's records (an order line naming a product) may see that area.
+_AREA_BY_APP = {
+    "catalog": "products", "customers": "customers", "wishlist": "customers",
+    "inventory": "inventory", "discounts": "discounts", "gift_cards": "gift_cards",
+    "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes",
+    "orders": "orders", "payments": "orders", "commerce": "orders",
+    "delivery": "shipping",
+}
+_AREA_BY_MODEL = {"DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment"}
+
+
+def area_for_model(model):
+    """The permission area that owns `model`, or None when it isn't one of the store areas."""
+    return _AREA_BY_MODEL.get(model.__name__) or _AREA_BY_APP.get(model._meta.app_label)

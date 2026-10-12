@@ -61,6 +61,9 @@ def create_store(owner, store_name, store_slug=None):
         status=ACTIVE,
     )
 
+    from .access import ensure_built_in_roles
+    ensure_built_in_roles(store)
+
     return store
 
 

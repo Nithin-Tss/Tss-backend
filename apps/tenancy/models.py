@@ -18,6 +18,8 @@ class Store(models.Model):
     status = models.CharField(max_length=30)
     # Names the owner gave the generic product columns, e.g. {"column1": "Ingredients"}
     field_labels = models.JSONField(default=dict, blank=True)
+    # Built-in roles are created once; after that a deleted one stays deleted
+    roles_seeded = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -70,8 +72,9 @@ class StoreMembership(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user} → {self.store}"
-        
+        return f"{self.user} -> {self.store}"
+
+
 class StoreRole(models.Model):
     role_id = models.UUIDField(
         primary_key=True,
@@ -125,7 +128,7 @@ class StoreRole(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.store} → {self.name}"
+        return f"{self.store} -> {self.name}"
 
 
 class MembershipRole(models.Model):
@@ -169,4 +172,59 @@ class MembershipRole(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.membership} → {self.role}"
+        return f"{self.membership} -> {self.role}"
+
+
+class Invitation(models.Model):
+    """
+    Access offered to an email address that has no account yet. It is claimed
+    when that address is verified (so nobody can claim access by signing up
+    with someone else's email), and lapses after a while.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store, on_delete=models.CASCADE, db_column="store_id", related_name="invitations",
+    )
+    email = models.CharField(max_length=254)
+    role_ids = models.JSONField(default=list)
+    is_owner = models.BooleanField(default=False)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+        db_column="invited_by_id", related_name="+",
+    )
+    status = models.CharField(max_length=20, default="pending")  # pending / accepted / revoked
+    created_at = models.DateTimeField(auto_now_add=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = '"tenancy"."invitations"'
+        indexes = [models.Index(fields=["email"], name="idx_invitation_email")]
+
+    def __str__(self):
+        return f"{self.email} -> {self.store}"
+
+
+class AccessLog(models.Model):
+    """Who changed roles or access, and when. Rows are never edited."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store, on_delete=models.CASCADE, db_column="store_id", related_name="access_log",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+        db_column="actor_id", related_name="+",
+    )
+    action = models.CharField(max_length=50)
+    subject = models.CharField(max_length=254, blank=True, default="")
+    detail = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"tenancy"."access_log"'
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["store", "-created_at"], name="idx_access_log_store")]
+
+    def __str__(self):
+        return f"{self.action} {self.subject}"

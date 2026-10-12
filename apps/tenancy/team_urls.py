@@ -1,11 +1,14 @@
 from django.urls import path
 
 from .team_views import (
-    MemberDetailView, MemberListView, PermissionCatalogView, RoleDetailView, RoleListView,
+    ActivityView, InvitationDetailView, InvitationListView, MemberDetailView, MemberListView, PermissionCatalogView, RoleDetailView, RoleListView,
 )
 
 members_urlpatterns = [
     path("", MemberListView.as_view(), name="member_list"),
+    path("invitations/", InvitationListView.as_view(), name="invitation_list"),
+    path("invitations/<uuid:invitation_id>/", InvitationDetailView.as_view(), name="invitation_detail"),
+    path("activity/", ActivityView.as_view(), name="access_activity"),
     path("<uuid:membership_id>/", MemberDetailView.as_view(), name="member_detail"),
 ]
 

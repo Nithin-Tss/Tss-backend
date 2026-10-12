@@ -8,7 +8,7 @@ from apps.core import rbac
 from apps.core.permissions import HasStorePermission, IsStoreMember
 
 from . import access
-from .models import StoreMembership, StoreRole
+from .models import AccessLog, Invitation, StoreMembership
 from .services import ACTIVE, OWNER
 
 
@@ -36,6 +36,29 @@ def member_json(m):
         "roles": [{"id": str(r.role_id), "name": r.name} for r in access.member_roles(m)],
         "permissions": sorted(access.membership_permissions(m)),
         "createdAt": m.created_at,
+    }
+
+
+def invitation_json(i):
+    roles = {str(r.role_id): r.name for r in i.store.roles.filter(role_id__in=access._valid_uuids(i.role_ids))}
+    return {
+        "invitationId": str(i.id),
+        "invited": True,
+        "email": i.email,
+        "isOwner": i.is_owner,
+        "roles": [{"id": rid, "name": roles[rid]} for rid in map(str, i.role_ids) if rid in roles],
+        "createdAt": i.created_at,
+    }
+
+
+def log_json(entry):
+    return {
+        "id": str(entry.id),
+        "action": entry.action,
+        "subject": entry.subject,
+        "detail": entry.detail,
+        "actor": entry.actor.email if entry.actor_id else None,
+        "createdAt": entry.created_at,
     }
 
 
@@ -139,12 +162,14 @@ class MemberListView(TeamView):
         return Response([member_json(m) for m in members])
 
     def post(self, request):
-        m = access.add_member(
+        result = access.add_member(
             request.store, request.membership,
             request.data.get("email"), request.data.get("roleIds", []),
             make_owner=bool(request.data.get("isOwner")),
         )
-        return Response(member_json(m), status=status.HTTP_201_CREATED)
+        if isinstance(result, Invitation):
+            return Response(invitation_json(result), status=status.HTTP_201_CREATED)
+        return Response(member_json(result), status=status.HTTP_201_CREATED)
 
 
 class MemberDetailView(TeamView):
@@ -168,3 +193,31 @@ class MemberDetailView(TeamView):
     def delete(self, request, membership_id):
         access.remove_member(self.get_member(membership_id), request.membership)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class InvitationListView(TeamView):
+    """GET /api/v1/members/invitations/  invitations still waiting to be claimed (members.view)"""
+
+    def get(self, request):
+        return Response([invitation_json(i) for i in access.pending_invitations(request.store)])
+
+
+class InvitationDetailView(TeamView):
+    """DELETE /api/v1/members/invitations/<id>/  withdraw an invitation (members.manage)"""
+
+    def delete(self, request, invitation_id):
+        invitation = access.pending_invitations(request.store).filter(pk=invitation_id).first()
+        if invitation is None:
+            raise NotFound("Invitation not found.")
+        access.revoke_invitation(invitation, request.membership)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ActivityView(TeamView):
+    """GET /api/v1/members/activity/  recent changes to roles and access (members.manage)"""
+
+    action_permissions = {"GET": "members.manage"}
+
+    def get(self, request):
+        entries = AccessLog.objects.filter(store=request.store).select_related("actor")[:100]
+        return Response([log_json(e) for e in entries])
