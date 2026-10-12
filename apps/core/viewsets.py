@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.tenancy.models import Store
 
-from .permissions import IsStoreMember
+from .permissions import HasStorePermission, IsStoreMember
 
 
 @lru_cache(maxsize=None)
@@ -54,7 +54,10 @@ class StoreScopedGenericViewSet(viewsets.GenericViewSet):
     - New rows get the current store and is_deleted=False automatically.
     """
 
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    # Every subclass names its area (see apps/core/rbac.py); without one, requests are refused.
+    permission_resource = None
+    action_permissions = None
     store_lookup = None
 
     def get_queryset(self):

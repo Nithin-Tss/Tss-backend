@@ -8,6 +8,8 @@ from .serializers import WishlistItemSerializer, WishlistSerializer
 class WishlistViewSet(StoreScopedViewSet):
     """/api/v1/wishlists/  ?customer=<id>"""
 
+    permission_resource = "customers"
+    action_permissions = {"DELETE": "customers.manage"}
     queryset = Wishlist.objects.prefetch_related("items__product").order_by("-created_at")
     serializer_class = WishlistSerializer
 
@@ -21,6 +23,8 @@ class WishlistViewSet(StoreScopedViewSet):
 class WishlistItemViewSet(StoreScopedViewSet):
     """/api/v1/wishlists/items/  ?wishlist=<id>"""
 
+    permission_resource = "customers"
+    action_permissions = {"DELETE": "customers.manage"}
     queryset = WishlistItem.objects.select_related("product").order_by("-created_at")
     serializer_class = WishlistItemSerializer
     http_method_names = ["get", "post", "delete", "head", "options"]

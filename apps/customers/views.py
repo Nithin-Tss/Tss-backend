@@ -10,6 +10,7 @@ from .serializers import CustomerAddressSerializer, CustomerSerializer
 class CustomerViewSet(StoreScopedViewSet):
     """/api/v1/customers/  ?search=name or email"""
 
+    permission_resource = "customers"
     queryset = (
         Customer.objects.prefetch_related("addresses", "orders")
         .order_by("-created_at")
@@ -31,6 +32,8 @@ class CustomerViewSet(StoreScopedViewSet):
 class CustomerAddressViewSet(StoreScopedViewSet):
     """/api/v1/customers/addresses/  ?customer=<id>"""
 
+    permission_resource = "customers"
+    action_permissions = {"DELETE": "customers.manage"}
     queryset = CustomerAddress.objects.order_by("-is_default", "created_at")
     serializer_class = CustomerAddressSerializer
 

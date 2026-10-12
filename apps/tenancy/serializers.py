@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from apps.catalog.models import EXTRA_FIELDS
 
+from .access import member_roles, membership_permissions
 from .models import Store
 
 
@@ -16,19 +17,36 @@ class StoreSerializer(serializers.ModelSerializer):
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     fieldLabels = serializers.JSONField(source="field_labels", required=False)
     role = serializers.SerializerMethodField()
+    roles = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = Store
-        fields = ["storeId", "storeName", "storeSlug", "status", "createdAt", "fieldLabels", "role"]
+        fields = [
+            "storeId", "storeName", "storeSlug", "status", "createdAt", "fieldLabels",
+            "role", "roles", "permissions",
+        ]
         read_only_fields = ["status"]
 
-    def get_role(self, store):
-        """The signed-in user's role in this store ("owner", "staff", ...)."""
+    def _membership(self, store):
         request = self.context.get("request")
         if request is None or not request.user.is_authenticated:
             return None
-        membership = store.memberships.filter(user=request.user).first()
+        return store.memberships.filter(user=request.user, status="active").first()
+
+    def get_role(self, store):
+        """The signed-in user's role in this store ("owner", "staff", ...)."""
+        membership = self._membership(store)
         return membership.role if membership else None
+
+    def get_roles(self, store):
+        """Names of the roles they hold (owners hold none: they skip the role check)."""
+        membership = self._membership(store)
+        return [r.name for r in member_roles(membership)] if membership else []
+
+    def get_permissions(self, store):
+        membership = self._membership(store)
+        return sorted(membership_permissions(membership)) if membership else []
 
     def validate_fieldLabels(self, value):
         """Only the generic "columnN" fields can be renamed; blank resets to the default."""

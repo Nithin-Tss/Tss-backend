@@ -24,7 +24,7 @@ from rest_framework.views import APIView
 from apps.catalog.models import Collection
 from apps.catalog.services import published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
-from apps.core.permissions import IsStoreMember
+from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.tenancy.models import Store, StoreMembership
 
 from .customizer import read_settings, save_settings, validate_settings
@@ -42,7 +42,8 @@ from .services import (
 
 
 class StoreThemeView(APIView):
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
 
     def store_theme(self):
         return get_store_theme(self.request.store)
@@ -505,6 +506,8 @@ class ThemePreviewView(StoreThemeView):
     live preview, with drag handles on every section. Nothing is saved.
     """
 
+    action_permissions = {"POST": "themes.view"}
+
     def post(self, request):
         clean = validate_custom_data(request.data)
 
@@ -693,7 +696,9 @@ class StorefrontLinkView(APIView):
     -> {"url": ...}: the active store's storefront, with the "Back to admin" bar for this user.
     """
 
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
+    action_permissions = {"POST": "themes.view"}
 
     def post(self, request):
         path = str(request.data.get("path") or "/")

@@ -10,7 +10,9 @@ REMOVED = "removed"
 
 
 def stores_for_user(user):
-    """Stores the user is an active member of, with their role in each."""
+    """Stores the user is an active member of, with their role and access in each."""
+    from .access import member_roles, membership_permissions
+
     memberships = (
         StoreMembership.objects.select_related("store")
         .filter(user=user, status=ACTIVE)
@@ -24,6 +26,8 @@ def stores_for_user(user):
             "storeSlug": m.store.store_slug,
             "status": m.store.status,
             "role": m.role,
+            "roles": [r.name for r in member_roles(m)],
+            "permissions": sorted(membership_permissions(m)),
         }
         for m in memberships
     ]

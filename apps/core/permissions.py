@@ -4,6 +4,10 @@ from rest_framework import exceptions
 from rest_framework.permissions import BasePermission
 
 from apps.tenancy.models import StoreMembership
+from apps.tenancy.access import membership_permissions
+from apps.tenancy.services import OWNER
+
+from .rbac import permission_for
 
 STORE_HEADER = "X-Store-Id"
 ACTIVE = "active"
@@ -43,4 +47,40 @@ class IsStoreMember(BasePermission):
 
         request.store = membership.store
         request.store_role = membership.role
+        request.membership = membership
         return True
+
+
+class HasStorePermission(BasePermission):
+    """
+    Checks the signed-in member's role permissions for the view's area.
+
+    The view names its area with `permission_resource` ("orders", "products", ...).
+    The HTTP method picks <area>.view / .manage / .delete, and
+    `action_permissions` overrides that per action or method; a value of None
+    means any member of the store. A view with no area is refused rather than
+    allowed. Owners skip the check. Run after IsStoreMember.
+    """
+
+    message = "Your role in this store doesn't allow this."
+
+    def has_permission(self, request, view):
+        membership = getattr(request, "membership", None)
+        if membership is None:
+            return False
+
+        if membership.role == OWNER:
+            return True
+
+        area = getattr(view, "permission_resource", None)
+        if not area:
+            return False
+
+        needed = permission_for(
+            area,
+            request.method,
+            getattr(view, "action", None),
+            getattr(view, "action_permissions", None),
+        )
+
+        return needed is None or needed in membership_permissions(membership)

@@ -14,6 +14,7 @@ class GiftCardViewSet(StoreScopedViewSet):
     POST /api/v1/gift-cards/<id>/adjust/    {amount, reason}: negative spends, positive credits back
     """
 
+    permission_resource = "gift_cards"
     queryset = GiftCard.objects.prefetch_related("transactions__created_by_user").order_by("-created_at")
     serializer_class = GiftCardSerializer
 
