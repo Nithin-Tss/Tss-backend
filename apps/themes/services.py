@@ -7,6 +7,7 @@ store had installed - is copied into a private Theme row whose slug is
 "store-<store id>". Code edits from the editor change only that copy.
 Section settings (hero text, slides, ...) live in StoreTheme.custom_data.
 """
+import hashlib
 import re
 from pathlib import Path
 
@@ -28,6 +29,20 @@ REQUIRED_FILES = {
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+# Starter files that have newer versions. Each store has its own copy of the
+# theme; a copy whose content still matches one of these earlier versions
+# (SHA-256) was never edited, so it is replaced with the current starter file.
+# Edited copies are left alone. Bump STARTER_REVISION when adding entries.
+STARTER_REVISION = 2
+STARTER_UPGRADES = {
+    "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
+    "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
+    "sections/product-grid.liquid": {"b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184"},
+    "sections/product-carousel.liquid": {"0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4"},
+    "sections/rich-text.liquid": {"37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b"},
+    "snippets/product-card.liquid": {"bc624bf8346fce0c29de1419f3d32ad1f66f052fe75ec9830685f219aee43eff"},
+}
 
 
 def starter_files():
@@ -98,6 +113,7 @@ def get_store_theme(store):
 
     if current and current.theme.slug == private_slug(store):
         _add_missing_starter_files(current.theme)
+        _upgrade_untouched_starter_files(current.theme)
         return current
 
     if current:
@@ -114,7 +130,27 @@ def get_store_theme(store):
         installed = StoreTheme.objects.select_related("theme").get(store=store, is_active=True)
 
     _add_missing_starter_files(installed.theme)
+    _upgrade_untouched_starter_files(installed.theme)
     return installed
+
+
+def _upgrade_untouched_starter_files(theme):
+    """Bring never-edited starter files up to date (see STARTER_UPGRADES). Runs once per revision."""
+    theme_data = theme.theme_data or {}
+    if theme_data.get("starter_revision", 1) >= STARTER_REVISION:
+        return
+
+    current = starter_files()
+    for file in theme.files.filter(file_path__in=STARTER_UPGRADES):
+        digest = hashlib.sha256(file.content.encode("utf-8")).hexdigest()
+        new = current.get(file.file_path)
+        if new is not None and digest in STARTER_UPGRADES[file.file_path] and file.content != new:
+            file.content = new
+            file.file_size = len(new.encode("utf-8"))
+            file.save(update_fields=["content", "file_size", "updated_at"])
+
+    theme.theme_data = {**theme_data, "starter_revision": STARTER_REVISION}
+    theme.save(update_fields=["theme_data", "updated_at"])
 
 
 def theme_files(store_theme):

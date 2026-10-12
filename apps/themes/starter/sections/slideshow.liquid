@@ -2,16 +2,19 @@
 {%- if section.blocks.size == 0 -%}
   <section class="section"><div class="page-width"><div class="empty-state">Add slides to this slideshow.</div></div></section>
 {%- else -%}
-<section id="section-{{ section.id }}" class="slideshow" aria-roledescription="carousel" aria-label="Slideshow"
-  data-autoplay="{{ s.autoplay }}" data-interval="{{ s.interval }}">
+<section id="section-{{ section.id }}" class="slideshow slideshow--{{ s.transition }}" aria-roledescription="carousel" aria-label="Slideshow"
+  data-autoplay="{{ s.autoplay }}" data-interval="{{ s.interval }}" data-transition="{{ s.transition }}">
   <div class="slideshow__track">
     {%- for block in section.blocks -%}
       {%- assign b = block.settings -%}
-      <div class="slideshow__slide hero hero--{{ s.height }}{% if b.image_url != blank %} hero--image{% else %} placeholder{% endif %}"
+      <div class="slideshow__slide hero hero--{{ s.height }}{% if b.image_url != blank %} hero--image{% else %} placeholder{% endif %}{% if forloop.first %} is-active{% endif %}"
         role="group" aria-roledescription="slide" aria-label="{{ forloop.index }} of {{ forloop.length }}">
         {%- if b.image_url != blank -%}
-          <img src="{{ b.image_url }}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"{% unless forloop.first %} loading="lazy"{% endunless %}>
-          <div class="hero__overlay" style="opacity:.3"></div>
+          <picture>
+            {%- if b.mobile_image_url != blank -%}<source media="(max-width: 749px)" srcset="{{ b.mobile_image_url }}">{%- endif -%}
+            <img class="hero__media" src="{{ b.image_url }}" alt=""{% unless forloop.first %} loading="lazy"{% endunless %}>
+          </picture>
+          <div class="hero__overlay" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }}"></div>
         {%- endif -%}
         <div class="page-width hero__content align-{{ b.text_alignment }}">
           {%- if b.heading != blank -%}<h1>{{ b.heading }}</h1>{%- endif -%}
@@ -25,27 +28,37 @@
   </div>
 
   {%- if section.blocks.size > 1 -%}
-    <button class="slideshow__arrow slideshow__arrow--prev" type="button" aria-label="Previous slide">&#8249;</button>
-    <button class="slideshow__arrow slideshow__arrow--next" type="button" aria-label="Next slide">&#8250;</button>
-    <div class="slideshow__dots">
-      {%- for block in section.blocks -%}
-        <button class="slideshow__dot" type="button" aria-label="Go to slide {{ forloop.index }}"></button>
-      {%- endfor -%}
-    </div>
+    {%- if s.show_arrows -%}
+      <button class="slideshow__arrow slideshow__arrow--prev" type="button" aria-label="Previous slide">&#8249;</button>
+      <button class="slideshow__arrow slideshow__arrow--next" type="button" aria-label="Next slide">&#8250;</button>
+    {%- endif -%}
+    {%- if s.show_dots -%}
+      <div class="slideshow__dots">
+        {%- for block in section.blocks -%}
+          <button class="slideshow__dot" type="button" aria-label="Go to slide {{ forloop.index }}"></button>
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
   {%- endif -%}
 </section>
 <script>
   (function () {
     var root = document.getElementById("section-{{ section.id }}");
     var track = root.querySelector(".slideshow__track");
+    var slides = track.children;
     var dots = root.querySelectorAll(".slideshow__dot");
-    var count = track.children.length;
+    var fade = root.dataset.transition === "fade";
+    var count = slides.length;
     var index = 0;
     var timer = null;
 
     function go(i) {
       index = (i + count) % count;
-      track.style.transform = "translateX(" + (-100 * index) + "%)";
+      if (fade) {
+        for (var n = 0; n < count; n++) slides[n].classList.toggle("is-active", n === index);
+      } else {
+        track.style.transform = "translateX(" + (-100 * index) + "%)";
+      }
       dots.forEach(function (d, n) { d.setAttribute("aria-current", n === index ? "true" : "false"); });
     }
 

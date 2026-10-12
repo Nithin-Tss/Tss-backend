@@ -1,16 +1,67 @@
+{%- comment -%}
+  Featured products. Same markup as product-carousel.liquid; "Display as"
+  switches between a grid and a scrolling carousel.
+{%- endcomment -%}
 {%- assign s = section.settings -%}
-<section id="section-{{ section.id }}" class="section">
+<section id="section-{{ section.id }}"
+  class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
+  data-autoplay="{{ s.autoplay }}"
+  style="--cols: {{ s.columns }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
   <div class="page-width">
-    {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+    <div class="carousel__header">
+      <div>
+        {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+        {%- if s.subheading != blank -%}<p class="product-list__sub">{{ s.subheading }}</p>{%- endif -%}
+      </div>
+      <div class="product-list__actions">
+        {%- if s.view_all_label != blank -%}
+          <a class="product-list__view-all" href="{{ s.view_all_link | link }}">{{ s.view_all_label }} &rarr;</a>
+        {%- endif -%}
+        {%- if s.layout == 'carousel' and s.show_arrows and section.products.size > 1 -%}
+          <div class="carousel__controls">
+            <button class="carousel__btn" type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button>
+            <button class="carousel__btn" type="button" data-dir="1" aria-label="Scroll right">&#8250;</button>
+          </div>
+        {%- endif -%}
+      </div>
+    </div>
 
     {%- if section.products.size == 0 -%}
       <div class="empty-state">Products you publish will appear here.</div>
     {%- else -%}
-      <div class="product-grid product-grid--{{ s.columns }}">
+      <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
+        {%- if s.layout == 'carousel' %} tabindex="0" aria-label="{{ s.heading | default: 'Products' }}"{% endif %}>
         {%- for product in section.products -%}
-          {% render 'product-card', product: product, show_vendor: s.show_vendor %}
+          {% render 'product-card', product: product, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
         {%- endfor -%}
       </div>
     {%- endif -%}
   </div>
 </section>
+{%- if s.layout == 'carousel' -%}
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var track = root.querySelector(".carousel__track");
+    if (!track) return;
+
+    function step(dir) {
+      var card = track.firstElementChild;
+      var width = card ? card.getBoundingClientRect().width + parseFloat(getComputedStyle(track).columnGap || 0) : track.clientWidth;
+      var atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
+      if (dir > 0 && atEnd) track.scrollTo({ left: 0, behavior: "smooth" });
+      else track.scrollBy({ left: dir * width, behavior: "smooth" });
+    }
+
+    root.querySelectorAll(".carousel__btn").forEach(function (btn) {
+      btn.addEventListener("click", function () { step(Number(btn.dataset.dir)); });
+    });
+
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (root.dataset.autoplay === "true" && !reduce) {
+      var timer = setInterval(function () { step(1); }, 4000);
+      root.addEventListener("mouseenter", function () { clearInterval(timer); });
+    }
+  })();
+</script>
+{%- endif -%}

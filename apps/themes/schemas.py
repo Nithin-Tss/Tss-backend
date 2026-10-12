@@ -241,8 +241,11 @@ def _clean_value(spec, value, where):
         raise serializers.ValidationError(f"{where} must be one of: {', '.join(spec['options'])}.")
     if kind == "color" and not _COLOR.match(value):
         raise serializers.ValidationError(f"{where} must be a color like #1A2B3C.")
-    if kind in ("url", "image") and value and not value.startswith(("/", "https://", "http://")):
+    if kind == "image" and value and not value.startswith(("/", "https://", "http://")):
         raise serializers.ValidationError(f"{where} must start with /, http:// or https://.")
+    # Links may also be an email, a phone number or a section on the page
+    if kind == "url" and value and not value.startswith(("/", "https://", "http://", "mailto:", "tel:", "#")):
+        raise serializers.ValidationError(f"{where} must be a page (/...), a web address, mailto:, tel: or #section.")
     if len(value) > spec.get("max", 2000):
         raise serializers.ValidationError(f"{where} is too long.")
 
@@ -291,13 +294,23 @@ def _clean_section(page, section_id, raw):
         for i, block in enumerate(blocks):
             if not isinstance(block, dict) or block.get("type") not in schema["blocks"]:
                 raise serializers.ValidationError(f"{where}.blocks[{i}].type is not valid.")
+            block_hidden = block.get("hidden", False)
+            if not isinstance(block_hidden, bool):
+                raise serializers.ValidationError(f"{where}.blocks[{i}].hidden must be true or false.")
             block_schema = schema["blocks"][block["type"]]
             section["blocks"].append({
                 "type": block["type"],
+                "hidden": block_hidden,
                 "settings": _clean_settings(
                     block_schema["settings"], block.get("settings", {}), f"{where}.blocks[{i}].settings"
                 ),
             })
+
+        # Some block types have their own limit (e.g. at most 8 slides)
+        for type_, limit in schema.get("type_limits", {}).items():
+            if sum(1 for b in section["blocks"] if b["type"] == type_) > limit:
+                name = schema["blocks"][type_]["name"].lower()
+                raise serializers.ValidationError(f"{where} can have at most {limit} {name}s.")
 
     return section
 
@@ -347,8 +360,22 @@ def validate_custom_data(data):
     return clean
 
 
+def _coerce(spec, value):
+    """A saved value that no longer fits its option (range or choices changed) falls back safely."""
+    if spec["type"] in ("range", "number"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return copy.deepcopy(spec["default"])
+        return max(spec["min"], min(spec["max"], int(value)))
+    if spec["type"] == "select" and value not in spec["options"]:
+        return copy.deepcopy(spec["default"])
+    return value
+
+
 def _with_defaults(schema, values):
-    return {key: values.get(key, copy.deepcopy(spec["default"])) for key, spec in schema.items()}
+    return {
+        key: _coerce(spec, values[key]) if key in values else copy.deepcopy(spec["default"])
+        for key, spec in schema.items()
+    }
 
 
 def resolve(custom_data):
@@ -366,6 +393,7 @@ def resolve(custom_data):
                 section["blocks"] = [
                     {
                         "type": b["type"],
+                        "hidden": bool(b.get("hidden", False)),
                         "settings": _with_defaults(schema["blocks"][b["type"]]["settings"], b.get("settings", {})),
                     }
                     for b in section.get("blocks", [])
@@ -380,7 +408,13 @@ def resolve(custom_data):
 
 def public_schema():
     """Schemas for the admin customizer UI."""
-    return {"settings": THEME_SETTINGS, "sections": SECTIONS, "pages": list(PAGES)}
+    return {
+        "settings": THEME_SETTINGS,
+        "sections": SECTIONS,
+        "pages": list(PAGES),
+        "groups": GROUPS,
+        "fonts": [{"key": k, "label": label, "stack": stack, "google": family} for k, label, stack, family, _ in FONTS],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -554,48 +588,6 @@ VALUE_CLEANERS.update({
 })
 
 
-# ---------------------------------------------------------------------------
-# Page builder: ready-made sections get "Section heading" labels, the
-# slideshow gets a heading, Featured products can be picked one by one,
-# Rich text gets an editor.
-# ---------------------------------------------------------------------------
-
-_hero = SECTIONS["hero"]["settings"]
-SECTIONS["hero"]["settings"] = {
-    "heading": dict(_hero["heading"], label="Section heading"),
-    "subheading": dict(_hero["subheading"], label="Sub-text"),
-    "button_label": dict(_hero["button_label"], label="Button text"),
-    "button_link": _hero["button_link"],
-    "image_url": dict(_hero["image_url"], label="Background image"),
-    **{k: v for k, v in _hero.items() if k not in ("heading", "subheading", "button_label", "button_link", "image_url")},
-}
-
-SECTIONS["slideshow"]["settings"] = {
-    "heading": {"type": "text", "label": "Section heading", "default": ""},
-    **SECTIONS["slideshow"]["settings"],
-}
-_slide = SECTIONS["slideshow"]["blocks"]["slide"]["settings"]
-_slide["image_url"] = dict(_slide["image_url"], label="Image")
-
-_carousel = SECTIONS["product-carousel"]["settings"]
-_carousel["heading"] = dict(_carousel["heading"], label="Section heading")
-
-_grid = SECTIONS["product-grid"]["settings"]
-SECTIONS["product-grid"]["settings"] = {
-    "heading": dict(_grid["heading"], label="Section heading"),
-    "products": {
-        "type": "products",
-        "label": "Products to show (none chosen = from the collection below)",
-        "default": [],
-        "max": 24,
-    },
-    **{k: v for k, v in _grid.items() if k != "heading"},
-}
-
-_rich = SECTIONS["rich-text"]["settings"]
-_rich["heading"] = dict(_rich["heading"], label="Section heading")
-_rich["text"] = {"type": "richtext", "label": "Body", "default": "<p>Tell customers about your brand.</p>", "max": 20000}
-
 # A section the owner names and fills with any blocks, in any order
 SECTIONS["custom"] = {
     "name": "Custom section",
@@ -657,3 +649,638 @@ SECTIONS["custom"] = {
     },
     "max_blocks": 30,
 }
+
+
+# ---------------------------------------------------------------------------
+# Page builder: section options. Every option has a group for the customizer
+# ("content", "layout", "style", "advanced"); "ui", "unit", "help", "labels"
+# and "show_if" only affect how the customizer shows it.
+# ---------------------------------------------------------------------------
+
+_ANCHOR = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_CSS_CLASSES = re.compile(r"^[A-Za-z0-9_\- ]*$")
+
+
+def _clean_optional_color(spec, value, where):
+    if value in ("", None):
+        return ""
+    if not isinstance(value, str) or not _COLOR.match(value.strip()):
+        raise serializers.ValidationError(f"{where} must be a color like #1A2B3C, or empty.")
+    return value.strip().upper()
+
+
+def _clean_anchor(spec, value, where):
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    value = value.strip().lstrip("#").lower()
+    if value and (len(value) > spec.get("max", 50) or not _ANCHOR.match(value)):
+        raise serializers.ValidationError(f"{where} may only use letters, numbers, - and _.")
+    return value
+
+
+def _clean_css_class(spec, value, where):
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    value = " ".join(value.split())
+    if len(value) > spec.get("max", 100) or not _CSS_CLASSES.match(value):
+        raise serializers.ValidationError(f"{where} may only use letters, numbers, -, _ and spaces.")
+    return value
+
+
+def _clean_number(spec, value, where):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise serializers.ValidationError(f"{where} must be a number.")
+    if not spec["min"] <= value <= spec["max"]:
+        raise serializers.ValidationError(f"{where} must be between {spec['min']} and {spec['max']}.")
+    return int(value)
+
+
+VALUE_CLEANERS.update({
+    "color_optional": _clean_optional_color,
+    "anchor": _clean_anchor,
+    "css_class": _clean_css_class,
+    "number": _clean_number,
+})
+
+
+def _opt(group, type_, label, default, **extra):
+    return {"type": type_, "label": label, "default": default, "group": group, **extra}
+
+
+def _choice(group, label, options, default, ui=None, **extra):
+    spec = _opt(group, "select", label, default, options=list(options), **extra)
+    if ui:
+        spec["ui"] = ui
+    return spec
+
+
+def common_settings(width="wide", spacing_top=48, spacing_bottom=48, alignment="default"):
+    """Layout, style and advanced options every section has."""
+    return {
+        "width": _choice("layout", "Width", ["full", "wide", "narrow"], width, ui="segmented"),
+        "spacing_top": _opt("layout", "range", "Top spacing", spacing_top, min=0, max=120, step=4, unit="px"),
+        "spacing_bottom": _opt("layout", "range", "Bottom spacing", spacing_bottom, min=0, max=120, step=4, unit="px"),
+        "padding_x": _opt(
+            "layout", "range", "Left and right padding", 20, min=0, max=80, step=4, unit="px",
+            help="Space between the content and the edges of the screen.",
+        ),
+        "content_alignment": _choice(
+            "layout", "Content alignment", ["default", "left", "center", "right"], alignment, ui="segmented",
+        ),
+        "background_color": _opt("style", "color_optional", "Background colour", ""),
+        "text_color": _opt("style", "color_optional", "Text colour", ""),
+        "heading_size": _choice("style", "Heading size", ["small", "medium", "large"], "medium", ui="segmented"),
+        "heading_weight": _choice(
+            "style", "Heading weight", ["regular", "medium", "semibold", "bold"], "bold",
+        ),
+        "border_radius": _opt(
+            "style", "range", "Corner radius", 0, min=0, max=40, step=2, unit="px",
+            help="Rounds the corners of the section's background.",
+        ),
+        "divider": _choice(
+            "style", "Divider line", ["none", "top", "bottom", "both"], "none",
+            labels={"both": "Top and bottom"},
+        ),
+        "visibility": _choice(
+            "advanced", "Show on", ["both", "desktop", "mobile"], "both", ui="segmented",
+            labels={"both": "All devices", "desktop": "Desktop only", "mobile": "Mobile only"},
+        ),
+        "animation": _choice(
+            "advanced", "Entrance animation", ["none", "fade", "slide-up"], "none",
+            labels={"fade": "Fade in", "slide-up": "Slide up"},
+        ),
+        "anchor_id": _opt(
+            "advanced", "anchor", "Section ID", "", max=50,
+            help="Lets a menu link jump here: link to #your-id. Letters, numbers, - and _.",
+        ),
+        "css_class": _opt(
+            "advanced", "css_class", "Custom CSS class", "", max=100,
+            help="Adds your own class names, for styles written in the code editor.",
+        ),
+    }
+
+
+_ALIGN3 = ["left", "center", "right"]
+
+SECTIONS["hero"]["settings"] = {
+    "label_text": _opt("content", "text", "Label above the heading", "", max=80),
+    "heading": _opt("content", "text", "Heading", "Welcome to our store"),
+    "subheading": _opt("content", "textarea", "Sub-text", "Discover products made for you."),
+    "button_label": _opt("content", "text", "Button text", "Shop now", help="Leave empty to hide the button."),
+    "button_link": _opt("content", "url", "Button link", "/collections/all"),
+    "button_new_tab": _opt("content", "checkbox", "Open the button link in a new tab", False),
+    "button2_label": _opt("content", "text", "Second button text", "", help="Optional."),
+    "button2_link": _opt("content", "url", "Second button link", ""),
+    "image_url": _opt("content", "image", "Background image", ""),
+    "mobile_image_url": _opt(
+        "content", "image", "Mobile image", "", help="Optional. Shown on phones instead of the background image.",
+    ),
+    "video_url": _opt(
+        "content", "url", "Background video", "",
+        help="Optional. A direct link to an .mp4 or .webm file; it plays muted behind the text.",
+    ),
+    "height": _choice(
+        "layout", "Height", ["small", "medium", "large", "full", "custom"], "medium",
+        labels={"full": "Full screen"},
+    ),
+    "custom_height": _opt(
+        "layout", "number", "Custom height", 560, min=200, max=1400, unit="px", show_if={"height": "custom"},
+    ),
+    "vertical_position": _choice("layout", "Text position", ["top", "middle", "bottom"], "middle", ui="segmented"),
+    "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
+    "text_max_width": _opt("layout", "range", "Maximum text width", 720, min=320, max=1100, step=20, unit="px"),
+    "overlay_color": _opt("style", "color", "Image overlay colour", "#000000"),
+    "overlay_opacity": _opt("style", "range", "Image overlay opacity", 30, min=0, max=90, unit="%"),
+    "button_style": _choice("style", "Button style", ["filled", "outline"], "filled", ui="segmented"),
+    "button_color": _opt("style", "color_optional", "Button colour", "", help="None uses the theme's colour."),
+    "image_position": _choice("style", "Image position", ["center", "top", "bottom"], "center", ui="segmented"),
+    "parallax": _opt(
+        "style", "checkbox", "Parallax effect", False, help="The image stays still while the page scrolls.",
+    ),
+    **common_settings(width="full", spacing_top=0, spacing_bottom=0),
+}
+
+SECTIONS["slideshow"]["settings"] = {
+    "heading": _opt("content", "text", "Section heading", "", help="Optional. Shown above the slideshow."),
+    "height": _choice("layout", "Height", ["small", "medium", "large", "full"], "medium", labels={"full": "Full screen"}),
+    "show_arrows": _opt("layout", "checkbox", "Show arrows", True),
+    "show_dots": _opt("layout", "checkbox", "Show dots", True),
+    "autoplay": _opt("style", "checkbox", "Autoplay", True),
+    "interval": _opt("style", "range", "Speed", 5, min=3, max=10, unit="s", help="Seconds each slide is shown."),
+    "transition": _choice("style", "Transition", ["slide", "fade"], "slide", ui="segmented"),
+    "overlay_opacity": _opt("style", "range", "Image overlay opacity", 30, min=0, max=90, unit="%"),
+    **common_settings(width="full", spacing_top=0, spacing_bottom=0),
+}
+SECTIONS["slideshow"]["blocks"]["slide"]["settings"] = {
+    "image_url": _opt("content", "image", "Image", ""),
+    "mobile_image_url": _opt("content", "image", "Mobile image", "", help="Optional. Shown on phones."),
+    "heading": _opt("content", "text", "Heading", "New season"),
+    "text": _opt("content", "textarea", "Sub-text", ""),
+    "button_label": _opt("content", "text", "Button text", ""),
+    "button_link": _opt("content", "url", "Button link", ""),
+    "text_alignment": _choice("content", "Text alignment", _ALIGN3, "center", ui="segmented"),
+}
+
+
+def _product_list_settings(layout, limit, heading):
+    return {
+        "heading": _opt("content", "text", "Section heading", heading),
+        "subheading": _opt("content", "textarea", "Sub-text", ""),
+        "source": _choice(
+            "content", "Products to show", ["collection", "products", "newest", "best_sellers"], "collection",
+            labels={"collection": "From a collection", "products": "Choose products", "best_sellers": "Best sellers"},
+        ),
+        "collection": dict(_COLLECTION, group="content", label="Collection", show_if={"source": "collection"}),
+        "products": _opt("content", "products", "Products", [], max=12, show_if={"source": "products"}),
+        "limit": _opt("content", "range", "Number of products", limit, min=2, max=12),
+        "view_all_label": _opt("content", "text", "\"View all\" button text", "", help="Leave empty to hide it."),
+        "view_all_link": _opt("content", "url", "\"View all\" link", "/collections/all"),
+        "layout": _choice("layout", "Display as", ["grid", "carousel"], layout, ui="segmented"),
+        "columns": _opt("layout", "range", "Products per row (desktop)", 4, min=2, max=6),
+        "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
+        "gap": _opt("layout", "range", "Gap between cards", 24, min=0, max=48, step=2, unit="px"),
+        "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
+        "show_arrows": _opt("layout", "checkbox", "Show arrows", True, show_if={"layout": "carousel"}),
+        "autoplay": _opt("layout", "checkbox", "Auto-scroll", False, show_if={"layout": "carousel"}),
+        "show_price": _opt("style", "checkbox", "Show price", True),
+        "show_vendor": _opt("style", "checkbox", "Show vendor", False),
+        "show_rating": _opt("style", "checkbox", "Show rating", False, help="From approved product reviews."),
+        "show_tags": _opt("style", "checkbox", "Show product tags", False),
+        "show_add_to_cart": _opt(
+            "style", "checkbox", "Show \"Add to cart\" button", False,
+            help="Opens the product page, where shoppers pick options and add it to the cart.",
+        ),
+        "card_background": _opt("style", "color_optional", "Card background", ""),
+        "card_border": _opt("style", "checkbox", "Card border", False),
+        "card_hover": _choice(
+            "style", "Card hover effect", ["none", "lift", "zoom"], "zoom", ui="segmented",
+            labels={"zoom": "Zoom image"},
+        ),
+        **common_settings(),
+    }
+
+
+SECTIONS["product-carousel"]["settings"] = _product_list_settings("carousel", 10, "Trending now")
+SECTIONS["product-grid"]["settings"] = _product_list_settings("grid", 8, "Featured products")
+
+SECTIONS["rich-text"]["settings"] = {
+    "heading": _opt("content", "text", "Section heading", "About us"),
+    "text": _opt("content", "richtext", "Text", "<p>Tell customers about your brand.</p>", max=20000),
+    "button_label": _opt("content", "text", "Button text", "", help="Optional."),
+    "button_link": _opt("content", "url", "Button link", "/collections/all"),
+    "image_url": _opt("content", "image", "Image", "", help="Optional."),
+    "image_position": _choice(
+        "content", "Image position", ["left", "right", "top"], "left", ui="segmented", show_if={"image_url": "*"},
+    ),
+    "text_width": _choice("layout", "Text width", ["narrow", "medium", "wide"], "medium", ui="segmented"),
+    "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
+    "text_columns": _choice("layout", "Columns", ["1", "2"], "1", ui="segmented"),
+    "text_size": _choice("style", "Text size", ["small", "medium", "large"], "medium", ui="segmented"),
+    "line_spacing": _choice("style", "Line spacing", ["tight", "normal", "relaxed"], "normal", ui="segmented"),
+    "quote_style": _choice(
+        "style", "Quote style", ["plain", "bordered", "highlighted"], "bordered", ui="segmented",
+        help="How quotes in the text look.",
+    ),
+    **common_settings(),
+}
+
+SECTIONS["custom"]["settings"] = {
+    "heading": _opt("content", "text", "Section name", "New section", max=200),
+    "show_heading": _opt("content", "checkbox", "Show the name as a heading", True),
+    **common_settings(alignment="left"),
+}
+
+for _type in ("main-product", "main-collection"):
+    SECTIONS[_type]["settings"] = {
+        **{k: dict(v, group=v.get("group", "content")) for k, v in SECTIONS[_type]["settings"].items()},
+        **common_settings(),
+    }
+
+GROUPS = [
+    {"id": "content", "label": "Content"},
+    {"id": "layout", "label": "Layout"},
+    {"id": "style", "label": "Style"},
+    {"id": "advanced", "label": "Advanced"},
+]
+
+
+# ---------------------------------------------------------------------------
+# Page builder: blocks. Every section can hold these blocks (after its own
+# content); a custom section is made only of them. Each block also has its
+# own spacing, alignment and width.
+# ---------------------------------------------------------------------------
+
+_DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
+
+
+def _clean_datetime(spec, value, where):
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    value = value.strip()[:16]
+    if value and not _DATETIME.match(value):
+        raise serializers.ValidationError(f"{where} must be a date and time like 2026-12-31T23:59.")
+    return value
+
+
+VALUE_CLEANERS["datetime"] = _clean_datetime
+
+ICONS = ["star", "heart", "truck", "shield", "gift", "leaf", "clock", "phone", "mail", "check", "return", "sparkle"]
+
+
+def block_settings():
+    """Spacing, alignment and width every block has."""
+    return {
+        "spacing_top": _opt("layout", "range", "Top spacing", 0, min=0, max=80, step=4, unit="px"),
+        "spacing_bottom": _opt("layout", "range", "Bottom spacing", 0, min=0, max=80, step=4, unit="px"),
+        "alignment": _choice("layout", "Alignment", ["default", "left", "center", "right"], "default", ui="segmented"),
+        "width": _choice(
+            "layout", "Width", ["auto", "full", "narrow"], "auto", ui="segmented",
+            help="Full spans every column of a multi-column section; narrow keeps the block slim.",
+        ),
+    }
+
+
+def _block(name, **settings):
+    return {"name": name, "settings": {**settings, **block_settings()}}
+
+
+BLOCKS = {
+    "heading": _block(
+        "Heading",
+        text=_opt("content", "text", "Text", "Heading", max=300),
+        size=_choice("content", "Size", ["small", "medium", "large"], "medium", ui="segmented"),
+    ),
+    "text": _block(
+        "Text",
+        body=_opt("content", "richtext", "Text", "<p>Write something here.</p>", max=20000),
+    ),
+    "image": _block(
+        "Image",
+        image_url=_opt("content", "image", "Image", ""),
+        alt=_opt("content", "text", "Description (for screen readers)", "", max=300),
+        link=_opt("content", "url", "Link (optional)", ""),
+    ),
+    "button": _block(
+        "Button",
+        label=_opt("content", "text", "Button text", "Shop now", max=100),
+        link=_opt("content", "url", "Button link", "/collections/all"),
+        new_tab=_opt("content", "checkbox", "Open in a new tab", False),
+        style=_choice("content", "Style", ["filled", "outline"], "filled", ui="segmented"),
+    ),
+    "video": _block(
+        "Video",
+        url=_opt(
+            "content", "url", "Video file link", "",
+            help="A direct link to an .mp4 or .webm file. YouTube and Vimeo links can't play here.",
+        ),
+        poster=_opt("content", "image", "Cover image", "", help="Optional. Shown before the video plays."),
+        autoplay=_opt("content", "checkbox", "Play automatically (muted, looping)", False),
+        controls=_opt("content", "checkbox", "Show player controls", True),
+    ),
+    "products": _block(
+        "Product list",
+        products=_opt("content", "products", "Products", [], max=24),
+        columns=_opt("content", "range", "Columns on desktop", 4, min=2, max=5),
+    ),
+    "collections": _block(
+        "Collection list",
+        collections=_opt("content", "collections", "Collections", [], max=12),
+    ),
+    "divider": _block(
+        "Divider",
+        line_style=_choice("content", "Line style", ["solid", "dashed", "dotted"], "solid", ui="segmented"),
+        thickness=_opt("content", "range", "Thickness", 1, min=1, max=6, unit="px"),
+        color=_opt("content", "color_optional", "Colour", "", help="None uses a light line."),
+    ),
+    "spacer": _block(
+        "Spacer",
+        height=_opt("content", "range", "Height", 40, min=8, max=200, step=4, unit="px"),
+    ),
+    "icon_text": _block(
+        "Icon with text",
+        icon=_choice("content", "Icon", ICONS, "star"),
+        title=_opt("content", "text", "Title", "Free shipping", max=120),
+        text=_opt("content", "textarea", "Text", "On all orders over ₹999."),
+        icon_position=_choice("content", "Icon position", ["top", "left"], "top", ui="segmented"),
+    ),
+    "list": _block(
+        "List",
+        items=_opt("content", "textarea", "Items", "First item\nSecond item\nThird item", help="One item per line."),
+        list_style=_choice("content", "Style", ["bullets", "numbers", "checks"], "bullets", ui="segmented"),
+    ),
+    "quote": _block(
+        "Quote",
+        text=_opt("content", "textarea", "Quote", "The best purchase I've made this year."),
+        author=_opt("content", "text", "Author", "", max=120),
+        quote_style=_choice("content", "Style", ["plain", "bordered", "highlighted"], "bordered", ui="segmented"),
+    ),
+    "social": _block(
+        "Social links",
+        instagram=_opt("content", "url", "Instagram", ""),
+        facebook=_opt("content", "url", "Facebook", ""),
+        x=_opt("content", "url", "X (Twitter)", ""),
+        tiktok=_opt("content", "url", "TikTok", ""),
+        youtube=_opt("content", "url", "YouTube", ""),
+        pinterest=_opt("content", "url", "Pinterest", ""),
+        linkedin=_opt("content", "url", "LinkedIn", ""),
+    ),
+    "countdown": _block(
+        "Countdown timer",
+        title=_opt("content", "text", "Title", "Sale ends in", max=120),
+        end=_opt("content", "datetime", "Ends at", "", help="Uses the shopper's own time zone."),
+        expired_text=_opt("content", "text", "Text after it ends", "This offer has ended.", max=200),
+    ),
+    "accordion": _block(
+        "Accordion (FAQ)",
+        items=_opt(
+            "content", "textarea", "Questions and answers",
+            "How long does delivery take?\nUsually 3 to 5 working days.\n\nCan I return an item?\nYes, within 30 days.",
+            max=10000,
+            help="Question on the first line, answer below it. Leave an empty line between questions.",
+        ),
+        open_first=_opt("content", "checkbox", "Open the first question", False),
+    ),
+    "map": _block(
+        "Map or embed",
+        address=_opt("content", "text", "Address", "", max=300, help="Shows this address on Google Maps."),
+        embed=_opt(
+            "content", "embed", "Or embed code", "", max=20000,
+            help="Optional. Used instead of the address, e.g. a Google Maps or Calendly embed.",
+        ),
+        height=_opt("content", "range", "Height", 360, min=160, max=800, step=10, unit="px"),
+    ),
+    "html": _block(
+        "Custom HTML",
+        html=_opt("content", "embed", "HTML", "", max=20000),
+    ),
+}
+
+GENERIC_BLOCK_TYPES = set(BLOCKS)
+
+for _type, _schema in SECTIONS.items():
+    own = {k: v for k, v in _schema.get("blocks", {}).items() if k not in GENERIC_BLOCK_TYPES}
+    _schema["blocks"] = {**own, **BLOCKS}
+    _schema["max_blocks"] = 40
+
+SECTIONS["slideshow"]["type_limits"] = {"slide": 8}
+
+SECTIONS["custom"]["settings"] = {
+    "heading": SECTIONS["custom"]["settings"]["heading"],
+    "show_heading": SECTIONS["custom"]["settings"]["show_heading"],
+    "columns": _opt("layout", "range", "Columns", 1, min=1, max=4, help="On phones, blocks always stack."),
+    "block_gap": _opt("layout", "range", "Gap between blocks", 20, min=0, max=64, step=2, unit="px"),
+    "vertical_align": _choice(
+        "layout", "Vertical alignment", ["top", "center", "bottom", "stretch"], "top", ui="segmented",
+        help="How blocks line up in a row when they have different heights.",
+    ),
+    **{k: v for k, v in SECTIONS["custom"]["settings"].items() if k not in ("heading", "show_heading")},
+}
+
+
+# ---------------------------------------------------------------------------
+# Page builder: fonts, text options and button options. Options marked
+# "theme_default" start empty/at their default and then follow the theme
+# settings; the customizer shows "Reset to theme default" once one is changed.
+# ---------------------------------------------------------------------------
+
+# key, label, CSS font stack, Google Fonts family (None = no download), weights to load
+FONTS = [
+    ("system", "System default", 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif', None, ""),
+    ("serif", "Serif (default)", 'Georgia,"Times New Roman",serif', None, ""),
+    ("mono", "Monospace (default)", 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', None, ""),
+    ("arial", "Arial", "Arial,Helvetica,sans-serif", None, ""),
+    ("georgia", "Georgia", "Georgia,serif", None, ""),
+    ("verdana", "Verdana", "Verdana,Geneva,sans-serif", None, ""),
+    ("trebuchet", "Trebuchet MS", '"Trebuchet MS",Helvetica,sans-serif', None, ""),
+    ("times", "Times New Roman", '"Times New Roman",Times,serif', None, ""),
+    ("inter", "Inter", '"Inter",system-ui,sans-serif', "Inter", "300;400;500;600;700;800"),
+    ("poppins", "Poppins", '"Poppins",system-ui,sans-serif', "Poppins", "300;400;500;600;700;800"),
+    ("roboto", "Roboto", '"Roboto",system-ui,sans-serif', "Roboto", "300;400;500;700"),
+    ("open-sans", "Open Sans", '"Open Sans",system-ui,sans-serif', "Open Sans", "300;400;500;600;700;800"),
+    ("montserrat", "Montserrat", '"Montserrat",system-ui,sans-serif', "Montserrat", "300;400;500;600;700;800"),
+    ("lato", "Lato", '"Lato",system-ui,sans-serif', "Lato", "300;400;700"),
+    ("dm-sans", "DM Sans", '"DM Sans",system-ui,sans-serif', "DM Sans", "300;400;500;600;700;800"),
+    ("raleway", "Raleway", '"Raleway",system-ui,sans-serif', "Raleway", "300;400;500;600;700;800"),
+    ("nunito", "Nunito", '"Nunito",system-ui,sans-serif', "Nunito", "300;400;500;600;700;800"),
+    ("work-sans", "Work Sans", '"Work Sans",system-ui,sans-serif', "Work Sans", "300;400;500;600;700;800"),
+    ("manrope", "Manrope", '"Manrope",system-ui,sans-serif', "Manrope", "300;400;500;600;700;800"),
+    ("rubik", "Rubik", '"Rubik",system-ui,sans-serif', "Rubik", "300;400;500;600;700;800"),
+    ("space-grotesk", "Space Grotesk", '"Space Grotesk",system-ui,sans-serif', "Space Grotesk", "300;400;500;600;700"),
+    ("oswald", "Oswald", '"Oswald",Impact,sans-serif', "Oswald", "300;400;500;600;700"),
+    ("playfair", "Playfair Display", '"Playfair Display",Georgia,serif', "Playfair Display", "400;500;600;700;800"),
+    ("merriweather", "Merriweather", '"Merriweather",Georgia,serif', "Merriweather", "300;400;700"),
+    ("lora", "Lora", '"Lora",Georgia,serif', "Lora", "400;500;600;700"),
+    ("pt-serif", "PT Serif", '"PT Serif",Georgia,serif', "PT Serif", "400;700"),
+    ("libre-baskerville", "Libre Baskerville", '"Libre Baskerville",Georgia,serif', "Libre Baskerville", "400;700"),
+]
+FONT_KEYS = {f[0] for f in FONTS}
+
+
+def _clean_font(spec, value, where):
+    if value in ("", None):
+        return ""
+    if value not in FONT_KEYS:
+        raise serializers.ValidationError(f"{where} is not one of the available fonts.")
+    return value
+
+
+def _clean_font_size(spec, value, where):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise serializers.ValidationError(f"{where} must be a number.")
+    value = int(value)
+    if value != 0 and not spec["min"] <= value <= spec["max"]:
+        raise serializers.ValidationError(f"{where} must be between {spec['min']} and {spec['max']}, or 0 for the theme size.")
+    return value
+
+
+VALUE_CLEANERS.update({"font": _clean_font, "font_size": _clean_font_size})
+
+_WEIGHTS = ["", "300", "400", "500", "600", "700", "800"]
+_WEIGHT_LABELS = {"": "Theme default", "300": "Light", "400": "Regular", "500": "Medium", "600": "Semi-bold", "700": "Bold", "800": "Extra bold"}
+_TRANSFORMS = ["", "none", "uppercase", "lowercase", "capitalize"]
+_TRANSFORM_LABELS = {"": "Theme default", "none": "As typed", "uppercase": "UPPERCASE", "lowercase": "lowercase", "capitalize": "Capitalize"}
+TEXT_PRESETS = {"Small": 14, "Medium": 16, "Large": 20, "Extra large": 28}
+HEADING_PRESETS = {"Small": 20, "Medium": 28, "Large": 40, "Extra large": 56}
+
+
+def _td(group, type_, label, default, **extra):
+    """An option that follows the theme until changed."""
+    return _opt(group, type_, label, default, theme_default=True, **extra)
+
+
+def text_settings(presets=TEXT_PRESETS):
+    """Text options for a block: font, size, weight, style, colour, spacing, alignment, shadow, links."""
+    return {
+        "t_font": _td("text", "font", "Font", ""),
+        "t_size": _td("text", "font_size", "Font size (desktop)", 0, min=10, max=96, unit="px", presets=presets,
+                      help="Theme uses the theme's size."),
+        "t_size_mobile": _td("text", "font_size", "Font size (mobile)", 0, min=10, max=96, unit="px", presets=presets),
+        "t_weight": _td("text", "select", "Font weight", "", options=_WEIGHTS, labels=_WEIGHT_LABELS),
+        "t_italic": _td("text", "checkbox", "Italic", False),
+        "t_underline": _td("text", "checkbox", "Underline", False),
+        "t_strike": _td("text", "checkbox", "Strikethrough", False),
+        "t_transform": _td("text", "select", "Letter case", "", options=_TRANSFORMS, labels=_TRANSFORM_LABELS),
+        "t_color": _td("text", "color_optional", "Text colour", ""),
+        "t_line_height": _td(
+            "text", "select", "Line height", "", options=["", "1", "1.2", "1.4", "1.6", "1.8", "2"],
+            labels={"": "Theme default", "1": "1 (tight)", "1.6": "1.6 (normal)", "2": "2 (loose)"},
+        ),
+        "t_letter_spacing": _td("text", "range", "Letter spacing", 0, min=-2, max=12, unit="px"),
+        "t_word_spacing": _td("text", "range", "Word spacing", 0, min=0, max=24, unit="px"),
+        "t_align": _td(
+            "text", "select", "Text alignment", "", options=["", "left", "center", "right", "justify"],
+            labels={"": "Auto"}, ui="segmented",
+        ),
+        "t_shadow": _td("text", "select", "Text shadow", "none", options=["none", "soft", "strong"], ui="segmented"),
+        "t_link_color": _td("text", "color_optional", "Link colour", ""),
+        "t_link_hover": _td("text", "checkbox", "Underline links only on hover", False,
+                            help="Off: links are always underlined."),
+    }
+
+
+def section_text_settings():
+    """Text options for a whole section: its fonts, shadow and links."""
+    return {
+        "t_heading_font": _td("text", "font", "Heading font", ""),
+        "t_body_font": _td("text", "font", "Body font", ""),
+        "t_shadow": _td("text", "select", "Text shadow", "none", options=["none", "soft", "strong"], ui="segmented"),
+        "t_link_color": _td("text", "color_optional", "Link colour", ""),
+        "t_link_hover": _td("text", "checkbox", "Underline links only on hover", False),
+    }
+
+
+BUTTON_ICONS = ["", "arrow", "cart", "bag", "heart", "star", "check", "external", "mail", "phone", "download"]
+
+
+def button_settings():
+    """Button style, colours, size, shape, typography, effects and alignment."""
+    return {
+        "b_icon": _td("button", "select", "Icon", "", options=BUTTON_ICONS, labels={"": "No icon", "external": "External link"}),
+        "b_icon_position": _td("button", "select", "Icon position", "right", options=["left", "right"], ui="segmented",
+                               show_if={"b_icon": "*"}),
+        "b_style": _td(
+            "button", "select", "Style", "", options=["", "filled", "outline", "soft", "text", "link"],
+            labels={"": "Theme default", "soft": "Soft (light background)", "text": "Text only", "link": "Link style"},
+        ),
+        "b_bg": _td("button", "color_optional", "Background colour", ""),
+        "b_text": _td("button", "color_optional", "Text colour", ""),
+        "b_border": _td("button", "color_optional", "Border colour", ""),
+        "b_hover_bg": _td("button", "color_optional", "Hover background", ""),
+        "b_hover_text": _td("button", "color_optional", "Hover text colour", ""),
+        "b_hover_border": _td("button", "color_optional", "Hover border colour", ""),
+        "b_size": _td("button", "select", "Size", "", options=["", "small", "medium", "large"], labels={"": "Theme"}, ui="segmented"),
+        "b_height": _td("button", "number", "Custom height", 0, min=0, max=96, unit="px", help="0 uses the size above."),
+        "b_padding_x": _td("button", "number", "Side padding", 0, min=0, max=80, unit="px", help="0 uses the size above."),
+        "b_radius": _td(
+            "button", "select", "Corners", "", options=["", "square", "slight", "rounded", "pill"],
+            labels={"": "Theme", "slight": "Slight"}, ui="segmented",
+        ),
+        "b_border_width": _td("button", "range", "Border width", 1, min=0, max=4, unit="px"),
+        "b_full_width": _td("button", "checkbox", "Full width", False),
+        "b_font": _td("button", "font", "Font", ""),
+        "b_font_size": _td("button", "font_size", "Font size", 0, min=10, max=40, unit="px",
+                           presets={"Small": 13, "Medium": 15, "Large": 17, "Extra large": 20}),
+        "b_weight": _td("button", "select", "Font weight", "", options=_WEIGHTS, labels=_WEIGHT_LABELS),
+        "b_transform": _td("button", "select", "Letter case", "", options=_TRANSFORMS, labels=_TRANSFORM_LABELS),
+        "b_shadow": _td("button", "select", "Shadow", "none", options=["none", "soft", "strong"], ui="segmented"),
+        "b_hover": _td(
+            "button", "select", "Hover effect", "", options=["", "none", "lift", "darken", "grow"],
+            labels={"": "Theme default"},
+        ),
+        "b_speed": _td("button", "range", "Transition speed", 150, min=0, max=600, step=50, unit="ms"),
+        "b_align": _td("button", "select", "Button alignment", "", options=["", "left", "center", "right"],
+                       labels={"": "Auto"}, ui="segmented"),
+        "b_gap": _td("button", "range", "Space between buttons", 12, min=0, max=48, step=2, unit="px",
+                     help="When two buttons sit side by side."),
+    }
+
+
+# Theme-wide defaults new sections and blocks start with
+THEME_SETTINGS.update({
+    "heading_font": {"type": "font", "label": "Heading font", "default": "system"},
+    "body_font": {"type": "font", "label": "Body font", "default": "system"},
+    "base_font_size": {"type": "number", "label": "Base font size", "default": 16, "min": 12, "max": 22, "unit": "px",
+                       "help": "The size of normal text across the store."},
+    "button_style": {"type": "select", "label": "Button style", "default": "filled",
+                     "options": ["filled", "outline", "soft", "text", "link"],
+                     "labels": {"soft": "Soft (light background)", "text": "Text only", "link": "Link style"}},
+    "button_bg": {"type": "color_optional", "label": "Button colour", "default": "", "help": "None uses the accent colour."},
+    "button_text": {"type": "color_optional", "label": "Button text colour", "default": ""},
+    "button_radius": {"type": "select", "label": "Button corners", "default": "pill", "ui": "segmented",
+                      "options": ["square", "slight", "rounded", "pill"], "labels": {"slight": "Slight"}},
+    "button_hover": {"type": "select", "label": "Button hover effect", "default": "darken",
+                     "options": ["none", "lift", "darken", "grow"]},
+})
+
+
+def _insert_before_layout(settings, extra):
+    """Put `extra` options after the section/block's content options, before layout."""
+    first = [(k, v) for k, v in settings.items() if v.get("group", "content") == "content"]
+    rest = [(k, v) for k, v in settings.items() if v.get("group", "content") != "content"]
+    return {**dict(first), **extra, **dict(rest)}
+
+
+# Blocks: text options on text blocks, button options on the button block
+for _key in ("heading", "text", "quote", "list", "icon_text", "accordion", "countdown", "social"):
+    BLOCKS[_key]["settings"] = _insert_before_layout(
+        BLOCKS[_key]["settings"], text_settings(HEADING_PRESETS if _key == "heading" else TEXT_PRESETS),
+    )
+_button = {k: v for k, v in BLOCKS["button"]["settings"].items() if k != "style"}
+BLOCKS["button"]["settings"] = _insert_before_layout(_button, button_settings())
+
+# Sections: fonts and links for every section, button options where there are buttons
+for _type, _schema in SECTIONS.items():
+    extra = section_text_settings()
+    if _type in ("hero", "slideshow", "rich-text", "custom", "product-carousel", "product-grid"):
+        extra.update(button_settings())
+    settings = {k: v for k, v in _schema["settings"].items() if not (_type == "hero" and k in ("button_style", "button_color"))}
+    _schema["settings"] = _insert_before_layout(settings, extra)
+
+GROUPS[:] = [
+    {"id": "content", "label": "Content"},
+    {"id": "text", "label": "Text"},
+    {"id": "button", "label": "Button"},
+    {"id": "layout", "label": "Layout"},
+    {"id": "style", "label": "Style"},
+    {"id": "advanced", "label": "Advanced"},
+]

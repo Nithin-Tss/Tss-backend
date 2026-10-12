@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import PROTECT, ProtectedError
 from rest_framework.exceptions import ValidationError
 
 from apps.inventory.services import set_available
@@ -50,6 +50,22 @@ def _price(value):
         return Decimal(str(value or "0")).quantize(Decimal("0.01"))
     except InvalidOperation:
         return Decimal("0.00")
+
+
+def check_skus(store, skus, exclude_product=None, exclude_variant=None):
+    """Raise a ValidationError naming any SKU that repeats in `skus` or is already used in the store."""
+    skus = [s for s in skus if s]
+    repeated = sorted({s for s in skus if skus.count(s) > 1})
+    if repeated:
+        raise ValidationError({"variants": f"SKU {', '.join(repeated)} is used more than once."})
+    taken = ProductVariant.objects.filter(product__store=store, sku__in=skus)
+    if exclude_product is not None:
+        taken = taken.exclude(product=exclude_product)
+    if exclude_variant is not None:
+        taken = taken.exclude(pk=exclude_variant.pk)
+    used = sorted(taken.values_list("sku", flat=True))
+    if used:
+        raise ValidationError({"sku": f"SKU {', '.join(used)} is already used by another variant."})
 
 
 def _named(model, store, name, field="name"):
@@ -120,6 +136,10 @@ def save_product(store, data, product=None):
             _replace_variants(product, data)
         except ProtectedError:
             raise ProductInUse("A variant that is used by orders or inventory can't be removed.")
+        skus = list(product.variants.values_list("sku", flat=True))
+        if not all(skus):
+            raise ValidationError({"sku": "Every product needs a SKU."})
+        check_skus(store, skus, exclude_product=product)
 
     # Opening stock for the chosen location, on the product's first variant
     if data.get("location") is not None and data.get("quantity") is not None:
@@ -128,23 +148,56 @@ def save_product(store, data, product=None):
     return product
 
 
-@transaction.atomic
 def delete_product(product):
-    """Delete a product and everything hanging off it, or raise ProductInUse."""
+    """Delete a product and everything hanging off it, or raise ProductInUse (nothing is removed then)."""
     try:
-        product.product_collections.all().delete()
-        product.product_tags.all().delete()
-        product.product_sales_channels.all().delete()
-        product.images.all().delete()
-        product.variants.all().delete()
-        product.delete()
+        with transaction.atomic():
+            product.product_collections.all().delete()
+            product.product_tags.all().delete()
+            product.product_sales_channels.all().delete()
+            product.images.all().delete()
+            product.variants.all().delete()
+            product.delete()
     except ProtectedError:
         raise ProductInUse("This product is used by orders or inventory. Set it to Draft instead.")
 
 
+def _protected_product_ids(ids):
+    """Ids among `ids` whose product, or one of its variants, a PROTECT foreign key still points at."""
+    children = (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant)
+    blocked = set()
+    for rel in Product._meta.related_objects:
+        if rel.on_delete is PROTECT and rel.related_model not in children:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids})
+                           .values_list(rel.field.name, flat=True))
+    for rel in ProductVariant._meta.related_objects:
+        if rel.on_delete is PROTECT:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
+                           .values_list(f"{rel.field.name}__product_id", flat=True))
+    return blocked
+
+
+def delete_products(store, ids):
+    """
+    Delete the store's products with these ids in a handful of queries.
+    Products used by orders or inventory are left alone.
+    Returns (deleted count, titles of those kept).
+    """
+    products = {p.pk: p.title for p in Product.objects.filter(store=store, pk__in=ids)}
+    blocked = _protected_product_ids(list(products))
+    free = [pk for pk in products if pk not in blocked]
+    if free:
+        with transaction.atomic():
+            for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
+                model.objects.filter(product__in=free).delete()
+            Product.objects.filter(pk__in=free).delete()
+    return len(free), sorted(products[pk] for pk in blocked)
+
+
 def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
-    variant.sku = (row.get("sku") or "").strip() or None
+    if "sku" in row:
+        variant.sku = (row["sku"] or "").strip() or None
     variant.save()
     return variant
 
@@ -159,7 +212,7 @@ def _replace_variants(product, data):
     Either way, variants referenced by orders or inventory keep their ids.
     """
     rows = data.get("variants") or [
-        {"price": data.get("price"), "sku": data.get("sku", "")}
+        {"price": data.get("price"), **({"sku": data["sku"]} if "sku" in data else {})}
     ]
     existing = list(product.variants.order_by("created_at"))
     default_price = data.get("price")
