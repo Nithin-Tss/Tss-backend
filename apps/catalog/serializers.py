@@ -5,7 +5,7 @@ from apps.core.viewsets import StoreScopedSerializerMixin
 from apps.inventory.models import Location
 
 from .models import Category, Collection, Product, ProductVariant, SalesChannel
-from .services import STATUSES, THEME_TEMPLATES
+from .services import STATUSES, THEME_TEMPLATES, check_skus
 
 
 class VariantInputSerializer(serializers.Serializer):
@@ -18,6 +18,9 @@ class VariantInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+
+    def validate_sku(self, value):
+        return value.strip()
 
     def to_internal_value(self, data):
         # The admin form sends "" for an empty price
@@ -81,6 +84,12 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
                 data = {**data, **blanks}
         return super().to_internal_value(data)
 
+    def validate_variants(self, rows):
+        ids = [str(r["id"]) for r in rows if r.get("id")]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError("A variant is listed more than once.")
+        return rows
+
     def validate_images(self, value):
         for url in value:
             if not url.startswith(("http://", "https://", "/media/")):
@@ -88,6 +97,9 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         return value
 
     def validate(self, data):
+        # Imports may leave the location out: their stock goes to the store's first location
+        if self.context.get("location_optional"):
+            return data
         if data.get("quantity") is not None and data.get("location") is None:
             raise serializers.ValidationError({"location": "Choose a location for this stock."})
         return data
@@ -189,12 +201,22 @@ class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer)
     """A variant on its own: /catalog/variants/."""
 
     price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
-    sku = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=100)
+    sku = serializers.CharField(max_length=100)
 
     class Meta:
         model = ProductVariant
         fields = ["id", "product", "sku", "price", "created_at", "updated_at"]
         read_only_fields = ["created_at", "updated_at"]
+
+    def validate_sku(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("SKU is required.")
+        request = self.context.get("request")
+        store = getattr(request, "store", None)
+        if value and store is not None:
+            check_skus(store, [value], exclude_variant=self.instance)
+        return value
 
     def validate_product(self, value):
         if self.instance and value.pk != self.instance.product_id:

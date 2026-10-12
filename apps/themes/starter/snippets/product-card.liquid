@@ -1,9 +1,13 @@
 {%- comment -%}
   Product card used by the grid, carousel and collection page.
   Usage: {% render 'product-card', product: product, show_vendor: true %}
+  Optional: show_price (default on), show_rating, show_tags, show_add_to_cart,
+  ratio ("square", "portrait" or "landscape").
 {%- endcomment -%}
-<a class="product-card" href="{{ product.url }}">
-  <div class="product-card__media">
+<a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
+  <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}">
+    {%- comment -%} Quantity 0: still listed and clickable, marked "Sold out" {%- endcomment -%}
+    {%- if product.is_sold_out -%}<span class="product-card__badge">Sold out</span>{%- endif -%}
     {%- if product.featured_image -%}
       <img src="{{ product.featured_image }}" alt="{{ product.title }}" loading="lazy">
     {%- else -%}
@@ -14,5 +18,16 @@
     <span class="product-card__vendor">{{ product.vendor }}</span>
   {%- endif -%}
   <span class="product-card__title">{{ product.title }}</span>
-  {% render 'price', product: product %}
+  {%- if show_rating and product.rating -%}
+    <span class="product-card__rating" aria-label="Rated {{ product.rating }} out of 5">&#9733; {{ product.rating }}{% if product.review_count > 0 %} <span>({{ product.review_count }})</span>{% endif %}</span>
+  {%- endif -%}
+  {%- if show_price != false -%}
+    {% render 'price', product: product %}
+  {%- endif -%}
+  {%- if show_tags and product.tags.size > 0 -%}
+    <span class="product-card__tags">{% for tag in product.tags limit: 3 %}<span>{{ tag }}</span>{% endfor %}</span>
+  {%- endif -%}
+  {%- if show_add_to_cart -%}
+    <span class="button product-card__cta">Add to cart</span>
+  {%- endif -%}
 </a>

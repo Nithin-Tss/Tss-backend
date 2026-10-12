@@ -1,10 +1,10 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import Exists, OuterRef, PROTECT, ProtectedError
 from rest_framework.exceptions import ValidationError
 
-from apps.inventory.services import set_available
+from apps.inventory.services import default_location, set_available
 
 from .models import (
     Category,
@@ -28,7 +28,8 @@ STATUSES = (ACTIVE, DRAFT, ARCHIVED)
 THEME_TEMPLATES = ("default", "featured", "minimal")
 
 # Every store sells through these unless it adds its own
-DEFAULT_CHANNELS = (("Online Store", "online"), ("Point of Sale", "pos"))
+ONLINE = "online"
+DEFAULT_CHANNELS = (("Online Store", ONLINE), ("Point of Sale", "pos"))
 
 
 def sales_channels_for(store):
@@ -52,18 +53,63 @@ def _price(value):
         return Decimal("0.00")
 
 
+def check_skus(store, skus, exclude_product=None, exclude_variant=None):
+    """Raise a ValidationError naming any SKU that repeats in `skus` or is already used in the store."""
+    skus = [s for s in skus if s]
+    repeated = sorted({s for s in skus if skus.count(s) > 1})
+    if repeated:
+        raise ValidationError({"variants": f"SKU {', '.join(repeated)} is used more than once."})
+    taken = ProductVariant.objects.filter(product__store=store, sku__in=skus)
+    if exclude_product is not None:
+        taken = taken.exclude(product=exclude_product)
+    if exclude_variant is not None:
+        taken = taken.exclude(pk=exclude_variant.pk)
+    used = sorted(taken.values_list("sku", flat=True))
+    if used:
+        raise ValidationError({"sku": f"SKU {', '.join(used)} is already used by another variant."})
+
+
 def _named(model, store, name, field="name"):
     obj, _ = model.objects.get_or_create(store=store, **{field: name})
     return obj
 
 
 def published_products(store):
-    """Products a shopper may see on the storefront."""
+    """
+    Products a shopper may see on the storefront: the store's Active products
+    with the Online Store channel ticked. Draft and Archived stay hidden.
+    """
+    on_online_store = ProductSalesChannel.objects.filter(product=OuterRef("pk"), sales_channel__type=ONLINE)
     return (
         Product.objects.filter(store=store, status=ACTIVE)
-        .prefetch_related("images", "variants")
+        .filter(Exists(on_online_store))
+        .prefetch_related("images", "variants__inventory_items")
         .order_by("-created_at")
     )
+
+
+def online_channels(store):
+    return [c for c in sales_channels_for(store) if c.type == ONLINE]
+
+
+@transaction.atomic
+def link_active_products_to_online_store(store=None):
+    """
+    One-time fix for products imported before imports set a channel: Active
+    products with no sales channel at all are put on the Online Store.
+    Products with any channel ticked are left as the owner set them.
+    Returns how many products were linked.
+    """
+    unlisted = Product.objects.filter(status=ACTIVE, product_sales_channels__isnull=True)
+    if store is not None:
+        unlisted = unlisted.filter(store=store)
+    links, channels = [], {}
+    for product in unlisted.select_related("store"):
+        if product.store_id not in channels:
+            channels[product.store_id] = online_channels(product.store)
+        links += [ProductSalesChannel(product=product, sales_channel=c) for c in channels[product.store_id]]
+    ProductSalesChannel.objects.bulk_create(links)
+    return len({link.product_id for link in links})
 
 
 @transaction.atomic
@@ -72,6 +118,7 @@ def save_product(store, data, product=None):
     Create or update a product from the admin form, including its
     category, collections, tags and variants, as one unit.
     """
+    creating = product is None
     product = product or Product(store=store)
 
     for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template"):
@@ -114,12 +161,21 @@ def save_product(store, data, product=None):
         ProductSalesChannel.objects.bulk_create(
             [ProductSalesChannel(product=product, sales_channel=c) for c in dict.fromkeys(data["sales_channels"])]
         )
+    elif creating:
+        # Like the Add product page: new products go on the Online Store unless channels are given
+        ProductSalesChannel.objects.bulk_create(
+            [ProductSalesChannel(product=product, sales_channel=c) for c in online_channels(store)]
+        )
 
     if "variants" in data or "price" in data or not product.variants.exists():
         try:
             _replace_variants(product, data)
         except ProtectedError:
             raise ProductInUse("A variant that is used by orders or inventory can't be removed.")
+        skus = list(product.variants.values_list("sku", flat=True))
+        if not all(skus):
+            raise ValidationError({"sku": "Every product needs a SKU."})
+        check_skus(store, skus, exclude_product=product)
 
     # Opening stock for the chosen location, on the product's first variant
     if data.get("location") is not None and data.get("quantity") is not None:
@@ -128,23 +184,56 @@ def save_product(store, data, product=None):
     return product
 
 
-@transaction.atomic
 def delete_product(product):
-    """Delete a product and everything hanging off it, or raise ProductInUse."""
+    """Delete a product and everything hanging off it, or raise ProductInUse (nothing is removed then)."""
     try:
-        product.product_collections.all().delete()
-        product.product_tags.all().delete()
-        product.product_sales_channels.all().delete()
-        product.images.all().delete()
-        product.variants.all().delete()
-        product.delete()
+        with transaction.atomic():
+            product.product_collections.all().delete()
+            product.product_tags.all().delete()
+            product.product_sales_channels.all().delete()
+            product.images.all().delete()
+            product.variants.all().delete()
+            product.delete()
     except ProtectedError:
         raise ProductInUse("This product is used by orders or inventory. Set it to Draft instead.")
 
 
+def _protected_product_ids(ids):
+    """Ids among `ids` whose product, or one of its variants, a PROTECT foreign key still points at."""
+    children = (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant)
+    blocked = set()
+    for rel in Product._meta.related_objects:
+        if rel.on_delete is PROTECT and rel.related_model not in children:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids})
+                           .values_list(rel.field.name, flat=True))
+    for rel in ProductVariant._meta.related_objects:
+        if rel.on_delete is PROTECT:
+            blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
+                           .values_list(f"{rel.field.name}__product_id", flat=True))
+    return blocked
+
+
+def delete_products(store, ids):
+    """
+    Delete the store's products with these ids in a handful of queries.
+    Products used by orders or inventory are left alone.
+    Returns (deleted count, titles of those kept).
+    """
+    products = {p.pk: p.title for p in Product.objects.filter(store=store, pk__in=ids)}
+    blocked = _protected_product_ids(list(products))
+    free = [pk for pk in products if pk not in blocked]
+    if free:
+        with transaction.atomic():
+            for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
+                model.objects.filter(product__in=free).delete()
+            Product.objects.filter(pk__in=free).delete()
+    return len(free), sorted(products[pk] for pk in blocked)
+
+
 def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
-    variant.sku = (row.get("sku") or "").strip() or None
+    if "sku" in row:
+        variant.sku = (row["sku"] or "").strip() or None
     variant.save()
     return variant
 
@@ -159,7 +248,7 @@ def _replace_variants(product, data):
     Either way, variants referenced by orders or inventory keep their ids.
     """
     rows = data.get("variants") or [
-        {"price": data.get("price"), "sku": data.get("sku", "")}
+        {"price": data.get("price"), **({"sku": data["sku"]} if "sku" in data else {})}
     ]
     existing = list(product.variants.order_by("created_at"))
     default_price = data.get("price")
@@ -224,6 +313,9 @@ def import_products(store, rows):
 
     Rows whose SKU, or title when there is no SKU, already exist in the store
     (or earlier in `rows`) are skipped, so importing the same file twice is safe.
+    Every product gets a price (0.00 when the file has none) and a stock record
+    at the row's location or the store's first one (quantity 0 when the file has
+    none). Active products are put on the Online Store channel, as in Shopify.
     Returns (created, skipped).
     """
     skus = {(r.get("sku") or "").strip() for r in rows} - {""}
@@ -286,4 +378,14 @@ def import_products(store, rows):
     ProductVariant.objects.bulk_create(variants)
     ProductCollection.objects.bulk_create(product_collections)
     ProductTag.objects.bulk_create(product_tags)
+
+    online = online_channels(store)
+    ProductSalesChannel.objects.bulk_create(
+        [ProductSalesChannel(product=p, sales_channel=c) for p in products if p.status == ACTIVE for c in online]
+    )
+
+    fallback = default_location(store)
+    for variant, (row, _) in zip(variants, fresh):
+        set_available(variant, row.get("location") or fallback, row.get("quantity") or 0)
+
     return len(products), len(rows) - len(products)

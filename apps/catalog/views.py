@@ -47,8 +47,11 @@ from .services import (
     create_variant,
 
     delete_product,
+    delete_products,
 
     delete_variant,
+
+    import_products,
 
     sales_channels_for,
 
@@ -63,6 +66,8 @@ from .services import (
 # Product photos: JPG, PNG or WEBP up to 5MB, checked by their first bytes, not the file name
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
+MAX_BULK_ROWS = 500
 
 IMAGE_SIGNATURES = {"jpg": (b"\xff\xd8\xff",), "png": (b"\x89PNG\r\n\x1a\n",)}
 
@@ -167,6 +172,59 @@ class ProductViewSet(StoreScopedViewSet):
             raise ValidationError(str(e))
 
 
+
+    @action(detail=False, methods=["post"], url_path="bulk")
+    def bulk(self, request):
+        """
+        POST /api/v1/catalog/products/bulk/  {"products": [row, ...]}  (up to 500 rows)
+        -> {"created": n, "skipped": n, "errors": [{"index": i, "message": "..."}]}
+        Used by the admin "Import products" popup. Invalid rows are reported, not fatal.
+        """
+        rows = request.data.get("products") if isinstance(request.data, dict) else None
+        if not isinstance(rows, list) or not rows:
+            raise ValidationError({"products": "Send a non-empty list of products."})
+        if len(rows) > MAX_BULK_ROWS:
+            raise ValidationError({"products": f"Send at most {MAX_BULK_ROWS} products per request."})
+
+        valid, errors = [], []
+        for index, row in enumerate(rows):
+            serializer = ProductInputSerializer(
+                data=row, context={**self.get_serializer_context(), "location_optional": True}
+            )
+            if serializer.is_valid():
+                if not (serializer.validated_data.get("sku") or "").strip():
+                    errors.append({"index": index, "message": "sku: SKU is required."})
+                    continue
+                valid.append(serializer.validated_data)
+                continue
+            parts = []
+            for field, messages in serializer.errors.items():
+                message = messages[0] if isinstance(messages, list) else str(messages)
+                parts.append(f"{field}: {message}")
+            errors.append({"index": index, "message": "; ".join(parts)})
+
+        created, skipped = import_products(request.store, valid) if valid else (0, 0)
+        return Response({"created": created, "skipped": skipped, "errors": errors})
+
+    @action(detail=False, methods=["post"], url_path="bulk-delete")
+    def bulk_delete(self, request):
+        """
+        POST /api/v1/catalog/products/bulk-delete/  {"ids": [id, ...]}  (up to 500)
+        -> {"deleted": n, "blocked": ["title", ...]}
+        Products used by orders or inventory are kept and listed in "blocked".
+        """
+        ids = request.data.get("ids") if isinstance(request.data, dict) else None
+        if not isinstance(ids, list) or not ids:
+            raise ValidationError({"ids": "Send a non-empty list of product ids."})
+        if len(ids) > MAX_BULK_ROWS:
+            raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
+        try:
+            ids = [uuid.UUID(str(i)) for i in ids]
+        except ValueError:
+            raise ValidationError({"ids": "Every id must be a valid product id."})
+
+        deleted, blocked = delete_products(request.store, ids)
+        return Response({"deleted": deleted, "blocked": blocked})
 
     @action(detail=False, methods=["post"], url_path="images", parser_classes=[MultiPartParser])
 

@@ -30,7 +30,8 @@ class ProductApiTests(APITestCase):
         self.client.credentials(**self.auth, HTTP_X_STORE_ID=self.store_id)
 
     def create(self, **extra):
-        body = {"title": "Shirt", "status": "active", "price": "10", **extra}
+        title = extra.get("title", "Shirt")
+        body = {"title": title, "sku": "SKU-" + title.upper(), "status": "active", "price": "10", **extra}
         r = self.client.post(URL, body, format="json")
         self.assertEqual(r.status_code, 201, r.content)
         return r.json()
@@ -74,6 +75,23 @@ class ProductApiTests(APITestCase):
         self.assertEqual(self.client.delete(f"{URL}{p['id']}/").status_code, 204)
         self.assertEqual(self.client.get(f"{URL}{p['id']}/").status_code, 404)
         self.assertFalse(Product.objects.filter(pk=p["id"]).exists())
+
+    def test_bulk_delete(self):
+        a, b, c = self.create(title="A"), self.create(title="B"), self.create(title="C")
+        r = self.client.post(URL + "bulk-delete/", {"ids": [a["id"], b["id"]]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {"deleted": 2, "blocked": []})
+        self.assertEqual(list(Product.objects.values_list("title", flat=True)), ["C"])
+        self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": []}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": ["x"]}, format="json").status_code, 400)
+
+    def test_bulk_delete_keeps_stocked_products(self):
+        stocked, plain = self.create(title="Stocked", collections=["C"]), self.create(title="Plain")
+        variant = ProductVariant.objects.get(pk=stocked["variants"][0]["id"])
+        self.stock(variant)
+        r = self.client.post(URL + "bulk-delete/", {"ids": [stocked["id"], plain["id"]]}, format="json")
+        self.assertEqual(r.json(), {"deleted": 1, "blocked": ["Stocked"]})
+        self.assertEqual(self.client.get(f"{URL}{stocked['id']}/").json()["collections"], ["C"])
 
     def test_delete_blocked_when_stocked(self):
         p = self.create()
@@ -134,7 +152,7 @@ class VariantApiTests(APITestCase):
         self.assertEqual(self.client.delete(f"{VARIANTS}{self.first}/").status_code, 400)
 
     def test_cannot_move_to_other_product(self):
-        other = self.client.post(URL, {"title": "Hat", "price": "3"}, format="json").json()
+        other = self.client.post(URL, {"title": "Hat", "sku": "SKU-HAT", "price": "3"}, format="json").json()
         r = self.client.patch(f"{VARIANTS}{self.first}/", {"product": other["id"]}, format="json")
         self.assertEqual(r.status_code, 400)
 
@@ -147,6 +165,44 @@ class VariantApiTests(APITestCase):
 
     def test_negative_price_rejected(self):
         r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_duplicate_sku_rejected_across_products(self):
+        self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1"}, format="json")
+        r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "1", "sku": "A-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post(URL, {"title": "Other", "price": "1", "sku": "A-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(Product.objects.filter(title="Other").count(), 0)
+
+    def test_variant_can_keep_its_own_sku(self):
+        self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1"}, format="json")
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"sku": "A-1", "price": "5"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_duplicate_sku_within_payload_rejected(self):
+        r = self.client.post(URL, {"title": "Two", "variants": [
+            {"sku": "D", "price": "1"}, {"sku": "D", "price": "2"}]}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_sku_required(self):
+        r = self.client.post(URL, {"title": "No sku", "price": "1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("sku", r.json())
+        self.assertEqual(Product.objects.filter(title="No sku").count(), 0)
+        r = self.client.post(VARIANTS, {"product": self.product["id"], "price": "1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post(URL + "bulk/", {"products": [{"title": "x"}]}, format="json")
+        self.assertEqual(r.json()["created"], 0)
+        self.assertEqual(len(r.json()["errors"]), 1)
+
+    def test_price_update_keeps_sku(self):
+        r = self.client.patch(f"{URL}{self.product['id']}/", {"price": "20"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["sku"], "S1")
+
+    def test_bulk_rejects_non_object_body(self):
+        r = self.client.post(URL + "bulk/", [{"title": "x"}], format="json")
         self.assertEqual(r.status_code, 400)
 
     def test_product_update_matches_by_id(self):
@@ -182,13 +238,13 @@ class ProductServiceTests(APITestCase):
         self.store = Store.objects.get(pk=store_id)
 
     def test_save_product_creates_variant(self):
-        p = save_product(self.store, {"title": "T", "price": "5"})
+        p = save_product(self.store, {"title": "T", "sku": "SKU-T", "price": "5"})
         self.assertEqual(p.variants.get().price, 5)
         self.assertEqual(p.status, "draft")
 
     def test_delete_product_raises_when_in_use(self):
         from apps.inventory.models import Location
-        p = save_product(self.store, {"title": "T", "price": "5"})
+        p = save_product(self.store, {"title": "T", "sku": "SKU-T", "price": "5"})
         loc = Location.objects.create(store=self.store, name="Main")
         InventoryItem.objects.create(
             variant=p.variants.get(), location=loc, available=1, committed=0,
@@ -245,8 +301,51 @@ class ProductFormSchemaTests(APITestCase):
         stock = self.client.get(f"/api/v1/inventory/items/?product={body['id']}").json()
         self.assertEqual([(s["location"], s["available"]) for s in stock], [(location["id"], 7)])
 
+    def test_edit_form_updates_in_place(self):
+        """What the shared form sends in edit mode: a PATCH that never creates a second product."""
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "Shop"}, format="json").json()
+        channels = self.client.get("/api/v1/catalog/sales-channels/").json()
+        created = self.client.post(URL, {
+            "title": "Chardonnay", "price": "19.50", "sku": "CH-1", "location": location["id"], "quantity": 7,
+        }, format="json").json()
+        # A second variant (e.g. from an import or the variants API) must survive the edit
+        extra = self.client.post(VARIANTS, {"product": created["id"], "sku": "CH-2", "price": "30"}, format="json").json()
+        first = created["variants"][0]["id"]
+        url = self.upload(self.PNG).json()["url"]
+
+        r = self.client.patch(f"{URL}{created['id']}/", {
+            "title": "Chardonnay Reserve", "description": "Oaky.", "status": "active",
+            "images": [url], "location": location["id"], "quantity": 3,
+            "category_id": None, "product_type": "White wine", "vendor": "Sipnow",
+            "collections": ["Summer"], "tags": ["oak"], "sales_channels": [channels[1]["id"]],
+            "theme_template": "minimal", "seo_title": "Reserve", "seo_description": "Buy it.",
+            "variants": [
+                {"id": first, "sku": "CH-1R", "price": "21.00"},
+                {"id": extra["id"], "sku": "CH-2", "price": "30.00"},
+            ],
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+
+        self.assertEqual(Product.objects.filter(store_id=self.store_id).count(), 1)
+        self.assertEqual(body["id"], created["id"])
+        self.assertEqual((body["title"], body["status"], body["theme_template"]), ("Chardonnay Reserve", "active", "minimal"))
+        self.assertEqual(body["sales_channels"], [channels[1]["id"]])
+        self.assertEqual([i["url"] for i in body["images"]], [url])
+        self.assertEqual(
+            [(v["id"], v["sku"], v["price"]) for v in body["variants"]],
+            [(first, "CH-1R", "21.00"), (extra["id"], "CH-2", "30.00")],
+        )
+        stock = self.client.get(f"/api/v1/inventory/items/?product={created['id']}").json()
+        self.assertEqual([(s["variant"], s["available"]) for s in stock], [(first, 3)])
+
+        # Another store can't edit it
+        token, other_store = signup(self.client, "edit-other@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_store)
+        self.assertEqual(self.client.patch(f"{URL}{created['id']}/", {"title": "Hijack"}, format="json").status_code, 404)
+
     def test_only_name_required(self):
-        r = self.client.post(URL, {"title": "Bare"}, format="json")
+        r = self.client.post(URL, {"title": "Bare", "sku": "SKU-BARE"}, format="json")
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(r.json()["status"], "draft")
 
@@ -260,7 +359,7 @@ class ProductFormSchemaTests(APITestCase):
         for field in ("title", "status", "theme_template", "images"):
             self.assertIn(field, errors)
 
-        r = self.client.post(URL, {"title": "No location", "quantity": 3}, format="json")
+        r = self.client.post(URL, {"title": "No location", "sku": "SKU-NO-LOCATION", "quantity": 3}, format="json")
         self.assertEqual(r.status_code, 400)
         self.assertIn("location", r.json())
 
@@ -284,3 +383,193 @@ class ProductFormSchemaTests(APITestCase):
         self.assertEqual(r.status_code, 400)
         for field in ("location", "category_id", "sales_channels"):
             self.assertIn(field, r.json())
+
+
+class AllProductsStorefrontTests(APITestCase):
+    """The storefront's "All products" grid (home page) and the all-products page."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "all@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    def product(self, title, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"ALL-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def page(self, path=""):
+        r = self.client.get(f"/s/{self.slug}/{path}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def test_home_lists_active_online_products_with_sold_out_badge(self):
+        self.product("Shown lamp")
+        self.product("Empty vase", quantity=0)
+        self.product("Draft chair", status="draft")
+        self.product("Archived desk", status="archived")
+        self.product("Shop-only rug", sales_channels=[self.channels["pos"]])
+
+        html = self.page()  # nothing saved for the home page: the default layout
+        self.assertIn(">All products</h2>", html)
+        self.assertIn("Shown lamp", html)
+        self.assertRegex(html, r'product-card__badge">Sold out</span>(?s:.)*Empty vase')
+        for hidden in ("Draft chair", "Archived desk", "Shop-only rug"):
+            self.assertNotIn(hidden, html)
+        self.assertIn(f'href="/s/{self.slug}/collections/all">View all', html)
+
+    def test_home_shows_12_then_load_more(self):
+        for i in range(15):
+            self.product(f"Item {i:02d}")
+        html = self.page()
+        self.assertEqual(html.count('<div data-more style="display:none">'), 3)  # 12 shown, 3 waiting
+        self.assertIn("data-load-more>Load more</button>", html)
+
+    def test_empty_store_says_no_products_yet(self):
+        self.assertIn("No products yet.", self.page())
+        self.assertIn("No products yet.", self.page("collections/all"))
+
+    def test_all_products_page_sorts_and_pages(self):
+        self.product("Cheap", price="1")
+        self.product("Dear", price="99")
+        self.product("Middle", price="50")
+
+        def order(query=""):
+            html = self.page(f"collections/all{query}")
+            return sorted(("Cheap", "Dear", "Middle"), key=lambda t: html.index(f">{t}<"))
+
+        self.assertIn('<h1 class="section-heading">All products</h1>', self.page("collections/all"))
+        self.assertEqual(order(), ["Middle", "Dear", "Cheap"])  # newest first
+        self.assertEqual(order("?sort=price-asc"), ["Cheap", "Middle", "Dear"])
+        self.assertEqual(order("?sort=price-desc"), ["Dear", "Middle", "Cheap"])
+
+        for i in range(24):
+            self.product(f"Bulk {i:02d}")
+        html = self.page("collections/all?page=2")
+        self.assertIn("Page 2 of 2", html)
+        self.assertIn(">Cheap<", html)  # 27 products: the oldest 3 are on page 2
+
+    def test_only_this_stores_products(self):
+        self.product("Mine")
+        token, other = signup(self.client, "other-all@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other)
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "W"}, format="json").json()
+        self.client.post(URL, {"title": "Theirs", "status": "active", "price": "1", "sku": "THEIRS-1",
+                               "location": location["id"], "quantity": 1}, format="json")
+        html = self.page("collections/all")
+        self.assertIn("Mine", html)
+        self.assertNotIn("Theirs", html)
+
+    def test_import_links_active_products_with_price_and_stock(self):
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4},
+            {"title": "Imported draft", "status": "draft", "sku": "IMP-D"},
+        ]}, format="json")
+        self.assertEqual(r.json()["created"], 2, r.content)
+
+        active = Product.objects.get(title="Imported active")
+        draft = Product.objects.get(title="Imported draft")
+        self.assertEqual(list(active.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
+        self.assertFalse(draft.product_sales_channels.exists())
+        self.assertEqual(str(active.variants.get().price), "0.00")
+        self.assertEqual(InventoryItem.objects.get(variant__product=active).available, 4)
+        self.assertEqual(InventoryItem.objects.get(variant__product=draft).available, 0)
+        self.assertIn("Imported active", self.page("collections/all"))
+
+    def test_one_time_fix_links_unlisted_active_products(self):
+        from .models import ProductSalesChannel
+        from .services import link_active_products_to_online_store
+
+        before = self.product("Old import")
+        kept_off = self.product("Shop only", sales_channels=[self.channels["pos"]])
+        ProductSalesChannel.objects.filter(product_id=before["id"]).delete()  # as imports used to leave it
+        self.assertNotIn("Old import", self.page("collections/all"))
+
+        self.assertEqual(link_active_products_to_online_store(), 1)
+        self.assertEqual(link_active_products_to_online_store(), 0)  # running it again changes nothing
+        self.assertIn("Old import", self.page("collections/all"))
+        self.assertNotIn("Shop only", self.page("collections/all"))  # an owner's choice is kept
+        self.assertEqual(kept_off["sales_channels"], [self.channels["pos"]])
+
+
+class SoldOutBadgeTests(APITestCase):
+    """Quantity 0 shows "Sold out" on the product card and the product page; stock above 0 does not."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "soldout@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+
+    def product(self, title, sku, quantity):
+        body = {"title": title, "status": "active", "price": "10", "sku": sku}
+        if quantity is not None:
+            body.update(location=self.location["id"], quantity=quantity)
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def html(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}").content.decode()
+
+    def card(self, listing, title):
+        start = listing.rindex('<a class="product-card', 0, listing.index(f'product-card__title">{title}<'))
+        return listing[start:listing.index("</a>", start)]
+
+    def test_quantity_zero_shows_sold_out_and_ten_does_not(self):
+        empty = self.product("Empty vase", "SO-0", 0)
+        stocked = self.product("Full vase", "SO-10", 10)
+        listing = self.html("collections/all")
+
+        card = self.card(listing, "Empty vase")
+        self.assertIn("product-card--sold-out", card)
+        self.assertIn('product-card__badge">Sold out</span>', card)
+        self.assertIn(f'href="/s/{self.slug}/products/{empty["id"]}"', card)  # still clickable
+        self.assertNotIn("Sold out", self.card(listing, "Full vase"))
+
+        page = self.html(f"products/{empty['id']}")
+        self.assertRegex(page, r"data-add disabled>\s*Sold out")
+        self.assertIn("data-quantity disabled", page)
+        self.assertNotRegex(page, r"data-add>\s*Add to cart")  # the button itself
+
+        page = self.html(f"products/{stocked['id']}")
+        # ("Sold out" still appears on this page: the "You may also like" card of the empty vase)
+        self.assertNotIn('price--muted">Sold out', page)
+        self.assertNotIn("data-add disabled", page)
+        self.assertRegex(page, r"data-add>\s*Add to cart")
+        self.assertRegex(page, r"data-stock>\s*In stock")
+
+    def test_few_left_and_no_stock_record(self):
+        few = self.product("Last ones", "SO-3", 3)
+        self.assertRegex(self.html(f"products/{few['id']}"), r"data-stock>\s*Only a few left")
+
+        untracked = self.product("Never stocked", "SO-NONE", None)  # no stock record at all
+        self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
+        self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add disabled>\s*Sold out")
+
+    def test_stock_value_is_a_number(self):
+        from apps.themes.rendering import product_drop
+
+        self.product("Counted", "SO-7", 7)
+        product = published_products_for(self.store_id).get(title="Counted")
+        drop = product_drop(product, "/s/x")
+        self.assertIs(type(drop["available_total"]), int)
+        self.assertEqual((drop["available_total"], drop["is_sold_out"]), (7, False))
+
+
+def published_products_for(store_id):
+    from apps.tenancy.models import Store
+
+    from .services import published_products
+
+    return published_products(Store.objects.get(pk=store_id))

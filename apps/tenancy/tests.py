@@ -21,7 +21,7 @@ class MultiStoreTest(StoreClientMixin, APITestCase):
         self.assertEqual({s["role"] for s in listed}, {"owner"})
 
         # Each store only sees its own products
-        self.ok("post", "/api/v1/catalog/products/", {"title": "Only in first", "price": "5"}, expect=201)
+        self.ok("post", "/api/v1/catalog/products/", {"title": "Only in first", "sku": "SKU-ONLY-IN-FIRST", "price": "5"}, expect=201)
         self.use(token, second["storeId"])
         self.assertEqual(self.ok("get", "/api/v1/catalog/products/"), [])
         self.use(token, first["storeId"])
