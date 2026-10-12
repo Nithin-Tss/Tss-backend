@@ -14,7 +14,7 @@ from apps.tenancy.services import stores_for_user
 from .email_links import send_password_reset_email, send_verification_email
 from .serializers import (
     ChangePasswordSerializer, LoginSerializer, PasswordResetConfirmSerializer,
-    PasswordResetLinkSerializer, PasswordResetRequestSerializer, SignupSerializer,
+    PasswordResetLinkSerializer, PasswordResetRequestSerializer, ProfileSerializer, SignupSerializer,
     VerifyEmailSerializer,
 )
 
@@ -204,12 +204,35 @@ class ChangePasswordView(APIView):
 
 
 class MeView(APIView):
-    """GET /api/v1/auth/me/  the signed-in user and their stores"""
+    """
+    GET   /api/v1/auth/me/  the signed-in user and their stores
+    PATCH /api/v1/auth/me/  {firstName, lastName, email, mobileNumber} (any of them)
+                            -> {user, stores}
+
+    A changed email counts as unverified, and a verification link is sent to
+    the new address.
+    """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         return Response(session_payload(request.user))
+
+    def patch(self, request):
+        user = request.user
+        old_email = user.email
+
+        serializer = ProfileSerializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        if user.email != old_email:
+            send_verification_email(user)
+
+        return Response({
+            "message": "Profile updated.",
+            **session_payload(user),
+        })
 
 
 # ---------------------------------------------------------------- password reset

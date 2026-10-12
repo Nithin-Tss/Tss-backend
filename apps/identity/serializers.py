@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -8,40 +10,50 @@ from .email_links import user_for_email_verification, user_for_password_reset
 
 User = get_user_model()
 
+# Same rule as the signup form: English letters and spaces only
+NAME_PATTERN = re.compile(r"[A-Za-z ]+")
 
-class SignupSerializer(serializers.Serializer):
+
+class ProfileSerializer(serializers.Serializer):
+    """
+    Name, email and mobile number: filled in at signup and changed later on
+    the profile page (PATCH /api/v1/auth/me/). Same messages as those forms.
+    """
+
     firstName = serializers.CharField(
         required=True,
-        allow_blank=False
+        allow_blank=False,
+        error_messages={
+            "required": "First name is required.",
+            "blank": "First name is required.",
+        }
     )
 
     lastName = serializers.CharField(
         required=True,
-        allow_blank=False
+        allow_blank=False,
+        error_messages={
+            "required": "Last name is required.",
+            "blank": "Last name is required.",
+        }
     )
 
     email = serializers.EmailField(
-        required=True
-    )
-
-    password = serializers.CharField(
         required=True,
-        write_only=True,
-        min_length=8
-    )
-
-    confirmPassword = serializers.CharField(
-        required=True,
-        write_only=True
+        error_messages={
+            "required": "Email is required.",
+            "blank": "Email is required.",
+            "invalid": "Please enter a valid email address.",
+        }
     )
 
     mobileNumber = serializers.CharField(
         required=True,
-        allow_blank=False
-    )
-
-    agreeTerms = serializers.BooleanField(
-        required=True
+        allow_blank=False,
+        error_messages={
+            "required": "Mobile number is required.",
+            "blank": "Mobile number is required.",
+        }
     )
 
     def validate_firstName(self, value):
@@ -50,6 +62,11 @@ class SignupSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError(
                 "First name is required."
+            )
+
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(
+                "First name can contain only letters and spaces."
             )
 
         return value
@@ -62,12 +79,21 @@ class SignupSerializer(serializers.Serializer):
                 "Last name is required."
             )
 
+        if not NAME_PATTERN.fullmatch(value):
+            raise serializers.ValidationError(
+                "Last name can contain only letters and spaces."
+            )
+
         return value
 
     def validate_email(self, value):
         value = value.strip().lower()
+        others = User.objects.filter(email__iexact=value)
 
-        if User.objects.filter(email__iexact=value).exists():
+        if self.instance is not None:  # editing a profile: its own email is fine
+            others = others.exclude(pk=self.instance.pk)
+
+        if others.exists():
             raise serializers.ValidationError(
                 "An account with this email already exists."
             )
@@ -83,6 +109,62 @@ class SignupSerializer(serializers.Serializer):
             )
 
         return value
+
+    def update(self, user, validated_data):
+        # A new address has to be verified again
+        if validated_data.get("email", user.email) != user.email:
+            user.email_verified_at = None
+
+        fields = {
+            "firstName": "first_name",
+            "lastName": "last_name",
+            "email": "email",
+            "mobileNumber": "phone",
+        }
+
+        for key, attribute in fields.items():
+            if key in validated_data:
+                setattr(user, attribute, validated_data[key])
+
+        try:
+            user.save()
+        except IntegrityError:
+            # Another account took this email at the same moment.
+            raise serializers.ValidationError({
+                "email": "An account with this email already exists."
+            })
+
+        return user
+
+
+class SignupSerializer(ProfileSerializer):
+    password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        error_messages={
+            "required": "Password is required.",
+            "blank": "Password is required.",
+            "min_length": "Password must contain at least 8 characters.",
+        }
+    )
+
+    confirmPassword = serializers.CharField(
+        required=True,
+        write_only=True,
+        error_messages={
+            "required": "Please confirm your password.",
+            "blank": "Please confirm your password.",
+        }
+    )
+
+    agreeTerms = serializers.BooleanField(
+        required=True,
+        error_messages={
+            "required": "You must agree to the Terms & Conditions.",
+            "invalid": "You must agree to the Terms & Conditions.",
+        }
+    )
 
     def validate_agreeTerms(self, value):
         if value is not True:
@@ -130,14 +212,24 @@ class SignupSerializer(serializers.Serializer):
 
 
 class LoginSerializer(serializers.Serializer):
+    # Same messages as the sign-in form
     email = serializers.EmailField(
-        required=True
+        required=True,
+        error_messages={
+            "required": "Email is required.",
+            "blank": "Email is required.",
+            "invalid": "Please enter a valid email address.",
+        }
     )
 
     password = serializers.CharField(
         required=True,
         write_only=True,
-        allow_blank=False
+        allow_blank=False,
+        error_messages={
+            "required": "Password is required.",
+            "blank": "Password is required.",
+        }
     )
 
     rememberMe = serializers.BooleanField(
@@ -164,21 +256,40 @@ class LoginSerializer(serializers.Serializer):
         return data
 
 
+NEW_PASSWORD_MESSAGES = {
+    "required": "New password is required.",
+    "blank": "New password is required.",
+    "min_length": "Password must contain at least 8 characters.",
+}
+
+CONFIRM_NEW_PASSWORD_MESSAGES = {
+    "required": "Please confirm your new password.",
+    "blank": "Please confirm your new password.",
+}
+
+
 class ChangePasswordSerializer(serializers.Serializer):
+    # Same messages as the change password form
     currentPassword = serializers.CharField(
         required=True,
-        write_only=True
+        write_only=True,
+        error_messages={
+            "required": "Current password is required.",
+            "blank": "Current password is required.",
+        }
     )
 
     newPassword = serializers.CharField(
         required=True,
         write_only=True,
-        min_length=8
+        min_length=8,
+        error_messages=NEW_PASSWORD_MESSAGES
     )
 
     confirmPassword = serializers.CharField(
         required=True,
-        write_only=True
+        write_only=True,
+        error_messages=CONFIRM_NEW_PASSWORD_MESSAGES
     )
 
     def validate_currentPassword(self, value):
@@ -209,8 +320,14 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
+    # Same messages as the forgot password form
     email = serializers.EmailField(
-        required=True
+        required=True,
+        error_messages={
+            "required": "Email is required.",
+            "blank": "Email is required.",
+            "invalid": "Please enter a valid email address.",
+        }
     )
 
     def validate_email(self, value):
@@ -244,12 +361,14 @@ class PasswordResetConfirmSerializer(PasswordResetLinkSerializer):
     newPassword = serializers.CharField(
         required=True,
         write_only=True,
-        min_length=8
+        min_length=8,
+        error_messages=NEW_PASSWORD_MESSAGES
     )
 
     confirmPassword = serializers.CharField(
         required=True,
-        write_only=True
+        write_only=True,
+        error_messages=CONFIRM_NEW_PASSWORD_MESSAGES
     )
 
     def validate(self, data):
