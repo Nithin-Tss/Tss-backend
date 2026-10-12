@@ -42,6 +42,22 @@ class Category(models.Model):
         return self.name
 
 
+# Free-text columns on every product, edited on the product page and filled by
+# the CSV import.
+EXTRA_FIELDS = (
+    "allergens",
+    "food_recommendations",
+    "storage_suggestions",
+    "column1",
+    "column2",
+    "column3",
+    "column4",
+    "column5",
+    "column6",
+    "column7",
+)
+
+
 class Product(models.Model):
     id = models.UUIDField(
         primary_key=True,

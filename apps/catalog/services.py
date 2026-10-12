@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 from apps.inventory.services import default_location, set_available
 
 from .models import (
+    EXTRA_FIELDS,
     Category,
     Collection,
     Product,
@@ -121,9 +122,13 @@ def save_product(store, data, product=None):
     creating = product is None
     product = product or Product(store=store)
 
-    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template"):
+    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template", *EXTRA_FIELDS):
         if field in data:
-            setattr(product, field, data[field])
+            value = data[field]
+            # Extra fields are free text: blank means "not set"
+            if field in EXTRA_FIELDS:
+                value = (value or "").strip() or None
+            setattr(product, field, value)
 
     product.status = data.get("status", product.status or DRAFT)
 
@@ -364,6 +369,7 @@ def import_products(store, rows):
             seo_title=row.get("seo_title", ""),
             seo_description=row.get("seo_description", ""),
             category=categories.get((row.get("category") or "").strip()),
+            **{f: (row.get(f) or "").strip() or None for f in EXTRA_FIELDS},
         )
         products.append(product)
         variants.append(
