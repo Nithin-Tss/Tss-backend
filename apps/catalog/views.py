@@ -105,6 +105,8 @@ class ProductViewSet(StoreScopedViewSet):
 
 
 
+    permission_resource = "products"
+    action_permissions = {"bulk_delete": "products.delete"}
     queryset = Product.objects.select_related("category").prefetch_related(
 
         "variants",
@@ -282,6 +284,7 @@ class VariantViewSet(StoreScopedViewSet):
 
 
 
+    permission_resource = "products"
     queryset = ProductVariant.objects.select_related("product").order_by("created_at")
 
     serializer_class = VariantSerializer
@@ -330,6 +333,7 @@ class VariantViewSet(StoreScopedViewSet):
 
 class CollectionViewSet(StoreScopedViewSet):
 
+    permission_resource = "products"
     queryset = Collection.objects.order_by("name")
 
     serializer_class = CollectionSerializer
@@ -348,6 +352,7 @@ class CategoryViewSet(StoreScopedViewSet):
 
 
 
+    permission_resource = "products"
     queryset = Category.objects.order_by("name")
 
     serializer_class = CategorySerializer
@@ -362,6 +367,7 @@ class SalesChannelViewSet(mixins.ListModelMixin, StoreScopedGenericViewSet):
 
 
 
+    permission_resource = "products"
     serializer_class = SalesChannelSerializer
 
 

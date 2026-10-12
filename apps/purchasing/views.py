@@ -22,6 +22,7 @@ class PurchaseOrderViewSet(StoreScopedViewSet):
     Only drafts can be edited or deleted.
     """
 
+    permission_resource = "purchasing"
     queryset = PurchaseOrder.objects.prefetch_related("items__variant__product").order_by("-created_at")
     serializer_class = PurchaseOrderSerializer
 

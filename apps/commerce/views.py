@@ -12,6 +12,7 @@ class CartViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedG
     Shoppers create and change carts through the storefront cart API (next phase).
     """
 
+    permission_resource = "orders"
     queryset = Cart.objects.prefetch_related("items__product").order_by("-updated_at")
     serializer_class = CartSerializer
     http_method_names = ["get", "head", "options"]
@@ -26,6 +27,7 @@ class CartViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedG
 class CheckoutViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedGenericViewSet):
     """GET /api/v1/checkouts/?abandoned=true   (read-only for staff)"""
 
+    permission_resource = "orders"
     queryset = Checkout.objects.prefetch_related("items").order_by("-updated_at")
     serializer_class = CheckoutSerializer
     http_method_names = ["get", "head", "options"]

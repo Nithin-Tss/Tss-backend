@@ -30,6 +30,7 @@ class OrderViewSet(
     Orders are never deleted - cancel them instead.
     """
 
+    permission_resource = "orders"
     queryset = (
         Order.objects.select_related("customer", "sales_channel")
         .prefetch_related("items")
@@ -69,6 +70,7 @@ class DraftOrderViewSet(StoreScopedViewSet):
     POST /api/v1/orders/drafts/<id>/complete/    turn the draft into a real order
     """
 
+    permission_resource = "draft_orders"
     queryset = (
         DraftOrder.objects.prefetch_related("details")
         .select_related("created_by_user", "customer")

@@ -8,7 +8,8 @@ from rest_framework.permissions import IsAuthenticated
 
 from apps.tenancy.models import Store
 
-from .permissions import IsStoreMember
+from .permissions import HasStorePermission, IsStoreMember
+from .rbac import VIEW, area_for_model
 
 
 @lru_cache(maxsize=None)
@@ -54,7 +55,10 @@ class StoreScopedGenericViewSet(viewsets.GenericViewSet):
     - New rows get the current store and is_deleted=False automatically.
     """
 
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    # Every subclass names its area (see apps/core/rbac.py); without one, requests are refused.
+    permission_resource = None
+    action_permissions = None
     store_lookup = None
 
     def get_queryset(self):
@@ -114,6 +118,25 @@ class StoreScopedSerializerMixin:
     product) - so a request for store A can't point at store B's data.
     """
 
+    def _may_reference(self, model):
+        """
+        A role that can write in one area may only point at another area's
+        records (a draft order naming a customer) when it can view that area.
+        """
+        from apps.tenancy.access import membership_permissions
+
+        request = self.context.get("request")
+        membership = getattr(request, "membership", None)
+        if membership is None or membership.role == "owner":
+            return True
+
+        area = area_for_model(model)
+        own_area = getattr(self.context.get("view"), "permission_resource", None)
+        if area is None or area == own_area:
+            return True
+
+        return f"{area}.{VIEW}" in membership_permissions(membership)
+
     def get_fields(self):
         fields = super().get_fields()
         store = getattr(self.context.get("request"), "store", None)
@@ -126,6 +149,10 @@ class StoreScopedSerializerMixin:
             queryset = getattr(relation, "queryset", None)
 
             if queryset is None:
+                continue
+
+            if not self._may_reference(queryset.model):
+                relation.queryset = queryset.none()
                 continue
 
             lookup = store_path(queryset.model)

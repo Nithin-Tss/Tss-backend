@@ -24,7 +24,7 @@ from rest_framework.views import APIView
 from apps.catalog.models import Collection
 from apps.catalog.services import published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
-from apps.core.permissions import IsStoreMember
+from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.tenancy.models import Store, StoreMembership
 
 from .customizer import read_settings, save_settings, validate_settings
@@ -42,7 +42,8 @@ from .services import (
 
 
 class StoreThemeView(APIView):
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
 
     def store_theme(self):
         return get_store_theme(self.request.store)
@@ -328,6 +329,17 @@ PREVIEW_EDITOR = """
     var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
   }, true);
+  // Edit mode: right-click opens the customizer's menu (Edit code) for the section or block under it
+  document.addEventListener("contextmenu", function (e) {
+    if (!editing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var section = e.target.closest("[data-tss-section]");
+    if (!section) { send({ type: "select", id: "", block: null }); return; }
+    var blockEl = e.target.closest("[data-tss-block]");
+    var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
+  }, true);
   document.addEventListener("submit", function (e) { if (editing) e.preventDefault(); }, true);
   document.addEventListener("keydown", function (e) {
     if (editing && e.key === "Escape") send({ type: "escape" });
@@ -504,6 +516,8 @@ class ThemePreviewView(StoreThemeView):
     Renders the home page with the customizer's unsaved sections, for its
     live preview, with drag handles on every section. Nothing is saved.
     """
+
+    action_permissions = {"POST": "themes.view"}
 
     def post(self, request):
         clean = validate_custom_data(request.data)
@@ -693,7 +707,9 @@ class StorefrontLinkView(APIView):
     -> {"url": ...}: the active store's storefront, with the "Back to admin" bar for this user.
     """
 
-    permission_classes = [IsAuthenticated, IsStoreMember]
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
+    action_permissions = {"POST": "themes.view"}
 
     def post(self, request):
         path = str(request.data.get("path") or "/")

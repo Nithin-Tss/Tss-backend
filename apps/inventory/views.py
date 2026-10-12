@@ -22,6 +22,7 @@ PENDING, COMPLETED, CANCELLED = "pending", "completed", "cancelled"
 class LocationViewSet(StoreScopedViewSet):
     """/api/v1/inventory/locations/  warehouses, shops, ..."""
 
+    permission_resource = "inventory"
     queryset = Location.objects.order_by("name")
     serializer_class = LocationSerializer
 
@@ -38,6 +39,7 @@ class InventoryItemViewSet(
     Stock is never edited directly, only through these actions.
     """
 
+    permission_resource = "inventory"
     queryset = InventoryItem.objects.select_related("variant__product", "location").order_by(
         "variant__product__title", "location__name"
     )
@@ -83,6 +85,7 @@ class TransferViewSet(StoreScopedViewSet):
     POST /api/v1/inventory/transfers/<id>/cancel/
     """
 
+    permission_resource = "inventory"
     queryset = Transfer.objects.prefetch_related("items__variant").order_by("-created_at")
     serializer_class = TransferSerializer
     http_method_names = ["get", "post", "head", "options"]
