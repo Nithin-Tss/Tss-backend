@@ -79,7 +79,9 @@ class HasStorePermission(BasePermission):
             return False
 
         area = getattr(view, "permission_resource", None)
-        if area == "themes" and not request.user.is_owner:
+        # Owners of their own stores can't edit themes (root admin only); a member
+        # who was given a role with themes.manage can, like any other assigned access
+        if area == "themes" and not request.user.is_owner and membership.role == OWNER:
             needed = permission_for(
                 area, request.method, getattr(view, "action", None), getattr(view, "action_permissions", None),
             )
