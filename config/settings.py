@@ -138,9 +138,9 @@ DATABASES = {
         # Required when DB_PORT is 6543 (Supabase transaction pooler)
         "DISABLE_SERVER_SIDE_CURSORS": True,
         "OPTIONS": {
-            # Supabase expects SSL; fail fast instead of hanging on network hiccups
+            # Supabase expects SSL; resilient timeout for cloud database connections
             "sslmode": os.getenv("DB_SSLMODE", "require"),
-            "connect_timeout": 10,
+            "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "30")),
         },
     }
 }

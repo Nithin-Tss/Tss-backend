@@ -54,18 +54,28 @@ def _price(value):
         return Decimal("0.00")
 
 
-def check_skus(store, skus, exclude_product=None, exclude_variant=None):
+def check_skus(store, skus, exclude_product=None, exclude_variant=None, allowed_skus=None):
     """Raise a ValidationError naming any SKU that repeats in `skus` or is already used in the store."""
     skus = [s for s in skus if s]
     repeated = sorted({s for s in skus if skus.count(s) > 1})
     if repeated:
         raise ValidationError({"variants": f"SKU {', '.join(repeated)} is used more than once."})
-    taken = ProductVariant.objects.filter(product__store=store, sku__in=skus)
+
+    skus_to_check = skus
+    if allowed_skus:
+        skus_to_check = [s for s in skus if s not in allowed_skus]
+    elif exclude_variant is not None and getattr(exclude_variant, "sku", None):
+        skus_to_check = [s for s in skus if s != exclude_variant.sku]
+
+    if not skus_to_check:
+        return
+
+    taken = ProductVariant.objects.filter(product__store=store, sku__in=skus_to_check)
     if exclude_product is not None:
         taken = taken.exclude(product=exclude_product)
     if exclude_variant is not None:
         taken = taken.exclude(pk=exclude_variant.pk)
-    used = sorted(taken.values_list("sku", flat=True))
+    used = sorted(set(taken.values_list("sku", flat=True)))
     if used:
         raise ValidationError({"sku": f"SKU {', '.join(used)} is already used by another variant."})
 
@@ -173,6 +183,7 @@ def save_product(store, data, product=None):
         )
 
     if "variants" in data or "price" in data or not product.variants.exists():
+        original_skus = set(product.variants.values_list("sku", flat=True)) if product.pk else set()
         try:
             _replace_variants(product, data)
         except ProtectedError:
@@ -180,7 +191,7 @@ def save_product(store, data, product=None):
         skus = list(product.variants.values_list("sku", flat=True))
         if not all(skus):
             raise ValidationError({"sku": "Every product needs a SKU."})
-        check_skus(store, skus, exclude_product=product)
+        check_skus(store, skus, exclude_product=product, allowed_skus=original_skus)
 
     # Opening stock for the chosen location, on the product's first variant
     if data.get("location") is not None and data.get("quantity") is not None:

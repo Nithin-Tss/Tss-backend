@@ -25,6 +25,8 @@ from apps.catalog.models import Collection
 from apps.catalog.services import published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import HasStorePermission, IsStoreMember
+from django.contrib.auth import get_user_model
+
 from apps.tenancy.models import Store, StoreMembership
 
 from .customizer import read_settings, save_settings, validate_settings
@@ -635,6 +637,8 @@ def _member_visit(store, data):
     if not isinstance(data, dict) or data.get("s") != str(store.store_id):
         return None
     active = StoreMembership.objects.filter(user_id=data.get("u"), store=store, status="active").exists()
+    # A platform admin may visit any store without being a member of it
+    active = active or get_user_model().objects.filter(pk=data.get("u"), is_owner=True).exists()
     return data if active else None
 
 
@@ -709,7 +713,8 @@ class StorefrontLinkView(APIView):
 
     permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
     permission_resource = "themes"
-    action_permissions = {"POST": "themes.view"}
+    # Looking at the store is for every member, whatever their role (None = any member)
+    action_permissions = {"POST": None}
 
     def post(self, request):
         path = str(request.data.get("path") or "/")

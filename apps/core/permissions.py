@@ -41,6 +41,15 @@ class IsStoreMember(BasePermission):
             .first()
         )
 
+        if membership is None and request.user.is_owner:
+            # Platform admin: owner access to every store that isn't closed
+            from apps.tenancy.models import Store
+            from apps.tenancy.services import CLOSED, platform_membership
+
+            store = Store.objects.filter(pk=store_id).exclude(status=CLOSED).first()
+            if store is not None:
+                membership = platform_membership(request.user, store)
+
         if membership is None:
             # Same answer whether the store exists or not, so ids can't be probed.
             raise exceptions.PermissionDenied("You don't have access to this store.")
@@ -68,6 +77,17 @@ class HasStorePermission(BasePermission):
         membership = getattr(request, "membership", None)
         if membership is None:
             return False
+
+        area = getattr(view, "permission_resource", None)
+        # Owners of their own stores can't edit themes (root admin only); a member
+        # who was given a role with themes.manage can, like any other assigned access
+        if area == "themes" and not request.user.is_owner and membership.role == OWNER:
+            needed = permission_for(
+                area, request.method, getattr(view, "action", None), getattr(view, "action_permissions", None),
+            )
+            if needed == "themes.manage":
+                self.message = "Only the administrator can edit themes."
+                return False
 
         if membership.role == OWNER:
             return True
