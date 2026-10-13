@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from .models import Store
 from .serializers import StoreSerializer
-from .services import ACTIVE, OWNER, close_store, create_store
+from .services import ACTIVE, CLOSED, OWNER, close_store, create_store
 
 
 class StoreViewSet(
@@ -19,8 +19,8 @@ class StoreViewSet(
     GET    /api/v1/stores/       stores the signed-in user belongs to
     POST   /api/v1/stores/       create a store (the caller becomes its owner)
     GET    /api/v1/stores/<id>/  one of those stores
-    PATCH  /api/v1/stores/<id>/  rename it (owners only)
-    DELETE /api/v1/stores/<id>/  close it (owners only)
+    PATCH  /api/v1/stores/<id>/  change its settings (root admin only)
+    DELETE /api/v1/stores/<id>/  close it (root admin only)
     """
 
     serializer_class = StoreSerializer
@@ -29,6 +29,9 @@ class StoreViewSet(
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        # A platform admin sees every store that isn't closed
+        if self.request.user.is_owner:
+            return Store.objects.exclude(status=CLOSED).order_by("created_at")
         # Only the caller's own stores: anyone else's id is a 404
         return Store.objects.filter(
             memberships__user=self.request.user,
@@ -36,8 +39,9 @@ class StoreViewSet(
         ).order_by("created_at")
 
     def check_owner(self, store):
-        if not store.memberships.filter(user=self.request.user, status=ACTIVE, role=OWNER).exists():
-            raise PermissionDenied("Only the store owner can do this.")
+        # Store settings (name, URL, field names) and closing a store: root admin only
+        if not self.request.user.is_owner:
+            raise PermissionDenied("Only the administrator can change store settings.")
 
     def perform_create(self, serializer):
         data = serializer.validated_data

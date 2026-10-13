@@ -9,15 +9,31 @@ CLOSED = "closed"
 REMOVED = "removed"
 
 
+def platform_membership(user, store):
+    """
+    An unsaved owner membership for a platform admin (User.is_owner) in a store
+    they don't belong to, so they can open and manage any store.
+    """
+    return StoreMembership(user=user, store=store, role=OWNER, status=ACTIVE)
+
+
 def stores_for_user(user):
-    """Stores the user is an active member of, with their role and access in each."""
+    """Stores the user is an active member of, with their role and access in each.
+    A platform admin gets every store that isn't closed, as owner."""
     from .access import member_roles, membership_permissions
 
-    memberships = (
+    memberships = list(
         StoreMembership.objects.select_related("store")
         .filter(user=user, status=ACTIVE)
         .order_by("created_at")
     )
+
+    if user.is_owner:
+        held = {m.store_id for m in memberships}
+        memberships += [
+            platform_membership(user, store)
+            for store in Store.objects.exclude(status=CLOSED).exclude(pk__in=held).order_by("created_at")
+        ]
 
     return [
         {

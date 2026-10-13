@@ -4,6 +4,7 @@ from apps.catalog.models import EXTRA_FIELDS
 
 from .access import member_roles, membership_permissions
 from .models import Store
+from .services import platform_membership
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -32,7 +33,10 @@ class StoreSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if request is None or not request.user.is_authenticated:
             return None
-        return store.memberships.filter(user=request.user, status="active").first()
+        membership = store.memberships.filter(user=request.user, status="active").first()
+        if membership is None and request.user.is_owner:
+            membership = platform_membership(request.user, store)
+        return membership
 
     def get_role(self, store):
         """The signed-in user's role in this store ("owner", "staff", ...)."""
