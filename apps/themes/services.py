@@ -368,9 +368,9 @@ def _new_file(theme, path, content):
     )
 
 
-# Snippets every product list renders: code that doesn't compile is refused (with its line),
-# so the saved version keeps the grid, carousel and collection page working
-CHECKED_FILES = {"snippets/product-card.liquid"}
+# Product list code (the card every list renders, and the Product grid section): code that doesn't
+# compile is refused (with its line), so the saved version keeps the grid, carousel and collection page working
+CHECKED_FILES = {"snippets/product-card.liquid", "sections/product-grid.liquid"}
 
 
 def _check_liquid(content):

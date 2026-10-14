@@ -751,6 +751,131 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
         self.assertNotIn("Liquid error", html)
 
 
+GRID = "sections/product-grid.liquid"
+INDEX_JSON = "templates/index.json"
+
+
+class ProductGridSyncTest(StoreClientMixin, APITestCase):
+    """
+    The Home page's Product grid ("featured") in both editors: its values are the "featured" entry of
+    templates/index.json in Edit code and its panel in the customizer (one saved copy); its markup is
+    sections/product-grid.liquid, which neither editor's value changes ever rewrite.
+    """
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("grid@example.com", "Grid Store")
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Clay mug", "sku": "SKU-MUG", "status": "active", "price": "12", "vendor": "Potter",
+        }, expect=201)
+
+    def files(self):
+        return {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+
+    def save_file(self, path, content, expect=200):
+        r = self.client.post("/api/v1/themes/files/", {"path": path, "content": content}, format="json")
+        self.assertEqual(r.status_code, expect, r.content[:500])
+        return r.json()
+
+    def code_index(self):
+        return json.loads(self.files()[INDEX_JSON])
+
+    def save_code_index(self, change):
+        index = self.code_index()
+        change(index["sections"]["featured"])
+        self.save_file(INDEX_JSON, json.dumps(index, indent=2))
+
+    def customizer_grid(self):
+        return self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["featured"]
+
+    def save_customizer_grid(self, change):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["featured"]
+        change(section)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"featured": section}}}})
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        return self.ok("post", "/api/v1/themes/preview/?section=featured", data)["html"]
+
+    def heading_blocks(self, *texts):
+        return [{"type": "heading", "settings": {"text": t}} for t in texts]
+
+    def test_1_code_setting_reaches_customizer_preview_and_store(self):
+        self.save_code_index(lambda s: s["settings"].update(heading="From code", show_vendor=True))
+        self.assertEqual(self.customizer_grid()["settings"]["heading"], "From code")
+        self.assertTrue(self.customizer_grid()["settings"]["show_vendor"])
+        for html in (self.preview_html(), self.store_html()):
+            self.assertIn("From code", html)
+            self.assertIn('class="product-card__vendor"', html)
+
+    def test_2_customizer_setting_reaches_code(self):
+        self.save_customizer_grid(lambda s: s["settings"].update(heading="From sidebar", columns=3))
+        featured = self.code_index()["sections"]["featured"]
+        self.assertEqual(featured["settings"]["heading"], "From sidebar")
+        self.assertEqual(featured["settings"]["columns"], 3)
+        self.assertIn("From sidebar", self.store_html())
+
+    def test_3_blocks_add_reorder_hide_remove_in_both_editors(self):
+        # Added in the code
+        self.save_code_index(lambda s: s.update(blocks=self.heading_blocks("Block A", "Block B")))
+        self.assertEqual([b["settings"]["text"] for b in self.customizer_grid()["blocks"]], ["Block A", "Block B"])
+        html = self.store_html()
+        self.assertLess(html.index("Block A"), html.index("Block B"))
+        # Reordered in the customizer
+        self.save_customizer_grid(lambda s: s["blocks"].reverse())
+        self.assertEqual([b["settings"]["text"] for b in self.code_index()["sections"]["featured"]["blocks"]],
+                         ["Block B", "Block A"])
+        html = self.store_html()
+        self.assertLess(html.index("Block B"), html.index("Block A"))
+        # Hidden in the customizer, shown again in the code
+        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=True))
+        self.assertTrue(self.code_index()["sections"]["featured"]["blocks"][0]["hidden"])
+        self.assertNotIn("Block B", self.store_html())
+        self.save_code_index(lambda s: s["blocks"][0].update(hidden=False))
+        self.assertFalse(self.customizer_grid()["blocks"][0].get("hidden"))
+        self.assertIn("Block B", self.preview_html())
+        # Removed in the code
+        self.save_code_index(lambda s: s["blocks"].pop(0))
+        self.assertEqual([b["settings"]["text"] for b in self.customizer_grid()["blocks"]], ["Block A"])
+        self.assertNotIn("Block B", self.store_html())
+
+    def test_4_custom_markup_survives_both_editors(self):
+        edited = self.files()[GRID].replace(
+            '<section id="section-{{ section.id }}"', '<p class="grid-note">Hand made</p><section id="section-{{ section.id }}"', 1)
+        self.assertNotEqual(edited, self.files()[GRID])
+        self.save_file(GRID, edited)
+        self.save_customizer_grid(lambda s: s["settings"].update(heading="Sidebar"))
+        self.save_code_index(lambda s: s["settings"].update(heading="Code"))
+        self.assertEqual(self.files()[GRID], edited)  # neither value change rewrote the markup
+        self.assertIn('class="grid-note"', self.preview_html())
+        self.assertIn('class="grid-note"', self.store_html())
+
+    def test_5_invalid_grid_code_is_refused_and_store_keeps_working(self):
+        saved = self.files()[GRID]
+        r = self.save_file(GRID, saved.replace("{%- endif -%}", "", 1), expect=400)
+        self.assertIn("Line", r["content"][0] if isinstance(r["content"], list) else r["content"])
+        self.assertEqual(self.files()[GRID], saved)
+        self.assertNotIn("Liquid error", self.store_html())
+
+    def test_6_layout_cards_and_show_price(self):
+        html = self.store_html()
+        self.assertIn('class="product-card', html)
+        self.assertIn("Clay mug", html)
+        prices = html.count('<span class="price">')
+        self.assertGreater(prices, 0)
+        self.save_code_index(lambda s: s["settings"].update(show_price=False))
+        self.assertLess(self.store_html().count('<span class="price">'), prices)  # the carousel keeps its own
+        self.save_customizer_grid(lambda s: s["settings"].update(show_price=True))
+        self.assertEqual(self.store_html().count('<span class="price">'), prices)
+        self.assertTrue(self.code_index()["sections"]["featured"]["settings"]["show_price"])
+
+
 class BlogTest(StoreClientMixin, APITestCase):
     """Blog posts written in the admin: the blog page, each post's own page, the customizer and the code."""
 
