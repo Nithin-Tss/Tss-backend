@@ -45,8 +45,10 @@ from .services import (
     restore_section,
     save_file,
     save_section_values,
+    synced_files,
     synced_section,
     synced_sections,
+    templates_changed,
     code_files,
 )
 
@@ -154,6 +156,15 @@ def _keep_sections(store_theme, clean):
         clean["sections"] = fresh["sections"]
 
 
+def _templates_changed(store_theme, before, data):
+    bases = data.get("section_versions") if isinstance(data.get("section_versions"), dict) else {}
+    return templates_changed(
+        store_theme, before, client=str(data.get("client") or "")[:64],
+        base_versions={name: _int_or_none(bases.get(name)) for name in sync.SYNCED_TEMPLATES if name in bases},
+        started_at=_float_or_none(data.get("started_at")),
+    )
+
+
 def _save_sections(store_theme, sections, data):
     """{"header": {"settings": {...}, "blocks": [...]}, "footer": {...}} -> each synced section saved (values + its file)."""
     if not sections:
@@ -226,18 +237,24 @@ class ThemeSettingsView(StoreThemeView):
         if sections is not None and not isinstance(sections, dict):
             raise ValidationError({"sections": "Expected an object."})
 
+        saved_templates = None
         if body.get("settings") is not None or templates:
             # Synced sections are saved below, by their own path (they also change their file)
+            before = resolve(store_theme.custom_data)["templates"]
             merged.pop("sections", None)
             clean = validate_custom_data(merged)
             _keep_sections(store_theme, clean)
             store_theme.custom_data = clean
             store_theme.save(update_fields=["custom_data", "updated_at"])
+            # The page's section lines in templates/<page>.liquid follow its new order
+            saved_templates = _templates_changed(store_theme, before, request.data)
 
         saved_sections = _save_sections(store_theme, sections, request.data)
         reply = {"saved": True}
         if saved_sections:
             reply["sections"] = saved_sections
+        if saved_templates:
+            reply["templates"] = saved_templates
         return Response(reply)
 
     def put(self, request):
@@ -248,6 +265,7 @@ class ThemeSettingsView(StoreThemeView):
         clean = validate_custom_data(data)
         clean.pop("sections", None)
         _keep_sections(store_theme, clean)
+        before = resolve(store_theme.custom_data)["templates"]
         store_theme.custom_data = clean
 
         store_theme.save(
@@ -257,6 +275,7 @@ class ThemeSettingsView(StoreThemeView):
             ]
         )
 
+        _templates_changed(store_theme, before, request.data if isinstance(request.data, dict) else {})
         if isinstance(sections, dict):
             _save_sections(store_theme, sections, request.data)
 
@@ -581,6 +600,8 @@ PREVIEW_EDITOR = """
     if (m.type === "patch") patch(m);
     else if (m.type === "remove") { var el = byId(m.id); if (el) el.remove(); }
     else if (m.type === "order") reorder(m.ids || []);
+    // A reorder or removal the customizer timed: "change made -> preview updated"
+    if ((m.type === "remove" || m.type === "order") && m.token) send({ type: "patched", id: m.id || "", token: m.token });
     else if (m.type === "select") select(m.id, m.block, m.scroll);
     else if (m.type === "mode") setMode(m.edit);
     else if (m.type === "fonts") addFonts(m.html);
@@ -610,21 +631,13 @@ PREVIEW_EDITOR = """
 class ThemeSectionsView(StoreThemeView):
     """
     GET /api/v1/themes/sections/
-        the synced sections (code <-> customizer): {"footer": {spec, values, version, path}}
+        what syncs with the customizer (code <-> customizer):
+        {"header": {kind: "section", spec, values, version, path, label},
+         "index":  {kind: "template", page, template: {order, sections}, version, path, label}}
     """
 
     def get(self, request):
-        found = synced_sections(self.store_theme())
-        return Response({
-            name: {
-                "path": section["path"],
-                "label": sync.SYNCED_SECTIONS[name]["label"],
-                "spec": section["spec"],
-                "values": section["values"],
-                "version": section["version"],
-            }
-            for name, section in found.items()
-        })
+        return Response(synced_files(self.store_theme()))
 
 
 class SectionHistoryView(StoreThemeView):
@@ -634,15 +647,15 @@ class SectionHistoryView(StoreThemeView):
     """
 
     def _name(self, name):
-        if name not in sync.SYNCED_SECTIONS:
+        if name not in sync.SYNCED_FILES:
             raise Http404
         return name
 
     def get(self, request, name):
         store_theme = self.store_theme()
-        section = synced_section(store_theme, self._name(name))
+        self._name(name)
         return Response({
-            "version": section["version"] if section else 0,
+            "version": sync.section_state(store_theme.theme, name)["version"],
             "history": sync.history_of(store_theme.theme, name),
         })
 

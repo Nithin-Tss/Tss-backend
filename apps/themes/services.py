@@ -7,6 +7,7 @@ store had installed - is copied into a private Theme row whose slug is
 "store-<store id>". Code edits from the editor change only that copy.
 Section settings (hero text, slides, ...) live in StoreTheme.custom_data.
 """
+import copy
 import hashlib
 import json
 import re
@@ -19,7 +20,7 @@ from rest_framework import exceptions
 
 from . import section_sync as sync
 from .models import StoreTheme, Theme, ThemeFile
-from .schemas import PAGES, resolve, validate_custom_data
+from .schemas import PAGES, SECTIONS as SECTION_SCHEMAS, resolve, validate_custom_data
 
 STARTER_DIR = Path(__file__).resolve().parent / "starter"
 STARTER_VERSION = "1.0.0"
@@ -164,7 +165,7 @@ def get_store_theme(store):
     if current and current.theme.slug == private_slug(store):
         _add_missing_starter_files(current.theme)
         _upgrade_untouched_starter_files(current.theme)
-        _add_synced_sections(current.theme)
+        _add_synced_sections(current.theme, current.custom_data)
         return current
 
     if current:
@@ -182,7 +183,7 @@ def get_store_theme(store):
 
     _add_missing_starter_files(installed.theme)
     _upgrade_untouched_starter_files(installed.theme)
-    _add_synced_sections(installed.theme)
+    _add_synced_sections(installed.theme, installed.custom_data)
     return installed
 
 
@@ -301,12 +302,14 @@ def _save_settings_file(store_theme, path, content):
             raise exceptions.ValidationError({"content": f"{path} may only contain \"order\" and \"sections\"."})
         merged["templates"][page] = parsed
 
+    before = resolve(store_theme.custom_data)["templates"]
     try:
         store_theme.custom_data = validate_custom_data(merged)
     except exceptions.ValidationError as error:
         # Say which file the problem is in
         raise exceptions.ValidationError({"content": f"{path}: " + " ".join(str(m) for m in _messages(error.detail))})
     store_theme.save(update_fields=["custom_data", "updated_at"])
+    templates_changed(store_theme, before, source="code")
     return SimpleNamespace(file_path=path, file_size=len(content.encode("utf-8")))
 
 
@@ -378,7 +381,8 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise exceptions.ValidationError({"content": "File is larger than 256 KB."})
 
-    if path in sync.PATH_TO_SECTION:
+    synced_name = sync.PATH_TO_SECTION.get(path)
+    if synced_name and not (sync.SYNCED_FILES[synced_name]["kind"] == "template" and sync.is_legacy_template(content)):
         return save_synced_code(store_theme, sync.PATH_TO_SECTION[path], content, base_version=base_version, client=client,
                                 started_at=started_at)
 
@@ -503,29 +507,36 @@ def _checked_sections(data):
     return {"footer": 1} if data.get("synced_sections_added") else {}
 
 
-def _add_synced_sections(theme):
+def _add_synced_sections(theme, custom_data=None):
     """
     Themes made before a section became synced (sections/<name>.liquid) get its file -
     unless the store changed the snippet it replaces, which then keeps working as it is.
-    A section is checked once per ORIGINALS_REVISION: when more starter versions are known
-    to be untouched, themes checked before are checked again.
+    A synced template (templates/index.liquid) that is still the starter's {{ sections }}
+    file gets one {% section %} line per section of the store's page, in its order.
+    Each is checked once per ORIGINALS_REVISION: when more starter versions are known to be
+    untouched, themes checked before are checked again.
     """
-    if not [n for n in sync.SYNCED_SECTIONS if _checked_sections(theme.theme_data or {}).get(n, 0) < sync.ORIGINALS_REVISION]:
+    if not [n for n in sync.SYNCED_FILES if _checked_sections(theme.theme_data or {}).get(n, 0) < sync.ORIGINALS_REVISION]:
         return
     with transaction.atomic():
         # One request at a time: two at once would both add the file
         locked = Theme.objects.select_for_update().get(pk=theme.pk)
         data = locked.theme_data or {}
         checked = _checked_sections(data)
-        todo = [n for n in sync.SYNCED_SECTIONS if checked.get(n, 0) < sync.ORIGINALS_REVISION]
+        todo = [n for n in sync.SYNCED_FILES if checked.get(n, 0) < sync.ORIGINALS_REVISION]
         if todo:
             paths = []
             for name in todo:
-                config = sync.SYNCED_SECTIONS[name]
-                paths += [config["path"], f"snippets/{config['snippet']}.liquid"]
+                config = sync.SYNCED_FILES[name]
+                paths.append(config["path"])
+                if config["kind"] == "section":
+                    paths.append(f"snippets/{config['snippet']}.liquid")
             files = dict(locked.files.filter(file_path__in=paths).values_list("file_path", "content"))
             for name in todo:
-                config = sync.SYNCED_SECTIONS[name]
+                config = sync.SYNCED_FILES[name]
+                if config["kind"] == "template":
+                    _convert_template(locked, name, files.get(config["path"]), custom_data)
+                    continue
                 if config["path"] in files:
                     continue
                 snippet = files.get(f"snippets/{config['snippet']}.liquid")
@@ -534,6 +545,17 @@ def _add_synced_sections(theme):
             locked.theme_data = {**data, "synced_sections": {**checked, **{n: sync.ORIGINALS_REVISION for n in todo}}}
             locked.save(update_fields=["theme_data", "updated_at"])
     theme.theme_data = locked.theme_data
+
+
+def _convert_template(theme, name, content, custom_data):
+    """An untouched starter {{ sections }} template becomes one section line per section, in the store's order."""
+    config = sync.SYNCED_FILES[name]
+    if content is None or not sync.is_original_snippet(name, content):
+        return
+    entries = sync.template_entries(resolve(custom_data or {})["templates"][config["page"]])
+    new = sync.template_from_entries(entries, "\r\n" if "\r\n" in content else "\n")
+    sync.record_version(theme, name, content, "upgrade")
+    theme.files.filter(file_path=config["path"]).update(content=new, file_size=len(new.encode("utf-8")))
 
 
 def _seed_header(s, store_name):
@@ -628,7 +650,7 @@ def synced_sections(store_theme, files=None):
 
 
 def _label(name):
-    return sync.SYNCED_SECTIONS[name]["label"].lower()
+    return sync.SYNCED_FILES[name]["label"].lower()
 
 
 def _when(ts):
@@ -685,6 +707,12 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
 
 @transaction.atomic
 def save_synced_code(store_theme, name, content, base_version=None, client="", source="code", started_at=None):
+    if sync.SYNCED_FILES[name]["kind"] == "template":
+        return save_template_code(store_theme, name, content, base_version, client, source, started_at)
+    return _save_section_code(store_theme, name, content, base_version, client, source, started_at)
+
+
+def _save_section_code(store_theme, name, content, base_version=None, client="", source="code", started_at=None):
     """
     Code -> Blocks: the section's file was saved in Edit code (or restored). Its code is
     checked first - invalid Liquid or schema JSON is refused with its line, and the saved
@@ -739,3 +767,174 @@ def restore_section(store_theme, name, index, client=""):
     if content is None:
         raise exceptions.NotFound("That version is no longer kept.")
     return save_synced_code(store_theme, name, content, client=client, source="restore")
+
+
+# ------------------------------------------------- synced page templates (templates/index.liquid)
+
+def synced_template(store_theme, name, files=None):
+    """{path, content, version, ..., template} of a synced template, or None (no file, or a {{ sections }} one)."""
+    config = sync.SYNCED_FILES[name]
+    theme = store_theme.theme
+    if files is not None:
+        content = files.get(config["path"])
+    else:
+        content = theme.files.filter(file_path=config["path"]).values_list("content", flat=True).first()
+    if content is None or sync.is_legacy_template(content):
+        return None
+    return {"path": config["path"], "content": content, **sync.section_state(theme, name),
+            "template": resolve(store_theme.custom_data)["templates"][config["page"]]}
+
+
+def synced_files(store_theme):
+    """Everything synced with the customizer in this theme (for the customizer and the code editor)."""
+    found = {}
+    for name, section in synced_sections(store_theme).items():
+        found[name] = {"kind": "section", "path": section["path"], "label": sync.SYNCED_FILES[name]["label"],
+                       "spec": section["spec"], "values": section["values"], "version": section["version"]}
+    for name in sync.SYNCED_TEMPLATES:
+        template = synced_template(store_theme, name)
+        if template:
+            found[name] = {"kind": "template", "path": template["path"], "label": sync.SYNCED_FILES[name]["label"],
+                           "page": sync.SYNCED_FILES[name]["page"], "template": template["template"],
+                           "version": template["version"]}
+    return found
+
+
+def _publish_template(store_theme, name, source, version, template, code, client, started_at=None):
+    sync.EVENTS.publish(store_theme.store_id, {
+        "type": "section", "kind": "template", "section": name, "page": sync.SYNCED_FILES[name]["page"],
+        "source": source, "client": client or "",
+        "version": version, "template": template, "code": code, "at": time.time() * 1000, "started_at": started_at,
+    })
+
+
+def _remember_removed(theme, name, before, after):
+    """Sections taken off the page are kept aside, so putting their line back restores their values."""
+    gone = {sid: section for sid, section in before["sections"].items() if sid not in after["sections"]}
+    if gone:
+        removed = sync.removed_sections(theme, name)
+        removed.update(gone)
+        sync.set_removed_sections(theme, name, removed)
+
+
+@transaction.atomic
+def templates_changed(store_theme, before, client="", base_versions=None, started_at=None, source="customizer"):
+    """
+    Blocks -> Code: the page's sections were saved (customizer, or templates/<page>.json).
+    If their order, list or hidden state changed, the template's section lines are rewritten -
+    only those lines. The newest change wins; if Edit code changed the file since, the reply says so.
+    Returns {name: {"version", "conflict"}} for the templates whose file changed.
+    """
+    results = {}
+    base_versions = base_versions or {}
+    for name, config in sync.SYNCED_TEMPLATES.items():
+        page = config["page"]
+        after = resolve(store_theme.custom_data)["templates"][page]
+        if sync.template_entries(before[page]) == sync.template_entries(after):
+            continue
+        theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
+        file = theme.files.filter(file_path=config["path"]).first()
+        if file is None or sync.is_legacy_template(file.content):
+            continue
+        _remember_removed(theme, name, before[page], after)
+        try:
+            code = sync.write_template(file.content, sync.template_entries(after))
+        except sync.SectionCodeError:
+            continue  # the file's own lines can't be read: it keeps them until it is fixed in Edit code
+        state = sync.section_state(theme, name)
+        base = base_versions.get(name)
+        conflict = None
+        if base is not None and base != state["version"] and state["source"] in ("code", "restore"):
+            conflict = (f"The code editor changed the {_label(name)} at {_when(state['updated_at'])}. Your change here was saved "
+                        "on top; the code editor's version is kept in its History.")
+        version = state["version"]
+        if code != file.content:
+            version = sync.record_version(theme, name, file.content, source)
+            file.content = code
+            file.file_size = len(code.encode("utf-8"))
+            file.save(update_fields=["content", "file_size", "updated_at"])
+        theme.save(update_fields=["theme_data", "updated_at"])
+        _publish_template(store_theme, name, source, version, after, code, client, started_at)
+        results[name] = {"version": version, "conflict": conflict}
+    return results
+
+
+@transaction.atomic
+def save_template_code(store_theme, name, content, base_version=None, client="", source="code", started_at=None):
+    """
+    Code -> Blocks: templates/<page>.liquid was saved in Edit code (or restored). Its section
+    lines become the page's sections, in that order: known ids keep their values, a new id
+    with a type is a new section, and a section whose line is gone is kept aside (its line
+    coming back restores it). Invalid lines or Liquid are refused with their line number.
+    """
+    config = sync.SYNCED_FILES[name]
+    path, page = config["path"], config["page"]
+    try:
+        tags = sync.parse_template(content, path)
+    except sync.SectionCodeError as error:
+        raise exceptions.ValidationError({"content": str(error), "line": error.line})
+
+    theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
+    store_theme.refresh_from_db(fields=["custom_data"])
+    current = resolve(store_theme.custom_data)["templates"][page]
+    removed = sync.removed_sections(theme, name)
+
+    sections = {}
+    for tag in tags:
+        sid, kind = tag["id"], tag["type"]
+        known = current["sections"].get(sid) or removed.get(sid)
+        if known is not None:
+            if kind and kind != known["type"]:
+                raise exceptions.ValidationError({
+                    "content": f"Line {tag['line']}: \"{sid}\" is a {SECTION_SCHEMAS[known['type']]['name']} section. "
+                               "To add a different one, give it a new id.", "line": tag["line"]})
+            section = copy.deepcopy(known)
+        elif not kind:
+            raise exceptions.ValidationError({
+                "content": f"Line {tag['line']}: there is no section \"{sid}\". To add one, give it a type, "
+                           f"e.g. {{% section '{sid}', type: 'rich-text' %}}.", "line": tag["line"]})
+        elif kind not in SECTION_SCHEMAS or page not in SECTION_SCHEMAS[kind]["pages"]:
+            usable = ", ".join(t for t, sc in SECTION_SCHEMAS.items() if page in sc["pages"])
+            raise exceptions.ValidationError({
+                "content": f"Line {tag['line']}: \"{kind}\" can't be used on this page. Types: {usable}.", "line": tag["line"]})
+        else:
+            section = {"type": kind, "settings": {}, **({"blocks": []} if "blocks" in SECTION_SCHEMAS[kind] else {})}
+        section["hidden"] = tag["hidden"]
+        sections[sid] = section
+
+    merged = resolve(store_theme.custom_data)
+    merged.pop("sections", None)
+    merged["templates"][page] = {"order": [t["id"] for t in tags], "sections": sections}
+    try:
+        clean = validate_custom_data(merged)
+    except exceptions.ValidationError as error:
+        raise exceptions.ValidationError({"content": f"{path}: " + " ".join(str(m) for m in _messages(error.detail))})
+    if store_theme.custom_data.get("sections"):
+        clean["sections"] = store_theme.custom_data["sections"]
+
+    state = sync.section_state(theme, name)
+    conflict = None
+    if base_version is not None and base_version != state["version"] and state["source"] == "customizer":
+        conflict = (f"The customizer changed the {_label(name)} at {_when(state['updated_at'])}. Your code was saved on top; "
+                    "the customizer's version is kept in History.")
+
+    after = resolve(clean)["templates"][page]
+    file = theme.files.filter(file_path=path).first()
+    version = sync.record_version(theme, name, file.content if file else None, source)
+    _remember_removed(theme, name, current, after)
+    # Sections that are back on the page no longer wait aside
+    sync.set_removed_sections(theme, name, {k: v for k, v in sync.removed_sections(theme, name).items() if k not in sections})
+    if file is None:
+        file = _new_file(theme, path, content)
+        file.save()
+    else:
+        file.content = content
+        file.file_size = len(content.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+    store_theme.custom_data = clean
+    store_theme.save(update_fields=["custom_data", "updated_at"])
+    _publish_template(store_theme, name, source, version, after, content, client, started_at)
+    return SimpleNamespace(file_path=path, file_size=file.file_size,
+                           sync={"section": name, "kind": "template", "version": version, "conflict": conflict, "template": after})

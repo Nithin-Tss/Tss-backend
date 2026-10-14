@@ -1058,6 +1058,38 @@ def _synced_html(store, store_theme, name, section, data, env, env_key, context,
     )
 
 
+def _template_slots(content, page):
+    """The page template with its {% section %} lines as slots, or None (not a synced template)."""
+    synced = [name for name, config in sync.SYNCED_TEMPLATES.items() if config["page"] == page]
+    if not synced or content is None or sync.is_legacy_template(content):
+        return None
+    try:
+        return sync.template_markup(content, sync.template_tags(content))
+    except sync.SectionCodeError:
+        return None  # unreadable lines (saving refuses them): show the sections the usual way
+
+
+def _fill_slots(rendered, order, pieces, visible, styles, scripts):
+    """
+    Each slot takes the next section of the page's order (a hidden one leaves it empty), so the
+    page shows the order being edited even before the file is saved. Sections without a slot
+    (more sections than lines, or the empty page's default sections) follow the last one.
+    """
+    queue = list(order)
+    placed = set()
+
+    def fill(_match):
+        if not queue:
+            return ""
+        sid = queue.pop(0)
+        placed.add(sid)
+        return pieces.get(sid, "")
+
+    body = re.sub(re.escape(sync.SLOT), fill, rendered)
+    rest = "\n".join(pieces[sid] for sid in visible if sid in pieces and sid not in placed)
+    return "\n".join(part for part in (styles, body, rest, scripts) if part)
+
+
 def render_synced_section_fast(store, name, custom_data):
     """
     One synced section only (the customizer's live preview while editing it):
@@ -1228,6 +1260,12 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         if section:
             synced[name] = section
     overrides = {sync.SYNCED_SECTIONS[name]["snippet"]: SECTION_PLACEHOLDER.format(name) for name in synced}
+    # A synced page template (templates/index.liquid) lists its sections as {% section %} lines:
+    # each becomes a slot that a section's HTML goes into, in the page's order
+    template_path = f"templates/{page}.liquid"
+    slots = _template_slots(files.get(template_path), page)
+    if slots is not None:
+        overrides[template_path] = slots
     env = _environment(files, base_url, settings["currency_symbol"], overrides or None)
 
     shop = {"name": store.store_name, "url": base_url}
@@ -1313,10 +1351,12 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     html.append(CUSTOM_CSS)
     page_styles = len(html)
 
+    spans = {}  # section id -> its part of `html` (to put it in its slot)
     for section_id, raw_section in visible:
         # "Latest posts" with no posts to show is left out of the live store
         if SECTIONS[raw_section["type"]].get("uses_articles") and not posts and not editor:
             continue
+        span_start = len(html)
         section = dict(raw_section, id=section_id)
         section["settings"] = _prepare(section["type"], section["settings"])
         path = f"sections/{section['type']}.liquid"
@@ -1409,18 +1449,30 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         html.append(Markup("</div>"))
         if wrap:
             html.append(Markup("</div>"))
+        spans[section_id] = (span_start, len(html))
 
     if only_section is not None:
         return Markup("\n".join(html[page_styles:]))
 
+    scripts_start = len(html)
     html.append(ANIMATION_JS)
     html.append(BLOCKS_JS)
     html.append(PRODUCT_INFO_JS)
 
-    content = env.get_template(f"templates/{page}.liquid").render(
-        sections=Markup("\n".join(html)),
-        **common,
-    )
+    if slots is None:
+        content = env.get_template(template_path).render(
+            sections=Markup("\n".join(html)),
+            **common,
+        )
+    else:
+        content = _fill_slots(
+            env.get_template(template_path).render(sections=Markup(""), **common),
+            [section_id for section_id in template_data["order"]],
+            {sid: "\n".join(html[a:b]) for sid, (a, b) in spans.items()},
+            [sid for sid, _ in visible],
+            "\n".join(html[:page_styles]),
+            "\n".join(html[scripts_start:]),
+        )
 
     if product:
         title = product.seo_title or product.title
