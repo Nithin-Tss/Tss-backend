@@ -33,6 +33,16 @@ class StockChangeSerializer(StoreScopedSerializerMixin, serializers.Serializer):
     available = serializers.IntegerField(required=False, min_value=0)
     delta = serializers.IntegerField(required=False)
 
+    def validate_delta(self, value):
+        if value == 0:
+            raise serializers.ValidationError("Must not be 0.")
+        return value
+
+    def validate(self, data):
+        if "available" in data and "delta" in data:
+            raise serializers.ValidationError("Send either available or delta, not both.")
+        return data
+
 
 class TransferItemSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
     sku = serializers.CharField(source="variant.sku", read_only=True)
