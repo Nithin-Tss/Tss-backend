@@ -82,27 +82,27 @@ class InventoryItem(models.Model):
         ]
 
     
-def clean(self):
-    super().clean()
+    def clean(self):
+        super().clean()
 
-    errors = {}
+        errors = {}
 
-    quantity_fields = [
-        "unavailable",
-        "committed",
-        "available",
-        "on_hand",
-        "incoming",
-    ]
+        quantity_fields = [
+            "unavailable",
+            "committed",
+            "available",
+            "on_hand",
+            "incoming",
+        ]
 
-    for field in quantity_fields:
-        value = getattr(self, field, None)
+        for field in quantity_fields:
+            value = getattr(self, field, None)
 
-        if value is not None and value < 0:
-            errors[field] = "This quantity cannot be negative."
+            if value is not None and value < 0:
+                errors[field] = "This quantity cannot be negative."
 
-    if errors:
-        raise ValidationError(errors)
+        if errors:
+            raise ValidationError(errors)
 
     def __str__(self):
         return f"{self.variant} - {self.location}"
