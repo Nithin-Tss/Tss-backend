@@ -1,0 +1,31 @@
+{%- comment -%}
+  "Latest posts": the newest posts (optionally from one category), already
+  limited to the chosen number, in `section.articles`.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{% render 'article-card', styles: true %}
+<section id="section-{{ section.id }}" class="section featured-posts">
+  <div class="page-width">
+    {%- if s.heading != blank or s.subheading != blank or s.view_all_label != blank -%}
+      <div class="carousel__header">
+        <div>
+          {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+          {%- if s.subheading != blank -%}<p class="product-list__sub">{{ s.subheading }}</p>{%- endif -%}
+        </div>
+        {%- if s.view_all_label != blank and section.articles.size > 0 -%}
+          <a class="product-list__view-all" href="{{ shop.blog_url }}" style="margin-bottom:24px">{{ s.view_all_label }} &rarr;</a>
+        {%- endif -%}
+      </div>
+    {%- endif -%}
+
+    {%- if section.articles.size == 0 -%}
+      {%- if design_mode -%}<div class="empty-state">No posts to show. Check the category name, or publish a post.</div>{%- endif -%}
+    {%- else -%}
+      <div class="post-list post-list--{{ s.layout }}{% if s.layout == 'grid' and s.columns == 1 %} post-list--cols-1{% endif %}" style="--cols: {{ s.columns }}">
+        {%- for article in section.articles -%}
+          {% render 'article-card', article: article, show_image: s.show_image, show_excerpt: s.show_excerpt, show_date: s.show_date, show_author: s.show_author, show_category: s.show_category, show_reading_time: s.show_reading_time, ratio: s.image_ratio, card_style: s.card_style %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+  </div>
+</section>

@@ -30,7 +30,9 @@ from html.parser import HTMLParser
 
 from rest_framework import serializers
 
-PAGES = ("index", "product", "collection")
+PAGES = ("index", "product", "collection", "blog", "article")
+# Pages where product lists make sense (the blog pages are for reading)
+COMMERCE_PAGES = ("index", "product", "collection")
 
 THEME_SETTINGS = {
     "accent_color": {"type": "color", "label": "Accent color", "default": "#161C2C"},
@@ -88,7 +90,7 @@ SECTIONS = {
     },
     "product-carousel": {
         "name": "Product carousel",
-        "pages": PAGES,
+        "pages": COMMERCE_PAGES,
         "uses_products": True,
         "settings": {
             "heading": {"type": "text", "label": "Heading", "default": "Trending now"},
@@ -100,7 +102,7 @@ SECTIONS = {
     },
     "product-grid": {
         "name": "Featured products",
-        "pages": PAGES,
+        "pages": COMMERCE_PAGES,
         "uses_products": True,
         "settings": {
             "heading": {"type": "text", "label": "Heading", "default": "Featured products"},
@@ -920,6 +922,95 @@ for _type in ("main-product", "main-collection"):
         **common_settings(),
     }
 
+# ---------------------------------------------------------------------------
+# Blog: the post list (blog page), one post (article page) and a "Latest
+# posts" section for any page. Until posts can be written in the admin, the
+# customizer previews these pages with sample posts (see rendering.py).
+# ---------------------------------------------------------------------------
+
+THEME_SETTINGS.update({
+    "blog_title": {"type": "text", "label": "Blog title", "default": "Blog", "max": 120, "group": "blog"},
+    "blog_description": {
+        "type": "textarea", "label": "Blog description", "default": "", "max": 500, "group": "blog",
+        "help": "Shown under the title on the blog page.",
+    },
+})
+
+
+def _post_card_settings():
+    """What a post card shows; shared by the blog page and "Latest posts"."""
+    return {
+        "image_ratio": _choice("layout", "Image shape", ["landscape", "wide", "square", "portrait"], "landscape",
+                               ui="segmented"),
+        "show_image": _opt("style", "checkbox", "Show cover image", True),
+        "show_excerpt": _opt("style", "checkbox", "Show excerpt", True),
+        "show_date": _opt("style", "checkbox", "Show date", True),
+        "show_author": _opt("style", "checkbox", "Show author", True),
+        "show_category": _opt("style", "checkbox", "Show category", True),
+        "show_reading_time": _opt("style", "checkbox", "Show reading time", True),
+        "card_style": _choice("style", "Card style", ["plain", "bordered", "shadow"], "plain", ui="segmented"),
+    }
+
+
+SECTIONS["main-blog"] = {
+    "name": "Blog posts",
+    "pages": ("blog",),
+    "required": True,
+    "settings": {
+        "show_header": _opt("content", "checkbox", "Show blog title and description", True),
+        "show_filters": _opt("content", "checkbox", "Show category links", True),
+        "posts_per_page": _opt("content", "range", "Posts per page", 9, min=3, max=24),
+        "layout": _choice("layout", "Layout", ["grid", "list", "featured"], "grid", ui="segmented",
+                          labels={"featured": "First post large"}),
+        "columns": _opt("layout", "range", "Posts per row (desktop)", 3, min=1, max=4, show_if={"layout": "grid"}),
+        **_post_card_settings(),
+        **common_settings(),
+    },
+}
+
+SECTIONS["main-article"] = {
+    "name": "Article",
+    "pages": ("article",),
+    "required": True,
+    "settings": {
+        "show_cover": _opt("content", "checkbox", "Show cover image", True),
+        "show_author": _opt("content", "checkbox", "Show author", True),
+        "show_date": _opt("content", "checkbox", "Show date", True),
+        "show_reading_time": _opt("content", "checkbox", "Show reading time", True),
+        "show_tags": _opt("content", "checkbox", "Show tags", True),
+        "show_share": _opt("content", "checkbox", "Show share links", True),
+        "show_author_bio": _opt("content", "checkbox", "Show author bio under the post", True),
+        "show_prev_next": _opt("content", "checkbox", "Show previous and next post", True),
+        "related_count": _opt("content", "range", "Related posts", 3, min=0, max=6, help="0 hides them."),
+        "content_width": _choice("layout", "Text width", ["narrow", "medium", "wide"], "medium", ui="segmented"),
+        "cover_style": _choice("layout", "Cover image", ["contained", "full"], "contained", ui="segmented",
+                               labels={"full": "Full width"}),
+        **common_settings(),
+    },
+}
+
+SECTIONS["featured-posts"] = {
+    "name": "Latest posts",
+    "pages": PAGES,
+    "uses_articles": True,
+    "settings": {
+        "heading": _opt("content", "text", "Section heading", "From the blog"),
+        "subheading": _opt("content", "textarea", "Sub-text", ""),
+        "category": _opt("content", "text", "Category", "", max=120,
+                         help="Optional. Only posts from this category; empty shows all."),
+        "limit": _opt("content", "range", "Number of posts", 3, min=1, max=12),
+        "view_all_label": _opt("content", "text", "\"View all\" link text", "View all posts",
+                               help="Leave empty to hide it."),
+        "layout": _choice("layout", "Display as", ["grid", "list"], "grid", ui="segmented"),
+        "columns": _opt("layout", "range", "Posts per row (desktop)", 3, min=1, max=4, show_if={"layout": "grid"}),
+        **_post_card_settings(),
+        **common_settings(),
+    },
+}
+
+DEFAULT_TEMPLATES["blog"] = {"order": ["main"], "sections": {"main": {"type": "main-blog", "settings": {}}}}
+DEFAULT_TEMPLATES["article"] = {"order": ["main"], "sections": {"main": {"type": "main-article", "settings": {}}}}
+
 GROUPS = [
     {"id": "content", "label": "Content"},
     {"id": "layout", "label": "Layout"},
@@ -1403,6 +1494,7 @@ THEME_GROUPS = [
     {"id": "announcement", "label": "Announcement bar"},
     {"id": "header", "label": "Header and navigation"},
     {"id": "footer", "label": "Footer"},
+    {"id": "blog", "label": "Blog"},
     {"id": "store", "label": "Store"},
 ]
 

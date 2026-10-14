@@ -1,0 +1,133 @@
+{%- comment -%}
+  Article page. `article` has title, body, excerpt, cover_image, date, reading_time,
+  author (name, bio, avatar, url), category, tags, previous, next and related.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- if article == nil -%}
+  <section class="section"><div class="page-width"><div class="empty-state">Publish a post to see the article page.</div></div></section>
+{%- else -%}
+{% render 'article-card', styles: true %}
+<article id="section-{{ section.id }}" class="section article article--{{ s.content_width }}">
+  <header class="page-width article__header">
+    {%- if article.category -%}
+      <a class="post-card__category" href="{{ article.category.url }}">{{ article.category.name }}</a>
+    {%- endif -%}
+    <h1 class="article__title">{{ article.title }}</h1>
+    <div class="article__byline">
+      {%- if s.show_author and article.author and article.author.avatar -%}
+        <img class="article__avatar" src="{{ article.author.avatar }}" alt="">
+      {%- endif -%}
+      <p class="post-meta">
+        {%- if s.show_author and article.author -%}<a href="{{ article.author.url }}">{{ article.author.name }}</a>{%- endif -%}
+        {%- if s.show_date -%}<time datetime="{{ article.published_at | date: '%Y-%m-%d' }}">{{ article.date }}</time>{%- endif -%}
+        {%- if s.show_reading_time -%}<span>{{ article.reading_time }} min read</span>{%- endif -%}
+      </p>
+    </div>
+  </header>
+
+  {%- if s.show_cover and article.cover_image -%}
+    <figure class="article__cover article__cover--{{ s.cover_style }}{% if s.cover_style != 'full' %} page-width{% endif %}">
+      <img src="{{ article.cover_image }}" alt="{{ article.title }}">
+    </figure>
+  {%- endif -%}
+
+  <div class="page-width">
+    <div class="article__body">{{ article.body }}</div>
+
+    {%- if s.show_tags and article.tags.size > 0 -%}
+      <ul class="article__tags" aria-label="Tags">
+        {%- for tag in article.tags -%}<li><a href="{{ tag.url }}">#{{ tag.name }}</a></li>{%- endfor -%}
+      </ul>
+    {%- endif -%}
+
+    {%- if s.show_share -%}
+      <div class="article__share" data-share-title="{{ article.title }}">
+        <span>Share</span>
+        <a data-share="x" target="_blank" rel="noopener" href="#">X</a>
+        <a data-share="facebook" target="_blank" rel="noopener" href="#">Facebook</a>
+        <a data-share="linkedin" target="_blank" rel="noopener" href="#">LinkedIn</a>
+        <a data-share="email" href="#">Email</a>
+      </div>
+    {%- endif -%}
+
+    {%- if s.show_author_bio and article.author and article.author.bio != blank -%}
+      <aside class="article__author">
+        {%- if article.author.avatar -%}<img class="article__avatar article__avatar--large" src="{{ article.author.avatar }}" alt="">{%- endif -%}
+        <div>
+          <p class="article__author-name"><a href="{{ article.author.url }}">{{ article.author.name }}</a></p>
+          <p class="article__author-bio">{{ article.author.bio }}</p>
+        </div>
+      </aside>
+    {%- endif -%}
+
+    {%- if s.show_prev_next -%}
+      {%- if article.previous or article.next -%}
+        <nav class="article__pager" aria-label="More posts">
+          {%- if article.previous -%}<a href="{{ article.previous.url }}"><small>&larr; Previous</small>{{ article.previous.title }}</a>{%- else -%}<span></span>{%- endif -%}
+          {%- if article.next -%}<a class="article__pager-next" href="{{ article.next.url }}"><small>Next &rarr;</small>{{ article.next.title }}</a>{%- endif -%}
+        </nav>
+      {%- endif -%}
+    {%- endif -%}
+  </div>
+
+  {%- if s.related_count > 0 and article.related.size > 0 -%}
+    <div class="page-width article__related">
+      <h2 class="section-heading">Keep reading</h2>
+      <div class="post-list post-list--grid" style="--cols: 3">
+        {%- for post in article.related limit: s.related_count -%}
+          {% render 'article-card', article: post, show_image: true, show_category: true, show_date: true %}
+        {%- endfor -%}
+      </div>
+    </div>
+  {%- endif -%}
+</article>
+<style>
+  .article { --article-w: 720px; }
+  .article--narrow { --article-w: 600px; } .article--wide { --article-w: 880px; }
+  .article__header, .article .page-width > .article__body, .article__tags, .article__share, .article__author, .article__pager { max-width: var(--article-w); margin-left: auto; margin-right: auto; }
+  .article__header { text-align: center; display: grid; justify-items: center; gap: 12px; }
+  .article__title { font-size: clamp(30px, 5vw, 48px); margin: 0; }
+  .article__byline { display: flex; align-items: center; gap: 10px; }
+  .article__byline a { text-decoration: none; color: var(--text); font-weight: 600; }
+  .article__avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+  .article__avatar--large { width: 64px; height: 64px; flex: none; }
+  .article__cover { margin: 32px auto; }
+  .article__cover img { width: 100%; max-height: 640px; object-fit: cover; border-radius: var(--radius); }
+  .article__cover--full img { border-radius: 0; max-height: 75vh; }
+  .article__body { margin-top: 32px; font-size: 18px; line-height: 1.75; overflow-wrap: anywhere; }
+  .article__body > :first-child { margin-top: 0; }
+  .article__body :is(h2, h3, h4) { margin: 1.6em 0 .5em; }
+  .article__body img, .article__body iframe { max-width: 100%; height: auto; border-radius: var(--radius); }
+  .article__body blockquote { margin: 1.5em 0; padding-left: 20px; border-left: 3px solid var(--accent); font-style: italic; color: var(--muted); }
+  .article__body pre { overflow-x: auto; padding: 16px; border-radius: 10px; background: var(--soft); font-size: 15px; }
+  .article__body table { width: 100%; border-collapse: collapse; } .article__body :is(td, th) { border: 1px solid var(--line); padding: 8px; }
+  .article__tags { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; margin-bottom: 0; }
+  .article__tags a { display: inline-block; padding: 4px 12px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 14px; text-decoration: none; }
+  .article__share { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
+  .article__share span { font-weight: 600; margin-right: 4px; }
+  .article__share a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }
+  .article__author { display: flex; gap: 16px; margin-top: 32px; padding: 20px; border-radius: var(--radius); background: var(--soft); }
+  .article__author p { margin: 0; } .article__author-name a { font-weight: 700; text-decoration: none; }
+  .article__author-bio { margin-top: 4px !important; color: var(--muted); }
+  .article__pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 40px; }
+  .article__pager a { display: grid; gap: 4px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); text-decoration: none; font-weight: 600; }
+  .article__pager small { color: var(--muted); font-weight: 400; }
+  .article__pager-next { text-align: right; grid-column: 2; }
+  .article__related { margin-top: 64px; }
+</style>
+<script>
+  (function () {
+    var box = document.querySelector("#section-{{ section.id }} [data-share-title]");
+    if (!box) return;
+    var url = encodeURIComponent(location.href.split("#")[0]);
+    var title = encodeURIComponent(box.getAttribute("data-share-title"));
+    var links = {
+      x: "https://twitter.com/intent/tweet?url=" + url + "&text=" + title,
+      facebook: "https://www.facebook.com/sharer/sharer.php?u=" + url,
+      linkedin: "https://www.linkedin.com/sharing/share-offsite/?url=" + url,
+      email: "mailto:?subject=" + title + "&body=" + url
+    };
+    box.querySelectorAll("[data-share]").forEach(function (a) { a.href = links[a.getAttribute("data-share")]; });
+  })();
+</script>
+{%- endif -%}

@@ -1,0 +1,65 @@
+{%- comment -%}
+  Blog post card, used by the blog page, "Latest posts" and related posts.
+  Usage: {% render 'article-card', article: article, show_image: true, show_excerpt: true,
+           show_date: true, show_author: true, show_category: true, show_reading_time: true,
+           ratio: 'landscape', card_style: 'plain', size: 'normal' %}
+  With styles: true it outputs only the card styles (once per section that shows cards).
+{%- endcomment -%}
+{%- if styles -%}
+<style>
+  .post-list { display: grid; gap: 36px 24px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 750px) { .post-list--grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 990px) { .post-list--grid { grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); } }
+  .post-list--cols-1 { grid-template-columns: minmax(0, 1fr) !important; }
+  @media (min-width: 750px) {
+    .post-list--featured { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .post-list--featured > .post-card--large { grid-column: 1 / -1; }
+  }
+  @media (min-width: 990px) { .post-list--featured { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .post-card { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .post-card--bordered { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .post-card--shadow { box-shadow: 0 6px 24px rgba(0, 0, 0, .08); border-radius: var(--radius); padding: 12px; background: var(--bg); }
+  .post-card__media { display: block; overflow: hidden; border-radius: var(--radius); background: var(--soft); aspect-ratio: 3 / 2; }
+  .post-card__media img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s; }
+  .post-card:hover .post-card__media img { transform: scale(1.03); }
+  .post-ratio-wide { aspect-ratio: 16 / 9; } .post-ratio-square { aspect-ratio: 1; } .post-ratio-portrait { aspect-ratio: 3 / 4; }
+  .post-card__body { display: grid; gap: 8px; align-content: start; }
+  .post-card__category { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); text-decoration: none; }
+  .post-card__title { margin: 0; font-size: 20px; line-height: 1.3; }
+  .post-card__title a { text-decoration: none; }
+  .post-card__title a:hover { text-decoration: underline; }
+  .post-card__excerpt { margin: 0; color: var(--muted); }
+  .post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; font-size: 13px; color: var(--muted); }
+  .post-meta > * + *::before { content: "\00B7"; margin-right: 10px; }
+  .post-card--large .post-card__title { font-size: clamp(24px, 3vw, 34px); }
+  @media (min-width: 750px) {
+    .post-list--list .post-card, .post-card--large { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 28px; align-items: center; }
+  }
+</style>
+{%- else -%}
+<article class="post-card post-card--{{ card_style | default: 'plain' }}{% if size == 'large' %} post-card--large{% endif %}">
+  {%- if show_image -%}
+    <a class="post-card__media post-ratio-{{ ratio | default: 'landscape' }}" href="{{ article.url }}" tabindex="-1" aria-hidden="true">
+      {%- if article.cover_image -%}
+        <img src="{{ article.cover_image }}" alt="" loading="lazy">
+      {%- else -%}
+        <span class="placeholder" style="width:100%;height:100%"></span>
+      {%- endif -%}
+    </a>
+  {%- endif -%}
+  <div class="post-card__body">
+    {%- if show_category and article.category -%}
+      <a class="post-card__category" href="{{ article.category.url }}">{{ article.category.name }}</a>
+    {%- endif -%}
+    <h3 class="post-card__title"><a href="{{ article.url }}">{{ article.title }}</a></h3>
+    {%- if show_excerpt and article.excerpt != blank -%}
+      <p class="post-card__excerpt">{{ article.excerpt }}</p>
+    {%- endif -%}
+    <p class="post-meta">
+      {%- if show_author and article.author -%}<span>{{ article.author.name }}</span>{%- endif -%}
+      {%- if show_date -%}<time datetime="{{ article.published_at | date: '%Y-%m-%d' }}">{{ article.date }}</time>{%- endif -%}
+      {%- if show_reading_time -%}<span>{{ article.reading_time }} min read</span>{%- endif -%}
+    </p>
+  </div>
+</article>
+{%- endif -%}
