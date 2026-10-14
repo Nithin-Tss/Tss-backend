@@ -800,7 +800,9 @@ SECTIONS["hero"]["settings"] = {
     "button_new_tab": _opt("content", "checkbox", "Open the button link in a new tab", False),
     "button2_label": _opt("content", "text", "Second button text", "", help="Optional."),
     "button2_link": _opt("content", "url", "Second button link", ""),
+    "button2_new_tab": _opt("content", "checkbox", "Open the second button link in a new tab", False),
     "image_url": _opt("content", "image", "Background image", ""),
+    "image_alt": _opt("content", "text", "Image description", "", max=200, help="Optional. Read aloud by screen readers."),
     "mobile_image_url": _opt(
         "content", "image", "Mobile image", "", help="Optional. Shown on phones instead of the background image.",
     ),
@@ -843,6 +845,7 @@ SECTIONS["slideshow"]["settings"] = {
 SECTIONS["slideshow"]["blocks"]["slide"]["settings"] = {
     "media_type": _choice("content", "Type", ["image", "video"], "image", ui="segmented", labels={"image": "Image", "video": "Video"}),
     "image_url": _opt("content", "image", "Image", ""),
+    "image_alt": dict(_opt("content", "text", "Image description", "", max=200, help="Optional. Read aloud by screen readers."), show_if={"media_type": "image"}),
     "mobile_image_url": _opt(
         "content", "image", "Mobile image", "", help="Optional. Shown on phones.", show_if={"media_type": "image"},
     ),
@@ -945,6 +948,7 @@ SECTIONS["rich-text"]["settings"] = {
     "button_label": _opt("content", "text", "Button text", "", help="Optional."),
     "button_link": _opt("content", "url", "Button link", "/collections/all"),
     "image_url": _opt("content", "image", "Image", "", help="Optional."),
+    "image_alt": dict(_opt("content", "text", "Image description", "", max=200, help="Optional. Read aloud by screen readers."), show_if={"image_url": "*"}),
     "image_position": _choice(
         "content", "Image position", ["left", "right", "top"], "left", ui="segmented", show_if={"image_url": "*"},
     ),

@@ -2,7 +2,7 @@
 {%- if section.blocks.size == 0 -%}
   <section class="section"><div class="page-width"><div class="empty-state">Add slides to this slideshow.</div></div></section>
 {%- else -%}
-<section id="section-{{ section.id }}" class="slideshow slideshow--{{ s.transition }}" aria-roledescription="carousel" aria-label="Slideshow"
+<section id="section-{{ section.id }}" class="slideshow slideshow--{{ s.transition }}" aria-roledescription="carousel" aria-label="{% if s.heading != blank %}{{ s.heading }}{% else %}Slideshow{% endif %}"
   data-autoplay="{{ s.autoplay }}" data-interval="{{ s.interval }}" data-transition="{{ s.transition }}">
   <div class="slideshow__track">
     {%- for block in section.blocks -%}
@@ -13,23 +13,23 @@
       {%- assign has_media = has_video -%}{%- if b.image_url != blank -%}{%- assign has_media = true -%}{%- endif -%}
       <div class="slideshow__slide hero hero--{{ s.height }}{% if has_media %} hero--image{% else %} placeholder{% endif %}{% if forloop.first %} is-active{% endif %}"
         style="{% if b.background_color != blank %}background:{{ b.background_color }};{% endif %}align-items:{% if b.content_position == 'top' %}flex-start{% elsif b.content_position == 'bottom' %}flex-end{% else %}center{% endif %}"
-        role="group" aria-roledescription="slide" aria-label="{{ forloop.index }} of {{ forloop.length }}">
+        role="group" aria-roledescription="slide" aria-label="{{ forloop.index }} of {{ forloop.length }}"{% unless forloop.first %} aria-hidden="true" inert{% endunless %}>
         {%- if has_video -%}
-          <video class="hero__media" src="{{ b.video_url }}" autoplay muted loop playsinline{% if b.image_url != blank %} poster="{{ b.image_url }}"{% endif %}></video>
+          <video class="hero__media" src="{{ b.video_url }}" autoplay muted loop playsinline aria-hidden="true"{% if b.image_url != blank %} poster="{{ b.image_url }}"{% endif %}></video>
         {%- elsif b.image_url != blank -%}
           <picture>
             {%- if b.mobile_image_url != blank -%}<source media="(max-width: 749px)" srcset="{{ b.mobile_image_url }}">{%- endif -%}
-            <img class="hero__media" src="{{ b.image_url }}" alt="" style="object-fit: {{ b.image_fit }}; object-position: {{ b.image_focus }}"{% unless forloop.first %} loading="lazy"{% endunless %}>
+            <img class="hero__media" src="{{ b.image_url }}" alt="{{ b.image_alt }}" style="object-fit: {{ b.image_fit }}; object-position: {{ b.image_focus }}"{% unless forloop.first %} loading="lazy"{% endunless %}>
           </picture>
         {%- endif -%}
         {%- if has_media and b.overlay -%}
-          <div class="hero__overlay" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }};background: {% if b.overlay_style == 'gradient' %}linear-gradient(to {% if b.gradient_direction == 'down' %}bottom{% else %}top{% endif %}, {{ b.overlay_color }}, transparent){% else %}{{ b.overlay_color }}{% endif %}"></div>
+          <div class="hero__overlay" aria-hidden="true" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }};background: {% if b.overlay_style == 'gradient' %}linear-gradient(to {% if b.gradient_direction == 'down' %}bottom{% else %}top{% endif %}, {{ b.overlay_color }}, transparent){% else %}{{ b.overlay_color }}{% endif %}"></div>
         {%- endif -%}
         <div class="page-width hero__content align-{{ b.text_alignment }}"
           style="padding: {{ b.padding_top }}px {{ b.padding_right }}px {{ b.padding_bottom }}px {{ b.padding_left }}px">
           <div class="{{ b._t_class | escape }}"
             style="{{ b._t_style | escape }};display:flex;flex-direction:{% if b.content_direction == 'horizontal' %}row;flex-wrap:wrap;align-items:center;justify-content:{% if align == 'start' %}flex-start{% elsif align == 'end' %}flex-end{% else %}center{% endif %}{% else %}column;align-items:{% if align == 'start' %}flex-start{% elsif align == 'end' %}flex-end{% else %}center{% endif %}{% endif %};gap:{{ b.content_gap }}px">
-            {%- if b.heading != blank -%}<h1>{{ b.heading }}</h1>{%- endif -%}
+            {%- if b.heading != blank -%}<h2 class="hero__title">{{ b.heading }}</h2>{%- endif -%}
             {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
             {%- if b.button_label != blank -%}
               <a class="button" href="{{ b.button_link | link }}">{{ b.button_label }}</a>
@@ -57,6 +57,7 @@
 <script>
   (function () {
     var root = document.getElementById("section-{{ section.id }}");
+    if (!root) return;
     var track = root.querySelector(".slideshow__track");
     var slides = track.children;
     var dots = root.querySelectorAll(".slideshow__dot");
@@ -64,34 +65,66 @@
     var count = slides.length;
     var index = 0;
     var timer = null;
+    var hovering = false;
+    var focused = false;
 
     function go(i) {
       index = (i + count) % count;
-      if (fade) {
-        for (var n = 0; n < count; n++) slides[n].classList.toggle("is-active", n === index);
-      } else {
-        track.style.transform = "translateX(" + (-100 * index) + "%)";
+      if (!fade) track.style.transform = "translateX(" + (-100 * index) + "%)";
+      for (var n = 0; n < count; n++) {
+        var active = n === index;
+        slides[n].classList.toggle("is-active", active);
+        slides[n].setAttribute("aria-hidden", active ? "false" : "true");
+        if (active) slides[n].removeAttribute("inert"); else slides[n].setAttribute("inert", "");
+        var video = slides[n].querySelector("video");
+        if (video) {
+          if (active) { var p = video.play(); if (p && p.catch) p.catch(function () {}); } else video.pause();
+        }
       }
       dots.forEach(function (d, n) { d.setAttribute("aria-current", n === index ? "true" : "false"); });
     }
 
-    function start() {
-      var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (root.dataset.autoplay !== "true" || count < 2 || reduce) return;
-      stop();
-      timer = setInterval(function () { go(index + 1); }, Number(root.dataset.interval) * 1000);
-    }
-
     function stop() { if (timer) clearInterval(timer); timer = null; }
+
+    function start() {
+      stop();
+      var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (String(root.dataset.autoplay).toLowerCase() !== "true" || count < 2 || reduce || hovering || focused || document.hidden) return;
+      timer = setInterval(function () { go(index + 1); }, (Number(root.dataset.interval) || 5) * 1000);
+    }
 
     var prev = root.querySelector(".slideshow__arrow--prev");
     var next = root.querySelector(".slideshow__arrow--next");
     if (prev) prev.addEventListener("click", function () { go(index - 1); start(); });
     if (next) next.addEventListener("click", function () { go(index + 1); start(); });
     dots.forEach(function (d, n) { d.addEventListener("click", function () { go(n); start(); }); });
-    root.addEventListener("mouseenter", stop);
-    root.addEventListener("mouseleave", start);
-    root.addEventListener("focusin", stop);
+
+    root.addEventListener("mouseenter", function () { hovering = true; stop(); });
+    root.addEventListener("mouseleave", function () { hovering = false; start(); });
+    root.addEventListener("focusin", function () { focused = true; stop(); });
+    root.addEventListener("focusout", function (e) {
+      if (e.relatedTarget && root.contains(e.relatedTarget)) return;
+      focused = false; start();
+    });
+    document.addEventListener("visibilitychange", start);
+
+    root.addEventListener("keydown", function (e) {
+      if (count < 2) return;
+      if (e.key === "ArrowLeft") { go(index - 1); start(); }
+      else if (e.key === "ArrowRight") { go(index + 1); start(); }
+    });
+
+    var startX = null, startY = null;
+    root.addEventListener("touchstart", function (e) {
+      startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    }, { passive: true });
+    root.addEventListener("touchend", function (e) {
+      if (startX === null || count < 2) return;
+      var dx = e.changedTouches[0].clientX - startX;
+      var dy = e.changedTouches[0].clientY - startY;
+      startX = startY = null;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { go(index + (dx < 0 ? 1 : -1)); start(); }
+    }, { passive: true });
 
     go(0);
     start();
