@@ -1,0 +1,76 @@
+{%- comment -%}
+  Header and navigation. Its options and menu links are edited in the customizer's
+  left sidebar (Header) or here, in the schema at the end of this file: the two stay in step.
+  Read values only through section.settings and block.settings.
+  {{ section.attrs }} and {{ block.attrs }} let the customizer's Edit mode select the header
+  and its links; they are empty on the store. Keep {{ section.attrs }} on the <header> element
+  (not on a wrapper), so a sticky header still sticks.
+  No menu links: Home, Shop all and the first collections are shown.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- capture header_style -%}
+  {% if s.background != blank %}background:{{ s.background }};{% endif %}
+  {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
+{%- endcapture -%}
+<header class="site-header"{{ section.attrs }}
+  data-sticky="{% if s.sticky %}true{% else %}false{% endif %}"
+  data-border="{% if s.border %}true{% else %}false{% endif %}"
+  data-layout="{% if s.layout == 'center' %}center{% else %}left{% endif %}"
+  style="{{ header_style | strip }}">
+  <div class="page-width site-header__inner">
+    <a class="site-header__logo" href="{{ shop.url }}/">
+      {%- if s.logo_image != blank -%}
+        <img src="{{ s.logo_image }}" alt="{{ shop.name }}" style="height: {{ s.logo_height }}px; width: auto;">
+      {%- elsif s.logo_text != blank -%}
+        {{ s.logo_text }}
+      {%- else -%}
+        {{ shop.name }}
+      {%- endif -%}
+    </a>
+    {%- if s.show_nav -%}
+      <nav class="site-header__nav" aria-label="Main">
+        {%- if section.blocks.size > 0 -%}
+          {%- for block in section.blocks -%}
+            <a href="{{ block.settings.url | default: '#' }}"{{ block.attrs }}>{{ block.settings.label }}</a>
+          {%- endfor -%}
+        {%- else -%}
+          <a href="{{ shop.url }}/">Home</a>
+          <a href="{{ shop.url }}/collections/all">Shop all</a>
+          {%- for collection in collections limit: s.collections -%}
+            <a href="{{ collection.url }}">{{ collection.name }}</a>
+          {%- endfor -%}
+        {%- endif -%}
+      </nav>
+    {%- endif -%}
+  </div>
+</header>
+
+{% schema %}
+{
+  "name": "Header",
+  "max_blocks": 12,
+  "settings": [
+    {"type": "text", "id": "logo_text", "label": "Logo text", "default": "", "info": "Empty uses the store name."},
+    {"type": "image", "id": "logo_image", "label": "Logo image", "default": "", "info": "Optional. Shown instead of the logo text."},
+    {"type": "range", "id": "logo_height", "label": "Logo image height", "min": 16, "max": 96, "step": 2, "unit": "px", "default": 36},
+    {"type": "radio", "id": "layout", "label": "Logo position", "options": [{"value": "left", "label": "Left"}, {"value": "center", "label": "Centred"}], "default": "left"},
+    {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},
+    {"type": "range", "id": "collections", "label": "Collections in the automatic menu", "min": 0, "max": 8, "step": 1, "default": 4, "info": "Used only when there are no menu links."},
+    {"type": "checkbox", "id": "sticky", "label": "Keep the header at the top while scrolling", "default": true},
+    {"type": "checkbox", "id": "border", "label": "Line under the header", "default": true},
+    {"type": "color", "id": "background", "label": "Header colour", "default": "", "info": "None uses the background colour."},
+    {"type": "color", "id": "text_color", "label": "Header text colour", "default": ""}
+  ],
+  "blocks": [
+    {
+      "type": "link",
+      "name": "Menu link",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label", "default": "New link"},
+        {"type": "url", "id": "url", "label": "Link", "default": "/collections/all", "info": "A page of your store (/collections/all) or a full web address."}
+      ]
+    }
+  ],
+  "default": {"blocks": []}
+}
+{% endschema %}

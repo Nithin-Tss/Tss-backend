@@ -1,8 +1,10 @@
 """
-The footer's two-way sync: sections/footer.liquid <-> the customizer's Footer.
+Two-way sync of the synced sections: sections/<name>.liquid <-> the customizer's panel.
+The header and the footer run the same checks through SyncedSectionMixin.
 
     python manage.py test apps.themes --settings=config.test_settings
 """
+import hashlib
 import json
 import time
 
@@ -12,38 +14,43 @@ from apps.core.tests.test_flow import StoreClientMixin
 
 from . import section_sync as sync
 
-PATH = "sections/footer.liquid"
 
+class SyncedSectionMixin(StoreClientMixin):
+    """Helpers for one synced section (NAME); each test class measures its own timings."""
 
-class FooterSyncTest(StoreClientMixin, APITestCase):
-    # "change made -> preview updated", measured through the API (all tests together)
-    timings = {"sidebar -> code + preview": [], "code save -> blocks + preview": []}
+    NAME = None
+    EMAIL = None
+    timings = None
+
+    @property
+    def PATH(self):
+        return sync.SYNCED_SECTIONS[self.NAME]["path"]
 
     def setUp(self):
-        self.token, self.store = self.sign_up("footer@example.com", "Footer Store")
+        self.token, self.store = self.sign_up(self.EMAIL, f"{self.NAME.title()} Store")
 
     # ---------------------------------------------------------------- helpers
 
     def code(self):
         files = self.ok("get", "/api/v1/themes/files/")["files"]
-        return next(f["content"] for f in files if f["path"] == PATH)
+        return next(f["content"] for f in files if f["path"] == self.PATH)
 
-    def footer(self):
-        return self.ok("get", "/api/v1/themes/sections/")["footer"]
+    def section(self):
+        return self.ok("get", "/api/v1/themes/sections/")[self.NAME]
 
     def save_values(self, values, version=None):
         started = time.perf_counter()
-        body = {"sections": {"footer": values}, "client": "test"}
+        body = {"sections": {self.NAME: values}, "client": "test"}
         if version is not None:
-            body["section_versions"] = {"footer": version}
-        saved = self.ok("patch", "/api/v1/themes/settings/", body)["sections"]["footer"]
+            body["section_versions"] = {self.NAME: version}
+        saved = self.ok("patch", "/api/v1/themes/settings/", body)["sections"][self.NAME]
         preview = self.preview(values)
         self.timings["sidebar -> code + preview"].append((time.perf_counter() - started) * 1000)
         return saved, preview
 
     def save_code(self, content, expect=200, version=None):
         started = time.perf_counter()
-        body = {"path": PATH, "content": content}
+        body = {"path": self.PATH, "content": content}
         if version is not None:
             body["base_version"] = version
         r = self.client.post("/api/v1/themes/files/", body, format="json")
@@ -54,10 +61,14 @@ class FooterSyncTest(StoreClientMixin, APITestCase):
         return r.json()
 
     def preview(self, values):
-        """The customizer's footer-only preview request."""
+        """The customizer's request for just this section's preview HTML."""
         data = self.ok("get", "/api/v1/themes/settings/")
-        data["sections"] = {"footer": values}
-        return self.ok("post", "/api/v1/themes/preview/?section=footer", data)["html"]
+        data["sections"] = {self.NAME: values}
+        return self.ok("post", f"/api/v1/themes/preview/?section={self.NAME}", data)["html"]
+
+    def error_text(self, error, key):
+        value = error[key]
+        return str(value[0] if isinstance(value, list) else value)
 
     def home(self):
         r = self.client.get(f"/s/{self.store['storeSlug']}/")
@@ -79,8 +90,18 @@ class FooterSyncTest(StoreClientMixin, APITestCase):
         super().tearDownClass()
         for kind, values in cls.timings.items():
             if values:
-                print(f"\n  [footer sync] {kind}: average {sum(values) / len(values):.0f} ms, "
+                print(f"\n  [{cls.NAME} sync] {kind}: average {sum(values) / len(values):.0f} ms, "
                       f"slowest {max(values):.0f} ms ({len(values)} runs)")
+
+
+class FooterSyncTest(SyncedSectionMixin, APITestCase):
+    NAME = "footer"
+    EMAIL = "footer@example.com"
+    # "change made -> preview updated", measured through the API (all tests together)
+    timings = {"sidebar -> code + preview": [], "code save -> blocks + preview": []}
+
+    def footer(self):
+        return self.section()
 
     # ---------------------------------------------------------------- the 7 checks
 
@@ -234,7 +255,7 @@ class FooterSyncTest(StoreClientMixin, APITestCase):
         self.save_code(self.code().replace('<footer class="site-footer"', '<footer data-owner="a" class="site-footer"'))
         _, other = self.sign_up("other@example.com", "Other Store")
         files = self.ok("get", "/api/v1/themes/files/")["files"]
-        self.assertNotIn('data-owner="a"', next(f["content"] for f in files if f["path"] == PATH))
+        self.assertNotIn('data-owner="a"', next(f["content"] for f in files if f["path"] == self.PATH))
 
     def test_events_reach_the_store_only(self):
         seq = sync.EVENTS.last_seq
@@ -274,3 +295,355 @@ class FooterSyncTest(StoreClientMixin, APITestCase):
         self.assertNotIn("footer", types)
         schema = self.ok("get", "/api/v1/themes/schema/")
         self.assertNotIn("footer", schema["sections"])
+
+
+class HeaderSyncTest(SyncedSectionMixin, APITestCase):
+    NAME = "header"
+    EMAIL = "header@example.com"
+    timings = {"sidebar -> code + preview": [], "code save -> blocks + preview": []}
+
+    def links(self, *pairs):
+        return [{"type": "link", "settings": {"label": label, "url": url}} for label, url in pairs]
+
+    def header_html(self, html):
+        start = html.index('<header class="site-header"')
+        return html[start:html.index("</header>", start)]
+
+    # ---------------------------------------------------------------- the 7 checks
+
+    def test_1_setting_added_in_schema_appears_in_sidebar(self):
+        new = self.with_schema(self.code(), lambda s: s["settings"].append(
+            {"type": "text", "id": "tagline", "label": "Tagline", "default": "Free delivery"}))
+        new = new.replace('    </a>\n    {%- if s.show_nav -%}',
+                          '    </a>\n    <span class="header-tagline">{{ section.settings.tagline }}</span>\n    {%- if s.show_nav -%}')
+        saved = self.save_code(new)
+        self.assertIn("tagline", saved["sync"]["spec"]["settings"])
+        header = self.section()
+        self.assertEqual(header["spec"]["settings"]["tagline"]["label"], "Tagline")
+        self.assertEqual(header["values"]["settings"]["tagline"], "Free delivery")
+        self.assertIn('<span class="header-tagline">Free delivery</span>', self.home())
+
+    def test_2_sidebar_text_change_updates_code_and_preview(self):
+        header = self.section()
+        values = header["values"]
+        values["settings"]["logo_text"] = "Maison Lune"
+        values["blocks"] = self.links(("New in", "/collections/all"))
+        before = self.code()
+        saved, preview = self.save_values(values, header["version"])
+        self.assertIsNone(saved["conflict"])
+        self.assertIn("Maison Lune", preview)
+        self.assertIn(">New in</a>", preview)
+
+        after = self.code()
+        self.assertEqual(sync.split(before)[0].rstrip("\n"), sync.split(after)[0].rstrip("\n"))  # markup untouched
+        schema = self.schema_of(after)
+        self.assertEqual(next(f for f in schema["settings"] if f["id"] == "logo_text")["default"], "Maison Lune")
+        self.assertEqual(schema["default"]["blocks"][0]["settings"]["label"], "New in")
+        home = self.home()
+        self.assertIn("Maison Lune", self.header_html(home))
+        self.assertIn(f'/s/{self.store["storeSlug"]}/collections/all">New in</a>', home)
+
+    def test_3_deleting_a_block_updates_code_and_preview(self):
+        values = self.section()["values"]
+        values["blocks"] = self.links(("Shop", "/collections/all"), ("Journal", "/blog"))
+        self.save_values(values)
+        self.assertIn(">Journal</a>", self.home())
+
+        values["blocks"].pop(1)
+        _, preview = self.save_values(values)
+        self.assertNotIn("Journal", preview)
+        self.assertEqual([b["settings"]["label"] for b in self.schema_of(self.code())["default"]["blocks"]], ["Shop"])
+        self.assertNotIn(">Journal</a>", self.home())
+
+    def test_4_editing_header_markup_updates_preview(self):
+        content = self.code().replace('<div class="page-width site-header__inner">',
+                                      '<div class="page-width site-header__inner" data-edited="yes">')
+        self.save_code(content)
+        self.assertIn('data-edited="yes"', self.preview(self.section()["values"]))
+        self.assertIn('data-edited="yes"', self.home())
+
+    def test_5_reordering_blocks_updates_code_order_and_preview(self):
+        values = self.section()["values"]
+        values["blocks"] = self.links(("Alpha", "/a"), ("Beta", "/b"))
+        self.save_values(values)
+        values["blocks"].reverse()
+        _, preview = self.save_values(values)
+        self.assertLess(preview.index(">Beta<"), preview.index(">Alpha<"))
+        self.assertEqual([b["settings"]["label"] for b in self.schema_of(self.code())["default"]["blocks"]], ["Beta", "Alpha"])
+        home = self.home()
+        self.assertLess(home.index(">Beta<"), home.index(">Alpha<"))
+
+    def test_6_broken_schema_is_refused_and_nothing_is_lost(self):
+        values = self.section()["values"]
+        values["blocks"] = self.links(("Keep me", "/collections/all"))
+        self.save_values(values)
+        good = self.code()
+
+        broken = good.replace('"max_blocks": 12,', '"max_blocks": 12')
+        error = self.save_code(broken, expect=400)
+        self.assertIn("schema is not valid JSON", self.error_text(error, "content"))
+        line = int(self.error_text(error, "line"))
+        self.assertEqual(broken.splitlines()[line - 1].strip()[:12], '"settings": ')
+
+        error = self.save_code(good.replace("{%- endfor -%}", "", 1), expect=400)
+        self.assertIn("Line", self.error_text(error, "content"))
+
+        self.assertEqual(self.code(), good)
+        self.assertIn(">Keep me</a>", self.home())
+        self.assertEqual(self.section()["values"]["blocks"][0]["settings"]["label"], "Keep me")
+
+    def test_7_two_quick_edits_both_show(self):
+        header = self.section()
+        values = header["values"]
+        values["settings"]["logo_text"] = "First edit"
+        first, _ = self.save_values(values, header["version"])
+        values["blocks"] = self.links(("Second edit", "/collections/all"))
+        second, preview = self.save_values(values, first["version"])
+        self.assertIsNone(second["conflict"])
+        for html in (preview, self.home()):
+            self.assertIn("First edit", html)
+            self.assertIn("Second edit", html)
+        code = self.code()
+        self.assertIn('"First edit"', code)
+        self.assertIn('"Second edit"', code)
+
+    # ---------------------------------------------------------------- header specifics
+
+    def test_sticky_header_is_not_wrapped_in_the_preview(self):
+        # The customizer marks the <header> itself: a wrapping <div> would stop position: sticky
+        preview = self.preview(self.section()["values"])
+        self.assertTrue(preview.startswith('<header class="site-header" data-tss-section="header" data-tss-fixed'), preview[:120])
+        self.assertIn('data-sticky="true"', preview)
+        page = self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))["html"]
+        self.assertIn('<header class="site-header" data-tss-section="header"', page)
+        self.assertNotIn('<div data-tss-section="header"', page)
+        # The store's own page has no editor markers
+        self.assertNotIn("data-tss-section", self.home())
+
+        # Code without {{ section.attrs }} is wrapped instead, so the customizer can still select it
+        self.save_code(self.code().replace("{{ section.attrs }}", ""))
+        self.assertTrue(self.preview(self.section()["values"]).startswith('<div data-tss-section="header"'))
+
+    def test_preview_marks_the_header_like_the_footer(self):
+        """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
+        import re
+
+        values = self.section()["values"]
+        values["blocks"] = self.links(("Shop", "/collections/all"), ("Journal", "/blog"))
+        self.save_values(values)
+        page = self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))["html"]
+        synced = self.ok("get", "/api/v1/themes/sections/")
+        for name, label in (("header", "Header"), ("footer", "Footer")):
+            tag = re.search(rf'<\w+[^>]*data-tss-section="{name}"[^>]*>', page)
+            self.assertIsNotNone(tag, name)
+            self.assertIn("data-tss-fixed", tag.group(0))
+            self.assertIn(f'data-tss-label="{label}"', tag.group(0))
+            self.assertIn(name, synced)  # the id the click sends is a synced section the customizer can open
+        # Each menu link is a block of the header: a click on it selects the header and that link
+        header = page[page.index('data-tss-section="header"'):page.index("</header>")]
+        self.assertIn('data-tss-block="0" data-tss-label="Menu link">Shop</a>', header)
+        self.assertIn('data-tss-block="1" data-tss-label="Menu link">Journal</a>', header)
+        # Edit mode stops every click in the page before links can navigate
+        self.assertIn("e.preventDefault();", page)
+
+    def test_automatic_menu_when_there_are_no_links(self):
+        for name in ("Autumn", "Basics", "Coats"):
+            self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
+        values = self.section()["values"]
+        self.assertEqual(values["blocks"], [])
+        values["settings"]["collections"] = 2
+        _, preview = self.save_values(values)
+        nav = self.header_html(self.home())
+        self.assertIn(">Home</a>", nav)
+        self.assertIn(">Shop all</a>", nav)
+        shown = [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in nav]
+        self.assertEqual(shown, ["Autumn", "Basics"])
+        # The fast preview path reads the collections the same way
+        self.assertEqual(shown, [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in preview])
+
+    def test_existing_header_settings_are_copied_into_the_section(self):
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        store_theme = get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+        data = dict(store_theme.custom_data)
+        data.pop("sections", None)  # a store from before the header was synced
+        data["settings"] = {**data.get("settings", {}),
+                            "header_menu": "About | /pages/about\nSale | /collections/sale",
+                            "header_sticky": False, "header_border": False, "header_bg": "#112233",
+                            "header_text": "#FAFAFA", "header_collections": 2, "header_logo_text": "Old Name",
+                            "header_layout": "center"}
+        store_theme.custom_data = data
+        store_theme.save()
+
+        values = self.section()["values"]
+        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale"])
+        self.assertEqual(values["blocks"][1]["settings"]["url"], "/collections/sale")
+        settings = values["settings"]
+        self.assertEqual((settings["sticky"], settings["border"], settings["background"], settings["text_color"]),
+                         (False, False, "#112233", "#FAFAFA"))
+        self.assertEqual((settings["collections"], settings["logo_text"], settings["layout"]), (2, "Old Name", "center"))
+        header = self.header_html(self.home())
+        self.assertIn('data-sticky="false"', header)
+        self.assertIn('data-layout="center"', header)
+        self.assertIn("Old Name", header)
+
+    def test_a_store_that_edited_its_header_snippet_keeps_it(self):
+        from .models import ThemeFile
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        # A store from before: no header section yet, and its own edited header snippet
+        theme.files.filter(file_path="sections/header.liquid").delete()
+        theme.files.filter(file_path="snippets/header.liquid").update(content='<header class="my-own-header">Mine</header>')
+        theme.theme_data = {**theme.theme_data, "synced_sections": ["footer"]}
+        theme.save()
+
+        get_store_theme(store)
+        self.assertFalse(ThemeFile.objects.filter(theme=theme, file_path="sections/header.liquid").exists())
+        self.assertIn('<header class="my-own-header">Mine</header>', self.home())
+        self.assertNotIn("header", self.ok("get", "/api/v1/themes/sections/"))
+        self.assertIn("footer", self.ok("get", "/api/v1/themes/sections/"))
+
+    def test_an_untouched_header_snippet_gets_the_section(self):
+        from .models import ThemeFile
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        theme.files.filter(file_path="sections/header.liquid").delete()
+        theme.theme_data = {**theme.theme_data, "synced_sections": ["footer"]}
+        theme.save()
+
+        get_store_theme(store)
+        self.assertTrue(ThemeFile.objects.filter(theme=theme, file_path="sections/header.liquid").exists())
+        self.assertIn("header", self.ok("get", "/api/v1/themes/sections/"))
+
+    def test_unsafe_links_are_refused_and_text_escaped(self):
+        values = self.section()["values"]
+        values["blocks"] = self.links(("Evil", "javascript:alert(1)"))
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}}, expect=400)
+        values["blocks"] = self.links(("<script>x()</script>", "/collections/all"))
+        values["settings"]["logo_image"] = "javascript:alert(1)"
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}}, expect=400)
+        values["settings"]["logo_image"] = ""
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}})
+        home = self.home()
+        self.assertNotIn("<script>x()</script>", home)
+        self.assertIn("&lt;script&gt;x()&lt;/script&gt;", home)
+
+    def test_header_and_footer_are_saved_together(self):
+        sections = self.ok("get", "/api/v1/themes/sections/")
+        header, footer = sections["header"]["values"], sections["footer"]["values"]
+        header["settings"]["logo_text"] = "Both at once"
+        footer["settings"]["copyright"] = "Footer too"
+        saved = self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": header, "footer": footer}})
+        self.assertEqual(set(saved["sections"]), {"header", "footer"})
+        home = self.home()
+        self.assertIn("Both at once", home)
+        self.assertIn("Footer too", home)
+        self.assertLess(home.index("Both at once"), home.index("<main"))
+        self.assertGreater(home.index("Footer too"), home.index("</main>"))
+
+    def test_history_and_timing_names(self):
+        content = self.code()
+        for i in range(22):
+            self.save_code(content.replace('<div class="page-width site-header__inner">',
+                                           f'<div class="page-width site-header__inner" data-v="{i}">'))
+        history = self.ok("get", "/api/v1/themes/sections/header/history/")["history"]
+        self.assertEqual(len(history), sync.HISTORY_LIMIT)
+        # Latest first: index 0 is the version before the current one (data-v="20"), index 5 is data-v="15"
+        self.ok("post", "/api/v1/themes/sections/header/history/", {"index": 5})
+        self.assertIn('data-v="15"', self.code())
+        self.ok("post", "/api/v1/themes/sync-timings/", {"kind": "header: sidebar -> preview", "ms": 42}, expect=204)
+        self.ok("post", "/api/v1/themes/sync-timings/", {"kind": "footer: sidebar -> preview", "ms": 42}, expect=204)
+        self.ok("post", "/api/v1/themes/sync-timings/", {"kind": "hero: sidebar -> preview", "ms": 42}, expect=400)
+        self.assertIn("header: sidebar -> preview", self.ok("get", "/api/v1/themes/sync-timings/"))
+
+    def test_other_sections_are_unchanged(self):
+        schema = self.ok("get", "/api/v1/themes/schema/")
+        self.assertNotIn("header", schema["sections"])
+        for name in ("hero", "slideshow", "rich-text", "product-grid", "product-carousel", "main-product", "main-collection"):
+            self.assertIn(name, schema["sections"])
+
+
+# The first starter header (2df94aa), before the header followed Theme settings
+OLDEST_STARTER_HEADER = """<header class="site-header">
+  <div class="page-width site-header__inner">
+    <a class="site-header__logo" href="{{ shop.url }}/">{{ shop.name }}</a>
+    <nav class="site-header__nav" aria-label="Main">
+      <a href="{{ shop.url }}/">Home</a>
+      <a href="{{ shop.url }}/collections/all">Shop all</a>
+      {% for collection in collections limit: 4 %}
+        <a href="{{ collection.url }}">{{ collection.name }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
+"""
+
+
+class HeaderMigrationTest(StoreClientMixin, APITestCase):
+    """Which existing themes get sections/header.liquid (the original-snippet check)."""
+
+    def setUp(self):
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        _, store = self.sign_up("migrate@example.com", "Migrate Store")
+        self.store = Store.objects.get(store_id=store["storeId"])
+        self.theme = get_store_theme(self.store).theme
+
+    def old_theme(self, snippet, checked=("footer",)):
+        """A theme from before the header was synced: no section file, this header snippet."""
+        self.theme.files.filter(file_path="sections/header.liquid").delete()
+        self.theme.files.filter(file_path="snippets/header.liquid").update(content=snippet)
+        self.theme.theme_data = {**self.theme.theme_data, "synced_sections": list(checked)}
+        self.theme.save()
+
+    def upgrade(self):
+        from .models import ThemeFile
+        from .services import get_store_theme
+
+        get_store_theme(self.store)
+        return ThemeFile.objects.filter(theme=self.theme, file_path="sections/header.liquid").count()
+
+    def test_oldest_untouched_starter_header_gets_the_section(self):
+        self.assertEqual(hashlib.sha256(OLDEST_STARTER_HEADER.encode()).hexdigest(),
+                         "6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1")
+        self.old_theme(OLDEST_STARTER_HEADER)
+        self.assertEqual(self.upgrade(), 1)
+
+    def test_oldest_untouched_starter_header_with_crlf_line_endings_gets_the_section(self):
+        self.old_theme(OLDEST_STARTER_HEADER.replace("\n", "\r\n"))
+        self.assertEqual(self.upgrade(), 1)
+
+    def test_an_edited_old_header_keeps_its_snippet(self):
+        # The oldest starter plus one line the store added (a Blog link)
+        edited = OLDEST_STARTER_HEADER.replace(
+            "      {% endfor %}\n", "      {% endfor %}\n      <a href=\"{{ shop.url }}/blog\">Blog</a>\n")
+        self.old_theme(edited)
+        self.assertEqual(self.upgrade(), 0)
+        r = self.client.get(f"/s/{self.store.store_slug}/")
+        self.assertIn(">Blog</a>", r.content.decode())
+
+    def test_a_theme_checked_with_fewer_known_originals_is_checked_again(self):
+        # Checked before (revision 1) when its untouched snippet was not recognised
+        from .services import starter_files
+
+        self.old_theme(starter_files()["snippets/header.liquid"], checked=("footer", "header"))
+        self.assertEqual(self.upgrade(), 1)
+        self.assertEqual(self.theme.__class__.objects.get(pk=self.theme.pk).theme_data["synced_sections"]["header"],
+                         sync.ORIGINALS_REVISION)
+
+    def test_checking_again_never_adds_a_second_file(self):
+        self.old_theme(OLDEST_STARTER_HEADER)
+        self.assertEqual(self.upgrade(), 1)
+        self.theme.theme_data = {**self.theme.__class__.objects.get(pk=self.theme.pk).theme_data, "synced_sections": ["footer"]}
+        self.theme.save()
+        self.assertEqual(self.upgrade(), 1)
+        from .models import ThemeFile
+        self.assertEqual(ThemeFile.objects.filter(theme=self.theme, file_path="sections/footer.liquid").count(), 1)

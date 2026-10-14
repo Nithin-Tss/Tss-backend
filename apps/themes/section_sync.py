@@ -19,8 +19,9 @@ and the Liquid reads only section.settings and block.settings.
 Every change bumps the section's version, keeps the last HISTORY_LIMIT versions
 of the file (Restore), and is pushed to open editors as an event (EVENTS).
 
-Reusable: a section takes part when it is listed in SYNCED_SECTIONS. Only the
-footer is switched on for now.
+Reusable: a section takes part when it is listed in SYNCED_SECTIONS (the
+header and the footer for now). Everything else - saving, history, events,
+timings, the customizer panel and the code editor - follows that list.
 """
 import hashlib
 import json
@@ -36,10 +37,62 @@ from markupsafe import Markup, escape
 
 logger = logging.getLogger(__name__)
 
+# Each synced section:
+#   path       its Liquid file
+#   label      its name in the customizer
+#   snippet    the layout's {% render '<snippet>' %} it takes the place of
+#   originals  SHA-256 of every starter version of that snippet (each with LF and with CRLF line
+#              endings): a theme whose snippet still matches one gets the section; a store that
+#              edited its snippet keeps its own. Bump ORIGINALS_REVISION when adding hashes, so
+#              themes checked before are checked again
+#   wrapper    True: the editor wraps it in a <div> to select it in the preview. False: its root
+#              element carries {{ section.attrs }} instead (a <div> around a sticky header would
+#              stop it sticking)
+#   context    extra data its Liquid uses besides shop and settings ("collections")
+#   position   where it shows in the customizer's sections list
 SYNCED_SECTIONS = {
-    "footer": {"path": "sections/footer.liquid", "label": "Footer"},
+    "header": {
+        "path": "sections/header.liquid", "label": "Header", "snippet": "header",
+        "originals": {
+            # current starter (a590775)
+            "87b238125f2423a74a44f72907f6c497819e57a91cf2c93aa1d55a96a652e53d",  # LF
+            "7abacf47fa6285eae383b52aae6d89225e54e00be5f583da939ec1b7d359df37",  # CRLF
+            # first starter, before the header followed Theme settings (2df94aa)
+            "6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1",  # LF
+            "6728b0814ac2020a9800f3ee8d48a900b48fb68c6c4dff4cbbabea80c397604a",  # CRLF
+        },
+        "wrapper": False, "context": ("collections",), "position": "top",
+    },
+    "footer": {
+        "path": "sections/footer.liquid", "label": "Footer", "snippet": "footer",
+        "originals": {
+            # current starter (a590775)
+            "dfef84bf0c7a8ad1f4be1895742e3df4b586303f40cdec1f6f667ee3ee34d426",  # LF
+            "6ae26729a6ebc257f8ceeef600fdaad077c1458664a1f5b15039931491237e5a",  # CRLF
+            # first starter (2df94aa)
+            "46998966bcd74dab088da530528ad25f6fac556a3cd7d2224bcdb728e6bf3573",  # LF
+            "692f9ef663eec69e8af4b5add5f078b301a653313b91e8c9aec82aa75f748773",  # CRLF
+        },
+        "wrapper": True, "context": (), "position": "bottom",
+    },
 }
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_SECTIONS.items()}
+
+# Revision 2: older starter snippets and CRLF line endings count as untouched
+ORIGINALS_REVISION = 2
+
+
+def is_original_snippet(name, content):
+    """True when `content` is one of the starter's own versions of the section's snippet (never edited)."""
+    originals = SYNCED_SECTIONS[name]["originals"]
+    for text in (content, content.replace("\r\n", "\n")):
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() in originals:
+            return True
+    return False
+
+# What the customizer and the code editor time ("change made -> preview updated"), per section
+TIMING_STEPS = ("sidebar -> preview", "code save -> preview", "sidebar -> code", "code save -> blocks")
+TIMING_KINDS = {f"{name}: {step}" for name in SYNCED_SECTIONS for step in TIMING_STEPS}
 
 HISTORY_LIMIT = 20
 # Quick edits from the customizer (typing) update the last saved version instead of adding new ones
@@ -81,7 +134,7 @@ def split(content):
     return content[: match.start()] + blank + content[match.end():], match.group(1), match.start(1)
 
 
-SETTING_TYPES = {"text", "textarea", "richtext", "url", "checkbox", "select", "radio", "color", "range", "number", "menu"}
+SETTING_TYPES = {"text", "textarea", "richtext", "url", "image", "checkbox", "select", "radio", "color", "range", "number", "menu"}
 UI_ONLY_TYPES = {"header", "paragraph"}
 
 
@@ -166,7 +219,7 @@ def _field(s):
     base = {"label": label, "group": "content"}
     if s.get("info"):
         base["help"] = s["info"]
-    if kind in ("text", "textarea", "richtext", "url", "menu"):
+    if kind in ("text", "textarea", "richtext", "url", "image", "menu"):
         return {**base, "type": kind, "default": str(s.get("default", "")), "max": MAX_TEXT}
     if kind == "checkbox":
         return {**base, "type": "checkbox", "default": bool(s.get("default", False))}
@@ -224,7 +277,7 @@ def _clean(spec, value, strict, where):
     value = value[:MAX_TEXT]
     if kind == "color_optional":
         return value.upper() if _COLOR.match(value) else ("" if value == "" else spec["default"])
-    if kind == "url" and value.strip() and not _SAFE_URL.match(value.strip()):
+    if kind in ("url", "image") and value.strip() and not _SAFE_URL.match(value.strip()):
         # javascript:, data: and other schemes are never stored or rendered
         if strict:
             raise ValueError(f"{where}: links must start with https://, http://, mailto:, tel:, / or #.")
@@ -578,18 +631,28 @@ def menu_links(text, link):
     return links
 
 
+def _resolved_value(field, value, link):
+    if field["type"] == "menu":
+        return menu_links(value, link)
+    if field["type"] == "url" and value:
+        return link(value)  # "/collections/all" -> this store's page
+    return value
+
+
 def render_section(name, *, theme_id, content, values, env, env_key, context, editor=False, link=lambda u: u):
     """
     HTML of a synced section. Liquid sees section.settings and section.blocks
     (each with .settings, and .attrs for the customizer's Edit mode); menu
-    settings arrive as lists of {label, url}. Output is escaped by the environment.
+    settings arrive as lists of {label, url}, url settings as this store's links.
+    Output is escaped by the environment.
     """
     started = time.perf_counter()
     spec = spec_of(name, parse_cached(theme_id, name, content))
     clean = clean_values(spec, values)
+    config = SYNCED_SECTIONS[name]
 
     def resolved(fields, settings):
-        return {k: (menu_links(v, link) if fields[k]["type"] == "menu" else v) for k, v in settings.items()}
+        return {k: _resolved_value(fields[k], v, link) for k, v in settings.items()}
 
     blocks = []
     for index, block in enumerate(clean["blocks"]):
@@ -598,11 +661,19 @@ def render_section(name, *, theme_id, content, values, env, env_key, context, ed
         bspec = spec["blocks"][block["type"]]
         attrs = Markup(f' data-tss-block="{index}" data-tss-label="{escape(bspec["name"])}"') if editor else Markup("")
         blocks.append({"type": block["type"], "index": index, "settings": resolved(bspec["settings"], block["settings"]), "attrs": attrs})
-    section = {"id": name, "settings": resolved(spec["settings"], clean["settings"]), "blocks": blocks}
+    marker = f' data-tss-section="{escape(name)}" data-tss-fixed data-tss-label="{escape(spec["name"])}"'
+    section = {
+        "id": name, "settings": resolved(spec["settings"], clean["settings"]), "blocks": blocks,
+        # On the root element of a section without a wrapper (see SYNCED_SECTIONS)
+        "attrs": Markup(marker) if editor and not config["wrapper"] else Markup(""),
+    }
 
-    html = compiled(theme_id, SYNCED_SECTIONS[name]["path"], content, env, env_key).render(section=section, **context)
-    if editor:
-        html = f'<div data-tss-section="{escape(name)}" data-tss-fixed data-tss-label="{escape(spec["name"])}">{html}</div>'
+    html = compiled(theme_id, config["path"], content, env, env_key).render(section=section, **context)
+    html = html.rstrip()  # the blank lines that stand in for the schema
+    # Wrapped - also when its code no longer puts {{ section.attrs }} on its root element,
+    # so the customizer can always find it
+    if editor and (config["wrapper"] or "data-tss-section=" not in html):
+        html = f"<div{marker}>{html}</div>"
     logger.debug("section_sync: rendered %s in %.1f ms", name, (time.perf_counter() - started) * 1000)
     return Markup(html)
 

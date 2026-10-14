@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import quote
@@ -1013,7 +1014,32 @@ def _error_box(where, error):
     )
 
 
-FOOTER_PLACEHOLDER = "<!--tss-section:footer-->"
+# Where a synced section's HTML goes in the page: the layout's {% render 'header' %} /
+# {% render 'footer' %} output this, and it is replaced with the section (see section_sync)
+SECTION_PLACEHOLDER = "<!--tss-section:{}-->"
+
+
+class _LazyList(Sequence):
+    """A list loaded on first use: the fast preview path reads collections only if the Liquid uses them."""
+
+    def __init__(self, load):
+        self._load = load
+        self._items = None
+
+    def _all(self):
+        if self._items is None:
+            self._items = list(self._load())
+        return self._items
+
+    def __getitem__(self, index):
+        return self._all()[index]
+
+    def __len__(self):
+        return len(self._all())
+
+
+def _nav(store, base_url):
+    return [{"name": c.name, "url": collection_url(base_url, c)} for c in published_collections(store)[:20]]
 
 
 def _env_key(files, base_url, currency):
@@ -1048,12 +1074,14 @@ def render_synced_section_fast(store, name, custom_data):
     settings = data["settings"]
     base_url = shop_url(store)
     env = _environment({}, base_url, settings["currency_symbol"])
+    context = {"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"}
+    if "collections" in sync.SYNCED_SECTIONS[name]["context"]:
+        context["collections"] = _LazyList(lambda: _nav(store, base_url))
     try:
         return sync.render_section(
             name, theme_id=row["theme_id"], content=row["content"], values=(data.get("sections") or {}).get(name) or {},
             env=env, env_key=("fast", base_url, settings["currency_symbol"]),
-            context={"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"},
-            editor=True, link=lambda url: _resolve_link(base_url, url),
+            context=context, editor=True, link=lambda url: _resolve_link(base_url, url),
         )
     except Exception:  # e.g. it renders a snippet: the full way has them
         sync.invalidate(row["theme_id"], path)
@@ -1191,17 +1219,18 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
     settings = data["settings"]
     base_url = shop_url(store)
-    # The footer is a synced section (sections/footer.liquid) when the theme has one:
-    # {% render 'footer' %} in the layout then shows it (see section_sync)
-    footer = synced_section(store_theme, "footer", files)
-    overrides = {"footer": FOOTER_PLACEHOLDER} if footer else None
-    env = _environment(files, base_url, settings["currency_symbol"], overrides)
+    # The header and footer are synced sections (sections/<name>.liquid) when the theme has
+    # them: the layout's {% render 'header' %} / {% render 'footer' %} then show them (see section_sync)
+    synced = {}
+    for name in sync.SYNCED_SECTIONS:
+        section = synced_section(store_theme, name, files)
+        if section:
+            synced[name] = section
+    overrides = {sync.SYNCED_SECTIONS[name]["snippet"]: SECTION_PLACEHOLDER.format(name) for name in synced}
+    env = _environment(files, base_url, settings["currency_symbol"], overrides or None)
 
     shop = {"name": store.store_name, "url": base_url}
-    nav = [
-        {"name": c.name, "url": collection_url(base_url, c)}
-        for c in published_collections(store)[:20]
-    ]
+    nav = _nav(store, base_url)
     product_drop_ = product_drop(product, base_url) if product else None
     if product_drop_:
         product_drop_["details"] = product_details(product, store.field_labels)
@@ -1255,15 +1284,13 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         **layout_data(settings, base_url, nav),
     }
 
-    # The synced footer section, rendered from its saved (or, in the preview, unsaved) values
-    footer_html = None
-    if footer:
-        footer_html = _synced_html(
-            store, store_theme, "footer", footer, data, env,
-            _env_key(files, base_url, settings["currency_symbol"]), common, editor,
-        )
-        if only_section == "footer":
-            return footer_html
+    # The synced sections, rendered from their saved (or, in the preview, unsaved) values
+    synced_html = {}
+    env_key = _env_key(files, base_url, settings["currency_symbol"]) if synced else None
+    for name, section in synced.items():
+        synced_html[name] = _synced_html(store, store_theme, name, section, data, env, env_key, common, editor)
+        if only_section == name:
+            return synced_html[name]
 
     visible = [
         (section_id, template_data["sections"][section_id])
@@ -1410,4 +1437,6 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         page_title=title,
         **common,
     )
-    return page_html.replace(FOOTER_PLACEHOLDER, str(footer_html)) if footer_html is not None else page_html
+    for name, html in synced_html.items():
+        page_html = page_html.replace(SECTION_PLACEHOLDER.format(name), str(html))
+    return page_html

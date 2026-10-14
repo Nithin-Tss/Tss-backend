@@ -488,34 +488,71 @@ def generate_css_variables(theme_data):
 
 # ------------------------------------------------- synced sections (code <-> customizer, see section_sync)
 
-# The starter's footer snippet before the footer became a section (sections/footer.liquid)
-_ORIGINAL_FOOTER_SNIPPET = "dfef84bf0c7a8ad1f4be1895742e3df4b586303f40cdec1f6f667ee3ee34d426"
+def _checked_sections(data):
+    """{name: ORIGINALS_REVISION it was checked with}. Older themes stored a list (revision 1)."""
+    checked = data.get("synced_sections")
+    if isinstance(checked, dict):
+        return checked
+    if isinstance(checked, list):
+        return {name: 1 for name in checked}
+    return {"footer": 1} if data.get("synced_sections_added") else {}
 
 
 def _add_synced_sections(theme):
     """
-    Themes made before the footer was a section get sections/footer.liquid - unless the
-    store changed its footer snippet, which then keeps working as it is. Checked once.
+    Themes made before a section became synced (sections/<name>.liquid) get its file -
+    unless the store changed the snippet it replaces, which then keeps working as it is.
+    A section is checked once per ORIGINALS_REVISION: when more starter versions are known
+    to be untouched, themes checked before are checked again.
     """
-    data = theme.theme_data or {}
-    if data.get("synced_sections_added"):
+    if not [n for n in sync.SYNCED_SECTIONS if _checked_sections(theme.theme_data or {}).get(n, 0) < sync.ORIGINALS_REVISION]:
         return
-    files = dict(
-        theme.files.filter(file_path__in=["sections/footer.liquid", "snippets/footer.liquid"]).values_list("file_path", "content")
-    )
-    if "sections/footer.liquid" not in files:
-        snippet = files.get("snippets/footer.liquid")
-        if snippet is None or hashlib.sha256(snippet.encode("utf-8")).hexdigest() == _ORIGINAL_FOOTER_SNIPPET:
-            _new_file(theme, "sections/footer.liquid", starter_files()["sections/footer.liquid"]).save()
-    theme.theme_data = {**data, "synced_sections_added": True}
-    theme.save(update_fields=["theme_data", "updated_at"])
+    with transaction.atomic():
+        # One request at a time: two at once would both add the file
+        locked = Theme.objects.select_for_update().get(pk=theme.pk)
+        data = locked.theme_data or {}
+        checked = _checked_sections(data)
+        todo = [n for n in sync.SYNCED_SECTIONS if checked.get(n, 0) < sync.ORIGINALS_REVISION]
+        if todo:
+            paths = []
+            for name in todo:
+                config = sync.SYNCED_SECTIONS[name]
+                paths += [config["path"], f"snippets/{config['snippet']}.liquid"]
+            files = dict(locked.files.filter(file_path__in=paths).values_list("file_path", "content"))
+            for name in todo:
+                config = sync.SYNCED_SECTIONS[name]
+                if config["path"] in files:
+                    continue
+                snippet = files.get(f"snippets/{config['snippet']}.liquid")
+                if snippet is None or sync.is_original_snippet(name, snippet):
+                    _new_file(locked, config["path"], starter_files()[config["path"]]).save()
+            locked.theme_data = {**data, "synced_sections": {**checked, **{n: sync.ORIGINALS_REVISION for n in todo}}}
+            locked.save(update_fields=["theme_data", "updated_at"])
+    theme.theme_data = locked.theme_data
 
 
-def _seed(name, theme_settings, store_name):
-    """A store's first values for a synced section: what it had set before (the footer's theme settings)."""
-    if name != "footer":
-        return None
-    s = theme_settings
+def _seed_header(s, store_name):
+    """The header's Theme settings (Header and navigation) as the header section's values."""
+    blocks = []
+    for line in str(s.get("header_menu") or "").splitlines():
+        label, _, url = line.partition("|")
+        label, url = label.strip(), url.strip() or label.strip()
+        if label:
+            blocks.append({"type": "link", "settings": {"label": label, "url": url}})
+    return {
+        "settings": {
+            "logo_text": s.get("header_logo_text", ""), "logo_image": s.get("header_logo_url", ""),
+            "logo_height": s.get("header_logo_height", 36), "layout": s.get("header_layout", "left"),
+            "show_nav": s.get("header_show_nav", True), "collections": s.get("header_collections", 4),
+            "sticky": s.get("header_sticky", True), "border": s.get("header_border", True),
+            "background": s.get("header_bg", ""), "text_color": s.get("header_text", ""),
+        },
+        "blocks": blocks,
+    }
+
+
+def _seed_footer(s, store_name):
+    """The footer's Theme settings as the footer section's values."""
     blocks = []
     if s.get("footer_text"):
         blocks.append({"type": "text", "settings": {"heading": store_name, "text": s["footer_text"]}})
@@ -531,6 +568,16 @@ def _seed(name, theme_settings, store_name):
     }
 
 
+# A store's first values for a synced section: what it had set before in Theme settings,
+# so nothing is lost when a section becomes synced. One entry per section.
+SEEDS = {"header": _seed_header, "footer": _seed_footer}
+
+
+def _seed(name, theme_settings, store_name):
+    seed = SEEDS.get(name)
+    return seed(theme_settings, store_name) if seed else None
+
+
 def _with_section(custom_data, name, values):
     return {**custom_data, "sections": {**(custom_data.get("sections") or {}), name: values}}
 
@@ -538,8 +585,8 @@ def _with_section(custom_data, name, values):
 def synced_section(store_theme, name, files=None):
     """
     {path, content, schema, spec, values, version} of a synced section in this store's theme,
-    or None (the theme has no such file, or its code is invalid: the old footer is used).
-    A store's first read fills in its values (from its earlier footer settings) and saves them.
+    or None (the theme has no such file, or its code is invalid: the old snippet is used).
+    A store's first read fills in its values (from its earlier Theme settings) and saves them.
     """
     path = sync.SYNCED_SECTIONS[name]["path"]
     theme = store_theme.theme
@@ -575,6 +622,10 @@ def synced_sections(store_theme, files=None):
     return found
 
 
+def _label(name):
+    return sync.SYNCED_SECTIONS[name]["label"].lower()
+
+
 def _when(ts):
     return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "earlier"
 
@@ -608,7 +659,7 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
     state = sync.section_state(theme, name)
     conflict = None
     if base_version is not None and base_version != state["version"] and state["source"] in ("code", "restore"):
-        conflict = (f"The code editor changed the footer at {_when(state['updated_at'])}. Your change here was saved on top; "
+        conflict = (f"The code editor changed the {_label(name)} at {_when(state['updated_at'])}. Your change here was saved on top; "
                     "the code editor's version is kept in its History.")
 
     code = sync.write_values(file.content, values)
@@ -653,7 +704,7 @@ def save_synced_code(store_theme, name, content, base_version=None, client="", s
     state = sync.section_state(theme, name)
     conflict = None
     if base_version is not None and base_version != state["version"] and state["source"] == "customizer":
-        conflict = (f"The customizer changed the footer at {_when(state['updated_at'])}. Your code was saved on top; "
+        conflict = (f"The customizer changed the {_label(name)} at {_when(state['updated_at'])}. Your code was saved on top; "
                     "the customizer's version is kept in History.")
 
     saved = (store_theme.custom_data.get("sections") or {}).get(name)

@@ -155,7 +155,7 @@ def _keep_sections(store_theme, clean):
 
 
 def _save_sections(store_theme, sections, data):
-    """{"footer": {"settings": {...}, "blocks": [...]}} -> each synced section saved (values + its file)."""
+    """{"header": {"settings": {...}, "blocks": [...]}, "footer": {...}} -> each synced section saved (values + its file)."""
     if not sections:
         return {}
     bases = data.get("section_versions") if isinstance(data.get("section_versions"), dict) else {}
@@ -709,12 +709,12 @@ class SyncTimingsView(StoreThemeView):
     """
 
     action_permissions = {"POST": "themes.view"}
-    KINDS = {
-        "footer: sidebar -> preview",       # customizer: an edit, until the preview shows it
-        "footer: code save -> preview",     # Save in Edit code, until the customizer's preview shows it
-        "footer: sidebar -> code",          # customizer: an edit, until Edit code shows the new file
-        "footer: code save -> blocks",      # Save in Edit code, until the response (sidebar rebuilt)
-    }
+    # "<section>: <step>" for every synced section, e.g. "header: sidebar -> preview":
+    #   sidebar -> preview     customizer: an edit, until the preview shows it
+    #   code save -> preview   Save in Edit code, until the customizer's preview shows it
+    #   sidebar -> code        customizer: an edit, until Edit code shows the new file
+    #   code save -> blocks    Save in Edit code, until the response (sidebar rebuilt)
+    KINDS = sync.TIMING_KINDS
 
     def get(self, request):
         return Response(sync.TIMINGS.summary())
