@@ -70,6 +70,9 @@
       {%- if product.description != blank -%}
         <div class="product__description">{{ product.description }}</div>
       {%- endif -%}
+
+      {%- comment -%} "Product information" block: the product's Additional details as accordion rows {%- endcomment -%}
+      {{ section.product_info }}
     </div>
   </div>
 </section>

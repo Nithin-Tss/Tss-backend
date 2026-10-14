@@ -34,7 +34,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 4
+STARTER_REVISION = 5
 STARTER_UPGRADES = {
     "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
     "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
@@ -50,7 +50,11 @@ STARTER_UPGRADES = {
         "4af9942dd8108371e0d9225c91686e3b55a7aa04fad897345fbee7d6a1875dd3",
     },
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
-    "sections/main-product.liquid": {"18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729"},
+    # Revision 5: "Product information" accordion under the description
+    "sections/main-product.liquid": {
+        "18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729",
+        "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
+    },
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     "sections/main-collection.liquid": {"80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5"},
 }

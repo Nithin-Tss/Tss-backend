@@ -410,6 +410,14 @@ def resolve(custom_data):
                     for b in section.get("blocks", [])
                     if b.get("type") in schema["blocks"]  # block types that no longer exist are dropped
                 ]
+                # Blocks the section always has, e.g. "Product information" on layouts saved before it existed
+                for type_ in reversed(schema.get("required_blocks", [])):
+                    if not any(b["type"] == type_ for b in section["blocks"]):
+                        section["blocks"].insert(0, {
+                            "type": type_,
+                            "hidden": False,
+                            "settings": _with_defaults(schema["blocks"][type_]["settings"], {}),
+                        })
 
     return {
         "settings": _with_defaults(THEME_SETTINGS, custom_data.get("settings", {})),
@@ -1078,6 +1086,28 @@ for _type, _schema in SECTIONS.items():
     _schema["max_blocks"] = 40
 
 SECTIONS["slideshow"]["type_limits"] = {"slide": 8}
+
+# The product's Additional details (allergens, storage, ...) as accordion rows
+# under the description. Every product page has exactly one: it can be hidden,
+# not deleted (resolve() adds it back to older saved layouts).
+SECTIONS["main-product"]["blocks"] = {
+    "product_info": {
+        "name": "Product information",
+        "settings": {
+            "heading": _opt("content", "text", "Heading", "Product information", max=120, help="Leave empty for no heading."),
+            "open_first": _opt("content", "checkbox", "Open the first row by default", False),
+            "allow_multiple": _opt(
+                "content", "checkbox", "Allow several rows open at once", False,
+                help="Off: opening a row closes the one that was open.",
+            ),
+            "font_size": _opt("style", "range", "Font size", 16, min=12, max=24, unit="px"),
+            "divider_color": _opt("style", "color_optional", "Divider color", "", help="None uses the theme's light line."),
+        },
+    },
+    **SECTIONS["main-product"]["blocks"],
+}
+SECTIONS["main-product"]["type_limits"] = {"product_info": 1}
+SECTIONS["main-product"]["required_blocks"] = ["product_info"]
 
 SECTIONS["custom"]["settings"] = {
     "heading": SECTIONS["custom"]["settings"]["heading"],

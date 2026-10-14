@@ -17,7 +17,7 @@ from markupsafe import Markup, escape
 from django.db.models import Avg, Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 
-from apps.catalog.models import Collection
+from apps.catalog.models import EXTRA_FIELDS, Collection
 from apps.catalog.services import published_products
 from apps.orders.models import OrderItem
 
@@ -442,7 +442,43 @@ CUSTOM_CSS = Markup("""<style>
 .tss-collection:hover{background:#E7EBF2}
 .tss-embed{max-width:100%;overflow-x:auto}.tss-embed iframe{max-width:100%;border:0}.tss-embed img{max-width:100%;height:auto}
 .tss-empty{padding:24px;border:1px dashed #D8DFE8;border-radius:12px;color:#53627E;text-align:center}
+.tss-pinfo{margin-top:24px;font-size:var(--pi-fs,16px);text-align:left}
+.tss-pinfo__heading{margin:0 0 8px;font-size:1.15em}
+.tss-pinfo__item{border-top:1px solid var(--pi-line,var(--line,rgba(0,0,0,.12)))}
+.tss-pinfo__item:last-child{border-bottom:1px solid var(--pi-line,var(--line,rgba(0,0,0,.12)))}
+.tss-pinfo__title{margin:0;font-size:inherit}
+.tss-pinfo__toggle{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:12px 0;
+  border:0;background:none;color:inherit;font:inherit;font-weight:600;text-align:left;cursor:pointer}
+.tss-pinfo__toggle:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.tss-pinfo__icon{flex:none;width:1.1em;height:1.1em;transition:transform .3s ease}
+.tss-pinfo__toggle[aria-expanded="true"] .tss-pinfo__icon{transform:rotate(180deg)}
+.tss-pinfo__panel{display:grid;grid-template-rows:1fr}
+.tss-js .tss-pinfo__panel{grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows .3s ease,visibility 0s .3s}
+.tss-js .tss-pinfo__item.is-open .tss-pinfo__panel{grid-template-rows:1fr;visibility:visible;transition:grid-template-rows .3s ease,visibility 0s}
+.tss-pinfo__inner{min-height:0;overflow:hidden}
+.tss-pinfo__text{padding:0 0 16px;color:var(--muted,inherit);white-space:pre-line;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){.tss-js .tss-pinfo__panel,.tss-pinfo__icon{transition:none}}
 </style>""")
+
+# "Product information" rows: a click opens or closes a row (and, unless several
+# may be open, closes the others). One listener for the page, so rows the
+# customizer preview swaps in work too. Edit mode stops clicks before they get here.
+PRODUCT_INFO_JS = Markup("""<script>
+document.addEventListener("click", function (e) {
+  var button = e.target.closest && e.target.closest(".tss-pinfo__toggle");
+  if (!button) return;
+  var root = button.closest("[data-product-info]");
+  var open = button.getAttribute("aria-expanded") !== "true";
+  function set(b, on) {
+    b.setAttribute("aria-expanded", on ? "true" : "false");
+    b.closest(".tss-pinfo__item").classList.toggle("is-open", on);
+  }
+  if (open && root.getAttribute("data-multiple") !== "true") {
+    root.querySelectorAll('.tss-pinfo__toggle[aria-expanded="true"]').forEach(function (b) { set(b, false); });
+  }
+  set(button, open);
+});
+</script>""")
 
 
 def shop_url(store):
@@ -548,6 +584,69 @@ def product_drop(product, base_url):
             for v in variants
         ],
     }
+
+
+# Shopper-facing names of the Additional details fields. "Column 1".."Column 7"
+# have none: they show only once the store owner has named them.
+DETAIL_LABELS = {
+    "allergens": "Allergens",
+    "food_recommendations": "Food recommendations",
+    "storage_suggestions": "Storage suggestions",
+}
+
+
+def product_details(product, field_labels):
+    """The product's filled Additional details, in admin order: [{"key", "label", "text"}]."""
+    labels = field_labels if isinstance(field_labels, dict) else {}
+    details = []
+    for key in EXTRA_FIELDS:
+        text = (getattr(product, key, None) or "").strip()
+        label = str(labels.get(key) or DETAIL_LABELS.get(key) or "").strip()
+        if text and label:
+            details.append({"key": key, "label": label, "text": text})
+    return details
+
+
+_CHEVRON = (
+    '<svg class="tss-pinfo__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>'
+)
+
+
+def _product_info_html(block, index, details, section_id, editor=False):
+    """The "Product information" block: one accordion row per filled detail, or "" when there are none."""
+    b = block["settings"]
+    if not details:
+        # The customizer still needs something to click to open the block's settings
+        if editor:
+            return (
+                f'<div class="tss-pinfo" data-product-info data-tss-block="{int(index)}">'
+                '<p class="tss-empty">Product information: this product has no Additional details filled in.</p></div>'
+            )
+        return ""
+
+    style = [f"--pi-fs:{int(b.get('font_size') or 16)}px"]
+    if b.get("divider_color"):
+        style.append(f"--pi-line:{b['divider_color']}")
+    heading = f'<h2 class="tss-pinfo__heading">{escape(b["heading"])}</h2>' if b.get("heading") else ""
+
+    rows = []
+    for i, detail in enumerate(details):
+        is_open = i == 0 and bool(b.get("open_first"))
+        row_id = f"pinfo-{section_id}-{detail['key']}"
+        rows.append(
+            f'<div class="tss-pinfo__item{" is-open" if is_open else ""}">'
+            f'<h3 class="tss-pinfo__title"><button type="button" class="tss-pinfo__toggle" id="{escape(row_id)}-button" '
+            f'aria-expanded="{"true" if is_open else "false"}" aria-controls="{escape(row_id)}">'
+            f'<span>{escape(detail["label"])}</span>{_CHEVRON}</button></h3>'
+            f'<div class="tss-pinfo__panel" id="{escape(row_id)}" role="region" aria-labelledby="{escape(row_id)}-button">'
+            f'<div class="tss-pinfo__inner"><div class="tss-pinfo__text">{escape(detail["text"])}</div></div></div></div>'
+        )
+
+    return (
+        f'<div class="tss-pinfo" data-product-info data-multiple="{"true" if b.get("allow_multiple") else "false"}" '
+        f'data-tss-block="{int(index)}" style="{escape(";".join(style))}">{heading}{"".join(rows)}</div>'
+    )
 
 
 def _find_collection(store, value):
@@ -883,6 +982,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         for c in Collection.objects.filter(store=store).order_by("name")[:20]
     ]
     product_drop_ = product_drop(product, base_url) if product else None
+    if product_drop_:
+        product_drop_["details"] = product_details(product, store.field_labels)
     collection_drop = None
 
     if page == "collection":
@@ -956,6 +1057,17 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             section["blocks"] = [b for b in all_blocks if b["type"] not in GENERIC_BLOCK_TYPES and not b.get("hidden")]
             extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
 
+            # The product page's "Product information" accordion; the template places it under the description
+            product_info = ""
+            if section["type"] == "main-product" and product_drop_:
+                info = next(
+                    ((i, b) for i, b in enumerate(all_blocks) if b["type"] == "product_info" and not b.get("hidden")),
+                    None,
+                )
+                if info:
+                    product_info = _product_info_html(info[1], info[0], product_drop_["details"], section_id, editor)
+                section["product_info"] = Markup(product_info)
+
             if SECTIONS[section["type"]].get("uses_products"):
                 ss = section["settings"]
                 source = ss.get("source", "collection")
@@ -984,7 +1096,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 ))
 
             try:
-                html.append(Markup(env.get_template(path).render(section=section, **common)))
+                rendered = env.get_template(path).render(section=section, **common)
+                html.append(Markup(rendered))
+                # A product template edited before the accordion existed doesn't place it: show it after the section
+                if product_info and "data-product-info" not in rendered:
+                    html.append(Markup(f'<div class="page-width">{product_info}</div>'))
             except LiquidError as error:
                 html.append(_error_box(path, error))
 
@@ -1004,6 +1120,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     html.append(ANIMATION_JS)
     html.append(BLOCKS_JS)
+    html.append(PRODUCT_INFO_JS)
 
     content = env.get_template(f"templates/{page}.liquid").render(
         sections=Markup("\n".join(html)),

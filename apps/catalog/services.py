@@ -182,6 +182,13 @@ def save_product(store, data, product=None):
             [ProductSalesChannel(product=product, sales_channel=c) for c in online_channels(store)]
         )
 
+    # An Active product shows in the store: with no sales channel at all (e.g. imported as Draft,
+    # then made Active), it goes on the Online Store. To hide a product, set it to Draft.
+    if product.status == ACTIVE and not ProductSalesChannel.objects.filter(product=product).exists():
+        ProductSalesChannel.objects.bulk_create(
+            [ProductSalesChannel(product=product, sales_channel=c) for c in online_channels(store)]
+        )
+
     if "variants" in data or "price" in data or not product.variants.exists():
         original_skus = set(product.variants.values_list("sku", flat=True)) if product.pk else set()
         try:
@@ -396,9 +403,11 @@ def import_products(store, rows):
     ProductCollection.objects.bulk_create(product_collections)
     ProductTag.objects.bulk_create(product_tags)
 
+    # Every imported product is on the Online Store (as in Shopify); its status decides whether
+    # shoppers see it, so a Draft import shows up as soon as it is made Active
     online = online_channels(store)
     ProductSalesChannel.objects.bulk_create(
-        [ProductSalesChannel(product=p, sales_channel=c) for p in products if p.status == ACTIVE for c in online]
+        [ProductSalesChannel(product=p, sales_channel=c) for p in products for c in online]
     )
 
     fallback = default_location(store)

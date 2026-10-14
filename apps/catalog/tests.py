@@ -478,11 +478,30 @@ class AllProductsStorefrontTests(APITestCase):
         active = Product.objects.get(title="Imported active")
         draft = Product.objects.get(title="Imported draft")
         self.assertEqual(list(active.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
-        self.assertFalse(draft.product_sales_channels.exists())
+        # Every import is on the Online Store; the Draft one stays hidden until it is made Active
+        self.assertEqual(list(draft.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
         self.assertEqual(str(active.variants.get().price), "0.00")
         self.assertEqual(InventoryItem.objects.get(variant__product=active).available, 4)
         self.assertEqual(InventoryItem.objects.get(variant__product=draft).available, 0)
-        self.assertIn("Imported active", self.page("collections/all"))
+        listing = self.page("collections/all")
+        self.assertIn("Imported active", listing)
+        self.assertNotIn("Imported draft", listing)
+
+    def test_a_product_made_active_shows_in_the_store(self):
+        # Saved with no channel at all (as older imports were), then made Active from the product form
+        from .models import ProductSalesChannel
+
+        p = self.product("Late starter", status="draft")
+        ProductSalesChannel.objects.filter(product_id=p["id"]).delete()
+        r = self.client.patch(f"{URL}{p['id']}/", {"status": "active", "sales_channels": []}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn("Late starter", self.page("collections/all"))
+        self.assertEqual(self.client.get(f"/s/{self.slug}/products/{p['id']}").status_code, 200)
+
+        # Point of Sale only stays the owner's choice
+        pos = self.product("Shop counter only", sales_channels=[self.channels["pos"]])
+        self.assertNotIn("Shop counter only", self.page("collections/all"))
+        self.assertEqual(pos["sales_channels"], [self.channels["pos"]])
 
     def test_one_time_fix_links_unlisted_active_products(self):
         from .models import ProductSalesChannel
