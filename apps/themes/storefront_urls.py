@@ -9,4 +9,5 @@ urlpatterns = [
     path("<slug:store_slug>/products/<uuid:product_id>", storefront_product, name="storefront-product"),
     path("<slug:store_slug>/collections/all", storefront_collection, name="storefront-collection-all"),
     path("<slug:store_slug>/collections/<uuid:collection_id>", storefront_collection, name="storefront-collection"),
+    path("<slug:store_slug>/collections/<slug:handle>", storefront_collection, name="storefront-collection-handle"),
 ]

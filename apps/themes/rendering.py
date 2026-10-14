@@ -17,8 +17,8 @@ from markupsafe import Markup, escape
 from django.db.models import Avg, Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 
-from apps.catalog.models import EXTRA_FIELDS, Collection
-from apps.catalog.services import published_products
+from apps.catalog.models import EXTRA_FIELDS
+from apps.catalog.services import published_collections, published_products
 from apps.orders.models import OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
@@ -649,15 +649,21 @@ def _product_info_html(block, index, details, section_id, editor=False):
     )
 
 
+def collection_url(base_url, collection):
+    return f"{base_url}/collections/{collection.handle or collection.id}"
+
+
 def _find_collection(store, value):
+    """A shown collection by id, handle or name (sections pick one); drafts are never found."""
     value = (value or "").strip()
     if not value:
         return None
 
+    shown = published_collections(store)
     try:
-        return Collection.objects.filter(store=store, id=uuid.UUID(value)).first()
+        return shown.filter(id=uuid.UUID(value)).first()
     except ValueError:
-        return Collection.objects.filter(store=store, name__iexact=value).first()
+        return shown.filter(handle=value).first() or shown.filter(name__iexact=value).first()
 
 
 def _products(store, base_url, collection=None, limit=None, exclude=None):
@@ -810,9 +816,10 @@ def _block_html(block, store, env, base_url):
 
     if kind == "collections":
         ids = b.get("collections") or []
-        by_id = {str(c.id): c for c in Collection.objects.filter(store=store, id__in=ids)}
+        # Drafts and collections off the Online Store are left out
+        by_id = {str(c.id): c for c in published_collections(store).filter(id__in=ids)}
         tiles = "".join(
-            f'<a class="tss-collection" href="{escape(base_url)}/collections/{c.id}">{escape(c.name)}</a>'
+            f'<a class="tss-collection" href="{escape(collection_url(base_url, c))}">{escape(c.name)}</a>'
             for c in (by_id.get(i) for i in ids) if c
         )
         return f'<div class="tss-collections">{tiles}</div>' if tiles else '<div class="tss-empty">Choose collections to show here.</div>'
@@ -978,8 +985,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     shop = {"name": store.store_name, "url": base_url}
     nav = [
-        {"name": c.name, "url": f"{base_url}/collections/{c.id}"}
-        for c in Collection.objects.filter(store=store).order_by("name")[:20]
+        {"name": c.name, "url": collection_url(base_url, c)}
+        for c in published_collections(store)[:20]
     ]
     product_drop_ = product_drop(product, base_url) if product else None
     if product_drop_:
@@ -993,9 +1000,14 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             products.sort(key=SORTS[sort])
         pages = max(1, -(-len(products) // PAGE_SIZE))
         page_number = min(max(1, page_number), pages)
+        obj = collection["obj"]
         collection_drop = {
             "name": collection["name"],
-            "url": f"{base_url}/collections/{collection['obj'].id if collection['obj'] else 'all'}",
+            "url": collection_url(base_url, obj) if obj else f"{base_url}/collections/all",
+            "handle": obj.handle if obj else "all",
+            # Written in the admin's rich-text editor; cleaned like section rich text
+            "description": Markup(sanitize_html(obj.description)) if obj and obj.description else "",
+            "image": obj.image_url if obj else "",
             "products": products[(page_number - 1) * PAGE_SIZE:page_number * PAGE_SIZE],
             "products_count": len(products),
             "sort": sort,
@@ -1130,7 +1142,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     if product:
         title = product.seo_title or product.title
     elif collection_drop:
-        title = collection_drop["name"]
+        title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
     else:
         title = store.store_name
 

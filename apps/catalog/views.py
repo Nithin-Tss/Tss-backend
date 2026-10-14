@@ -6,6 +6,8 @@ from django.conf import settings
 
 from django.core.files.storage import default_storage
 
+from django.db import transaction
+
 from rest_framework import mixins, status
 
 from rest_framework.decorators import action
@@ -27,6 +29,8 @@ from .models import Category, Collection, Product, ProductVariant
 from .serializers import (
 
     CategorySerializer,
+
+    CollectionRuleSerializer,
 
     CollectionSerializer,
 
@@ -52,6 +56,8 @@ from .services import (
     delete_variant,
 
     import_products,
+
+    matching_products,
 
     sales_channels_for,
 
@@ -333,9 +339,20 @@ class VariantViewSet(StoreScopedViewSet):
 
 class CollectionViewSet(StoreScopedViewSet):
 
+    """
+    /api/v1/catalog/collections/           list, create
+    /api/v1/catalog/collections/<id>/      retrieve, update, delete
+    /api/v1/catalog/collections/preview/   POST {rules, match, excluded_products} -> products an
+                                           automated collection with these (unsaved) rules would hold
+    """
+
     permission_resource = "products"
+    action_permissions = {"preview": "products.view"}
     queryset = Collection.objects.order_by("name")
     serializer_class = CollectionSerializer
+
+    # Most products the preview returns
+    PREVIEW_LIMIT = 250
 
     def get_queryset(self):
         from django.db.models import Count
@@ -346,8 +363,34 @@ class CollectionViewSet(StoreScopedViewSet):
                 products_count_annotated=Count("product_collections", distinct=True),
                 sales_channels_count_annotated=Count("collection_sales_channels", distinct=True),
             )
-            .prefetch_related("collection_sales_channels__sales_channel")
+            .prefetch_related("collection_sales_channels__sales_channel", "rules", "product_collections")
         )
+
+    def perform_destroy(self, instance):
+        # Its product links and rules go with it; the products themselves stay
+        with transaction.atomic():
+            instance.product_collections.all().delete()
+            super().perform_destroy(instance)
+
+    @action(detail=False, methods=["post"])
+    def preview(self, request):
+        rules = CollectionRuleSerializer(data=request.data.get("rules") or [], many=True)
+        rules.is_valid(raise_exception=True)
+        match = "any" if request.data.get("match") == "any" else "all"
+        excluded = request.data.get("excluded_products") or []
+        if not isinstance(excluded, list):
+            raise ValidationError({"excluded_products": "Send a list of product ids."})
+        try:
+            excluded = [str(uuid.UUID(str(pk))) for pk in excluded]
+        except ValueError:
+            raise ValidationError({"excluded_products": "Every id must be a valid product id."})
+
+        matches = matching_products(request.store, rules.validated_data, match, excluded)
+        products = ProductViewSet.queryset.filter(pk__in=matches.values("pk"))
+        return Response({
+            "count": products.count(),
+            "products": ProductSerializer(products[:self.PREVIEW_LIMIT], many=True).data,
+        })
 
 
 

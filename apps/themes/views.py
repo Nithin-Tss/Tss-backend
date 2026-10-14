@@ -21,8 +21,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.catalog.models import Collection
-from apps.catalog.services import published_products
+from apps.catalog.services import published_collections, published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from django.contrib.auth import get_user_model
@@ -842,8 +841,9 @@ def storefront_collection(
     store,
     params,
     collection_id=None,
+    handle=None,
 ):
-    if collection_id is None:
+    if collection_id is None and handle is None:
         return render_page(
             store,
             "collection",
@@ -854,11 +854,9 @@ def storefront_collection(
             **_listing(params),
         )
 
-    collection = get_object_or_404(
-        Collection,
-        store=store,
-        pk=collection_id,
-    )
+    # Draft collections, and ones off the Online Store, are not found
+    lookup = {"pk": collection_id} if collection_id is not None else {"handle": handle}
+    collection = get_object_or_404(published_collections(store), **lookup)
 
     return render_page(
         store,

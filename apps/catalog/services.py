@@ -1,7 +1,9 @@
+import threading
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
-from django.db.models import Exists, OuterRef, PROTECT, ProtectedError
+from django.db import connection, transaction
+from django.db.models import Exists, OuterRef, PROTECT, ProtectedError, Q, Sum
+from django.db.models.functions import Coalesce
 from rest_framework.exceptions import ValidationError
 
 from apps.inventory.services import default_location, set_available
@@ -10,6 +12,7 @@ from .models import (
     EXTRA_FIELDS,
     Category,
     Collection,
+    CollectionSalesChannel,
     Product,
     ProductCollection,
     ProductImage,
@@ -18,6 +21,7 @@ from .models import (
     ProductVariant,
     SalesChannel,
     Tag,
+    unique_handle,
 )
 
 ACTIVE = "active"
@@ -81,8 +85,139 @@ def check_skus(store, skus, exclude_product=None, exclude_variant=None, allowed_
 
 
 def _named(model, store, name, field="name"):
-    obj, _ = model.objects.get_or_create(store=store, **{field: name})
+    # Collection names may repeat (their handles are unique): use the first one
+    obj = model.objects.filter(store=store, **{field: name}).order_by("pk").first()
+    if obj is None:
+        obj = model.objects.create(store=store, **{field: name})
+        if model is Collection:
+            _put_on_online_store([obj])
     return obj
+
+
+def _put_on_online_store(collections):
+    """New collections made from the product form or an import show on the store, like products do."""
+    online = online_channels(collections[0].store) if collections else []
+    CollectionSalesChannel.objects.bulk_create(
+        [CollectionSalesChannel(collection=c, sales_channel=ch) for c in collections for ch in online],
+        ignore_conflicts=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Collections. A manual collection holds the products picked for it; an
+# automated one holds every product matching its rules, refreshed whenever a
+# product, variant, tag or stock level changes (see signals.py). Both keep
+# their products in collection_products (ProductCollection), so the store and
+# the product form read them the same way.
+# ---------------------------------------------------------------------------
+
+# field: (kind, label). Text rules ignore upper/lower case.
+RULE_FIELDS = {
+    "product_category": ("text", "Product category"),
+    "tag": ("text", "Tag"),
+    "vendor": ("text", "Vendor"),
+    "product_type": ("text", "Product type"),
+    "price": ("number", "Price"),
+    "inventory_stock": ("number", "Inventory stock"),
+    "status": ("text", "Status"),
+}
+RULE_OPERATORS = {
+    "text": ("equals", "not_equals", "contains"),
+    "number": ("equals", "not_equals", "greater_than", "less_than"),
+}
+_TEXT_PATHS = {
+    "product_category": "category__name",
+    "tag": "product_tags__tag__name",
+    "vendor": "vendor",
+    "product_type": "product_type",
+    "status": "status",
+}
+_NUMBER_LOOKUPS = {"equals": "exact", "greater_than": "gt", "less_than": "lt"}
+
+
+def _rule_q(store, field, operator, value):
+    """Q for one rule. Each rule is its own subquery, so "tag = A and tag = B" means both tags."""
+    base = Product.objects.filter(store=store)
+    negate = operator == "not_equals"
+    if negate:
+        operator = "equals"
+
+    if field in _TEXT_PATHS:
+        lookup = "icontains" if operator == "contains" else "iexact"
+        matching = base.filter(**{f"{_TEXT_PATHS[field]}__{lookup}": value.strip()})
+    else:
+        number = Decimal(str(value))
+        lookup = _NUMBER_LOOKUPS[operator]
+        if field == "price":
+            matching = base.filter(**{f"variants__price__{lookup}": number})
+        else:  # inventory_stock: available over every variant and location
+            matching = base.annotate(
+                stock=Coalesce(Sum("variants__inventory_items__available"), 0)
+            ).filter(**{f"stock__{lookup}": number})
+
+    q = Q(pk__in=matching.values("pk"))
+    return ~q if negate else q
+
+
+def matching_products(store, rules, match="all", excluded=()):
+    """The store's products matching `rules` ([{field, operator, value}]); none when there are no rules."""
+    if not rules:
+        return Product.objects.none()
+    combined = None
+    for rule in rules:
+        q = _rule_q(store, rule["field"], rule["operator"], rule["value"])
+        combined = q if combined is None else (combined | q if match == "any" else combined & q)
+    return Product.objects.filter(store=store).filter(combined).exclude(pk__in=list(excluded))
+
+
+def _rules_of(collection):
+    return [{"field": r.field, "operator": r.operator, "value": r.value} for r in collection.rules.all()]
+
+
+def sync_collection(collection, product_ids=None):
+    """Make an automated collection's products match its rules (only `product_ids`, when given)."""
+    if collection.type != Collection.AUTOMATED:
+        return
+    wanted = matching_products(collection.store_id, _rules_of(collection), collection.match, collection.excluded_products)
+    current = ProductCollection.objects.filter(collection=collection)
+    if product_ids is not None:
+        wanted = wanted.filter(pk__in=product_ids)
+        current = current.filter(product_id__in=product_ids)
+    wanted = set(wanted.values_list("pk", flat=True))
+    have = set(current.values_list("product_id", flat=True))
+
+    if have - wanted:
+        ProductCollection.objects.filter(collection=collection, product_id__in=have - wanted).delete()
+    ProductCollection.objects.bulk_create(
+        [ProductCollection(collection=collection, product_id=pk) for pk in wanted - have], ignore_conflicts=True,
+    )
+
+
+def refresh_automated_collections(store, product_ids=None):
+    """Re-check the store's automated collections, for `product_ids` only when given."""
+    for collection in Collection.objects.filter(store=store, type=Collection.AUTOMATED).prefetch_related("rules"):
+        sync_collection(collection, product_ids)
+
+
+def set_manual_products(collection, product_ids):
+    """A manual collection's products: exactly `product_ids` (the store's own products only)."""
+    keep = set(
+        Product.objects.filter(store=collection.store_id, pk__in=product_ids).values_list("pk", flat=True)
+    )
+    ProductCollection.objects.filter(collection=collection).exclude(product_id__in=keep).delete()
+    ProductCollection.objects.bulk_create(
+        [ProductCollection(collection=collection, product_id=pk) for pk in keep], ignore_conflicts=True,
+    )
+
+
+def published_collections(store):
+    """Collections a shopper may see: Active and on the Online Store. Drafts stay hidden."""
+    on_online_store = CollectionSalesChannel.objects.filter(collection=OuterRef("pk"), sales_channel__type=ONLINE)
+    return (
+        Collection.objects.filter(store=store, status=Collection.ACTIVE)
+        .filter(Exists(on_online_store))
+        .order_by("name")
+    )
 
 
 def published_products(store):
@@ -152,12 +287,12 @@ def save_product(store, data, product=None):
     product.save()
 
     if "collections" in data:
-        ProductCollection.objects.filter(product=product).delete()
+        # Only manual collections are picked here; automated ones follow their rules
+        ProductCollection.objects.filter(product=product, collection__type=Collection.MANUAL).delete()
         for name in {n.strip() for n in data["collections"] if n.strip()}:
-            ProductCollection.objects.create(
-                product=product,
-                collection=_named(Collection, store, name),
-            )
+            collection = _named(Collection, store, name)
+            if collection.type == Collection.MANUAL:
+                ProductCollection.objects.get_or_create(product=product, collection=collection)
 
     if "tags" in data:
         ProductTag.objects.filter(product=product).delete()
@@ -322,9 +457,17 @@ def delete_variant(variant):
 
 def _name_map(model, store, names):
     """Existing and newly created rows for `names`, in two queries."""
-    found = {o.name: o for o in model.objects.filter(store=store, name__in=names)}
+    found = {o.name: o for o in model.objects.filter(store=store, name__in=names).order_by("-pk")}
     missing = [model(store=store, name=n) for n in names if n not in found]
+    if model is Collection:
+        # bulk_create skips Collection.save(), which gives a handle
+        taken = set()
+        for c in missing:
+            c.handle = unique_handle(store, c.name, taken=taken)
+            taken.add(c.handle)
     model.objects.bulk_create(missing)
+    if model is Collection:
+        _put_on_online_store(missing)
     found.update({o.name: o for o in missing})
     return found
 
@@ -394,7 +537,8 @@ def import_products(store, rows):
             ProductVariant(product=product, sku=sku or None, price=_price(row.get("price")))
         )
         for name in {n.strip() for n in row.get("collections") or [] if n.strip()}:
-            product_collections.append(ProductCollection(product=product, collection=collections[name]))
+            if collections[name].type == Collection.MANUAL:
+                product_collections.append(ProductCollection(product=product, collection=collections[name]))
         for name in {n.strip() for n in row.get("tags") or [] if n.strip()}:
             product_tags.append(ProductTag(product=product, tag=tags[name]))
 
@@ -414,4 +558,67 @@ def import_products(store, rows):
     for variant, (row, _) in zip(variants, fresh):
         set_available(variant, row.get("location") or fallback, row.get("quantity") or 0)
 
+    # bulk_create sends no signals: put the new products in the automated collections they match
+    refresh_automated_collections(store, [p.pk for p in products])
+
     return len(products), len(rows) - len(products)
+
+
+# ---------------------------------------------------------------------------
+# Automated collections follow their rules: when a product, its variants
+# (price), tags or stock change, the products touched are re-checked once the
+# change is committed. Changes inside one transaction (a product form save) are
+# checked together, once. Connected in CatalogConfig.ready().
+# bulk_create sends no signals: import_products refreshes on its own.
+# ---------------------------------------------------------------------------
+
+_pending_refresh = threading.local()
+
+
+def _flush_refresh():
+    pending, _pending_refresh.ids = getattr(_pending_refresh, "ids", set()), set()
+    by_store = {}
+    for store_id, pk in Product.objects.filter(pk__in=pending).values_list("store_id", "pk"):
+        by_store.setdefault(store_id, []).append(pk)
+    for store_id, ids in by_store.items():
+        refresh_automated_collections(store_id, ids)
+
+
+def queue_collection_refresh(product_id):
+    if product_id is None:
+        return
+    # One check per transaction (scheduled again when a rollback dropped the earlier one)
+    if not any(item[1] is _flush_refresh for item in connection.run_on_commit):
+        _pending_refresh.ids = {product_id}
+        transaction.on_commit(_flush_refresh)
+    else:
+        _pending_refresh.ids.add(product_id)
+
+
+def _product_saved(sender, instance, raw=False, **kwargs):
+    if not raw:
+        queue_collection_refresh(instance.pk)
+
+
+def _product_part_changed(sender, instance, raw=False, **kwargs):
+    if not raw:
+        queue_collection_refresh(instance.product_id)
+
+
+def _stock_changed(sender, instance, raw=False, **kwargs):
+    if not raw:
+        queue_collection_refresh(
+            ProductVariant.objects.filter(pk=instance.variant_id).values_list("product_id", flat=True).first()
+        )
+
+
+def connect_collection_signals():
+    from django.db.models.signals import post_delete, post_save
+
+    from apps.inventory.models import InventoryItem
+
+    post_save.connect(_product_saved, sender=Product, dispatch_uid="collections-product")
+    for model in (ProductVariant, ProductTag):
+        post_save.connect(_product_part_changed, sender=model, dispatch_uid=f"collections-{model.__name__}-save")
+        post_delete.connect(_product_part_changed, sender=model, dispatch_uid=f"collections-{model.__name__}-delete")
+    post_save.connect(_stock_changed, sender=InventoryItem, dispatch_uid="collections-stock")

@@ -1,11 +1,20 @@
+from decimal import Decimal, InvalidOperation
+
+from django.db import transaction
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from apps.core.viewsets import StoreScopedSerializerMixin
 
 from apps.inventory.models import Location
 
-from .models import EXTRA_FIELDS, Category, Collection, Product, ProductVariant, SalesChannel
-from .services import STATUSES, THEME_TEMPLATES, check_skus
+from .models import (
+    EXTRA_FIELDS, RESERVED_HANDLES, Category, Collection, CollectionRule, Product, ProductVariant, SalesChannel,
+    unique_handle,
+)
+from .services import (
+    RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_skus, set_manual_products, sync_collection,
+)
 
 
 class VariantInputSerializer(serializers.Serializer):
@@ -204,7 +213,43 @@ class SalesChannelSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "type"]
 
 
+class CollectionRuleSerializer(serializers.Serializer):
+    """One condition of an automated collection: {field, operator, value}."""
+
+    field = serializers.ChoiceField(choices=list(RULE_FIELDS))
+    operator = serializers.CharField(max_length=20)
+    value = serializers.CharField(max_length=255)
+
+    def validate(self, data):
+        kind, label = RULE_FIELDS[data["field"]]
+        if data["operator"] not in RULE_OPERATORS[kind]:
+            raise serializers.ValidationError({"operator": f"{label} can't use this comparison."})
+        if kind == "number":
+            try:
+                number = Decimal(data["value"])
+            except InvalidOperation:
+                raise serializers.ValidationError({"value": f"{label} must be a number."})
+            if not number.is_finite():
+                raise serializers.ValidationError({"value": f"{label} must be a number."})
+        return data
+
+
 class CollectionSerializer(serializers.ModelSerializer):
+    """
+    A collection with its rules (automated) or products (manual).
+
+    products: ids of a manual collection's products (read: the products it holds now).
+    sales_channels: channel ids; a new collection without them goes on the Online Store.
+    """
+
+    name = serializers.CharField(max_length=255)
+    handle = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    type = serializers.ChoiceField(choices=Collection.TYPES, required=False)
+    status = serializers.ChoiceField(choices=Collection.STATUSES, required=False)
+    match = serializers.ChoiceField(choices=("all", "any"), required=False)
+    rules = CollectionRuleSerializer(many=True, required=False)
+    products = serializers.ListField(child=serializers.UUIDField(), required=False, write_only=True, max_length=5000)
+    excluded_products = serializers.ListField(child=serializers.UUIDField(), required=False, max_length=5000)
     products_count = serializers.SerializerMethodField()
     sales_channels = serializers.SerializerMethodField()
     sales_channels_count = serializers.SerializerMethodField()
@@ -214,9 +259,15 @@ class CollectionSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "handle",
+            "type",
+            "status",
             "description",
             "image_url",
-            "conditions",
+            "match",
+            "rules",
+            "products",
+            "excluded_products",
             "theme_template",
             "seo_title",
             "seo_description",
@@ -248,18 +299,84 @@ class CollectionSerializer(serializers.ModelSerializer):
             for c in channels
         ]
 
+    def to_representation(self, obj):
+        data = super().to_representation(obj)
+        data["products"] = [str(pc.product_id) for pc in obj.product_collections.all()]
+        return data
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Title is required.")
+        return value
+
+    def validate_handle(self, value):
+        return slugify(value)[:255].strip("-")
+
+    def validate_excluded_products(self, value):
+        return [str(pk) for pk in dict.fromkeys(value)]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        store = getattr(request, "store", None) or getattr(self.instance, "store", None)
+        current = self.instance
+
+        # Handle: typed by the owner, or made from the title; unique in the store
+        if attrs.get("handle"):
+            handle = attrs["handle"]
+            if handle in RESERVED_HANDLES:
+                raise serializers.ValidationError({"handle": f'"{handle}" is reserved. Choose another URL handle.'})
+            taken = Collection.objects.filter(store=store, handle=handle)
+            if current is not None:
+                taken = taken.exclude(pk=current.pk)
+            if taken.exists():
+                raise serializers.ValidationError({"handle": "Another collection already uses this URL handle."})
+        elif "handle" in attrs or current is None:
+            name = attrs.get("name") or (current.name if current else "")
+            attrs["handle"] = unique_handle(store, name, exclude_pk=current.pk if current else None)
+
+        kind = attrs.get("type", current.type if current else Collection.MANUAL)
+        if kind == Collection.AUTOMATED:
+            has_rules = bool(attrs["rules"]) if "rules" in attrs else bool(current and current.rules.exists())
+            if not has_rules:
+                raise serializers.ValidationError({"rules": "Add at least one condition."})
+        return attrs
+
+    @transaction.atomic
     def create(self, validated_data):
+        rules, products = validated_data.pop("rules", None), validated_data.pop("products", None)
         sales_channels_data = self.initial_data.get("sales_channels", None)
         instance = super().create(validated_data)
         self._sync_sales_channels(instance, sales_channels_data, creating=True)
+        self._save_items(instance, rules, products)
         return instance
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        rules, products = validated_data.pop("rules", None), validated_data.pop("products", None)
         sales_channels_data = self.initial_data.get("sales_channels", None)
         instance = super().update(instance, validated_data)
         if sales_channels_data is not None:
             self._sync_sales_channels(instance, sales_channels_data, creating=False)
+        self._save_items(instance, rules, products)
         return instance
+
+    def _save_items(self, instance, rules, products):
+        if rules is not None:
+            instance.rules.all().delete()
+            CollectionRule.objects.bulk_create([
+                CollectionRule(store=instance.store, collection=instance, position=i, **rule)
+                for i, rule in enumerate(rules)
+            ])
+        # Counts and prefetched rows read before this save are out of date now
+        instance._prefetched_objects_cache = {}
+        for attr in ("products_count_annotated", "sales_channels_count_annotated"):
+            instance.__dict__.pop(attr, None)
+
+        if instance.type == Collection.AUTOMATED:
+            sync_collection(instance)
+        elif products is not None:
+            set_manual_products(instance, products)
 
     def _sync_sales_channels(self, instance, sales_channels_data, creating=False):
         import uuid

@@ -34,7 +34,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 5
+STARTER_REVISION = 6
 STARTER_UPGRADES = {
     "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
     "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
@@ -56,7 +56,11 @@ STARTER_UPGRADES = {
         "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
     },
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
-    "sections/main-collection.liquid": {"80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5"},
+    # Revision 6: the collection's image and description above its products
+    "sections/main-collection.liquid": {
+        "80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5",
+        "878a1da3a5ee2d1bd4e8d09dfd5c44f2509a75905e0177782b3e1f06ca018567",
+    },
 }
 
 

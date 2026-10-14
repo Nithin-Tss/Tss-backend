@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils.text import slugify
 
 from apps.tenancy.models import Store
 
@@ -243,7 +244,35 @@ class ProductImage(models.Model):
         return self.url
 
 
+def handle_base(title):
+    """A URL handle from a title: "Summer Sale!" -> "summer-sale"."""
+    return slugify(title or "")[:200].strip("-") or "collection"
+
+
+def unique_handle(store, title, exclude_pk=None, taken=()):
+    """handle_base(title), with -2, -3, ... added while the store already uses it."""
+    base = handle_base(title)
+    used = set(Collection.objects.filter(store=store, handle__startswith=base)
+               .exclude(pk=exclude_pk).values_list("handle", flat=True)) | set(taken)
+    used.update(RESERVED_HANDLES)
+    handle, n = base, 2
+    while handle in used:
+        handle, n = f"{base}-{n}", n + 1
+    return handle
+
+
+# /collections/all is the all-products page
+RESERVED_HANDLES = {"all"}
+
+
 class Collection(models.Model):
+    MANUAL = "manual"        # products picked one by one (collection_products)
+    AUTOMATED = "automated"  # products matching its rules (collection_rules), kept up to date
+    TYPES = (MANUAL, AUTOMATED)
+    ACTIVE = "active"
+    DRAFT = "draft"          # hidden from the store
+    STATUSES = (ACTIVE, DRAFT)
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -257,9 +286,19 @@ class Collection(models.Model):
         related_name="collections",
     )
 
+    # The collection's title
     name = models.CharField(max_length=255)
     description = models.TextField(default="", blank=True)
     image_url = models.CharField(max_length=500, default="", blank=True)
+    # Its address on the store: /collections/<handle>
+    handle = models.SlugField(max_length=255, blank=True, default="", allow_unicode=False)
+    type = models.CharField(max_length=20, default=MANUAL)
+    status = models.CharField(max_length=20, default=ACTIVE)
+    # Automated: a product must match "all" rules, or "any" one of them
+    match = models.CharField(max_length=10, default="all")
+    # Automated: product ids kept out even when they match ("Exclude")
+    excluded_products = models.JSONField(default=list, blank=True)
+    # Unused; from the first version of the Add collection page
     conditions = models.JSONField(default=list, blank=True)
     theme_template = models.CharField(max_length=100, default="Default collection", blank=True)
     seo_title = models.CharField(max_length=255, default="", blank=True)
@@ -272,9 +311,41 @@ class Collection(models.Model):
         db_table = '"catalog"."collections"'
         verbose_name = "Collection"
         verbose_name_plural = "Collections"
+        constraints = [
+            models.UniqueConstraint(fields=["store", "handle"], name="uq_collection_store_handle"),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Collections made elsewhere (the product form, imports) get a handle from their name
+        if not self.handle:
+            self.handle = unique_handle(self.store, self.name, exclude_pk=self.pk)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
+
+
+class CollectionRule(models.Model):
+    """One condition of an automated collection, e.g. Tag / is equal to / Summer."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="collection_rules")
+    collection = models.ForeignKey(
+        Collection, on_delete=models.CASCADE, db_column="collection_id", related_name="rules",
+    )
+    field = models.CharField(max_length=40)
+    operator = models.CharField(max_length=20)
+    value = models.CharField(max_length=255)
+    position = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = '"catalog"."collection_rules"'
+        ordering = ["position"]
+        verbose_name = "Collection rule"
+        verbose_name_plural = "Collection rules"
+
+    def __str__(self):
+        return f"{self.field} {self.operator} {self.value}"
 
 
 class ProductCollection(models.Model):
