@@ -76,15 +76,35 @@ SYNCED_SECTIONS = {
         "wrapper": True, "context": (), "position": "bottom",
     },
 }
-PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_SECTIONS.items()}
+# Synced page templates: the file lists the page's sections, one {% section %} line each, in
+# order; the customizer's sections list (StoreTheme.custom_data["templates"][page]) follows it,
+# and the other way round. Values stay in custom_data, under the section's stable id.
+#   originals  SHA-256 of the starter's own versions of the file ({{ sections }}, LF and CRLF):
+#              an untouched one is turned into section lines once; an edited one keeps working as it is
+SYNCED_TEMPLATES = {
+    "index": {
+        "path": "templates/index.liquid", "label": "Home page", "page": "index",
+        "originals": {
+            "743f9ab8384353a8018ae18a1f9309db1b0a60c88b1b87f6337b5282910cf7f6",  # LF (2df94aa)
+            "c0a55f7817875cd0ca2ef0fdf2aed147f6d75eea3ad9fe285a360cb7b66a39ec",  # CRLF
+        },
+    },
+}
+
+# Everything that syncs with the customizer, by name: one system for history, events, timings
+SYNCED_FILES = {
+    **{name: {**config, "kind": "section"} for name, config in SYNCED_SECTIONS.items()},
+    **{name: {**config, "kind": "template"} for name, config in SYNCED_TEMPLATES.items()},
+}
+PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 2: older starter snippets and CRLF line endings count as untouched
 ORIGINALS_REVISION = 2
 
 
 def is_original_snippet(name, content):
-    """True when `content` is one of the starter's own versions of the section's snippet (never edited)."""
-    originals = SYNCED_SECTIONS[name]["originals"]
+    """True when `content` is one of the starter's own versions of the file it replaces (never edited)."""
+    originals = SYNCED_FILES[name]["originals"]
     for text in (content, content.replace("\r\n", "\n")):
         if hashlib.sha256(text.encode("utf-8")).hexdigest() in originals:
             return True
@@ -92,7 +112,7 @@ def is_original_snippet(name, content):
 
 # What the customizer and the code editor time ("change made -> preview updated"), per section
 TIMING_STEPS = ("sidebar -> preview", "code save -> preview", "sidebar -> code", "code save -> blocks")
-TIMING_KINDS = {f"{name}: {step}" for name in SYNCED_SECTIONS for step in TIMING_STEPS}
+TIMING_KINDS = {f"{name}: {step}" for name in SYNCED_FILES for step in TIMING_STEPS}
 
 HISTORY_LIMIT = 20
 # Quick edits from the customizer (typing) update the last saved version instead of adding new ones
@@ -522,12 +542,12 @@ def record_version(theme, name, previous_content, source, now=None):
     now = now or time.time()
     state = _state(theme, name)
     history = list(state.get("history") or [])
-    last = history[0] if history else None
-    if previous_content is not None and not (
-        source == "customizer" and last and last.get("source") == "customizer" and now - last.get("saved_at", 0) < COALESCE_SECONDS
-    ):
+    # Quick customizer saves replace the customizer's own version instead of adding one each -
+    # never a version someone else made (Edit code, a restore): that one is always kept
+    replacing_own = state.get("source") == "customizer" and now - (state.get("updated_at") or 0) < COALESCE_SECONDS
+    if previous_content is not None and not (source == "customizer" and replacing_own and history):
         history.insert(0, {"content": previous_content, "saved_at": now, "source": state.get("source") or "starter"})
-    state = {"version": state.get("version", 0) + 1, "history": history[:HISTORY_LIMIT], "updated_at": now, "source": source}
+    state = {**state, "version": state.get("version", 0) + 1, "history": history[:HISTORY_LIMIT], "updated_at": now, "source": source}
     data = dict(theme.theme_data or {})
     data["section_sync"] = {**(data.get("section_sync") or {}), name: state}
     theme.theme_data = data
@@ -717,3 +737,169 @@ class Timings:
 
 
 TIMINGS = Timings()
+
+
+# ======================================================================= synced page templates
+#
+#   {% section 'slideshow', type: 'slideshow' %}
+#   {% section 'about-ab12', type: 'rich-text', hidden: true %}
+#
+# One line per section of the page, in order. The id is the section's stable id (its values
+# stay with it in custom_data); type creates a new section when the id is new. Lines inside
+# {% comment %} / {% raw %} don't count. Markup around the lines is kept.
+
+_TAG = re.compile(r"\{%-?\s*section\s+(?P<q>['\"])(?P<id>[^'\"\n]*)(?P=q)(?P<args>[^%]*?)-?%\}")
+_TAG_START = re.compile(r"\{%-?\s*section\b")
+_ARG = re.compile(r"\s*,\s*(\w+)\s*:\s*(?:'([^']*)'|\"([^\"]*)\"|(\w+))")
+_LEGACY = re.compile(r"\{\{-?\s*sections\s*-?\}\}")
+_IGNORED = re.compile(
+    r"\{%-?\s*comment\s*-?%\}.*?\{%-?\s*endcomment\s*-?%\}|\{%-?\s*raw\s*-?%\}.*?\{%-?\s*endraw\s*-?%\}", re.S
+)
+_SECTION_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+SLOT = "<!--tss-section-slot-->"
+MAX_REMOVED = 50
+
+
+def _masked(content):
+    """The content with comments and raw blocks blanked out (same length, same lines)."""
+    return _IGNORED.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), content)
+
+
+def is_legacy_template(content):
+    """A template from before the section lines: {{ sections }} shows every section, in the customizer's order."""
+    return bool(_LEGACY.search(_masked(content)))
+
+
+def template_tags(content):
+    """The section lines, in order: [{id, type, hidden, start, end, line}]. Raises SectionCodeError."""
+    masked = _masked(content)
+    tags, seen = [], {}
+    found = {m.start() for m in _TAG.finditer(masked)}
+    for start in (m.start() for m in _TAG_START.finditer(masked)):
+        if start not in found:
+            raise SectionCodeError(
+                "Could not read this section line. Write it as {% section 'my-id', type: 'rich-text' %}.", line_of(content, start))
+    for m in _TAG.finditer(masked):
+        line = line_of(content, m.start())
+        sid, args, pos, opts = m.group("id"), m.group("args"), 0, {}
+        while args[pos:].strip():
+            arg = _ARG.match(args, pos)
+            if not arg:
+                raise SectionCodeError(f'Could not read "{args[pos:].strip()}". Options are written as , type: \'rich-text\' or , hidden: true.', line)
+            key, value = arg.group(1), next(v for v in arg.groups()[1:] if v is not None)
+            if key not in ("type", "hidden"):
+                raise SectionCodeError(f'Unknown option "{key}". A section line takes type and hidden.', line)
+            opts[key] = value
+            pos = arg.end()
+        if not _SECTION_ID.match(sid):
+            raise SectionCodeError(f'"{sid}" is not a valid section id: use lower-case letters, numbers, - and _ (up to 40).', line)
+        if sid in seen:
+            raise SectionCodeError(f'The section "{sid}" is listed twice (first on line {seen[sid]}).', line)
+        if opts.get("hidden", "false") not in ("true", "false"):
+            raise SectionCodeError('hidden must be true or false.', line)
+        seen[sid] = line
+        tags.append({"id": sid, "type": opts.get("type"), "hidden": opts.get("hidden") == "true",
+                     "start": m.start(), "end": m.end(), "line": line})
+    return tags
+
+
+def template_markup(content, tags):
+    """The template with each section line replaced by a slot the renderer fills (lines kept)."""
+    out, last = [], 0
+    for tag in tags:
+        out += [content[last:tag["start"]], SLOT + "\n" * content.count("\n", tag["start"], tag["end"])]
+        last = tag["end"]
+    return "".join(out) + content[last:]
+
+
+def parse_template(content, path="template"):
+    """The section lines of a synced template; its Liquid must compile. Raises SectionCodeError."""
+    tags = template_tags(content)
+    try:
+        Environment().from_string(template_markup(content, tags))
+    except LiquidError as error:
+        token = getattr(error, "token", None)
+        line = line_of(content, token.start_index) if token is not None and token.start_index is not None else None
+        raise SectionCodeError(f"Liquid error: {getattr(error, 'message', None) or error}", line)
+    return tags
+
+
+def tag_text(entry):
+    hidden = ", hidden: true" if entry.get("hidden") else ""
+    return f"{{% section '{entry['id']}', type: '{entry['type']}'{hidden} %}}"
+
+
+def template_entries(template):
+    """[{id, type, hidden}] of a page's sections, in order."""
+    return [{"id": sid, "type": template["sections"][sid]["type"], "hidden": bool(template["sections"][sid].get("hidden"))}
+            for sid in template["order"]]
+
+
+def write_template(content, entries):
+    """
+    The template with its section lines in `entries` order. The lines take the places of the
+    current ones (so markup between them stays put): only the lines that differ change; extra
+    lines go after the last one, lines no longer needed are removed. Unchanged lines keep
+    their exact text.
+    """
+    nl = "\r\n" if "\r\n" in content else "\n"
+    tags = template_tags(content)
+    by_id = {t["id"]: t for t in tags}
+    texts = []
+    for entry in entries:
+        tag = by_id.get(entry["id"])
+        same = tag and tag["hidden"] == entry["hidden"] and tag["type"] in (None, entry["type"])
+        texts.append(content[tag["start"]:tag["end"]] if same else tag_text(entry))
+
+    def line_span(tag):
+        begin = content.rfind("\n", 0, tag["start"]) + 1
+        end = content.find("\n", tag["end"])
+        return begin, (len(content) if end < 0 else end + 1)
+
+    edits = []
+    for i, tag in enumerate(tags):
+        if i < len(texts):
+            edits.append((tag["start"], tag["end"], texts[i]))
+        else:
+            begin, end = line_span(tag)
+            whole = not content[begin:tag["start"]].strip() and not content[tag["end"]:end].strip()
+            edits.append((begin, end, "") if whole else (tag["start"], tag["end"], ""))
+    extra = texts[len(tags):]
+    if extra:
+        if tags:
+            begin, end = line_span(tags[-1])
+            indent = content[begin:tags[-1]["start"]]
+            lead = "" if content[:end].endswith("\n") else nl
+            edits.append((end, end, lead + "".join(indent + text + nl for text in extra)))
+        else:
+            lead = "" if not content or content.endswith("\n") else nl
+            edits.append((len(content), len(content), lead + "".join(text + nl for text in extra)))
+    for start, end, text in sorted(edits, key=lambda e: e[0], reverse=True):
+        content = content[:start] + text + content[end:]
+    return content
+
+
+def template_from_entries(entries, nl="\n"):
+    """A synced template made from a page's sections (an untouched {{ sections }} template is turned into this)."""
+    head = [
+        "{%- comment -%}",
+        "  Home page: one line per section, in the order the page shows them. The customizer's",
+        "  sections list follows this file, and the other way round: move, add or remove a line here,",
+        "  or drag sections in the customizer. A line names the section's id (its settings stay with",
+        "  it) and its type; a new id with a type (e.g. type: 'rich-text') adds a section, and",
+        "  hidden: true keeps one but hides it. Add your own markup around the lines if you need to.",
+        "{%- endcomment -%}",
+    ]
+    return nl.join(head) + nl + "".join(tag_text(e) + nl for e in entries)
+
+
+def removed_sections(theme, name):
+    """Sections taken off a synced template, by id: putting their line back brings their values back."""
+    return dict(_state(theme, name).get("removed") or {})
+
+
+def set_removed_sections(theme, name, removed):
+    data = dict(theme.theme_data or {})
+    state = {**_state(theme, name), "removed": dict(list(removed.items())[-MAX_REMOVED:])}
+    data["section_sync"] = {**(data.get("section_sync") or {}), name: state}
+    theme.theme_data = data

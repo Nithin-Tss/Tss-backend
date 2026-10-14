@@ -869,3 +869,273 @@ class BlogTest(StoreClientMixin, APITestCase):
         self.sign_up("other-blog@example.com", "Other Blog Store")
         self.ok("get", f"/api/v1/themes/posts/{post['id']}/", expect=404)
         self.assertEqual(self.ok("get", "/api/v1/themes/posts/"), [])
+
+
+class HomeTemplateSyncTest(StoreClientMixin, APITestCase):
+    """templates/index.liquid lists the Home page's sections; the customizer's list follows it, both ways."""
+
+    PATH = "templates/index.liquid"
+    timings = {"sidebar -> code + preview": [], "code save -> list + preview": []}
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("home@example.com", "Home Store")
+        # Three sections that are easy to find on the page
+        self.ok("put", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": ["alpha", "beta", "gamma"],
+            "sections": {sid: {"type": "rich-text", "settings": {"heading": sid.title()}}
+                         for sid in ("alpha", "beta", "gamma")},
+        }}})
+
+    # ---------------------------------------------------------------- helpers
+
+    def code(self):
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        return next(f["content"] for f in files if f["path"] == self.PATH)
+
+    def index(self):
+        return self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]
+
+    def lines(self, content=None):
+        return [t["id"] for t in sync.template_tags(content if content is not None else self.code())]
+
+    def home(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def page_order(self, html, names=("Alpha", "Beta", "Gamma", "Delta")):
+        found = [(html.find(f">{n}<"), n) for n in names if f">{n}<" in html]
+        return [n for _, n in sorted(found)]
+
+    def reorder(self, order, version=None):
+        started = time.perf_counter()
+        body = {"templates": {"index": {"order": order}}, "client": "test"}
+        if version is not None:
+            body["section_versions"] = {"index": version}
+        reply = self.ok("patch", "/api/v1/themes/settings/", body)
+        data = self.ok("get", "/api/v1/themes/settings/")
+        preview = self.ok("post", "/api/v1/themes/preview/", data)["html"]
+        self.timings["sidebar -> code + preview"].append((time.perf_counter() - started) * 1000)
+        return reply, preview
+
+    def save_code(self, content, expect=200, version=None):
+        started = time.perf_counter()
+        body = {"path": self.PATH, "content": content}
+        if version is not None:
+            body["base_version"] = version
+        r = self.client.post("/api/v1/themes/files/", body, format="json")
+        self.assertEqual(r.status_code, expect, r.content[:500])
+        if expect == 200:
+            self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))
+            self.timings["code save -> list + preview"].append((time.perf_counter() - started) * 1000)
+        return r.json()
+
+    def error_text(self, error, key):
+        value = error[key]
+        return str(value[0] if isinstance(value, list) else value)
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        for kind, values in cls.timings.items():
+            if values:
+                print(f"\n  [index sync] {kind}: average {sum(values) / len(values):.0f} ms, "
+                      f"slowest {max(values):.0f} ms ({len(values)} runs)")
+
+    # ---------------------------------------------------------------- both ways
+
+    def test_the_starter_template_becomes_section_lines(self):
+        code = self.code()
+        self.assertNotIn("{{ sections }}", code)
+        self.assertEqual(self.lines(code), ["alpha", "beta", "gamma"])
+        self.assertIn("{% section 'beta', type: 'rich-text' %}", code)
+        synced = self.ok("get", "/api/v1/themes/sections/")
+        self.assertEqual(synced["index"]["kind"], "template")
+        self.assertEqual(synced["index"]["template"]["order"], ["alpha", "beta", "gamma"])
+        # A new store's own default page was turned into lines too
+        _, other = self.sign_up("fresh@example.com", "Fresh Store")
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        fresh = next(f["content"] for f in files if f["path"] == self.PATH)
+        self.assertEqual(self.lines(fresh), ["slideshow", "featured", "carousel", "hero", "about"])
+
+    def test_sidebar_reorder_rewrites_only_the_section_lines(self):
+        before = self.code()
+        reply, preview = self.reorder(["gamma", "alpha", "beta"], version=self.ok("get", "/api/v1/themes/sections/")["index"]["version"])
+        self.assertIsNone(reply["templates"]["index"]["conflict"])
+        after = self.code()
+        self.assertEqual(self.lines(after), ["gamma", "alpha", "beta"])
+        changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
+        self.assertEqual(len(before.splitlines()), len(after.splitlines()))
+        self.assertEqual(len(changed), 3)  # the three section lines; the comment and everything else stay
+        self.assertTrue(all("{% section" in a and "{% section" in b for a, b in changed))
+        self.assertEqual(self.page_order(preview), ["Gamma", "Alpha", "Beta"])
+        self.assertEqual(self.page_order(self.home()), ["Gamma", "Alpha", "Beta"])
+
+    def test_code_reorder_rebuilds_the_sidebar_list(self):
+        code = self.code()
+        moved = code.replace("{% section 'alpha', type: 'rich-text' %}\n", "").replace(
+            "{% section 'gamma', type: 'rich-text' %}\n", "{% section 'gamma', type: 'rich-text' %}\n{% section 'alpha', type: 'rich-text' %}\n")
+        saved = self.save_code(moved)
+        self.assertEqual(saved["sync"]["template"]["order"], ["beta", "gamma", "alpha"])
+        self.assertEqual(self.index()["order"], ["beta", "gamma", "alpha"])
+        self.assertEqual(self.page_order(self.home()), ["Beta", "Gamma", "Alpha"])
+
+    def test_reordering_never_loses_values(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {"sections": {
+            "beta": {"type": "rich-text", "hidden": False, "settings": {"heading": "Beta", "text": "<p>Kept text</p>"},
+                     "blocks": [{"type": "button", "settings": {"label": "Kept button", "link": "/collections/all"}}]},
+        }}}})
+        self.reorder(["beta", "gamma", "alpha"])
+        self.save_code(self.code().replace("{% section 'beta', type: 'rich-text' %}\n", "") + "{% section 'beta', type: 'rich-text' %}\n")
+        beta = self.index()["sections"]["beta"]
+        self.assertEqual(self.index()["order"], ["gamma", "alpha", "beta"])
+        self.assertEqual(beta["settings"]["text"], "<p>Kept text</p>")
+        self.assertEqual([b["settings"]["label"] for b in beta["blocks"]], ["Kept button"])
+
+    def test_adding_removing_and_hiding_in_code(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {"sections": {
+            "gamma": {"type": "rich-text", "settings": {"heading": "Gamma", "text": "<p>Gamma text</p>"}},
+        }}}})
+        code = self.code()
+        # Add a new section (new id + type), remove gamma, hide beta
+        code = code.replace("{% section 'gamma', type: 'rich-text' %}\n", "{% section 'delta', type: 'rich-text' %}\n")
+        code = code.replace("{% section 'beta', type: 'rich-text' %}", "{% section 'beta', type: 'rich-text', hidden: true %}")
+        self.save_code(code)
+        index = self.index()
+        self.assertEqual(index["order"], ["alpha", "beta", "delta"])
+        self.assertTrue(index["sections"]["beta"]["hidden"])
+        self.assertNotIn("gamma", index["sections"])
+        self.assertEqual(index["sections"]["delta"]["type"], "rich-text")
+        home = self.home()
+        self.assertNotIn(">Beta<", home)
+        self.assertNotIn(">Gamma<", home)
+
+        # Putting gamma's line back (even without a type) brings its values back
+        self.save_code(self.code() + "{% section 'gamma' %}\n")
+        gamma = self.index()["sections"]["gamma"]
+        self.assertEqual((gamma["settings"]["heading"], gamma["settings"]["text"]), ("Gamma", "<p>Gamma text</p>"))
+
+    def test_sidebar_hide_add_and_remove_update_the_lines(self):
+        index = self.index()
+        sections = {"beta": dict(index["sections"]["beta"], hidden=True),
+                    "new-one": {"type": "hero", "settings": {}}, "gamma": None}
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": ["alpha", "beta", "new-one"], "sections": sections}}})
+        code = self.code()
+        self.assertEqual(self.lines(code), ["alpha", "beta", "new-one"])
+        self.assertIn("{% section 'beta', type: 'rich-text', hidden: true %}", code)
+        self.assertIn("{% section 'new-one', type: 'hero' %}", code)
+        self.assertNotIn("'gamma'", code)
+
+    def test_markup_around_the_lines_is_kept(self):
+        code = self.code().replace("{% section 'beta', type: 'rich-text' %}",
+                                   "<div class=\"home-band\">\n{% section 'beta', type: 'rich-text' %}\n</div>")
+        self.save_code(code)
+        self.reorder(["gamma", "beta", "alpha"])
+        after = self.code()
+        self.assertIn('<div class="home-band">', after)
+        self.assertEqual(self.lines(after), ["gamma", "beta", "alpha"])
+        home = self.home()
+        band = home[home.index('<div class="home-band">'):]
+        self.assertIn(">Beta<", band[:band.index("</div>\n") + 2000])
+        self.assertEqual(self.page_order(home), ["Gamma", "Beta", "Alpha"])
+
+    def test_unsaved_preview_shows_the_order_being_edited(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["templates"]["index"]["order"] = ["beta", "alpha", "gamma"]
+        preview = self.ok("post", "/api/v1/themes/preview/", data)["html"]
+        self.assertEqual(self.page_order(preview), ["Beta", "Alpha", "Gamma"])
+        self.assertEqual(self.lines(), ["alpha", "beta", "gamma"])  # nothing saved
+
+    def test_templates_json_save_updates_the_lines(self):
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        data = json.loads(next(f["content"] for f in files if f["path"] == "templates/index.json"))
+        data["order"] = ["beta", "gamma", "alpha"]
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/index.json", "content": json.dumps(data)})
+        self.assertEqual(self.lines(), ["beta", "gamma", "alpha"])
+
+    # ---------------------------------------------------------------- invalid code
+
+    def test_invalid_code_is_refused_with_its_line_and_nothing_changes(self):
+        good = self.code()
+        cases = [
+            (good + "{% section 'nope' %}\n", "there is no section \"nope\""),
+            (good + "{% section 'alpha' %}\n", "listed twice"),
+            (good + "{% section 'x1', type: 'main-product' %}\n", "can't be used on this page"),
+            (good + "{% section 'beta', type: 'hero' %}\n", "listed twice"),
+            (good.replace("{% section 'alpha', type: 'rich-text' %}", "{% section 'alpha', type: 'hero' %}"), "is a Rich text section"),
+            (good + "{% section 'Bad Id' %}\n", "not a valid section id"),
+            (good + "{% section 'x2', colour: 'red' %}\n", "Unknown option"),
+            (good + "{% if %}\n", "Liquid error"),
+        ]
+        for content, message in cases:
+            error = self.save_code(content, expect=400)
+            self.assertIn(message, self.error_text(error, "content"), content[-60:])
+            line = int(self.error_text(error, "line"))
+            self.assertGreater(line, 1)
+            self.assertIn(self.error_text(error, "content").split(":")[0], (f"Line {line}",))
+        self.assertEqual(self.code(), good)
+        self.assertEqual(self.index()["order"], ["alpha", "beta", "gamma"])
+        self.assertEqual(self.page_order(self.home()), ["Alpha", "Beta", "Gamma"])
+
+    # ---------------------------------------------------------------- safety
+
+    def test_each_store_has_its_own_template(self):
+        self.reorder(["gamma", "beta", "alpha"])
+        _, other = self.sign_up("other-home@example.com", "Other Home")
+        self.assertEqual(self.lines(), ["slideshow", "featured", "carousel", "hero", "about"])
+        self.assertEqual(self.index()["order"], ["slideshow", "featured", "carousel", "hero", "about"])
+
+    def test_history_restore_and_conflict(self):
+        version = self.ok("get", "/api/v1/themes/sections/")["index"]["version"]
+        # Edit code moves gamma first
+        code = self.code()
+        self.save_code(code.replace("{% section 'gamma', type: 'rich-text' %}\n", "").replace(
+            "{% section 'alpha'", "{% section 'gamma', type: 'rich-text' %}\n{% section 'alpha'"))
+        # The customizer still had the old version: its change wins, and it is told
+        reply, _ = self.reorder(["beta", "alpha", "gamma"], version=version)
+        self.assertIn("code editor changed the home page", reply["templates"]["index"]["conflict"])
+        self.assertEqual(self.lines(), ["beta", "alpha", "gamma"])
+
+        history = self.ok("get", "/api/v1/themes/sections/index/history/")["history"]
+        self.assertGreaterEqual(len(history), 2)
+        self.ok("post", "/api/v1/themes/sections/index/history/", {"index": 0})  # the code editor's version
+        self.assertEqual(self.lines(), ["gamma", "alpha", "beta"])
+        self.assertEqual(self.index()["order"], ["gamma", "alpha", "beta"])
+
+        for i in range(22):
+            self.reorder(["alpha", "beta", "gamma"] if i % 2 else ["gamma", "beta", "alpha"])
+            self.save_code(self.code() + f"{{%- comment -%}} v{i} {{%- endcomment -%}}\n")
+        self.assertEqual(len(self.ok("get", "/api/v1/themes/sections/index/history/")["history"]), sync.HISTORY_LIMIT)
+
+    def test_header_and_footer_stay_fixed_around_the_page(self):
+        home = self.home()
+        main = home.index("<main")
+        self.assertLess(home.index('<header class="site-header"'), main)
+        self.assertGreater(home.index('<footer class="site-footer"'), home.index("</main>"))
+        for name in self.page_order(home):
+            self.assertTrue(main < home.index(f">{name}<") < home.index("</main>"))
+        synced = self.ok("get", "/api/v1/themes/sections/")
+        self.assertEqual({synced["header"]["kind"], synced["footer"]["kind"]}, {"section"})
+        self.ok("post", "/api/v1/themes/sync-timings/", {"kind": "index: sidebar -> preview", "ms": 12}, expect=204)
+
+    def test_an_edited_old_template_keeps_working_unsynced(self):
+        from .models import ThemeFile
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        theme.files.filter(file_path=self.PATH).update(content='<div class="my-home">{{ sections }}</div>\n')
+        theme.theme_data = {**theme.theme_data, "synced_sections": {"footer": 2, "header": 2}}
+        theme.save()
+        get_store_theme(store)
+        self.assertEqual(ThemeFile.objects.get(theme=theme, file_path=self.PATH).content, '<div class="my-home">{{ sections }}</div>\n')
+        self.assertNotIn("index", self.ok("get", "/api/v1/themes/sections/"))
+        self.reorder(["gamma", "beta", "alpha"])
+        home = self.home()
+        self.assertIn('<div class="my-home">', home)
+        self.assertEqual(self.page_order(home), ["Gamma", "Beta", "Alpha"])
+        # Saving such a file is an ordinary save
+        self.save_code('<section class="mine">{{ sections }}</section>\n')
+        self.assertIn('<section class="mine">', self.home())
