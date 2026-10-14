@@ -1,5 +1,39 @@
-<footer class="site-footer">
-  <div class="page-width">
-    &copy; {{ 'now' | date: '%Y' }} {{ shop.name }}
+{%- capture footer_style -%}
+  {% if settings.footer_bg != blank %}background:{{ settings.footer_bg }};{% endif %}
+  {% if settings.footer_text_color != blank %}color:{{ settings.footer_text_color }};{% endif %}
+{%- endcapture -%}
+<footer class="site-footer" style="{{ footer_style | strip }}">
+  {%- assign show_links = true -%}
+  {%- if settings.footer_show_links == false -%}{%- assign show_links = false -%}{%- endif -%}
+  {%- if settings.footer_text != blank or social.size > 0 or show_links and links.size > 0 -%}
+    <div class="page-width site-footer__top">
+      {%- if settings.footer_text != blank -%}
+        <div class="site-footer__about">
+          <strong>{{ shop.name }}</strong>
+          <p>{{ settings.footer_text }}</p>
+        </div>
+      {%- endif -%}
+      {%- if show_links and links.size > 0 -%}
+        <nav class="site-footer__nav" aria-label="Footer">
+          {%- for link in links -%}
+            <a href="{{ link.url }}">{{ link.label }}</a>
+          {%- endfor -%}
+        </nav>
+      {%- endif -%}
+      {%- if social.size > 0 -%}
+        <div class="site-footer__social">
+          {%- for item in social -%}
+            <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.name }}</a>
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+    </div>
+  {%- endif -%}
+  <div class="page-width site-footer__legal">
+    {%- if settings.footer_copyright != blank -%}
+      {{ settings.footer_copyright }}
+    {%- else -%}
+      &copy; {{ 'now' | date: '%Y' }} {{ shop.name }}
+    {%- endif -%}
   </div>
 </footer>

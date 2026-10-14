@@ -38,7 +38,7 @@ from .services import (
     get_store_theme,
     rename_path,
     save_file,
-    theme_files,
+    code_files,
 )
 
 
@@ -58,7 +58,7 @@ class ThemeFilesView(StoreThemeView):
     """
 
     def get(self, request):
-        files = theme_files(self.store_theme())
+        files = code_files(self.store_theme())
 
         return Response({
             "store": str(request.store.store_id),

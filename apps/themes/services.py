@@ -8,13 +8,16 @@ store had installed - is copied into a private Theme row whose slug is
 Section settings (hero text, slides, ...) live in StoreTheme.custom_data.
 """
 import hashlib
+import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
 from rest_framework import exceptions
 
 from .models import StoreTheme, Theme, ThemeFile
+from .schemas import PAGES, resolve, validate_custom_data
 
 STARTER_DIR = Path(__file__).resolve().parent / "starter"
 STARTER_VERSION = "1.0.0"
@@ -34,7 +37,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 6
+STARTER_REVISION = 8
 STARTER_UPGRADES = {
     "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
     "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
@@ -54,6 +57,14 @@ STARTER_UPGRADES = {
     "sections/main-product.liquid": {
         "18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729",
         "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
+    },
+    # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
+    "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
+    "snippets/header.liquid": {"6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1"},
+    "snippets/footer.liquid": {"46998966bcd74dab088da530528ad25f6fac556a3cd7d2224bcdb728e6bf3573"},
+    "snippets/styles.liquid": {
+        "83a3d9accc2af4aa68a6a58ad84c8eb662acc3b6e422adb71458afc2d80b0079",
+        "1c26147431b1ab810a18a33cb68cbc8955a685afa106874eed0ff2775d143f8e",  # revision 8: centred/right-aligned slide and hero text
     },
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
@@ -173,7 +184,90 @@ def _upgrade_untouched_starter_files(theme):
 
 
 def theme_files(store_theme):
+    """The theme's Liquid files (what the renderer loads)."""
     return {f.file_path: f.content for f in store_theme.theme.files.order_by("file_path")}
+
+
+# ------------------------------------------------- settings as code
+#
+# The customizer's choices (store-wide settings, and each page's sections and
+# blocks) are also shown in the code editor as JSON files, like Shopify's
+# config/settings_data.json and templates/*.json. They are not stored as theme
+# files: they are generated from StoreTheme.custom_data when the file list is
+# read, and saving one validates it and writes it back to custom_data. So an
+# edit in the customizer shows up in the code editor, and an edit in the code
+# shows up in the customizer, from one source of truth.
+
+SETTINGS_FILE = "config/settings_data.json"
+TEMPLATE_FILES = {f"templates/{page}.json": page for page in PAGES}
+SETTINGS_FILES = (SETTINGS_FILE, *TEMPLATE_FILES)
+
+
+def _dump(value):
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+
+
+def settings_files(store_theme):
+    """{path: JSON text} of the customizer's settings, with defaults filled in."""
+    data = resolve(store_theme.custom_data)
+    files = {SETTINGS_FILE: _dump(data["settings"])}
+    for path, page in TEMPLATE_FILES.items():
+        files[path] = _dump(data["templates"][page])
+    return files
+
+
+def code_files(store_theme):
+    """Everything the code editor lists: the Liquid files plus the settings files."""
+    return {**theme_files(store_theme), **settings_files(store_theme)}
+
+
+def _settings_conflict(path):
+    """A path that is, or holds, a settings file: those can't be deleted, moved or replaced."""
+    path = path.strip("/")
+    if any(p == path or p.startswith(path + "/") for p in SETTINGS_FILES):
+        raise exceptions.ValidationError(
+            "Settings files are managed by the customizer. Edit what is inside them instead of deleting or renaming them."
+        )
+
+
+def _parse_json(path, content):
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as error:
+        raise exceptions.ValidationError(
+            {"content": f"{path} is not valid JSON: {error.msg} (line {error.lineno}, column {error.colno})."}
+        )
+
+
+def _save_settings_file(store_theme, path, content):
+    parsed = _parse_json(path, content)
+    if not isinstance(parsed, dict):
+        raise exceptions.ValidationError({"content": f"{path} must contain a JSON object."})
+
+    merged = resolve(store_theme.custom_data)
+    if path == SETTINGS_FILE:
+        merged["settings"] = parsed
+    else:
+        page = TEMPLATE_FILES[path]
+        if set(parsed) - {"order", "sections"}:
+            raise exceptions.ValidationError({"content": f"{path} may only contain \"order\" and \"sections\"."})
+        merged["templates"][page] = parsed
+
+    try:
+        store_theme.custom_data = validate_custom_data(merged)
+    except exceptions.ValidationError as error:
+        # Say which file the problem is in
+        raise exceptions.ValidationError({"content": f"{path}: " + " ".join(str(m) for m in _messages(error.detail))})
+    store_theme.save(update_fields=["custom_data", "updated_at"])
+    return SimpleNamespace(file_path=path, file_size=len(content.encode("utf-8")))
+
+
+def _messages(detail):
+    if isinstance(detail, dict):
+        return [m for value in detail.values() for m in _messages(value)]
+    if isinstance(detail, (list, tuple)):
+        return [m for value in detail for m in _messages(value)]
+    return [detail]
 
 
 # ---------------------------------------------------------------- files
@@ -218,6 +312,14 @@ def _new_file(theme, path, content):
 
 
 def save_file(store_theme, path, content):
+    if isinstance(path, str) and path.strip().strip("/") in SETTINGS_FILES:
+        path = path.strip().strip("/")
+        if not isinstance(content, str):
+            raise exceptions.ValidationError({"content": "Content must be text."})
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            raise exceptions.ValidationError({"content": "File is larger than 256 KB."})
+        return _save_settings_file(store_theme, path, content)
+
     path = clean_path(path)
 
     if not isinstance(content, str):
@@ -251,6 +353,8 @@ def _matching(theme, path):
 @transaction.atomic
 def delete_path(store_theme, path):
     path = (path or "").strip().strip("/")
+    if path:
+        _settings_conflict(path)
     files = _matching(store_theme.theme, path) if path else []
 
     if not files:
@@ -268,6 +372,8 @@ def delete_path(store_theme, path):
 def rename_path(store_theme, source, target):
     source = (source or "").strip().strip("/")
     theme = store_theme.theme
+    if source:
+        _settings_conflict(source)
     files = _matching(theme, source) if source else []
 
     if not files:

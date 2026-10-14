@@ -1,12 +1,36 @@
-<header class="site-header">
+{%- capture header_style -%}
+  {% if settings.header_bg != blank %}background:{{ settings.header_bg }};{% endif %}
+  {% if settings.header_text != blank %}color:{{ settings.header_text }};{% endif %}
+{%- endcapture -%}
+<header class="site-header"
+  data-sticky="{% if settings.header_sticky != false %}true{% else %}false{% endif %}"
+  data-border="{% if settings.header_border != false %}true{% else %}false{% endif %}"
+  data-layout="{% if settings.header_layout == 'center' %}center{% else %}left{% endif %}"
+  style="{{ header_style | strip }}">
   <div class="page-width site-header__inner">
-    <a class="site-header__logo" href="{{ shop.url }}/">{{ shop.name }}</a>
-    <nav class="site-header__nav" aria-label="Main">
-      <a href="{{ shop.url }}/">Home</a>
-      <a href="{{ shop.url }}/collections/all">Shop all</a>
-      {% for collection in collections limit: 4 %}
-        <a href="{{ collection.url }}">{{ collection.name }}</a>
-      {% endfor %}
-    </nav>
+    <a class="site-header__logo" href="{{ shop.url }}/">
+      {%- if settings.header_logo_url != blank -%}
+        <img src="{{ settings.header_logo_url }}" alt="{{ shop.name }}" style="height: {{ settings.header_logo_height | default: 36 }}px; width: auto;">
+      {%- elsif settings.header_logo_text != blank -%}
+        {{ settings.header_logo_text }}
+      {%- else -%}
+        {{ shop.name }}
+      {%- endif -%}
+    </a>
+    {%- if settings.header_show_nav != false -%}
+      <nav class="site-header__nav" aria-label="Main">
+        {%- if links.size > 0 -%}
+          {%- for link in links -%}
+            <a href="{{ link.url }}">{{ link.label }}</a>
+          {%- endfor -%}
+        {%- else -%}
+          <a href="{{ shop.url }}/">Home</a>
+          <a href="{{ shop.url }}/collections/all">Shop all</a>
+          {%- for collection in collections limit: 4 -%}
+            <a href="{{ collection.url }}">{{ collection.name }}</a>
+          {%- endfor -%}
+        {%- endif -%}
+      </nav>
+    {%- endif -%}
   </div>
 </header>

@@ -37,7 +37,7 @@ THEME_SETTINGS = {
     "background_color": {"type": "color", "label": "Background color", "default": "#FFFFFF"},
     "text_color": {"type": "color", "label": "Text color", "default": "#161C2C"},
     "currency_symbol": {"type": "text", "label": "Currency symbol", "default": "₹", "max": 4},
-    "announcement": {"type": "text", "label": "Announcement bar", "default": ""},
+    "announcement": {"type": "text", "label": "Announcement text", "default": ""},
 }
 
 _HEIGHT = {"type": "select", "label": "Height", "options": ["small", "medium", "large"], "default": "medium"}
@@ -432,6 +432,7 @@ def public_schema():
         "sections": SECTIONS,
         "pages": list(PAGES),
         "groups": GROUPS,
+        "theme_groups": THEME_GROUPS,
         "fonts": [{"key": k, "label": label, "stack": stack, "google": family} for k, label, stack, family, _ in FONTS],
     }
 
@@ -1296,6 +1297,114 @@ THEME_SETTINGS.update({
     "button_hover": {"type": "select", "label": "Button hover effect", "default": "darken",
                      "options": ["none", "lift", "darken", "grow"]},
 })
+
+
+# ---------------------------------------------------------------------------
+# Page layout: announcement bar, header (logo + navigation) and footer. These
+# are theme-wide, so they live in THEME_SETTINGS and show in the customizer's
+# "Theme settings" panel; layout/theme.liquid and the header/footer snippets
+# read them.
+# ---------------------------------------------------------------------------
+
+MENU_MAX_LINKS = 12
+_LINK_STARTS = ("/", "https://", "http://", "mailto:", "tel:", "#")
+
+
+def _clean_menu(spec, value, where):
+    """One link per line: "Label | /page" (a bare "/page" or address uses itself as the label)."""
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if len(lines) > MENU_MAX_LINKS:
+        raise serializers.ValidationError(f"{where} can have at most {MENU_MAX_LINKS} links.")
+    for number, line in enumerate(lines, 1):
+        label, _, url = line.partition("|")
+        label, url = label.strip(), url.strip()
+        if not url and label.startswith(_LINK_STARTS):  # a bare link is its own label
+            label, url = label, label
+        if not url or not label:
+            raise serializers.ValidationError(f"{where}, line {number}: write it as  Label | /page")
+        if len(label) > 60:
+            raise serializers.ValidationError(f"{where}, line {number}: the label is too long.")
+        if not url.startswith(_LINK_STARTS) or url.startswith("//"):
+            raise serializers.ValidationError(
+                f"{where}, line {number}: the link must be a page (/...), a web address, mailto:, tel: or #section."
+            )
+    return "\n".join(lines)
+
+
+VALUE_CLEANERS["menu"] = _clean_menu
+
+
+def _theme_opt(group, type_, label, default, **extra):
+    return {"type": type_, "label": label, "default": default, "group": group, **extra}
+
+
+THEME_SETTINGS.update({
+    "announcement_show": _theme_opt("announcement", "checkbox", "Show the announcement bar", True),
+    "announcement_link": _theme_opt("announcement", "url", "Link (optional)", "", help="Makes the whole bar a link."),
+    "announcement_bg": _theme_opt("announcement", "color_optional", "Bar colour", "", help="None uses the accent colour."),
+    "announcement_text": _theme_opt("announcement", "color_optional", "Text colour", ""),
+    "header_layout": _theme_opt(
+        "header", "select", "Logo position", "left", options=["left", "center"], ui="segmented",
+        labels={"left": "Left", "center": "Centred"},
+    ),
+    "header_logo_text": _theme_opt("header", "text", "Logo text", "", max=60, help="Empty uses the store name."),
+    "header_logo_url": _theme_opt("header", "image", "Logo image", "", help="Optional. Shown instead of the logo text."),
+    "header_logo_height": _theme_opt("header", "range", "Logo image height", 36, min=16, max=96, step=2, unit="px"),
+    "header_show_nav": _theme_opt("header", "checkbox", "Show the navigation menu", True),
+    "header_menu": _theme_opt(
+        "header", "menu", "Menu links", "",
+        help="One link per line: Label | /page. Leave empty for Home, Shop all and your collections.",
+    ),
+    "header_collections": _theme_opt(
+        "header", "range", "Collections in the automatic menu", 4, min=0, max=8,
+        help="Used only when the menu links above are empty.",
+    ),
+    "header_sticky": _theme_opt("header", "checkbox", "Keep the header at the top while scrolling", True),
+    "header_border": _theme_opt("header", "checkbox", "Line under the header", True),
+    "header_bg": _theme_opt("header", "color_optional", "Header colour", "", help="None uses the background colour."),
+    "header_text": _theme_opt("header", "color_optional", "Header text colour", ""),
+    "footer_text": _theme_opt("footer", "textarea", "About text", "", max=600, help="Shown at the top of the footer."),
+    "footer_show_links": _theme_opt("footer", "checkbox", "Show the navigation links", True),
+    "footer_menu": _theme_opt(
+        "footer", "menu", "Footer links", "",
+        help="One link per line: Label | /page. Leave empty for Home and Shop all.",
+    ),
+    "footer_instagram": _theme_opt("footer", "url", "Instagram", ""),
+    "footer_facebook": _theme_opt("footer", "url", "Facebook", ""),
+    "footer_x": _theme_opt("footer", "url", "X (Twitter)", ""),
+    "footer_tiktok": _theme_opt("footer", "url", "TikTok", ""),
+    "footer_youtube": _theme_opt("footer", "url", "YouTube", ""),
+    "footer_pinterest": _theme_opt("footer", "url", "Pinterest", ""),
+    "footer_linkedin": _theme_opt("footer", "url", "LinkedIn", ""),
+    "footer_copyright": _theme_opt(
+        "footer", "text", "Copyright line", "", max=200, help="Empty shows © the year and the store name.",
+    ),
+    "footer_bg": _theme_opt("footer", "color_optional", "Footer colour", "", help="None uses the background colour."),
+    "footer_text_color": _theme_opt("footer", "color_optional", "Footer text colour", ""),
+})
+
+# Where each theme-wide setting appears in the "Theme settings" panel
+_THEME_GROUP_OF = {
+    "accent_color": "colors", "background_color": "colors", "text_color": "colors",
+    "currency_symbol": "store", "announcement": "announcement",
+    "heading_font": "typography", "body_font": "typography", "base_font_size": "typography",
+    "button_style": "buttons", "button_bg": "buttons", "button_text": "buttons",
+    "button_radius": "buttons", "button_hover": "buttons",
+}
+for _key, _spec in THEME_SETTINGS.items():
+    _spec.setdefault("group", _THEME_GROUP_OF.get(_key, "store"))
+
+THEME_GROUPS = [
+    {"id": "colors", "label": "Colours"},
+    {"id": "typography", "label": "Typography"},
+    {"id": "buttons", "label": "Buttons"},
+    {"id": "announcement", "label": "Announcement bar"},
+    {"id": "header", "label": "Header and navigation"},
+    {"id": "footer", "label": "Footer"},
+    {"id": "store", "label": "Store"},
+]
 
 
 def _insert_before_layout(settings, extra):

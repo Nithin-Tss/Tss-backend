@@ -485,6 +485,44 @@ def shop_url(store):
     return f"/s/{store.store_slug}"
 
 
+def _resolve_link(base_url, value):
+    """Store-relative links ("/collections/all") point inside this store."""
+    value = str(value or "")
+    return base_url + value if value.startswith("/") and not value.startswith("//") else value
+
+
+def _menu_links(text, base_url):
+    """[{"label", "url"}] from "Label | /page" lines (already validated by the menu setting)."""
+    links = []
+    for line in str(text or "").splitlines():
+        label, _, url = line.partition("|")
+        label, url = label.strip(), url.strip()
+        if label and not url:  # a bare link is its own label
+            url = label
+        if label and url:
+            links.append({"label": label, "url": _resolve_link(base_url, url)})
+    return links
+
+
+def layout_data(settings, base_url, nav):
+    """Header links, footer links and footer social links for layout/theme.liquid."""
+    header = _menu_links(settings.get("header_menu"), base_url)
+    if not header:
+        header = [{"label": "Home", "url": f"{base_url}/"}, {"label": "Shop all", "url": f"{base_url}/collections/all"}]
+        header += [{"label": c["name"], "url": c["url"]} for c in nav[: int(settings.get("header_collections") or 0)]]
+
+    footer = _menu_links(settings.get("footer_menu"), base_url) or [
+        {"label": "Home", "url": f"{base_url}/"},
+        {"label": "Shop all", "url": f"{base_url}/collections/all"},
+    ]
+    social = [
+        {"name": name, "url": settings[f"footer_{key}"]}
+        for key, name in SOCIAL_NAMES.items()
+        if settings.get(f"footer_{key}")
+    ]
+    return {"header_links": header, "footer_links": footer, "footer_social": social}
+
+
 def _environment(files, base_url, currency):
     loader = {}
     for path, content in files.items():
@@ -501,9 +539,7 @@ def _environment(files, base_url, currency):
         return f"{currency}{Decimal(str(value)):,.2f}"
 
     def link(value):
-        # Store-relative links ("/collections/all") point inside this store.
-        value = str(value or "")
-        return base_url + value if value.startswith("/") and not value.startswith("//") else value
+        return _resolve_link(base_url, value)
 
     env.filters["money"] = money
     env.filters["link"] = link
@@ -1022,6 +1058,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "collection": collection_drop,
         "collections": nav,
         "template": page,
+        **layout_data(settings, base_url, nav),
     }
 
     template_data = data["templates"][page]
