@@ -21,6 +21,21 @@ class Store(models.Model):
     # Built-in roles are created once; after that a deleted one stays deleted
     roles_seeded = models.BooleanField(default=False)
 
+    # Settings > General
+    contact_email = models.CharField(max_length=254, blank=True, default="")
+    phone = models.CharField(max_length=30, blank=True, default="")
+    address = models.CharField(max_length=500, blank=True, default="")
+    currency = models.CharField(max_length=3, default="INR")
+    backup_region = models.CharField(max_length=60, blank=True, default="")
+    unit_system = models.CharField(max_length=10, default="metric")
+    weight_unit = models.CharField(max_length=5, default="kg")
+    timezone = models.CharField(max_length=64, default="Asia/Kolkata")
+    order_prefix = models.CharField(max_length=10, blank=True, default="#")
+    order_suffix = models.CharField(max_length=10, blank=True, default="")
+    # What happens to an order once it is paid: "all", "gift_cards" or "none"
+    auto_fulfill = models.CharField(max_length=20, default="gift_cards")
+    auto_archive = models.BooleanField(default=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

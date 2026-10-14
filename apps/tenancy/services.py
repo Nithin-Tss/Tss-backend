@@ -7,6 +7,8 @@ ACTIVE = "active"
 OWNER = "owner"
 CLOSED = "closed"
 REMOVED = "removed"
+# Memberships that were active when the store was closed: reopening brings them back
+STORE_CLOSED = "store_closed"
 
 
 def platform_membership(user, store):
@@ -87,10 +89,18 @@ def create_store(owner, store_name, store_slug=None):
 def close_store(store):
     """
     "Delete" a store. Its products, orders and so on reference it with
-    PROTECT, so the rows stay; the store is marked closed and every
-    membership removed, which hides it from all lists and makes every
+    PROTECT, so the rows stay; the store is marked closed and every active
+    membership set aside (reopen_store restores them), which hides it from all lists and makes every
     X-Store-Id request for it fail (IsStoreMember needs an active membership).
     """
     store.status = CLOSED
     store.save(update_fields=["status", "updated_at"])
-    store.memberships.update(status=REMOVED)
+    store.memberships.filter(status=ACTIVE).update(status=STORE_CLOSED)
+
+
+@transaction.atomic
+def reopen_store(store):
+    """Undo close_store: the store is active again and its members get their access back."""
+    store.status = ACTIVE
+    store.save(update_fields=["status", "updated_at"])
+    store.memberships.filter(status=STORE_CLOSED).update(status=ACTIVE)

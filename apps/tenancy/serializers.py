@@ -1,3 +1,6 @@
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from rest_framework import serializers
 
 from apps.catalog.models import EXTRA_FIELDS
@@ -5,6 +8,10 @@ from apps.catalog.models import EXTRA_FIELDS
 from .access import member_roles, membership_permissions
 from .models import Store
 from .services import platform_membership
+
+UNIT_SYSTEMS = ["metric", "imperial"]
+WEIGHT_UNITS = ["kg", "g", "lb", "oz"]
+AUTO_FULFILL = ["all", "gift_cards", "none"]
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -17,6 +24,18 @@ class StoreSerializer(serializers.ModelSerializer):
     )
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     fieldLabels = serializers.JSONField(source="field_labels", required=False)
+    contactEmail = serializers.EmailField(source="contact_email", required=False, allow_blank=True, max_length=254)
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    address = serializers.CharField(required=False, allow_blank=True, max_length=500)
+    currency = serializers.CharField(required=False, max_length=3)
+    backupRegion = serializers.CharField(source="backup_region", required=False, allow_blank=True, max_length=60)
+    unitSystem = serializers.ChoiceField(source="unit_system", choices=UNIT_SYSTEMS, required=False)
+    weightUnit = serializers.ChoiceField(source="weight_unit", choices=WEIGHT_UNITS, required=False)
+    timezone = serializers.CharField(required=False, max_length=64)
+    orderPrefix = serializers.CharField(source="order_prefix", required=False, allow_blank=True, max_length=10)
+    orderSuffix = serializers.CharField(source="order_suffix", required=False, allow_blank=True, max_length=10)
+    autoFulfill = serializers.ChoiceField(source="auto_fulfill", choices=AUTO_FULFILL, required=False)
+    autoArchive = serializers.BooleanField(source="auto_archive", required=False)
     role = serializers.SerializerMethodField()
     roles = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
@@ -25,9 +44,47 @@ class StoreSerializer(serializers.ModelSerializer):
         model = Store
         fields = [
             "storeId", "storeName", "storeSlug", "status", "createdAt", "fieldLabels",
+            "contactEmail", "phone", "address", "currency", "backupRegion", "unitSystem",
+            "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
             "role", "roles", "permissions",
         ]
         read_only_fields = ["status"]
+
+    def validate_currency(self, value):
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise serializers.ValidationError("Use a 3-letter currency code, e.g. INR.")
+        return value
+
+    def validate_timezone(self, value):
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise serializers.ValidationError("Unknown time zone.")
+        return value
+
+    def validate_phone(self, value):
+        value = value.strip()
+        if value and not re.fullmatch(r"[0-9+()\-.\s]{5,30}", value):
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return value
+
+    def validate_address(self, value):
+        return " ".join(value.split())
+
+    def validate_orderPrefix(self, value):
+        return self._order_affix(value)
+
+    def validate_orderSuffix(self, value):
+        return self._order_affix(value)
+
+    @staticmethod
+    def _order_affix(value):
+        # Order numbers are read back by their trailing digits, so an affix can't hold digits
+        value = value.strip()
+        if any(c.isdigit() for c in value):
+            raise serializers.ValidationError("Can't contain numbers.")
+        return value
 
     def _membership(self, store):
         request = self.context.get("request")

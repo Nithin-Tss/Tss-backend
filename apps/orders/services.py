@@ -49,7 +49,9 @@ def create_order(
 
     order = Order.objects.create(
         store=store,
-        order_number=next_number(store, Order, "order_number", "#"),
+        order_number=next_number(
+            store, Order, "order_number", store.order_prefix, suffix=store.order_suffix,
+        ),
         customer=customer,
         sales_channel=sales_channel,
         currency_code=currency,

@@ -205,7 +205,9 @@ class TeamRulesTest(RbacTestBase):
 
     def test_unknown_account_and_bad_role_ids(self):
         self.as_owner()
-        self.ok("post", "/api/v1/members/", {"email": "ghost@example.com", "roleIds": []}, expect=400)
+        # No account yet: the access is held as an invitation until that email signs up
+        invited = self.ok("post", "/api/v1/members/", {"email": "ghost@example.com", "roleIds": []}, expect=201)
+        self.assertTrue(invited["invited"])
         self.sign_up("real@example.com", "Real")
         self.as_owner()
         self.ok("post", "/api/v1/members/", {"email": "real@example.com", "roleIds": ["not-a-uuid"]}, expect=400)
