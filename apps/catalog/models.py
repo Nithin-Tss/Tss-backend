@@ -57,6 +57,47 @@ EXTRA_FIELDS = (
     "column7",
 )
 
+class Brand(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.PROTECT,
+        db_column="store_id",
+        related_name="brands",
+    )
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(null=True, blank=True)
+    logo_url = models.TextField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+   
+    class Meta:
+        db_table = '"catalog"."brands"'
+        verbose_name = "Brand"
+        verbose_name_plural = "Brands"
+        constraints = [
+            models.UniqueConstraint(
+                models.functions.Lower(
+                    models.functions.Trim("name")
+                ),
+                "store",
+                name="uq_brand_store_name_ci",
+            ),
+        ]
+
+
+    def __str__(self):
+        return self.name
+
+
 
 class Product(models.Model):
     id = models.UUIDField(
