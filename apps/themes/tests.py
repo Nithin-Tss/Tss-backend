@@ -876,6 +876,139 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         self.assertTrue(self.code_index()["sections"]["featured"]["settings"]["show_price"])
 
 
+STYLES = "snippets/styles.liquid"
+SETTINGS_JSON = "config/settings_data.json"
+
+
+class StylesSyncTest(StoreClientMixin, APITestCase):
+    """snippets/styles.liquid (Edit code) and the Theme settings colours and type (customizer / settings_data.json)."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("styles@example.com", "Styles Store")
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Linen apron", "sku": "SKU-APRON", "status": "active", "price": "30",
+        }, expect=201)
+
+    def files(self):
+        return {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+
+    def save_file(self, path, content):
+        r = self.client.post("/api/v1/themes/files/", {"path": path, "content": content}, format="json")
+        self.assertEqual(r.status_code, 200, r.content[:500])
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self, data=None):
+        data = data or self.ok("get", "/api/v1/themes/settings/")
+        return self.ok("post", "/api/v1/themes/preview/", data)["html"]
+
+    def test_css_edit_reaches_preview_and_store_and_persists(self):
+        original = self.files()[STYLES]
+        old_rule, new_rule = ".product-card__title { font-weight: 600; }", ".product-card__title { font-weight: 700; }"
+        self.assertIn(old_rule, original)
+        self.save_file(STYLES, original.replace(old_rule, new_rule))  # the temporary change
+        self.assertIn(new_rule, self.files()[STYLES])  # what reopening the code editor shows
+        self.assertIn(new_rule, self.preview_html())
+        for _ in range(2):  # the storefront, and again after a refresh
+            html = self.store_html()
+            self.assertIn(new_rule, html)
+            self.assertIn('class="product-card__title"', html)
+        self.save_file(STYLES, original)  # restored
+        self.assertIn(old_rule, self.store_html())
+        self.assertNotIn(new_rule, self.store_html())
+
+    def test_theme_colours_fill_the_css_variables(self):
+        html = self.store_html()
+        for line in ("--accent: #161C2C;", "--bg: #FFFFFF;", "--text: #161C2C;"):  # the defaults
+            self.assertIn(line, html)
+
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["settings"].update(accent_color="#AA2200", background_color="#FAF7F2", text_color="#222222")
+        self.assertIn("#AA2200", self.preview_html(data).upper())  # unsaved: the preview only
+        self.assertNotIn("#AA2200", self.store_html().upper())
+
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": data["settings"]})  # saved from the customizer
+        html = self.store_html().upper()
+        for line in ("--ACCENT: #AA2200;", "--BG: #FAF7F2;", "--TEXT: #222222;"):
+            self.assertIn(line, html)
+        code_settings = json.loads(self.files()[SETTINGS_JSON])  # what Edit code shows
+        self.assertEqual(code_settings["accent_color"].upper(), "#AA2200")
+        self.assertIn("{{ settings.accent_color }}", self.files()[STYLES])  # the CSS file itself is not rewritten
+
+    def test_settings_json_from_code_reaches_customizer_and_store(self):
+        code_settings = json.loads(self.files()[SETTINGS_JSON])
+        code_settings.update(text_color="#123456", base_font_size=18)
+        self.save_file(SETTINGS_JSON, json.dumps(code_settings, indent=2))
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual(saved["text_color"].upper(), "#123456")
+        self.assertEqual(saved["base_font_size"], 18)
+        html = self.store_html()
+        self.assertIn("--text: #123456;", html)
+        self.assertIn("--tss-base-size:18px", html.replace(" ", ""))
+
+
+class CustomizerTokenTest(StoreClientMixin, APITestCase):
+    """Customizer tokens (POST /themes/customizer/) in the CSS of the preview and the storefront."""
+
+    TOKENS = {"primary": "#101010", "accent": "#FF5500", "background": "#F0F0F0",
+              "heading_font": "serif", "body_font": "Verdana, sans-serif", "button_radius": "8px"}
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("tokens@example.com", "Token Store")
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self):
+        return self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))["html"]
+
+    def token_css(self, html):
+        """The theme's :root <style> that the tokens go into (it holds --tss-base-size)."""
+        start = html.index("<style>:root{--tss-heading-font")
+        return html[start:html.index("</style>", start)]
+
+    def test_no_tokens_keeps_the_theme_settings(self):
+        css = self.token_css(self.store_html())
+        self.assertNotIn("--accent:", css)
+        self.assertNotIn("--text:", css)
+        self.assertIn("--b-r:999px", css)  # the theme's pill buttons
+
+    def test_saved_tokens_reach_store_and_preview_and_persist(self):
+        self.assertEqual(self.ok("post", "/api/v1/themes/customizer/", self.TOKENS), self.TOKENS)
+        self.assertEqual(self.ok("get", "/api/v1/themes/customizer/"), self.TOKENS)  # saved
+        expected = ["--text:#101010", "--accent:#FF5500", "--bg:#F0F0F0",
+                    '--tss-heading-font:Georgia,"Times New Roman",serif', "--tss-body-font:Verdana, sans-serif",
+                    "--b-r:8px"]
+        for html in (self.store_html(), self.store_html(), self.preview_html()):  # store, refresh, preview
+            css = self.token_css(html)
+            for line in expected:
+                self.assertIn(line, css)
+            # Comes after styles.liquid's :root, so the token wins over settings.accent_color
+            self.assertLess(html.index("--accent: #161C2C;"), html.index("--accent:#FF5500"))
+        self.assertEqual(self.store_html().count("--accent:#FF5500"), 1)  # loaded once
+
+    def test_theme_settings_colours_still_work_next_to_tokens(self):
+        self.ok("post", "/api/v1/themes/customizer/", {"accent": "#FF5500"})
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"text_color": "#334455", "background_color": "#FFFFEE"}})
+        html = self.store_html()
+        self.assertIn("--text: #334455;", html)  # no primary token: the setting decides
+        self.assertIn("--bg: #FFFFEE;", html)
+        css = self.token_css(html)
+        self.assertIn("--accent:#FF5500", css)
+        self.assertNotIn("--text:", css)
+        self.assertNotIn("--bg:", css)
+
+    def test_unsafe_token_is_refused(self):
+        r = self.client.post("/api/v1/themes/customizer/", {"accent": "red;}</style><script>"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn("<script>", self.token_css(self.store_html()))
+
+
 class BlogTest(StoreClientMixin, APITestCase):
     """Blog posts written in the admin: the blog page, each post's own page, the customizer and the code."""
 

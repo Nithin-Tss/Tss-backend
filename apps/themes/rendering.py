@@ -29,6 +29,7 @@ from apps.orders.models import OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
 from . import section_sync as sync
+from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, ThemeFile
 from .services import get_store_theme, synced_section, theme_files
 
@@ -273,15 +274,40 @@ def _style_attr(vars_):
     return ";".join(f"{k}:{v}" for k, v in vars_.items())
 
 
-def theme_css(settings):
-    """:root variables for the theme's fonts, base size and button defaults."""
+# Customizer tokens (Theme.theme_data["tokens"], see customizer.py) -> the CSS variables the theme uses
+TOKEN_COLORS = {"primary": "--text", "accent": "--accent", "background": "--bg"}
+
+
+def _token(value):
+    """A saved token value, or None when it is empty or could break out of the CSS (same rule as customizer.py)."""
+    value = str(value or "").strip()
+    return value if value and not (_UNSAFE_TOKEN & set(value)) else None
+
+
+def theme_css(settings, tokens=None):
+    """
+    :root variables for the theme's fonts, base size and button defaults. Saved customizer
+    tokens (colours, heading/body font, button radius) take the place of the matching Theme
+    settings; this <style> comes after styles.liquid's :root, so its --text, --accent and --bg win.
+    """
     root = {
         "--tss-heading-font": _font_stack(settings.get("heading_font"), FONT_BY_KEY["system"][0]),
         "--tss-body-font": _font_stack(settings.get("body_font"), FONT_BY_KEY["system"][0]),
         "--tss-base-size": f"{int(settings.get('base_font_size') or 16)}px",
         **_button_vars({}, _theme_button(settings)),
     }
-    # Every value comes from fixed tables or validated colours/numbers, so it can't break out of <style>
+    tokens = tokens or {}
+    colors, typography, buttons = (tokens.get(g) or {} for g in ("colors", "typography", "buttons"))
+    for name, var in TOKEN_COLORS.items():
+        if _token(colors.get(name)):
+            root[var] = _token(colors[name])
+    for name, var in (("heading_font", "--tss-heading-font"), ("body_font", "--tss-body-font")):
+        if _token(typography.get(name)):
+            # A font key of the theme ("serif", ...) becomes its stack; anything else is used as written
+            root[var] = _font_stack(_token(typography[name]), _token(typography[name]))
+    if _token(buttons.get("radius")):
+        root["--b-r"] = RADII.get(_token(buttons["radius"]), _token(buttons["radius"]))
+    # Every value comes from fixed tables, validated colours/numbers or checked tokens, so it can't break out of <style>
     return Markup(f"<style>:root{{{_style_attr(root)}}}</style>")
 
 
@@ -1410,7 +1436,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     real_ids = set(template_data["sections"])
     theme_button = _theme_button(settings)
-    html = [google_fonts_link(_collect_fonts(data)), theme_css(settings), SECTION_CSS, TYPE_CSS]
+    tokens = (store_theme.theme.theme_data or {}).get("tokens")
+    html = [google_fonts_link(_collect_fonts(data)), theme_css(settings, tokens), SECTION_CSS, TYPE_CSS]
 
     html.append(CUSTOM_CSS)
     page_styles = len(html)
