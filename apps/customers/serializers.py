@@ -7,7 +7,103 @@ from .models import Customer, CustomerAddress
 SUBSCRIPTION_STATUSES = ("subscribed", "not_subscribed", "unsubscribed")
 
 
+ADDRESS_TYPES = ("shipping", "billing")
+
+
 class CustomerAddressSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=Customer.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    address_type = serializers.ChoiceField(
+        choices=ADDRESS_TYPES,
+        default="shipping",
+        required=False,
+    )
+    first_name = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=100,
+        error_messages={
+            "required": "First name is required.",
+            "blank": "First name is required.",
+        },
+    )
+    last_name = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=100,
+        error_messages={
+            "required": "Last name is required.",
+            "blank": "Last name is required.",
+        },
+    )
+    address_line_1 = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=255,
+        error_messages={
+            "required": "Address line 1 is required.",
+            "blank": "Address line 1 is required.",
+        },
+    )
+    city = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=100,
+        error_messages={
+            "required": "City is required.",
+            "blank": "City is required.",
+        },
+    )
+    state = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=100,
+        error_messages={
+            "required": "State is required.",
+            "blank": "State is required.",
+        },
+    )
+    postal_code = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=20,
+        error_messages={
+            "required": "Postal code is required.",
+            "blank": "Postal code is required.",
+        },
+    )
+    country = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=100,
+        error_messages={
+            "required": "Country is required.",
+            "blank": "Country is required.",
+        },
+    )
+    company = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=255,
+    )
+    address_line_2 = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=255,
+    )
+    phone = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=30,
+    )
+    is_default = serializers.BooleanField(required=False, default=False)
+
     class Meta:
         model = CustomerAddress
         fields = [
@@ -15,6 +111,17 @@ class CustomerAddressSerializer(StoreScopedSerializerMixin, serializers.ModelSer
             "address_line_1", "address_line_2", "city", "state", "postal_code",
             "country", "phone", "is_default", "created_at", "updated_at",
         ]
+
+    def validate(self, attrs):
+        # Trim string fields
+        str_fields = [
+            "first_name", "last_name", "company", "address_line_1",
+            "address_line_2", "city", "state", "postal_code", "country", "phone",
+        ]
+        for field in str_fields:
+            if field in attrs and isinstance(attrs[field], str):
+                attrs[field] = attrs[field].strip()
+        return attrs
 
 
 class CustomerSerializer(serializers.ModelSerializer):
