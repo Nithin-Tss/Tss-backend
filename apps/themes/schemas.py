@@ -368,6 +368,11 @@ def validate_custom_data(data):
 
         clean["templates"][page] = {"order": order, "sections": cleaned}
 
+    # Synced sections (the footer) keep their values here; they are checked against the
+    # section's own {% schema %} when saved (services.save_section_values), not here
+    if isinstance(data.get("sections"), dict):
+        clean["sections"] = data["sections"]
+
     return clean
 
 
@@ -422,6 +427,8 @@ def resolve(custom_data):
     return {
         "settings": _with_defaults(THEME_SETTINGS, custom_data.get("settings", {})),
         "templates": templates,
+        # Synced sections' values (see section_sync), passed through as saved
+        **({"sections": copy.deepcopy(custom_data["sections"])} if isinstance(custom_data.get("sections"), dict) else {}),
     }
 
 

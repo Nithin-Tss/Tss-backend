@@ -1,0 +1,120 @@
+{%- comment -%}
+  Footer. Its options and blocks are edited in the customizer's left sidebar
+  (Footer) or here, in the schema at the end of this file: the two stay in step.
+  Read values only through section.settings and block.settings.
+  {{ block.attrs }} lets the customizer's Edit mode select a block; it is empty on the store.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+<footer class="site-footer" style="{% if s.background != blank %}background:{{ s.background }};{% endif %}{% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}">
+  {%- if section.blocks.size > 0 -%}
+    <div class="page-width site-footer__top">
+      {%- for block in section.blocks -%}
+        {%- assign b = block.settings -%}
+        {%- case block.type -%}
+          {%- when 'text' -%}
+            <div class="site-footer__about"{{ block.attrs }}>
+              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
+            </div>
+          {%- when 'links' -%}
+            <nav class="site-footer__nav" aria-label="{{ b.heading | default: 'Footer' }}"{{ block.attrs }}>
+              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- for link in b.menu -%}
+                <a href="{{ link.url }}">{{ link.label }}</a>
+              {%- endfor -%}
+            </nav>
+          {%- when 'social' -%}
+            <div class="site-footer__social"{{ block.attrs }}>
+              {%- if b.instagram != blank -%}<a href="{{ b.instagram }}" target="_blank" rel="noopener">Instagram</a>{%- endif -%}
+              {%- if b.facebook != blank -%}<a href="{{ b.facebook }}" target="_blank" rel="noopener">Facebook</a>{%- endif -%}
+              {%- if b.x != blank -%}<a href="{{ b.x }}" target="_blank" rel="noopener">X</a>{%- endif -%}
+              {%- if b.tiktok != blank -%}<a href="{{ b.tiktok }}" target="_blank" rel="noopener">TikTok</a>{%- endif -%}
+              {%- if b.youtube != blank -%}<a href="{{ b.youtube }}" target="_blank" rel="noopener">YouTube</a>{%- endif -%}
+              {%- if b.pinterest != blank -%}<a href="{{ b.pinterest }}" target="_blank" rel="noopener">Pinterest</a>{%- endif -%}
+              {%- if b.linkedin != blank -%}<a href="{{ b.linkedin }}" target="_blank" rel="noopener">LinkedIn</a>{%- endif -%}
+            </div>
+          {%- when 'newsletter' -%}
+            <form class="site-footer__newsletter" onsubmit="event.preventDefault(); this.querySelector('p').textContent = 'Thanks! Sign-ups are coming soon.';"{{ block.attrs }}>
+              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- if b.text != blank -%}<span>{{ b.text }}</span>{%- endif -%}
+              <div class="site-footer__signup">
+                <input type="email" name="email" placeholder="Email address" aria-label="Email address" required>
+                <button class="button" type="submit">{{ b.button_label | default: 'Subscribe' }}</button>
+              </div>
+              <p role="status"></p>
+            </form>
+        {%- endcase -%}
+      {%- endfor -%}
+    </div>
+  {%- endif -%}
+  <div class="page-width site-footer__legal">
+    {%- if s.copyright != blank -%}
+      {{ s.copyright }}
+    {%- else -%}
+      &copy; {{ 'now' | date: '%Y' }} {{ shop.name }}
+    {%- endif -%}
+  </div>
+</footer>
+<style>
+  .site-footer__nav strong, .site-footer__newsletter strong { color: var(--text); }
+  .site-footer__newsletter { display: grid; gap: 8px; max-width: 360px; }
+  .site-footer__newsletter p { margin: 0; min-height: 1em; }
+  .site-footer__signup { display: flex; gap: 8px; }
+  .site-footer__signup input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--bg); color: var(--text); }
+  .site-footer__signup .button { min-height: 40px; padding: 0 16px; }
+</style>
+
+{% schema %}
+{
+  "name": "Footer",
+  "max_blocks": 8,
+  "settings": [
+    {"type": "text", "id": "copyright", "label": "Copyright line", "default": "", "info": "Empty shows the year and the store name."},
+    {"type": "color", "id": "background", "label": "Background colour", "default": ""},
+    {"type": "color", "id": "text_color", "label": "Text colour", "default": ""}
+  ],
+  "blocks": [
+    {
+      "type": "text",
+      "name": "Text",
+      "settings": [
+        {"type": "text", "id": "heading", "label": "Heading", "default": ""},
+        {"type": "textarea", "id": "text", "label": "Text", "default": "Tell shoppers about your store."}
+      ]
+    },
+    {
+      "type": "links",
+      "name": "Links",
+      "settings": [
+        {"type": "text", "id": "heading", "label": "Heading", "default": ""},
+        {"type": "menu", "id": "menu", "label": "Links", "default": "Home | /\nShop all | /collections/all", "info": "One link per line: Label | /page"}
+      ]
+    },
+    {
+      "type": "social",
+      "name": "Social links",
+      "settings": [
+        {"type": "url", "id": "instagram", "label": "Instagram", "default": ""},
+        {"type": "url", "id": "facebook", "label": "Facebook", "default": ""},
+        {"type": "url", "id": "x", "label": "X (Twitter)", "default": ""},
+        {"type": "url", "id": "tiktok", "label": "TikTok", "default": ""},
+        {"type": "url", "id": "youtube", "label": "YouTube", "default": ""},
+        {"type": "url", "id": "pinterest", "label": "Pinterest", "default": ""},
+        {"type": "url", "id": "linkedin", "label": "LinkedIn", "default": ""}
+      ]
+    },
+    {
+      "type": "newsletter",
+      "name": "Newsletter",
+      "settings": [
+        {"type": "text", "id": "heading", "label": "Heading", "default": "Stay in the loop"},
+        {"type": "text", "id": "text", "label": "Text", "default": "New arrivals and offers, once a month."},
+        {"type": "text", "id": "button_label", "label": "Button text", "default": "Subscribe"}
+      ]
+    }
+  ],
+  "default": {"blocks": [
+    {"type": "links", "settings": {"heading": "", "menu": "Home | /\nShop all | /collections/all"}}
+  ]}
+}
+{% endschema %}

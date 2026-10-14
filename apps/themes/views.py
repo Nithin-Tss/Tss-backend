@@ -1,12 +1,14 @@
 import json
 import re
+import time
 import uuid
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core import signing
 from django.core.files.storage import default_storage
-from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.db import connection
+from django.http import Http404, HttpResponse, HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.http import require_GET
@@ -18,6 +20,7 @@ from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -29,7 +32,8 @@ from django.contrib.auth import get_user_model
 from apps.tenancy.models import Store, StoreMembership
 
 from .customizer import read_settings, save_settings, validate_settings
-from .rendering import render_page, shop_url
+from . import section_sync as sync
+from .rendering import render_page, render_synced_section_fast, shop_url
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, public_schema, resolve, validate_custom_data
 from .services import (
@@ -37,7 +41,11 @@ from .services import (
     generate_css_variables,
     get_store_theme,
     rename_path,
+    restore_section,
     save_file,
+    save_section_values,
+    synced_section,
+    synced_sections,
     code_files,
 )
 
@@ -79,12 +87,19 @@ class ThemeFilesView(StoreThemeView):
             self.store_theme(),
             request.data.get("path"),
             request.data.get("content", ""),
+            base_version=_int_or_none(request.data.get("base_version")),
+            client=str(request.data.get("client") or "")[:64],
+            started_at=_float_or_none(request.data.get("started_at")),
         )
 
-        return Response({
+        body = {
             "path": saved.file_path,
             "size": saved.file_size,
-        })
+        }
+        # A synced section (sections/footer.liquid): its new version, values and any conflict
+        if getattr(saved, "sync", None):
+            body["sync"] = saved.sync
+        return Response(body)
 
     def delete(self, request):
         removed = delete_path(
@@ -113,6 +128,49 @@ class ThemeRenameView(StoreThemeView):
         return Response({
             "moved": moves,
         })
+
+
+def _float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _keep_sections(store_theme, clean):
+    """Saving the theme's other settings never touches the synced sections: their newest saved values stay."""
+    from .models import StoreTheme
+
+    fresh = StoreTheme.objects.filter(pk=store_theme.pk).values_list("custom_data", flat=True).first() or {}
+    if fresh.get("sections"):
+        clean["sections"] = fresh["sections"]
+
+
+def _save_sections(store_theme, sections, data):
+    """{"footer": {"settings": {...}, "blocks": [...]}} -> each synced section saved (values + its file)."""
+    if not sections:
+        return {}
+    bases = data.get("section_versions") if isinstance(data.get("section_versions"), dict) else {}
+    client = str(data.get("client") or "")[:64]
+    saved = {}
+    for name, values in sections.items():
+        if name not in sync.SYNCED_SECTIONS:
+            raise ValidationError({"sections": f"Unknown section: {name}."})
+        if not isinstance(values, dict):
+            raise ValidationError({"sections": f"{name}: expected an object."})
+        store_theme.refresh_from_db(fields=["custom_data"])
+        saved[name] = save_section_values(
+            store_theme, name, values, client=client, base_version=_int_or_none(bases.get(name)),
+            started_at=_float_or_none(data.get("started_at")),
+        )
+    return saved
 
 
 class ThemeSettingsView(StoreThemeView):
@@ -163,16 +221,33 @@ class ThemeSettingsView(StoreThemeView):
             if "order" in changes:
                 target["order"] = changes["order"]
 
-        store_theme.custom_data = validate_custom_data(merged)
-        store_theme.save(update_fields=["custom_data", "updated_at"])
-        return Response({"saved": True})
+        sections = body.get("sections")
+        if sections is not None and not isinstance(sections, dict):
+            raise ValidationError({"sections": "Expected an object."})
+
+        if body.get("settings") is not None or templates:
+            # Synced sections are saved below, by their own path (they also change their file)
+            merged.pop("sections", None)
+            clean = validate_custom_data(merged)
+            _keep_sections(store_theme, clean)
+            store_theme.custom_data = clean
+            store_theme.save(update_fields=["custom_data", "updated_at"])
+
+        saved_sections = _save_sections(store_theme, sections, request.data)
+        reply = {"saved": True}
+        if saved_sections:
+            reply["sections"] = saved_sections
+        return Response(reply)
 
     def put(self, request):
         store_theme = self.store_theme()
+        data = dict(request.data) if isinstance(request.data, dict) else request.data
+        sections = data.pop("sections", None) if isinstance(data, dict) else None
 
-        store_theme.custom_data = validate_custom_data(
-            request.data
-        )
+        clean = validate_custom_data(data)
+        clean.pop("sections", None)
+        _keep_sections(store_theme, clean)
+        store_theme.custom_data = clean
 
         store_theme.save(
             update_fields=[
@@ -180,6 +255,9 @@ class ThemeSettingsView(StoreThemeView):
                 "updated_at",
             ]
         )
+
+        if isinstance(sections, dict):
+            _save_sections(store_theme, sections, request.data)
 
         return Response(
             resolve(store_theme.custom_data),
@@ -293,6 +371,8 @@ PREVIEW_EDITOR = """
   function send(message) { message.source = "tss-preview"; parent.postMessage(message, "*"); }
   function all() { return [].slice.call(document.querySelectorAll("[data-tss-section]")); }
   function byId(id) { return all().filter(function (el) { return el.getAttribute("data-tss-section") === id; })[0]; }
+  // The page's own sections; fixed ones (the footer) can be selected but not moved
+  function movable() { return all().filter(function (el) { return !el.hasAttribute("data-tss-fixed"); }); }
 
   var line = document.createElement("div");
   line.className = "tss-drop-line";
@@ -348,7 +428,7 @@ PREVIEW_EDITOR = """
 
   // Drag handle (Edit mode only: the handle is hidden otherwise)
   function enhance(el) {
-    if (el.__tssReady) return;
+    if (el.__tssReady || el.hasAttribute("data-tss-fixed")) return;
     el.__tssReady = true;
     var id = el.getAttribute("data-tss-section");
     var handle = document.createElement("button");
@@ -368,7 +448,7 @@ PREVIEW_EDITOR = """
     function move(ev) {
       target = null;
       var y = ev.clientY;
-      var sections = all();
+      var sections = movable();
       for (var i = 0; i < sections.length; i++) {
         var other = sections[i];
         if (other === el) continue;
@@ -434,7 +514,7 @@ PREVIEW_EDITOR = """
   }
 
   function place(el, index) {
-    var others = all().filter(function (x) { return x !== el; });
+    var others = movable().filter(function (x) { return x !== el; });
     if (!others.length) return false;
     if (index >= others.length) others[others.length - 1].after(el);
     else others[Math.max(0, index)].before(el);
@@ -456,11 +536,13 @@ PREVIEW_EDITOR = """
       runScripts(fresh);
       enhance(fresh);
       select(selected, selectedBlock);
+      // The customizer measures "change made -> preview updated" with this
+      if (message.token) send({ type: "patched", id: message.id, token: message.token });
     });
   }
 
   function reorder(ids) {
-    var first = all()[0];
+    var first = movable()[0];
     if (!first) return;
     var marker = document.createComment("tss");
     first.before(marker);
@@ -511,6 +593,130 @@ PREVIEW_EDITOR = """
 """
 
 
+class ThemeSectionsView(StoreThemeView):
+    """
+    GET /api/v1/themes/sections/
+        the synced sections (code <-> customizer): {"footer": {spec, values, version, path}}
+    """
+
+    def get(self, request):
+        found = synced_sections(self.store_theme())
+        return Response({
+            name: {
+                "path": section["path"],
+                "label": sync.SYNCED_SECTIONS[name]["label"],
+                "spec": section["spec"],
+                "values": section["values"],
+                "version": section["version"],
+            }
+            for name, section in found.items()
+        })
+
+
+class SectionHistoryView(StoreThemeView):
+    """
+    GET  /api/v1/themes/sections/<name>/history/    the last 20 versions of its file
+    POST /api/v1/themes/sections/<name>/history/    {index} puts that version back
+    """
+
+    def _name(self, name):
+        if name not in sync.SYNCED_SECTIONS:
+            raise Http404
+        return name
+
+    def get(self, request, name):
+        store_theme = self.store_theme()
+        section = synced_section(store_theme, self._name(name))
+        return Response({
+            "version": section["version"] if section else 0,
+            "history": sync.history_of(store_theme.theme, name),
+        })
+
+    def post(self, request, name):
+        index = _int_or_none(request.data.get("index"))
+        if index is None:
+            raise ValidationError({"index": "Which version to restore."})
+        saved = restore_section(
+            self.store_theme(), self._name(name), index, client=str(request.data.get("client") or "")[:64],
+        )
+        return Response({"path": saved.file_path, "size": saved.file_size, "sync": saved.sync})
+
+
+class EventStreamRenderer(BaseRenderer):
+    media_type = "text/event-stream"
+    format = "event-stream"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return json.dumps(data).encode("utf-8")
+
+
+class ThemeEventsView(StoreThemeView):
+    """
+    GET /api/v1/themes/events/?after=<seq>   Server-Sent Events for this store
+        "section" events when a synced section changes (from the customizer, the code editor or a restore).
+    Each connection stays open about a minute; the client reconnects with ?after=<last id>.
+    """
+
+    renderer_classes = [JSONRenderer, EventStreamRenderer]
+    STREAM_SECONDS = 55
+    PING_SECONDS = 15
+
+    def get(self, request):
+        store_id = request.store.pk
+        after = _int_or_none(request.query_params.get("after"))
+        if after is None:
+            after = sync.EVENTS.last_seq
+        # The stream holds no database connection while it waits
+        if not connection.in_atomic_block:
+            connection.close()
+
+        def stream():
+            last = after
+            yield f"retry: 1000\nevent: hello\ndata: {json.dumps({'seq': last})}\n\n"
+            ends = time.monotonic() + self.STREAM_SECONDS
+            while time.monotonic() < ends:
+                events, last = sync.EVENTS.wait(store_id, last, min(self.PING_SECONDS, max(ends - time.monotonic(), 0.1)))
+                if not events:
+                    yield ": ping\n\n"
+                    continue
+                for seq, payload in events:
+                    yield f"id: {seq}\nevent: {payload.get('type', 'message')}\ndata: {json.dumps(payload)}\n\n"
+
+        response = StreamingHttpResponse(stream(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
+class SyncTimingsView(StoreThemeView):
+    """
+    GET  /api/v1/themes/sync-timings/   average and slowest "change made -> preview updated" times
+    POST /api/v1/themes/sync-timings/   {kind, ms} reported by the customizer / code editor
+    """
+
+    action_permissions = {"POST": "themes.view"}
+    KINDS = {
+        "footer: sidebar -> preview",       # customizer: an edit, until the preview shows it
+        "footer: code save -> preview",     # Save in Edit code, until the customizer's preview shows it
+        "footer: sidebar -> code",          # customizer: an edit, until Edit code shows the new file
+        "footer: code save -> blocks",      # Save in Edit code, until the response (sidebar rebuilt)
+    }
+
+    def get(self, request):
+        return Response(sync.TIMINGS.summary())
+
+    def post(self, request):
+        kind = request.data.get("kind")
+        try:
+            ms = float(request.data.get("ms"))
+        except (TypeError, ValueError):
+            ms = -1
+        if kind not in self.KINDS or not 0 <= ms < 600000:
+            raise ValidationError("Expected {kind, ms}.")
+        sync.TIMINGS.add(kind, ms)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ThemePreviewView(StoreThemeView):
     """
     POST /api/v1/themes/preview/?scroll=&selected=  {unsaved custom_data} -> {"html": ...}
@@ -525,6 +731,12 @@ class ThemePreviewView(StoreThemeView):
 
         # ?section=<id>: just that section, to swap into the open preview (plus the fonts it may need)
         section_id = request.query_params.get("section")
+        if section_id in sync.SYNCED_SECTIONS:
+            started = time.perf_counter()
+            html = render_synced_section_fast(request.store, section_id, clean)
+            if html is not None:
+                sync.TIMINGS.add(f"{section_id}: server render", (time.perf_counter() - started) * 1000)
+                return Response({"html": str(html), "fonts": ""})
         if section_id:
             try:
                 html = render_page(request.store, "index", custom_data=clean, editor=True, only_section=section_id)

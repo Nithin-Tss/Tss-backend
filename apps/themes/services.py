@@ -10,12 +10,14 @@ Section settings (hero text, slides, ...) live in StoreTheme.custom_data.
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
 from rest_framework import exceptions
 
+from . import section_sync as sync
 from .models import StoreTheme, Theme, ThemeFile
 from .schemas import PAGES, resolve, validate_custom_data
 
@@ -144,6 +146,7 @@ def get_store_theme(store):
     if current and current.theme.slug == private_slug(store):
         _add_missing_starter_files(current.theme)
         _upgrade_untouched_starter_files(current.theme)
+        _add_synced_sections(current.theme)
         return current
 
     if current:
@@ -161,6 +164,7 @@ def get_store_theme(store):
 
     _add_missing_starter_files(installed.theme)
     _upgrade_untouched_starter_files(installed.theme)
+    _add_synced_sections(installed.theme)
     return installed
 
 
@@ -311,7 +315,7 @@ def _new_file(theme, path, content):
     )
 
 
-def save_file(store_theme, path, content):
+def save_file(store_theme, path, content, base_version=None, client="", started_at=None):
     if isinstance(path, str) and path.strip().strip("/") in SETTINGS_FILES:
         path = path.strip().strip("/")
         if not isinstance(content, str):
@@ -326,6 +330,10 @@ def save_file(store_theme, path, content):
         raise exceptions.ValidationError({"content": "Content must be text."})
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise exceptions.ValidationError({"content": "File is larger than 256 KB."})
+
+    if path in sync.PATH_TO_SECTION:
+        return save_synced_code(store_theme, sync.PATH_TO_SECTION[path], content, base_version=base_version, client=client,
+                                started_at=started_at)
 
     theme = store_theme.theme
     existing = theme.files.filter(file_path=path).first()
@@ -434,3 +442,202 @@ def generate_css_variables(theme_data):
         )
 
     return ":root {\n    " + "\n    ".join(css_variables) + "\n}"
+
+
+# ------------------------------------------------- synced sections (code <-> customizer, see section_sync)
+
+# The starter's footer snippet before the footer became a section (sections/footer.liquid)
+_ORIGINAL_FOOTER_SNIPPET = "dfef84bf0c7a8ad1f4be1895742e3df4b586303f40cdec1f6f667ee3ee34d426"
+
+
+def _add_synced_sections(theme):
+    """
+    Themes made before the footer was a section get sections/footer.liquid - unless the
+    store changed its footer snippet, which then keeps working as it is. Checked once.
+    """
+    data = theme.theme_data or {}
+    if data.get("synced_sections_added"):
+        return
+    files = dict(
+        theme.files.filter(file_path__in=["sections/footer.liquid", "snippets/footer.liquid"]).values_list("file_path", "content")
+    )
+    if "sections/footer.liquid" not in files:
+        snippet = files.get("snippets/footer.liquid")
+        if snippet is None or hashlib.sha256(snippet.encode("utf-8")).hexdigest() == _ORIGINAL_FOOTER_SNIPPET:
+            _new_file(theme, "sections/footer.liquid", starter_files()["sections/footer.liquid"]).save()
+    theme.theme_data = {**data, "synced_sections_added": True}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _seed(name, theme_settings, store_name):
+    """A store's first values for a synced section: what it had set before (the footer's theme settings)."""
+    if name != "footer":
+        return None
+    s = theme_settings
+    blocks = []
+    if s.get("footer_text"):
+        blocks.append({"type": "text", "settings": {"heading": store_name, "text": s["footer_text"]}})
+    if s.get("footer_show_links", True):
+        blocks.append({"type": "links", "settings": {"heading": "", "menu": s.get("footer_menu") or "Home | /\nShop all | /collections/all"}})
+    social = {k: s.get(f"footer_{k}", "") for k in ("instagram", "facebook", "x", "tiktok", "youtube", "pinterest", "linkedin")}
+    if any(social.values()):
+        blocks.append({"type": "social", "settings": social})
+    return {
+        "settings": {"copyright": s.get("footer_copyright", ""), "background": s.get("footer_bg", ""),
+                     "text_color": s.get("footer_text_color", "")},
+        "blocks": blocks,
+    }
+
+
+def _with_section(custom_data, name, values):
+    return {**custom_data, "sections": {**(custom_data.get("sections") or {}), name: values}}
+
+
+def synced_section(store_theme, name, files=None):
+    """
+    {path, content, schema, spec, values, version} of a synced section in this store's theme,
+    or None (the theme has no such file, or its code is invalid: the old footer is used).
+    A store's first read fills in its values (from its earlier footer settings) and saves them.
+    """
+    path = sync.SYNCED_SECTIONS[name]["path"]
+    theme = store_theme.theme
+    if files is not None:
+        content = files.get(path)
+    else:
+        content = theme.files.filter(file_path=path).values_list("content", flat=True).first()
+    if content is None:
+        return None
+    try:
+        schema = sync.parse_cached(theme.pk, name, content)
+    except sync.SectionCodeError:
+        return None
+    spec = sync.spec_of(name, schema)
+    saved = (store_theme.custom_data.get("sections") or {}).get(name)
+    if saved is None:
+        seed = _seed(name, resolve(store_theme.custom_data)["settings"], store_theme.store.store_name)
+        values = sync.clean_values(spec, seed) if seed else sync.defaults_of(spec, schema)
+        store_theme.custom_data = _with_section(store_theme.custom_data, name, values)
+        store_theme.save(update_fields=["custom_data", "updated_at"])
+    else:
+        values = sync.clean_values(spec, saved)
+    return {"path": path, "content": content, "schema": schema, "spec": spec, "values": values,
+            **sync.section_state(theme, name)}
+
+
+def synced_sections(store_theme, files=None):
+    found = {}
+    for name in sync.SYNCED_SECTIONS:
+        section = synced_section(store_theme, name, files)
+        if section:
+            found[name] = section
+    return found
+
+
+def _when(ts):
+    return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "earlier"
+
+
+def _publish(store_theme, name, source, version, values, spec, code, client, started_at=None):
+    sync.EVENTS.publish(store_theme.store_id, {
+        "type": "section", "section": name, "source": source, "client": client or "",
+        "version": version, "values": values, "spec": spec, "code": code, "at": time.time() * 1000,
+        # When the change was made in the browser (ms), for the "change made -> preview updated" times
+        "started_at": started_at,
+    })
+
+
+@transaction.atomic
+def save_section_values(store_theme, name, raw, client="", base_version=None, started_at=None):
+    """
+    Blocks -> Code: the customizer saved the section's values. They are stored, and
+    written into the file's schema (defaults and block order) - only those lines change.
+    The newest change wins; if the code editor changed the file since, the reply says so.
+    """
+    current = synced_section(store_theme, name)
+    if current is None:
+        raise exceptions.ValidationError({"sections": f"This theme has no {sync.SYNCED_SECTIONS[name]['path']} to save into."})
+    try:
+        values = sync.clean_values(current["spec"], raw, strict=True)
+    except ValueError as error:
+        raise exceptions.ValidationError({"sections": str(error)})
+
+    theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
+    file = theme.files.get(file_path=current["path"])
+    state = sync.section_state(theme, name)
+    conflict = None
+    if base_version is not None and base_version != state["version"] and state["source"] in ("code", "restore"):
+        conflict = (f"The code editor changed the footer at {_when(state['updated_at'])}. Your change here was saved on top; "
+                    "the code editor's version is kept in its History.")
+
+    code = sync.write_values(file.content, values)
+    version = state["version"]
+    if code != file.content:
+        version = sync.record_version(theme, name, file.content, "customizer")
+        file.content = code
+        file.file_size = len(code.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        theme.save(update_fields=["theme_data", "updated_at"])
+        sync.invalidate(theme.pk, current["path"])
+
+    store_theme.custom_data = _with_section(store_theme.custom_data, name, values)
+    store_theme.save(update_fields=["custom_data", "updated_at"])
+    _publish(store_theme, name, "customizer", version, values, current["spec"], code, client, started_at)
+    return {"version": version, "values": values, "conflict": conflict}
+
+
+@transaction.atomic
+def save_synced_code(store_theme, name, content, base_version=None, client="", source="code", started_at=None):
+    """
+    Code -> Blocks: the section's file was saved in Edit code (or restored). Its code is
+    checked first - invalid Liquid or schema JSON is refused with its line, and the saved
+    version keeps working. Settings and blocks are rebuilt: new ones appear, removed ones
+    go, ids that stay keep their values.
+    """
+    path = sync.SYNCED_SECTIONS[name]["path"]
+    try:
+        new_schema = sync.parse(content, path)
+    except sync.SectionCodeError as error:
+        raise exceptions.ValidationError({"content": str(error), "line": error.line})
+
+    theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
+    file = theme.files.filter(file_path=path).first()
+    old_schema = None
+    if file is not None:
+        try:
+            old_schema = sync.parse(file.content, path)
+        except sync.SectionCodeError:
+            old_schema = None
+
+    state = sync.section_state(theme, name)
+    conflict = None
+    if base_version is not None and base_version != state["version"] and state["source"] == "customizer":
+        conflict = (f"The customizer changed the footer at {_when(state['updated_at'])}. Your code was saved on top; "
+                    "the customizer's version is kept in History.")
+
+    saved = (store_theme.custom_data.get("sections") or {}).get(name)
+    values = sync.merge_for_new_code(old_schema, new_schema, saved, name)
+    version = sync.record_version(theme, name, file.content if file else None, source)
+    if file is None:
+        file = _new_file(theme, path, content)
+        file.save()
+    else:
+        file.content = content
+        file.file_size = len(content.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+    theme.save(update_fields=["theme_data", "updated_at"])
+    sync.invalidate(theme.pk, path)
+
+    store_theme.custom_data = _with_section(store_theme.custom_data, name, values)
+    store_theme.save(update_fields=["custom_data", "updated_at"])
+    spec = sync.spec_of(name, new_schema)
+    _publish(store_theme, name, source, version, values, spec, content, client, started_at)
+    return SimpleNamespace(file_path=path, file_size=file.file_size,
+                           sync={"section": name, "version": version, "conflict": conflict, "values": values, "spec": spec})
+
+
+def restore_section(store_theme, name, index, client=""):
+    """Put back a version from the section's history (it becomes the newest version)."""
+    content = sync.history_content(store_theme.theme, name, index)
+    if content is None:
+        raise exceptions.NotFound("That version is no longer kept.")
+    return save_synced_code(store_theme, name, content, client=client, source="restore")

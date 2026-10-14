@@ -1,7 +1,11 @@
 from django.urls import path
  
 from .views import (
+    SectionHistoryView,
+    SyncTimingsView,
     ThemeCustomizerView,
+    ThemeEventsView,
+    ThemeSectionsView,
     ThemeFilesView,
     ThemeImageView,
     ThemePreviewView,
@@ -59,6 +63,30 @@ urlpatterns = [
         "preview/",
         ThemePreviewView.as_view(),
         name="theme_preview",
+    ),
+
+    path(
+        "sections/",
+        ThemeSectionsView.as_view(),
+        name="theme_sections",
+    ),
+
+    path(
+        "sections/<str:name>/history/",
+        SectionHistoryView.as_view(),
+        name="theme_section_history",
+    ),
+
+    path(
+        "events/",
+        ThemeEventsView.as_view(),
+        name="theme_events",
+    ),
+
+    path(
+        "sync-timings/",
+        SyncTimingsView.as_view(),
+        name="theme_sync_timings",
     ),
 
     path(

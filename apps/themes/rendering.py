@@ -5,6 +5,8 @@ Page = layout/theme.liquid
          └ templates/<page>.liquid
              └ sections/<type>.liquid for each section, in the store's order
 """
+import hashlib
+import json
 import re
 import uuid
 from decimal import Decimal
@@ -22,7 +24,9 @@ from apps.catalog.services import published_collections, published_products
 from apps.orders.models import OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
-from .services import get_store_theme, theme_files
+from . import section_sync as sync
+from .models import ThemeFile
+from .services import get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
@@ -523,13 +527,15 @@ def layout_data(settings, base_url, nav):
     return {"header_links": header, "footer_links": footer, "footer_social": social}
 
 
-def _environment(files, base_url, currency):
+def _environment(files, base_url, currency, overrides=None):
     loader = {}
     for path, content in files.items():
         loader[path] = content
         # Snippets can be rendered by name: {% render 'product-card' %}
         if path.startswith("snippets/") and path.endswith(".liquid"):
             loader[path[len("snippets/"):-len(".liquid")]] = content
+    # e.g. the footer snippet name pointing at the synced footer section's output
+    loader.update(overrides or {})
 
     env = Environment(loader=DictLoader(loader), autoescape=True)
 
@@ -1001,6 +1007,53 @@ def _error_box(where, error):
     )
 
 
+FOOTER_PLACEHOLDER = "<!--tss-section:footer-->"
+
+
+def _env_key(files, base_url, currency):
+    """What a compiled section depends on besides its own file: the snippets it can render."""
+    snippets = sorted((p, hashlib.sha256(c.encode("utf-8")).hexdigest()) for p, c in files.items() if p.startswith("snippets/"))
+    return hashlib.sha256(json.dumps([base_url, currency, snippets]).encode("utf-8")).hexdigest()
+
+
+def _synced_html(store, store_theme, name, section, data, env, env_key, context, editor):
+    raw = (data.get("sections") or {}).get(name)
+    return sync.render_section(
+        name, theme_id=store_theme.theme_id, content=section["content"],
+        values=raw if raw is not None else section["values"], env=env, env_key=env_key,
+        context=context, editor=editor, link=lambda url: _resolve_link(shop_url(store), url),
+    )
+
+
+def render_synced_section_fast(store, name, custom_data):
+    """
+    One synced section only (the customizer's live preview while editing it):
+    a single database read for its code, and its compiled template from the cache.
+    Returns None when it can't be done this way (the caller renders it the full way).
+    """
+    path = sync.SYNCED_SECTIONS[name]["path"]
+    row = (
+        ThemeFile.objects.filter(file_path=path, theme__store_assignments__store=store, theme__store_assignments__is_active=True)
+        .values("theme_id", "content").first()
+    )
+    if row is None:
+        return None
+    data = resolve(custom_data)
+    settings = data["settings"]
+    base_url = shop_url(store)
+    env = _environment({}, base_url, settings["currency_symbol"])
+    try:
+        return sync.render_section(
+            name, theme_id=row["theme_id"], content=row["content"], values=(data.get("sections") or {}).get(name) or {},
+            env=env, env_key=("fast", base_url, settings["currency_symbol"]),
+            context={"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"},
+            editor=True, link=lambda url: _resolve_link(base_url, url),
+        )
+    except Exception:  # e.g. it renders a snippet: the full way has them
+        sync.invalidate(row["theme_id"], path)
+        return None
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1):
     """
@@ -1017,7 +1070,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
     settings = data["settings"]
     base_url = shop_url(store)
-    env = _environment(files, base_url, settings["currency_symbol"])
+    # The footer is a synced section (sections/footer.liquid) when the theme has one:
+    # {% render 'footer' %} in the layout then shows it (see section_sync)
+    footer = synced_section(store_theme, "footer", files)
+    overrides = {"footer": FOOTER_PLACEHOLDER} if footer else None
+    env = _environment(files, base_url, settings["currency_symbol"], overrides)
 
     shop = {"name": store.store_name, "url": base_url}
     nav = [
@@ -1060,6 +1117,16 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "template": page,
         **layout_data(settings, base_url, nav),
     }
+
+    # The synced footer section, rendered from its saved (or, in the preview, unsaved) values
+    footer_html = None
+    if footer:
+        footer_html = _synced_html(
+            store, store_theme, "footer", footer, data, env,
+            _env_key(files, base_url, settings["currency_symbol"]), common, editor,
+        )
+        if only_section == "footer":
+            return footer_html
 
     template_data = data["templates"][page]
     visible = [
@@ -1183,8 +1250,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     else:
         title = store.store_name
 
-    return env.get_template("layout/theme.liquid").render(
+    page_html = env.get_template("layout/theme.liquid").render(
         content_for_layout=Markup(content),
         page_title=title,
         **common,
     )
+    return page_html.replace(FOOTER_PLACEHOLDER, str(footer_html)) if footer_html is not None else page_html
