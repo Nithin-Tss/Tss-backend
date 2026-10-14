@@ -102,3 +102,26 @@ class StoreTheme(models.Model):
 
     def __str__(self):
         return f"{self.store} - {self.theme}"
+
+class ThemeImage(models.Model):
+    """A picture uploaded in the customizer (banner, slide, image block); the bytes live in the database."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        db_column="store_id",
+        related_name="theme_images",
+    )
+    content_type = models.CharField(max_length=50)
+    data = models.BinaryField()
+    size = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"themes"."theme_images"'
+        verbose_name = "Theme Image"
+        verbose_name_plural = "Theme Images"
+
+    def __str__(self):
+        return f"{self.store_id}/{self.id}"

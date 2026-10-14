@@ -7,21 +7,34 @@
   <div class="slideshow__track">
     {%- for block in section.blocks -%}
       {%- assign b = block.settings -%}
-      <div class="slideshow__slide hero hero--{{ s.height }}{% if b.image_url != blank %} hero--image{% else %} placeholder{% endif %}{% if forloop.first %} is-active{% endif %}"
+      {%- assign has_video = false -%}{%- if b.media_type == "video" and b.video_url != blank -%}{%- assign has_video = true -%}{%- endif -%}
+      {%- assign align = b.content_align -%}
+      {%- if align == blank -%}{%- if b.text_alignment == "left" -%}{%- assign align = "start" -%}{%- elsif b.text_alignment == "right" -%}{%- assign align = "end" -%}{%- else -%}{%- assign align = "center" -%}{%- endif -%}{%- endif -%}
+      {%- assign has_media = has_video -%}{%- if b.image_url != blank -%}{%- assign has_media = true -%}{%- endif -%}
+      <div class="slideshow__slide hero hero--{{ s.height }}{% if has_media %} hero--image{% else %} placeholder{% endif %}{% if forloop.first %} is-active{% endif %}"
+        style="{% if b.background_color != blank %}background:{{ b.background_color }};{% endif %}align-items:{% if b.content_position == 'top' %}flex-start{% elsif b.content_position == 'bottom' %}flex-end{% else %}center{% endif %}"
         role="group" aria-roledescription="slide" aria-label="{{ forloop.index }} of {{ forloop.length }}">
-        {%- if b.image_url != blank -%}
+        {%- if has_video -%}
+          <video class="hero__media" src="{{ b.video_url }}" autoplay muted loop playsinline{% if b.image_url != blank %} poster="{{ b.image_url }}"{% endif %}></video>
+        {%- elsif b.image_url != blank -%}
           <picture>
             {%- if b.mobile_image_url != blank -%}<source media="(max-width: 749px)" srcset="{{ b.mobile_image_url }}">{%- endif -%}
-            <img class="hero__media" src="{{ b.image_url }}" alt=""{% unless forloop.first %} loading="lazy"{% endunless %}>
+            <img class="hero__media" src="{{ b.image_url }}" alt="" style="object-fit: {{ b.image_fit }}; object-position: {{ b.image_focus }}"{% unless forloop.first %} loading="lazy"{% endunless %}>
           </picture>
-          <div class="hero__overlay" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }}"></div>
         {%- endif -%}
-        <div class="page-width hero__content align-{{ b.text_alignment }}">
-          {%- if b.heading != blank -%}<h1>{{ b.heading }}</h1>{%- endif -%}
-          {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
-          {%- if b.button_label != blank -%}
-            <a class="button" href="{{ b.button_link | link }}">{{ b.button_label }}</a>
-          {%- endif -%}
+        {%- if has_media and b.overlay -%}
+          <div class="hero__overlay" style="opacity: {{ s.overlay_opacity | divided_by: 100.0 }};background: {% if b.overlay_style == 'gradient' %}linear-gradient(to {% if b.gradient_direction == 'down' %}bottom{% else %}top{% endif %}, {{ b.overlay_color }}, transparent){% else %}{{ b.overlay_color }}{% endif %}"></div>
+        {%- endif -%}
+        <div class="page-width hero__content align-{{ b.text_alignment }}"
+          style="padding: {{ b.padding_top }}px {{ b.padding_right }}px {{ b.padding_bottom }}px {{ b.padding_left }}px">
+          <div class="{{ b._t_class | escape }}"
+            style="{{ b._t_style | escape }};display:flex;flex-direction:{% if b.content_direction == 'horizontal' %}row;flex-wrap:wrap;align-items:center;justify-content:{% if align == 'start' %}flex-start{% elsif align == 'end' %}flex-end{% else %}center{% endif %}{% else %}column;align-items:{% if align == 'start' %}flex-start{% elsif align == 'end' %}flex-end{% else %}center{% endif %}{% endif %};gap:{{ b.content_gap }}px">
+            {%- if b.heading != blank -%}<h1>{{ b.heading }}</h1>{%- endif -%}
+            {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
+            {%- if b.button_label != blank -%}
+              <a class="button" href="{{ b.button_link | link }}">{{ b.button_label }}</a>
+            {%- endif -%}
+          </div>
         </div>
       </div>
     {%- endfor -%}

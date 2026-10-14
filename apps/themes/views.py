@@ -31,6 +31,7 @@ from django.contrib.auth import get_user_model
 
 from apps.tenancy.models import Store, StoreMembership
 
+from .models import ThemeImage
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
 from .rendering import render_page, render_synced_section_fast, shop_url
@@ -325,9 +326,22 @@ class ThemeImageView(StoreThemeView):
             raise ValidationError({"image": "Not a supported image. Use JPG, PNG or WEBP."})
         file.seek(0)
 
-        name = default_storage.save(f"themes/{request.store.store_id}/{uuid.uuid4().hex}.{ext}", file)
-        url = request.build_absolute_uri(settings.MEDIA_URL + name)
+        ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
+        image = ThemeImage.objects.create(
+            store_id=request.store.store_id, content_type=ctype, data=file.read(), size=file.size,
+        )
+        url = request.build_absolute_uri(f"/s/_img/{image.id}")
         return Response({"url": url}, status=status.HTTP_201_CREATED)
+
+
+@require_GET
+def theme_image(request, image_id):
+    """Public: a customizer picture, straight from the database."""
+    image = get_object_or_404(ThemeImage, pk=image_id)
+    response = HttpResponse(bytes(image.data), content_type=image.content_type)
+    response["Cache-Control"] = "public, max-age=31536000, immutable"
+    response["Cross-Origin-Resource-Policy"] = "cross-origin"
+    return response
 
 
 # Added to the customizer preview only (the Home page). The page has no access to
@@ -1001,6 +1015,17 @@ def _storefront(render):
             )
 
             status_code = 200
+
+        except Http404:
+            # Drafts and unknown pages: a readable page that the preview frame is allowed to show
+            html = (
+                "<!doctype html><meta charset='utf-8'><title>Page not found</title>"
+                "<div style='font:16px/1.5 system-ui,sans-serif;padding:64px 24px;text-align:center;color:#161C2C'>"
+                "<h1 style='font-size:24px'>This page isn't available</h1>"
+                "<p>The product or collection is not published, or it no longer exists.</p></div>"
+            )
+
+            status_code = 404
 
         except LiquidError as error:
             html = (

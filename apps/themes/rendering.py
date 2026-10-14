@@ -124,7 +124,10 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .rich-text--quote-highlighted blockquote{background:var(--soft);padding:16px 20px;border-radius:12px;font-style:italic}
 @media (min-width:750px){.rich-text__body--2col{columns:2;column-gap:40px;text-align:left}}
 .rich-text--image{display:grid;gap:32px;align-items:center;max-width:none}
-.rich-text__image img{width:100%;border-radius:var(--radius,14px)}
+.rich-text__image img{display:block;width:100%;height:auto;border-radius:var(--radius,14px);object-fit:var(--img-fit,cover);object-position:var(--img-focus,center)}
+.rich-text__image--square img{aspect-ratio:1/1;height:100%}.rich-text__image--portrait img{aspect-ratio:4/5;height:100%}
+.rich-text__image--landscape img{aspect-ratio:3/2;height:100%}.rich-text__image--wide img{aspect-ratio:21/9;height:100%}
+.rich-text__image--contain{background:var(--soft)}
 @media (min-width:750px){.rich-text--image-left,.rich-text--image-right{grid-template-columns:1fr 1fr}.rich-text--image-right .rich-text__image{order:2}}
 .rich-text__button{margin-top:8px}
 </style>""")
@@ -1307,6 +1310,10 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             # The template sees only its own blocks (e.g. slides); visible ones only
             all_blocks = section.get("blocks", [])
             section["blocks"] = [b for b in all_blocks if b["type"] not in GENERIC_BLOCK_TYPES and not b.get("hidden")]
+            # Slides carry the same text options as blocks; the template puts them on the slide's text
+            for own in section["blocks"]:
+                t_classes, t_style = text_attrs(own["settings"])
+                own["settings"] = dict(own["settings"], _t_class=" ".join(t_classes), _t_style=";".join(t_style))
             extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
 
             # The product page's "Product information" accordion; the template places it under the description

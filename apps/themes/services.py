@@ -42,16 +42,26 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 8
+STARTER_REVISION = 12
 STARTER_UPGRADES = {
     "sections/hero.liquid": {"c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d"},
-    "sections/slideshow.liquid": {"1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58"},
+    "sections/slideshow.liquid": {
+        "1676de060a502cce01bded76ca923306ffb596e2b5e4a824630b2398e5b1fb58",
+        "32a46aa7269245969967e3c388440384f79a8c57e40060332a6a9ec047cc8732",  # revision 9: slide text options
+        "67d575481eee66766ed8c904813a8ccf965c8d288376881e60e24a51cecab125",
+        "8a3471bb606877eda22c385605c975c942aaa2b1b5bbfcbb9afbd57af24b029c",  # revision 12: slide alignment follows text alignment
+        "06e6537da8a47e1d8e62fbc1615ca4636aee391c7627342f20707c95fc630313",  # revision 11: slide image fit and focus
+        "004beb6dad2713d62967443126f69483bc99da33e548b62e325090c65ad57032",  # revision 10: slide layout, overlay, padding, video
+    },
     "sections/product-grid.liquid": {
         "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
         "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
     },
     "sections/product-carousel.liquid": {"0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4"},
-    "sections/rich-text.liquid": {"37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b"},
+    "sections/rich-text.liquid": {
+        "37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b",
+        "8c115bfae9de1cfa75a8931aaafa91c3781837d743e9340440e22bbc95a6ebe8",  # revision 11: image shape, fit and focus
+    },
     "snippets/product-card.liquid": {
         "bc624bf8346fce0c29de1419f3d32ad1f66f052fe75ec9830685f219aee43eff",
         "386b5a2d330ef931de50ce9fa6f66cb49f0bae00b23582dfd4e27b6a84ad3723",
@@ -207,7 +217,7 @@ def theme_files(store_theme):
 
 SETTINGS_FILE = "config/settings_data.json"
 TEMPLATE_FILES = {f"templates/{page}.json": page for page in PAGES}
-SETTINGS_FILES = (SETTINGS_FILE, *TEMPLATE_FILES)
+SETTINGS_FILES = (SETTINGS_FILE, *TEMPLATE_FILES, "assets/images.json")
 
 
 def _dump(value):
@@ -223,9 +233,35 @@ def settings_files(store_theme):
     return files
 
 
+IMAGES_FILE = "assets/images.json"
+
+
+def images_file(store_theme):
+    """The pictures uploaded in the customizer (stored in the database), listed as read-only JSON."""
+    from .models import ThemeImage
+
+    used = _dump(store_theme.custom_data)
+    images = []
+    for image in ThemeImage.objects.filter(store_id=store_theme.store_id).order_by("-created_at"):
+        key = str(image.id)
+        images.append({
+            "id": key,
+            "url": f"/s/_img/{key}",
+            "type": image.content_type,
+            "bytes": image.size,
+            "uploaded": image.created_at.isoformat(timespec="seconds"),
+            "in_use": key in used,
+        })
+    return _dump({
+        "_note": "Pictures uploaded in the customizer. They are stored in the database; use the url in a Liquid file "
+                 "or pick the picture in the customizer. This file is read-only.",
+        "images": images,
+    })
+
+
 def code_files(store_theme):
-    """Everything the code editor lists: the Liquid files plus the settings files."""
-    return {**theme_files(store_theme), **settings_files(store_theme)}
+    """Everything the code editor lists: the Liquid files, the settings files and the uploaded images."""
+    return {**theme_files(store_theme), **settings_files(store_theme), IMAGES_FILE: images_file(store_theme)}
 
 
 def _settings_conflict(path):
@@ -319,6 +355,9 @@ def _new_file(theme, path, content):
 
 
 def save_file(store_theme, path, content, base_version=None, client="", started_at=None):
+    if isinstance(path, str) and path.strip().strip("/") == IMAGES_FILE:
+        raise exceptions.ValidationError({"content": "assets/images.json lists your uploaded pictures and can't be edited."})
+
     if isinstance(path, str) and path.strip().strip("/") in SETTINGS_FILES:
         path = path.strip().strip("/")
         if not isinstance(content, str):

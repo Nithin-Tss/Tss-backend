@@ -841,13 +841,56 @@ SECTIONS["slideshow"]["settings"] = {
     **common_settings(width="full", spacing_top=0, spacing_bottom=0),
 }
 SECTIONS["slideshow"]["blocks"]["slide"]["settings"] = {
+    "media_type": _choice("content", "Type", ["image", "video"], "image", ui="segmented", labels={"image": "Image", "video": "Video"}),
     "image_url": _opt("content", "image", "Image", ""),
-    "mobile_image_url": _opt("content", "image", "Mobile image", "", help="Optional. Shown on phones."),
+    "mobile_image_url": _opt(
+        "content", "image", "Mobile image", "", help="Optional. Shown on phones.", show_if={"media_type": "image"},
+    ),
+    "video_url": _opt(
+        "content", "url", "Video link", "", show_if={"media_type": "video"},
+        help="Link to an MP4 or WEBM file. The image above is shown until it loads.",
+    ),
     "heading": _opt("content", "text", "Heading", "New season"),
     "text": _opt("content", "textarea", "Sub-text", ""),
     "button_label": _opt("content", "text", "Button text", ""),
     "button_link": _opt("content", "url", "Button link", ""),
     "text_alignment": _choice("content", "Text alignment", _ALIGN3, "center", ui="segmented"),
+    "image_fit": _choice(
+        "layout", "Image fit", ["cover", "contain"], "cover", ui="segmented", show_if={"media_type": "image"},
+        labels={"cover": "Fill (crop)", "contain": "Fit (whole image)"},
+    ),
+    "image_focus": _choice(
+        "layout", "Image focus", ["center", "top", "bottom", "left", "right"], "center",
+        show_if={"media_type": "image"}, help="Which part stays visible when the image is cropped.",
+    ),
+    "content_direction": _choice(
+        "layout", "Direction", ["vertical", "horizontal"], "vertical", ui="segmented",
+        labels={"vertical": "Vertical", "horizontal": "Horizontal"},
+    ),
+    "content_align": _choice(
+        "layout", "Alignment", ["", "start", "center", "end"], "",
+        labels={"": "Same as text alignment", "start": "Start", "center": "Center", "end": "End"},
+    ),
+    "content_position": _choice(
+        "layout", "Position", ["top", "center", "bottom"], "center",
+        labels={"top": "Top", "center": "Center", "bottom": "Bottom"},
+    ),
+    "content_gap": _opt("layout", "range", "Gap", 16, min=0, max=100, unit="px"),
+    "background_color": _opt("style", "color_optional", "Background colour", ""),
+    "overlay": _opt("style", "checkbox", "Media overlay", True),
+    "overlay_color": _opt("style", "color", "Overlay colour", "#000000", show_if={"overlay": True}),
+    "overlay_style": _choice(
+        "style", "Overlay style", ["solid", "gradient"], "solid", ui="segmented", show_if={"overlay": True},
+        labels={"solid": "Solid", "gradient": "Gradient"},
+    ),
+    "gradient_direction": _choice(
+        "style", "Gradient direction", ["up", "down"], "up", ui="segmented",
+        show_if={"overlay": True, "overlay_style": "gradient"}, labels={"up": "Up", "down": "Down"},
+    ),
+    "padding_top": _opt("layout", "range", "Top padding", 48, min=0, max=200, unit="px"),
+    "padding_bottom": _opt("layout", "range", "Bottom padding", 48, min=0, max=200, unit="px"),
+    "padding_left": _opt("layout", "range", "Left padding", 20, min=0, max=200, unit="px"),
+    "padding_right": _opt("layout", "range", "Right padding", 20, min=0, max=200, unit="px"),
 }
 
 
@@ -904,6 +947,19 @@ SECTIONS["rich-text"]["settings"] = {
     "image_url": _opt("content", "image", "Image", "", help="Optional."),
     "image_position": _choice(
         "content", "Image position", ["left", "right", "top"], "left", ui="segmented", show_if={"image_url": "*"},
+    ),
+    "image_ratio": _choice(
+        "layout", "Image shape", ["original", "square", "portrait", "landscape", "wide"], "original",
+        labels={"original": "Original", "wide": "Wide (21:9)"}, show_if={"image_url": "*"},
+        help="Original keeps the picture's own proportions.",
+    ),
+    "image_fit": _choice(
+        "layout", "Image fit", ["cover", "contain"], "cover", ui="segmented", show_if={"image_url": "*"},
+        labels={"cover": "Fill (crop)", "contain": "Fit (whole image)"},
+    ),
+    "image_focus": _choice(
+        "layout", "Image focus", ["center", "top", "bottom", "left", "right"], "center", show_if={"image_url": "*"},
+        help="Which part stays visible when the image is cropped.",
     ),
     "text_width": _choice("layout", "Text width", ["narrow", "medium", "wide"], "medium", ui="segmented"),
     "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
@@ -1518,6 +1574,10 @@ for _key in ("heading", "text", "quote", "list", "icon_text", "accordion", "coun
     BLOCKS[_key]["settings"] = _insert_before_layout(
         BLOCKS[_key]["settings"], text_settings(HEADING_PRESETS if _key == "heading" else TEXT_PRESETS),
     )
+# Slides: text options for the slide's heading, sub-text and links
+SECTIONS["slideshow"]["blocks"]["slide"]["settings"] = _insert_before_layout(
+    SECTIONS["slideshow"]["blocks"]["slide"]["settings"], text_settings(HEADING_PRESETS),
+)
 _button = {k: v for k, v in BLOCKS["button"]["settings"].items() if k != "style"}
 BLOCKS["button"]["settings"] = _insert_before_layout(_button, button_settings())
 

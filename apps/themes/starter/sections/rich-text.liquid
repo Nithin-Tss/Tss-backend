@@ -3,7 +3,7 @@
   <div class="page-width">
     <div class="rich-text rich-text--{{ s.text_width }} rich-text--size-{{ s.text_size }} rich-text--lh-{{ s.line_spacing }} rich-text--quote-{{ s.quote_style }} align-{{ s.text_alignment }}{% if s.image_url != blank %} rich-text--image rich-text--image-{{ s.image_position }}{% endif %}">
       {%- if s.image_url != blank -%}
-        <div class="rich-text__image"><img src="{{ s.image_url }}" alt="" loading="lazy"></div>
+        <div class="rich-text__image rich-text__image--{{ s.image_ratio }}{% if s.image_fit == 'contain' %} rich-text__image--contain{% endif %}" style="--img-fit: {{ s.image_fit }}; --img-focus: {{ s.image_focus }}"><img src="{{ s.image_url }}" alt="" loading="lazy"></div>
       {%- endif -%}
       <div class="rich-text__content">
         {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
