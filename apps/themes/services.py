@@ -30,6 +30,9 @@ REQUIRED_FILES = {
     "templates/index.liquid",
     "templates/product.liquid",
     "templates/collection.liquid",
+    # Blog pages: a theme copied before they existed gets the starter's missing files once
+    "templates/blog.liquid",
+    "templates/article.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500

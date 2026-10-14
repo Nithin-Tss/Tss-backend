@@ -717,17 +717,45 @@ class SyncTimingsView(StoreThemeView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _preview_target(request):
+    """
+    (page, render_page arguments, message) for ?page=index|product|collection|blog|article.
+    The product page shows ?product=<id> or the newest product; the collection page shows all products.
+    message: why the page can't be shown (no product to show), else None.
+    """
+    page = request.query_params.get("page") or "index"
+    if page not in PAGES:
+        raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}."})
+    if page == "collection":
+        return page, {"collection": {"name": "All products", "obj": None}}, None
+    if page == "product":
+        products = published_products(request.store)
+        try:
+            chosen = products.filter(pk=uuid.UUID(request.query_params.get("product", ""))).first()
+        except ValueError:
+            chosen = None
+        product = chosen or products.order_by("-created_at").first()
+        if product is None:
+            return page, {}, "Add an active product on the Online Store to preview the product page."
+        return page, {"product": product}, None
+    return page, {}, None
+
+
 class ThemePreviewView(StoreThemeView):
     """
-    POST /api/v1/themes/preview/?scroll=&selected=  {unsaved custom_data} -> {"html": ...}
-    Renders the home page with the customizer's unsaved sections, for its
-    live preview, with drag handles on every section. Nothing is saved.
+    POST /api/v1/themes/preview/?page=&product=&scroll=&selected=  {unsaved custom_data} -> {"html": ...}
+    Renders a page (Home by default) with the customizer's unsaved sections,
+    for its live preview, with drag handles on every section. Nothing is saved.
     """
 
     action_permissions = {"POST": "themes.view"}
 
     def post(self, request):
         clean = validate_custom_data(request.data)
+        page, target, message = _preview_target(request)
+        if message:
+            return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
+                             "fonts": ""})
 
         # ?section=<id>: just that section, to swap into the open preview (plus the fonts it may need)
         section_id = request.query_params.get("section")
@@ -739,13 +767,13 @@ class ThemePreviewView(StoreThemeView):
                 return Response({"html": str(html), "fonts": ""})
         if section_id:
             try:
-                html = render_page(request.store, "index", custom_data=clean, editor=True, only_section=section_id)
+                html = render_page(request.store, page, custom_data=clean, editor=True, only_section=section_id, **target)
             except LiquidError as error:
                 html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
             return Response({"html": html, "fonts": google_fonts_link(_collect_fonts(resolve(clean)))})
 
         try:
-            html = render_page(request.store, "index", custom_data=clean, editor=True)
+            html = render_page(request.store, page, custom_data=clean, editor=True, **target)
         except LiquidError as error:
             html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
 

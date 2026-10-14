@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -18,6 +19,8 @@ from markupsafe import Markup, escape
 
 from django.db.models import Avg, Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
+from django.utils import timezone
+from django.utils.text import slugify
 
 from apps.catalog.models import EXTRA_FIELDS
 from apps.catalog.services import published_collections, published_products
@@ -1054,10 +1057,125 @@ def render_synced_section_fast(store, name, custom_data):
         return None
 
 
+# ---------------------------------------------------------------- blog
+#
+# Posts can't be written in the admin yet, so the customizer previews the blog
+# pages with these sample posts. The live store shows no posts (blog_posts).
+
+SAMPLE_POSTS = [
+    {
+        "title": "Five summer drinks to make at home", "handle": "five-summer-drinks", "days_ago": 2,
+        "category": "Recipes", "tags": ["Summer", "Easy"], "author": "Asha Rao",
+        "bio": "Asha writes about food, drink and the people who make them.",
+        "excerpt": "Bright, cold and ready in minutes: our favourite drinks for warm evenings.",
+        "body": "<p>Long days call for something cold. These five drinks need no special tools.</p>"
+                "<h2>1. Mint lemonade</h2><p>Crush a handful of mint with sugar, add lemon juice and top up with "
+                "sparkling water.</p><blockquote>Make the syrup the night before and keep it in the fridge.</blockquote>"
+                "<h2>2. Cold brew tonic</h2><p>Pour cold brew coffee over tonic and ice for a bitter, fizzy pick-me-up.</p>"
+                "<ul><li>Use fresh ice</li><li>Chill the glasses</li><li>Taste before you sweeten</li></ul>",
+    },
+    {
+        "title": "How we choose our ingredients", "handle": "how-we-choose-ingredients", "days_ago": 6,
+        "category": "Stories", "tags": ["Sourcing"], "author": "Ben Carter",
+        "bio": "Ben looks after the people and farms we buy from.",
+        "excerpt": "A look behind the scenes at the farms and makers we work with.",
+        "body": "<p>Every ingredient starts with a visit. We meet the growers, taste the harvest and ask how it was made.</p>"
+                "<h2>Small batches</h2><p>Buying in small batches means fresher stock and fairer prices.</p>",
+    },
+    {
+        "title": "A beginner's guide to tasting notes", "handle": "guide-to-tasting-notes", "days_ago": 11,
+        "category": "Guides", "tags": ["Learn"], "author": "Asha Rao",
+        "bio": "Asha writes about food, drink and the people who make them.",
+        "excerpt": "Sweet, bright, earthy: learn the words that help you find what you like.",
+        "body": "<p>Tasting notes are a shared language. Start with three questions: is it sweet, is it sharp, "
+                "what does it remind you of?</p>",
+    },
+    {
+        "title": "Hosting a tasting evening", "handle": "hosting-a-tasting-evening", "days_ago": 18,
+        "category": "Guides", "tags": ["Events", "Easy"], "author": "Ben Carter",
+        "bio": "Ben looks after the people and farms we buy from.",
+        "excerpt": "Everything you need for a relaxed evening with friends, from glasses to snacks.",
+        "body": "<p>Pick three to five things to taste, go from light to strong, and keep water close by.</p>",
+    },
+]
+
+
+def _date_text(value):
+    """"October 14, 2026" (no zero padding, on every OS)."""
+    return f"{value:%B} {value.day}, {value.year}"
+
+
+def _slug_link(base_url, path, name):
+    """{"name", "handle", "url"} for a category, tag or author, or None when there is no name."""
+    handle = slugify(name or "")
+    return {"name": name, "handle": handle, "url": f"{base_url}/blog/{path}/{handle}"} if handle else None
+
+
+def _sample_post_drop(post, base_url):
+    """A sample post as the theme sees a post: what article cards and the article page use."""
+    published = timezone.now() - timedelta(days=post["days_ago"])
+    words = len(re.sub(r"<[^>]+>", " ", post["body"]).split())
+    author = _slug_link(base_url, "author", post["author"])
+    author.update(bio=post["bio"], avatar=None)
+    return {
+        "id": post["handle"],
+        "title": post["title"],
+        "handle": post["handle"],
+        "url": f"{base_url}/blog/{post['handle']}",
+        "excerpt": post["excerpt"],
+        "body": Markup(sanitize_embed(post["body"])),
+        "cover_image": None,
+        "published_at": published,
+        "date": _date_text(published),
+        "reading_time": max(1, round(words / 200)),
+        "author": author,
+        "category": _slug_link(base_url, "category", post["category"]),
+        "tags": [_slug_link(base_url, "tagged", tag) for tag in post["tags"]],
+    }
+
+
+def blog_posts(base_url, editor):
+    """Posts newest first: sample posts in the customizer preview, none on the live store yet."""
+    return [_sample_post_drop(post, base_url) for post in SAMPLE_POSTS] if editor else []
+
+
+def _blog_drop(posts, settings, base_url, per_page, page_number):
+    """The blog page: this page's posts, the categories to filter by, and paging."""
+    categories = {}
+    for post in posts:
+        if post["category"]:
+            categories.setdefault(post["category"]["handle"], dict(post["category"], active=False))
+    pages = max(1, -(-len(posts) // per_page))
+    page_number = min(max(1, page_number), pages)
+    return {
+        "title": settings.get("blog_title") or "Blog",
+        "description": settings.get("blog_description") or "",
+        "url": f"{base_url}/blog",
+        "all_url": f"{base_url}/blog",
+        "filter": None,
+        "articles": posts[(page_number - 1) * per_page:page_number * per_page],
+        "articles_count": len(posts),
+        "categories": sorted(categories.values(), key=lambda c: c["name"].lower()),
+        "page": page_number,
+        "pages": pages,
+    }
+
+
+def _article_drop(posts, index):
+    """Post `index` of `posts` with its neighbours and related posts (same category first)."""
+    post = dict(posts[index])
+    post["previous"] = posts[index + 1] if index + 1 < len(posts) else None  # older
+    post["next"] = posts[index - 1] if index > 0 else None  # newer
+    others = [p for i, p in enumerate(posts) if i != index]
+    same = [p for p in others if post["category"] and p["category"] and p["category"]["handle"] == post["category"]["handle"]]
+    post["related"] = (same + [p for p in others if p not in same])[:6]
+    return post
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1):
     """
-    page: "index", "product" or "collection".
+    page: "index", "product", "collection", "blog" or "article".
     product: a catalog Product (product page).
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
     sort, page_number: the collection page's order (see SORTS) and page (PAGE_SIZE products each).
@@ -1108,13 +1226,29 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "pages": pages,
         }
 
+    template_data = data["templates"][page]
+
+    posts = blog_posts(base_url, editor)
+    blog_drop = article_drop = None
+    if page == "blog":
+        per_page = next(
+            (s["settings"]["posts_per_page"] for s in template_data["sections"].values() if s["type"] == "main-blog"), 9
+        )
+        blog_drop = _blog_drop(posts, settings, base_url, per_page, page_number)
+    elif page == "article" and posts:
+        article_drop = _article_drop(posts, 0)
+
     common = {
-        "shop": shop,
+        "shop": dict(shop, blog_url=f"{base_url}/blog"),
         "settings": settings,
         "product": product_drop_,
         "collection": collection_drop,
         "collections": nav,
+        "blog": blog_drop,
+        "article": article_drop,
         "template": page,
+        # True in the customizer preview: templates may show hints that shoppers never see
+        "design_mode": editor,
         **layout_data(settings, base_url, nav),
     }
 
@@ -1128,7 +1262,6 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         if only_section == "footer":
             return footer_html
 
-    template_data = data["templates"][page]
     visible = [
         (section_id, template_data["sections"][section_id])
         for section_id in template_data["order"]
@@ -1150,6 +1283,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     page_styles = len(html)
 
     for section_id, raw_section in visible:
+        # "Latest posts" with no posts to show is left out of the live store
+        if SECTIONS[raw_section["type"]].get("uses_articles") and not posts and not editor:
+            continue
         section = dict(raw_section, id=section_id)
         section["settings"] = _prepare(section["type"], section["settings"])
         path = f"sections/{section['type']}.liquid"
@@ -1204,6 +1340,14 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                         store, base_url, collection=collection_obj, limit=limit, exclude=exclude,
                     )
 
+            if SECTIONS[section["type"]].get("uses_articles"):
+                ss = section["settings"]
+                wanted = slugify(ss.get("category") or "")
+                shown = [p for p in posts if not wanted or (p["category"] and p["category"]["handle"] == wanted)]
+                if article_drop:
+                    shown = [p for p in shown if p["handle"] != article_drop["handle"]]
+                section["articles"] = shown[:ss.get("limit") or 3]
+
             # The slideshow template has no heading of its own; show the section heading above it
             if section["type"] == "slideshow" and section["settings"].get("heading"):
                 html.append(Markup(
@@ -1247,6 +1391,10 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         title = product.seo_title or product.title
     elif collection_drop:
         title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
+    elif article_drop:
+        title = article_drop["title"]
+    elif blog_drop:
+        title = blog_drop["title"]
     else:
         title = store.store_name
 

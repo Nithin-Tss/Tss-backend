@@ -724,3 +724,107 @@ class LivePreviewAndAutosaveTest(StoreClientMixin, APITestCase):
             {"settings": {"accent_color": "red"}},
         ):
             self.ok("patch", "/api/v1/themes/settings/", body, expect=400)
+
+
+class BlogPagesTest(StoreClientMixin, APITestCase):
+    """Blog and article pages: schema, page-aware preview with sample posts, and the theme files."""
+
+    def setUp(self):
+        _, self.store = self.sign_up("blog@example.com", "Sip Journal")
+
+    def preview(self, page, data=None, expect=200, **query):
+        query = "&".join(f"{k}={v}" for k, v in {"page": page, **query}.items())
+        r = self.client.post(f"/api/v1/themes/preview/?{query}", data or {}, format="json")
+        self.assertEqual(r.status_code, expect, r.content[:300])
+        return r.json()
+
+    def test_blog_page_previews_sample_posts_with_the_blog_settings(self):
+        html = self.preview("blog", {
+            "settings": {"blog_title": "The Journal", "blog_description": "Notes from the bar"},
+            "templates": {"blog": {"order": ["intro", "main"], "sections": {
+                "intro": {"type": "rich-text", "settings": {"heading": "Fresh stories"}},
+                "main": {"type": "main-blog", "settings": {"layout": "list", "posts_per_page": 3}},
+            }}},
+        })["html"]
+        self.assertIn("The Journal", html)
+        self.assertIn("Notes from the bar", html)
+        self.assertLess(html.index("Fresh stories"), html.index("Five summer drinks"))
+        self.assertIn("post-list--list", html)
+        self.assertIn("Page 1 of 2", html)  # 4 sample posts, 3 per page
+        self.assertIn('data-tss-section="main"', html)  # Edit mode can select it
+
+    def test_article_page_previews_a_sample_post(self):
+        html = self.preview("article")["html"]
+        self.assertIn('<h1 class="article__title">Five summer drinks to make at home</h1>', html)
+        self.assertIn("<h2>1. Mint lemonade</h2>", html)
+        self.assertIn("Keep reading", html)
+        self.assertIn("Asha Rao", html)
+        self.assertIn("min read", html)
+
+    def test_one_section_of_a_blog_page_can_be_rerendered(self):
+        r = self.preview("blog", section="main")
+        self.assertIn('data-tss-section="main"', r["html"])
+        self.assertNotIn("<html", r["html"])
+
+    def test_blog_pages_need_their_main_section_and_no_product_sections(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"blog": {"order": [], "sections": {"main": None}}}}, expect=400)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"article": {
+            "order": ["main", "p"], "sections": {"p": {"type": "product-grid", "settings": {}}},
+        }}}, expect=400)
+        saved = self.ok("patch", "/api/v1/themes/settings/", {"templates": {"article": {
+            "order": ["main", "more"], "sections": {"more": {"type": "featured-posts", "settings": {"limit": 2}}},
+        }}})
+        self.assertTrue(saved["saved"])
+
+    def test_preview_of_other_pages(self):
+        self.assertIn("Add an active product", self.preview("product")["html"])
+        self.ok("post", "/api/v1/catalog/products/", {"title": "Oat milk", "sku": "OAT-1", "status": "active", "price": "4"}, expect=201)
+        self.assertIn("Oat milk", self.preview("product")["html"])
+        self.assertIn("All products", self.preview("collection")["html"])
+        self.preview("checkout", expect=400)
+
+    def test_latest_posts_show_in_the_preview_but_not_on_the_live_store_yet(self):
+        layout = {"templates": {"index": {"order": ["posts"], "sections": {
+            "posts": {"type": "featured-posts", "settings": {"heading": "From the journal", "category": "Guides"}},
+        }}}}
+        html = self.preview("index", layout)["html"]
+        self.assertIn("From the journal", html)
+        self.assertIn("A beginner&#39;s guide to tasting notes", html)
+        self.assertNotIn("Five summer drinks", html)  # a Recipes post
+
+        self.ok("put", "/api/v1/themes/settings/", layout)
+        live = self.client.get(f"/s/{self.store['storeSlug']}/").content.decode()
+        self.assertNotIn("From the journal", live)
+
+    def test_code_mode_lists_and_edits_the_blog_files(self):
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        for path in ("templates/blog.liquid", "templates/article.liquid", "sections/main-blog.liquid",
+                     "sections/main-article.liquid", "sections/featured-posts.liquid", "snippets/article-card.liquid",
+                     "templates/blog.json", "templates/article.json"):
+            self.assertIn(path, files)
+
+        self.ok("post", "/api/v1/themes/files/", {
+            "path": "templates/blog.liquid", "content": "<p>Custom blog wrapper</p>{{ sections }}",
+        })
+        self.assertIn("Custom blog wrapper", self.preview("blog")["html"])
+        self.ok("delete", "/api/v1/themes/files/?path=templates/blog.liquid", expect=400)
+
+        # The blog page's sections as JSON: a change made in code shows in the customizer's data
+        self.ok("post", "/api/v1/themes/files/", {
+            "path": "templates/blog.json",
+            "content": '{"order": ["main"], "sections": {"main": {"type": "main-blog", "settings": {"columns": 2}}}}',
+        })
+        saved = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(saved["templates"]["blog"]["sections"]["main"]["settings"]["columns"], 2)
+
+    def test_themes_made_before_the_blog_get_its_files(self):
+        from apps.tenancy.models import Store
+        from apps.themes.services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        theme.files.filter(file_path__in=["templates/blog.liquid", "sections/main-blog.liquid"]).delete()
+
+        get_store_theme(store)
+        paths = set(theme.files.values_list("file_path", flat=True))
+        self.assertTrue({"templates/blog.liquid", "sections/main-blog.liquid"} <= paths)
