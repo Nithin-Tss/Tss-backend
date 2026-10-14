@@ -647,3 +647,225 @@ class HeaderMigrationTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.upgrade(), 1)
         from .models import ThemeFile
         self.assertEqual(ThemeFile.objects.filter(theme=self.theme, file_path="sections/footer.liquid").count(), 1)
+
+
+CARD = "snippets/product-card.liquid"
+
+
+class ProductCardSyncTest(StoreClientMixin, APITestCase):
+    """
+    snippets/product-card.liquid (Edit code) and the product list settings (Customize) together:
+    the code decides the card's markup, the settings decide what it shows; neither overwrites the other.
+    """
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("cards@example.com", "Card Store")
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Linen shirt", "sku": "SKU-LINEN", "status": "active", "price": "25",
+            "vendor": "Acme", "tags": ["summer"],
+        }, expect=201)
+
+    def files(self):
+        return {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+
+    def page(self, path=""):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/{path}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def save_card(self, content, expect=200):
+        r = self.client.post("/api/v1/themes/files/", {"path": CARD, "content": content}, format="json")
+        self.assertEqual(r.status_code, expect, r.content[:500])
+        return r.json()
+
+    def grid_settings(self, **changes):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["featured"]
+        section["settings"].update(changes)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"featured": section},
+        }}})
+
+    def test_code_save_shows_on_store_preview_and_after_reload(self):
+        edited = self.files()[CARD].replace(
+            '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
+        )
+        self.save_card(edited)
+        self.assertEqual(self.files()[CARD], edited)  # persisted: what a reload of the editor shows
+        self.assertIn("card-mark", self.page())  # home: grid + carousel
+        self.assertIn("card-mark", self.page("collections/all"))  # collection page
+        data = self.ok("get", "/api/v1/themes/settings/")
+        self.assertIn("card-mark", self.ok("post", "/api/v1/themes/preview/", data)["html"])  # customizer preview
+
+    def test_settings_change_the_card_and_keep_custom_code(self):
+        edited = self.files()[CARD].replace(
+            '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
+        )
+        self.save_card(edited)
+
+        before = self.page()
+        self.assertNotIn('class="product-card__vendor"', before)
+        self.grid_settings(show_vendor=True, show_rating=True, show_tags=True,
+                           show_add_to_cart=True, image_ratio="portrait", gap=10)
+        html = self.page()
+        for marker in ('class="product-card__vendor"', 'class="product-card__tags"', "product-card__cta\"",
+                       "product-card__media product-card__media--portrait", 'class="card-mark"'):
+            self.assertIn(marker, html)
+        # Price off: the grid's cards have no price (the carousel still shows its own)
+        prices = html.count('<span class="price">')
+        self.grid_settings(show_price=False)
+        self.assertLess(self.page().count('<span class="price">'), prices)
+        # Persisted on both sides: settings saved, code untouched
+        featured = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["featured"]
+        self.assertTrue(featured["settings"]["show_vendor"])
+        self.assertEqual(featured["settings"]["image_ratio"], "portrait")
+        self.assertEqual(self.files()[CARD], edited)
+
+    def test_product_page_preview_shows_the_clicked_product(self):
+        other = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Wool scarf", "sku": "SKU-SCARF", "status": "active", "price": "40",
+        }, expect=201)
+        data = self.ok("get", "/api/v1/themes/settings/")
+        html = self.ok("post", f"/api/v1/themes/preview/?page=product&product={other['id']}", data)["html"]
+        self.assertIn("Wool scarf", html)
+        self.assertIn('data-tss-section="main"', html)  # Product information, selectable in Edit mode
+        self.assertIn('type: "navigate"', html)  # store links open their template in the customizer
+        # The home page's product grid links to that product's page
+        home = self.ok("post", "/api/v1/themes/preview/?page=index", data)["html"]
+        self.assertIn(f"/products/{other['id']}", home)
+
+    def test_unsaved_settings_show_in_preview_only(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["templates"]["index"]["sections"]["featured"]["settings"]["show_vendor"] = True
+        html = self.ok("post", "/api/v1/themes/preview/?section=featured", data)["html"]
+        self.assertIn('class="product-card__vendor"', html)
+        self.assertNotIn('class="product-card__vendor"', self.page())
+
+    def test_broken_card_code_is_refused_and_store_keeps_working(self):
+        saved = self.files()[CARD]
+        r = self.save_card(saved.replace("{%- endif -%}", "", 1), expect=400)
+        self.assertIn("line", json.dumps(r).lower())
+        self.assertEqual(self.files()[CARD], saved)
+        html = self.page()
+        self.assertIn("product-card__title", html)
+        self.assertNotIn("Liquid error", html)
+
+
+class BlogTest(StoreClientMixin, APITestCase):
+    """Blog posts written in the admin: the blog page, each post's own page, the customizer and the code."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("blog@example.com", "Blog Store")
+
+    def post(self, expect=201, **fields):
+        body = {"title": "My first article", "excerpt": "A short summary.", "body": "<p>Full text here.</p>",
+                "author": "Ada Lane", "category": "News", "tags": ["Tips"], "status": "published", **fields}
+        return self.ok("post", "/api/v1/themes/posts/", body, expect=expect)
+
+    def page(self, path, expect=200):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/{path}")
+        self.assertEqual(r.status_code, expect)
+        return r.content.decode()
+
+    def preview(self, page, **query):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        params = "&".join(f"{k}={v}" for k, v in {"page": page, **query}.items())
+        return self.ok("post", f"/api/v1/themes/preview/?{params}", data)["html"]
+
+    def test_blog_page_lists_published_posts_as_cards(self):
+        first = self.post()
+        self.post(title="Second post", status="draft")
+        self.assertEqual(first["handle"], "my-first-article")
+        self.assertIsNotNone(first["published_at"])
+        html = self.page("blog")
+        self.assertIn("My first article", html)
+        self.assertIn("A short summary.", html)
+        self.assertIn(f'/blog/{first["handle"]}', html)
+        self.assertIn("post-card__more", html)  # Read more
+        self.assertNotIn("Second post", html)  # drafts stay hidden
+
+    def test_article_has_its_own_url_and_reloads_the_same_post(self):
+        self.post(title="Older post", cover_image="https://example.com/cover.jpg")
+        self.post()
+        for _ in range(2):  # opening it again (a refresh) shows the same post
+            html = self.page("blog/older-post")
+            self.assertIn("<h1 class=\"article__title\">Older post</h1>", html)
+            self.assertIn("https://example.com/cover.jpg", html)
+            self.assertIn("Ada Lane", html)
+            self.assertIn("Full text here.", html)
+            self.assertIn("Keep reading", html)  # related posts
+            self.assertIn("My first article", html)
+
+    def test_drafts_and_unknown_posts_are_not_found(self):
+        self.post(title="Hidden", status="draft")
+        self.page("blog/hidden", expect=404)
+        self.page("blog/nope", expect=404)
+        self.page("blog/unknown/news", expect=404)
+
+    def test_handles_are_unique_per_store(self):
+        a = self.post()
+        b = self.post()
+        self.assertEqual(b["handle"], "my-first-article-2")
+        r = self.ok("patch", f"/api/v1/themes/posts/{b['id']}/", {"handle": a["handle"]}, expect=400)
+        self.assertIn("handle", r)
+
+    def test_edit_unpublish_and_delete(self):
+        post = self.post()
+        self.ok("patch", f"/api/v1/themes/posts/{post['id']}/", {"title": "Renamed", "body": "<p>New text</p>"})
+        self.assertIn("New text", self.page("blog/my-first-article"))
+        self.ok("patch", f"/api/v1/themes/posts/{post['id']}/", {"status": "draft"})
+        self.page("blog/my-first-article", expect=404)
+        self.ok("delete", f"/api/v1/themes/posts/{post['id']}/", expect=204)
+        self.assertEqual(self.ok("get", "/api/v1/themes/posts/"), [])
+
+    def test_body_is_cleaned(self):
+        self.post(body='<p onclick="x()">Safe</p><script>alert(1)</script>')
+        html = self.page("blog/my-first-article")
+        self.assertIn("Safe", html)
+        self.assertNotIn("alert(1)", html)
+        self.assertNotIn("onclick", html)
+
+    def test_category_and_tag_links_filter_the_blog(self):
+        self.post()
+        self.post(title="Other", category="Recipes", tags=[])
+        html = self.page("blog/category/news")
+        self.assertIn("My first article", html)
+        self.assertNotIn(">Other<", html)
+        self.assertNotIn(">Other<", self.page("blog/tagged/tips"))
+
+    def test_customizer_previews_blog_and_each_article_separately(self):
+        samples = self.preview("blog")
+        self.assertIn("Five summer drinks", samples)  # samples until a post is published
+        self.assertNotIn("/blog/five-summer-drinks", samples)  # ... which link to the blog, never to a missing post
+        self.post(title="Older post")
+        self.post()
+        self.assertIn("My first article", self.preview("blog"))
+        self.assertIn('article__title">My first article', self.preview("article"))  # newest
+        self.assertIn('article__title">Older post', self.preview("article", article="older-post"))
+
+    def test_article_settings_and_code_reach_the_store(self):
+        self.post()
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["templates"]["article"]["sections"]["main"]["settings"]["related_count"] = 0
+        data["templates"]["article"]["sections"]["main"]["settings"]["show_author"] = False
+        self.ok("put", "/api/v1/themes/settings/", data)
+        self.post(title="Second")
+        html = self.page("blog/my-first-article")
+        self.assertNotIn("Keep reading", html)
+        self.assertNotIn('href="/s/', html.split("article__byline")[1].split("</header>")[0])  # no author link
+
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        path = "sections/main-article.liquid"
+        edited = files[path].replace('<h1 class="article__title">', '<p class="custom-kicker">Story</p><h1 class="article__title">')
+        self.ok("post", "/api/v1/themes/files/", {"path": path, "content": edited})
+        self.assertIn("custom-kicker", self.page("blog/my-first-article"))
+        # Saving settings again keeps the custom code
+        self.ok("put", "/api/v1/themes/settings/", self.ok("get", "/api/v1/themes/settings/"))
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        self.assertEqual(files[path], edited)
+
+    def test_other_stores_cannot_see_or_change_posts(self):
+        post = self.post()
+        self.sign_up("other-blog@example.com", "Other Blog Store")
+        self.ok("get", f"/api/v1/themes/posts/{post['id']}/", expect=404)
+        self.assertEqual(self.ok("get", "/api/v1/themes/posts/"), [])

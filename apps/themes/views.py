@@ -8,15 +8,18 @@ from django.conf import settings
 from django.core import signing
 from django.core.files.storage import default_storage
 from django.db import connection
+from django.db.models import F
 from django.http import Http404, HttpResponse, HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.text import slugify
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.decorators.http import require_GET
 
 from liquid.exceptions import LiquidError
 from markupsafe import escape
 
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -31,10 +34,10 @@ from django.contrib.auth import get_user_model
 
 from apps.tenancy.models import Store, StoreMembership
 
-from .models import ThemeImage
+from .models import BlogPost, ThemeImage
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
-from .rendering import render_page, render_synced_section_fast, shop_url
+from .rendering import published_posts, render_page, render_synced_section_fast, shop_url
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, public_schema, resolve, validate_custom_data
 from .services import (
@@ -412,8 +415,32 @@ PREVIEW_EDITOR = """
     if (scroll && editing && section) section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  // Edit mode: a click selects the section or block under it, and does nothing else
+  // The store path ("/products/<id>", "/collections/all", "/blog/<handle>", "/") of a plain click on a
+  // link to one of this store's pages that has a template, else null
+  function storePage(e) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return null;
+    var a = e.target.closest && e.target.closest("a[href]");
+    if (!a || (a.target && a.target !== "_self")) return null;
+    var url;
+    try { url = new URL(a.href, document.baseURI); } catch (err) { return null; }
+    if (url.origin !== new URL(document.baseURI).origin) return null;
+    var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
+    if (!m) return null;
+    var path = (m[1] || "/").replace(/\\/+$/, "") || "/";
+    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2})?$/i.test(path) ? path : null;
+  }
+
+  // Edit mode: a click selects the section or block under it, and does nothing else -
+  // except on a product or blog post link, which opens that page (as does any store link with Edit mode off).
+  // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
+    var page = storePage(e);
+    if (page && (!editing || /^\\/(products|blog)\\/[^/]+$/.test(page))) {
+      e.preventDefault();
+      e.stopPropagation();
+      send({ type: "navigate", path: page });
+      return;
+    }
     if (!editing) return;
     e.preventDefault();
     e.stopPropagation();
@@ -731,10 +758,128 @@ class SyncTimingsView(StoreThemeView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# ---------------------------------------------------------------- blog posts
+
+
+def _unique_post_handle(store, title, exclude_pk=None):
+    """slugify(title), with -2, -3, ... added while another post of the store uses it."""
+    base = slugify(title or "")[:200].strip("-") or "post"
+    used = set(BlogPost.objects.filter(store=store, handle__startswith=base)
+               .exclude(pk=exclude_pk).values_list("handle", flat=True))
+    handle, n = base, 2
+    while handle in used:
+        handle, n = f"{base}-{n}", n + 1
+    return handle
+
+
+class BlogPostSerializer(serializers.ModelSerializer):
+    """A blog post as the admin edits it. handle: typed, or made from the title; unique in the store."""
+
+    title = serializers.CharField(max_length=255)
+    handle = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    body = serializers.CharField(required=False, allow_blank=True, max_length=200000)
+    excerpt = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    cover_image = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    tags = serializers.ListField(child=serializers.CharField(max_length=60), required=False, max_length=20)
+    url = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
+    class Meta:
+        model = BlogPost
+        fields = [
+            "id", "title", "handle", "excerpt", "body", "cover_image", "author", "category", "tags",
+            "status", "published_at", "url", "createdAt", "updatedAt",
+        ]
+        read_only_fields = ["published_at"]
+
+    def get_url(self, post):
+        request = self.context["request"]
+        return request.build_absolute_uri(f"{shop_url(post.store)}/blog/{post.handle}")
+
+    def validate_title(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Title is required.")
+        return value.strip()
+
+    def validate_handle(self, value):
+        return slugify(value)[:255].strip("-")
+
+    def validate_cover_image(self, value):
+        value = value.strip()
+        if value and not re.match(r"^(https?://|/(?!/))", value):
+            raise serializers.ValidationError("Use an uploaded image or a link starting with https://.")
+        return value
+
+    def validate_tags(self, value):
+        return list(dict.fromkeys(t.strip() for t in value if t.strip()))
+
+    def validate(self, attrs):
+        store = self.context["request"].store
+        current = self.instance
+        if attrs.get("handle"):
+            taken = BlogPost.objects.filter(store=store, handle=attrs["handle"])
+            if current is not None:
+                taken = taken.exclude(pk=current.pk)
+            if taken.exists():
+                raise serializers.ValidationError({"handle": "Another post already uses this URL handle."})
+        elif "handle" in attrs or current is None:
+            title = attrs.get("title") or (current.title if current else "")
+            attrs["handle"] = _unique_post_handle(store, title, exclude_pk=current.pk if current else None)
+        # Published for the first time: that is the post's date
+        published = attrs.get("status", current.status if current else BlogPost.DRAFT) == BlogPost.PUBLISHED
+        if published and not (current and current.published_at):
+            attrs["published_at"] = timezone.now()
+        return attrs
+
+    def create(self, validated_data):
+        return BlogPost.objects.create(store=self.context["request"].store, **validated_data)
+
+
+class BlogPostsView(StoreThemeView):
+    """
+    GET  /api/v1/themes/posts/   the store's posts, newest first (drafts too)
+    POST /api/v1/themes/posts/   create {title, handle?, excerpt, body, cover_image, author, category, tags, status}
+    """
+
+    def get(self, request):
+        posts = BlogPost.objects.filter(store=request.store).select_related("store").order_by(
+            F("published_at").desc(nulls_first=True), "-created_at"
+        )
+        return Response(BlogPostSerializer(posts, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        serializer = BlogPostSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class BlogPostView(StoreThemeView):
+    """GET / PATCH / DELETE /api/v1/themes/posts/<id>/"""
+
+    def get_post(self, post_id):
+        return get_object_or_404(BlogPost.objects.select_related("store"), store=self.request.store, pk=post_id)
+
+    def get(self, request, post_id):
+        return Response(BlogPostSerializer(self.get_post(post_id), context={"request": request}).data)
+
+    def patch(self, request, post_id):
+        serializer = BlogPostSerializer(self.get_post(post_id), data=request.data, partial=True, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, post_id):
+        self.get_post(post_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 def _preview_target(request):
     """
     (page, render_page arguments, message) for ?page=index|product|collection|blog|article.
-    The product page shows ?product=<id> or the newest product; the collection page shows all products.
+    The product page shows ?product=<id> or the newest product; the collection page shows all products;
+    the article page shows ?article=<handle> or the newest post.
     message: why the page can't be shown (no product to show), else None.
     """
     page = request.query_params.get("page") or "index"
@@ -752,6 +897,9 @@ def _preview_target(request):
         if product is None:
             return page, {}, "Add an active product on the Online Store to preview the product page."
         return page, {"product": product}, None
+    if page == "article":
+        # ?article=<handle>: that post; otherwise the newest
+        return page, {"article": request.query_params.get("article") or None}, None
     return page, {}, None
 
 
@@ -1132,3 +1280,28 @@ def storefront_collection(
         },
         **_listing(params),
     )
+
+BLOG_FILTERS = ("category", "tagged", "author")
+
+
+@_storefront
+def storefront_blog(store, params, kind=None, handle=None):
+    """/blog, and /blog/category|tagged|author/<handle>: the published posts, newest first."""
+    try:
+        page_number = int(params.get("page", 1))
+    except ValueError:
+        page_number = 1
+    blog_filter = None
+    if kind is not None:
+        if kind not in BLOG_FILTERS:
+            raise Http404("Page not found.")
+        blog_filter = {"kind": kind, "handle": handle}
+    return render_page(store, "blog", blog_filter=blog_filter, page_number=page_number)
+
+
+@_storefront
+def storefront_article(store, params, handle):
+    """/blog/<handle>: one published post; drafts and unknown handles are not found."""
+    if not published_posts(store).filter(handle=handle).exists():
+        raise Http404("Post not found.")
+    return render_page(store, "article", article=handle)

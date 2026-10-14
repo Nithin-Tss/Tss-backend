@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
+from liquid import Environment
+from liquid.exceptions import LiquidError
 from rest_framework import exceptions
 
 from . import section_sync as sync
@@ -42,7 +44,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 13
+STARTER_REVISION = 14
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -86,6 +88,8 @@ STARTER_UPGRADES = {
         "83a3d9accc2af4aa68a6a58ad84c8eb662acc3b6e422adb71458afc2d80b0079",
         "1c26147431b1ab810a18a33cb68cbc8955a685afa106874eed0ff2775d143f8e",  # revision 8: centred/right-aligned slide and hero text
     },
+    # Revision 14: "Read more" link on blog post cards
+    "snippets/article-card.liquid": {"d2911b0825b5f87470be4b1118e6f31617ce75c1a327d18dc2a58d52b97e38f9"},
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
@@ -359,6 +363,21 @@ def _new_file(theme, path, content):
     )
 
 
+# Snippets every product list renders: code that doesn't compile is refused (with its line),
+# so the saved version keeps the grid, carousel and collection page working
+CHECKED_FILES = {"snippets/product-card.liquid"}
+
+
+def _check_liquid(content):
+    try:
+        Environment().from_string(content)
+    except LiquidError as error:
+        token = getattr(error, "token", None)
+        line = sync.line_of(content, token.start_index) if token is not None and token.start_index is not None else None
+        message = f"Liquid error: {getattr(error, 'message', None) or error}"
+        raise exceptions.ValidationError({"content": f"Line {line}: {message}" if line else message, "line": line})
+
+
 def save_file(store_theme, path, content, base_version=None, client="", started_at=None):
     if isinstance(path, str) and path.strip().strip("/") == IMAGES_FILE:
         raise exceptions.ValidationError({"content": "assets/images.json lists your uploaded pictures and can't be edited."})
@@ -381,6 +400,9 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
     if path in sync.PATH_TO_SECTION:
         return save_synced_code(store_theme, sync.PATH_TO_SECTION[path], content, base_version=base_version, client=client,
                                 started_at=started_at)
+
+    if path in CHECKED_FILES:
+        _check_liquid(content)
 
     theme = store_theme.theme
     existing = theme.files.filter(file_path=path).first()

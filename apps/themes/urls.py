@@ -1,6 +1,8 @@
 from django.urls import path
  
 from .views import (
+    BlogPostView,
+    BlogPostsView,
     SectionHistoryView,
     SyncTimingsView,
     ThemeCustomizerView,
@@ -87,6 +89,18 @@ urlpatterns = [
         "sync-timings/",
         SyncTimingsView.as_view(),
         name="theme_sync_timings",
+    ),
+
+    path(
+        "posts/",
+        BlogPostsView.as_view(),
+        name="theme_blog_posts",
+    ),
+
+    path(
+        "posts/<uuid:post_id>/",
+        BlogPostView.as_view(),
+        name="theme_blog_post",
     ),
 
     path(

@@ -29,7 +29,7 @@ from apps.orders.models import OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
 from . import section_sync as sync
-from .models import ThemeFile
+from .models import BlogPost, ThemeFile
 from .services import get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
@@ -1091,8 +1091,9 @@ def render_synced_section_fast(store, name, custom_data):
 
 # ---------------------------------------------------------------- blog
 #
-# Posts can't be written in the admin yet, so the customizer previews the blog
-# pages with these sample posts. The live store shows no posts (blog_posts).
+# Posts are written in the admin (BlogPost); the store shows the published ones.
+# Until a store has published one, the customizer previews the blog pages with
+# these sample posts (blog_posts).
 
 SAMPLE_POSTS = [
     {
@@ -1153,7 +1154,8 @@ def _sample_post_drop(post, base_url):
         "id": post["handle"],
         "title": post["title"],
         "handle": post["handle"],
-        "url": f"{base_url}/blog/{post['handle']}",
+        # Sample posts have no page of their own: their links open the blog page, not a "Not found"
+        "url": f"{base_url}/blog",
         "excerpt": post["excerpt"],
         "body": Markup(sanitize_embed(post["body"])),
         "cover_image": None,
@@ -1166,25 +1168,80 @@ def _sample_post_drop(post, base_url):
     }
 
 
-def blog_posts(base_url, editor):
-    """Posts newest first: sample posts in the customizer preview, none on the live store yet."""
-    return [_sample_post_drop(post, base_url) for post in SAMPLE_POSTS] if editor else []
+def published_posts(store):
+    """The store's posts that shoppers can read: published, newest first."""
+    return BlogPost.objects.filter(
+        store=store, status=BlogPost.PUBLISHED, published_at__lte=timezone.now(),
+    ).order_by("-published_at", "-created_at")
 
 
-def _blog_drop(posts, settings, base_url, per_page, page_number):
+def _post_drop(post, base_url):
+    """A saved post as the theme sees a post (same fields as a sample post)."""
+    words = len(re.sub(r"<[^>]+>", " ", post.body or "").split())
+    author = _slug_link(base_url, "author", post.author)
+    if author:
+        author.update(bio="", avatar=None)
+    tags = [_slug_link(base_url, "tagged", tag) for tag in post.tags or []]
+    return {
+        "id": str(post.pk),
+        "title": post.title,
+        "handle": post.handle,
+        "url": f"{base_url}/blog/{post.handle}",
+        "excerpt": post.excerpt,
+        "body": Markup(sanitize_embed(post.body or "")),
+        "cover_image": post.cover_image or None,
+        "published_at": post.published_at,
+        "date": _date_text(post.published_at),
+        "reading_time": max(1, round(words / 200)),
+        "author": author,
+        "category": _slug_link(base_url, "category", post.category),
+        "tags": [t for t in tags if t],
+    }
+
+
+def blog_posts(store, base_url, editor):
+    """Published posts newest first; sample posts in the customizer preview while there are none."""
+    posts = [_post_drop(post, base_url) for post in published_posts(store)]
+    if not posts and editor:
+        posts = [_sample_post_drop(post, base_url) for post in SAMPLE_POSTS]
+    return posts
+
+
+def _filtered(posts, blog_filter):
+    """Posts in a category, with a tag or by an author: (posts, the category, tag or author name)."""
+    kind, handle = blog_filter["kind"], blog_filter["handle"]
+    if kind == "tagged":
+        shown = [p for p in posts if any(t["handle"] == handle for t in p["tags"])]
+        name = next((t["name"] for p in shown for t in p["tags"] if t["handle"] == handle), handle)
+    else:
+        key = "author" if kind == "author" else "category"
+        shown = [p for p in posts if p[key] and p[key]["handle"] == handle]
+        name = shown[0][key]["name"] if shown else handle
+    return shown, name
+
+
+def _blog_drop(posts, settings, base_url, per_page, page_number, blog_filter=None):
     """The blog page: this page's posts, the categories to filter by, and paging."""
     categories = {}
     for post in posts:
         if post["category"]:
             categories.setdefault(post["category"]["handle"], dict(post["category"], active=False))
+    url, active = f"{base_url}/blog", None
+    if blog_filter:
+        posts, name = _filtered(posts, blog_filter)
+        url = f"{base_url}/blog/{blog_filter['kind']}/{blog_filter['handle']}"
+        active = {"kind": blog_filter["kind"], "handle": blog_filter["handle"], "name": name}
+        if blog_filter["kind"] == "category" and blog_filter["handle"] in categories:
+            categories[blog_filter["handle"]]["active"] = True
     pages = max(1, -(-len(posts) // per_page))
     page_number = min(max(1, page_number), pages)
     return {
         "title": settings.get("blog_title") or "Blog",
         "description": settings.get("blog_description") or "",
-        "url": f"{base_url}/blog",
+        # Paging links keep the filter
+        "url": url,
         "all_url": f"{base_url}/blog",
-        "filter": None,
+        "filter": active,
         "articles": posts[(page_number - 1) * per_page:page_number * per_page],
         "articles_count": len(posts),
         "categories": sorted(categories.values(), key=lambda c: c["name"].lower()),
@@ -1205,11 +1262,13 @@ def _article_drop(posts, index):
 
 
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
-                sort="newest", page_number=1):
+                sort="newest", page_number=1, article=None, blog_filter=None):
     """
     page: "index", "product", "collection", "blog" or "article".
     product: a catalog Product (product page).
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
+    article: the handle of the post the article page shows (the newest when None or not found).
+    blog_filter: {"kind": "category" | "tagged" | "author", "handle"} narrows the blog page.
     sort, page_number: the collection page's order (see SORTS) and page (PAGE_SIZE products each).
     custom_data: unsaved section data to render instead of the saved one (customizer preview).
     editor: wrap each section in a marker the customizer preview uses for drag and drop.
@@ -1261,15 +1320,20 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     template_data = data["templates"][page]
 
-    posts = blog_posts(base_url, editor)
+    # Posts are read only where they show: the blog pages and "Latest posts" sections
+    shows_posts = page in ("blog", "article") or any(
+        SECTIONS.get(s["type"], {}).get("uses_articles") for s in template_data["sections"].values()
+    )
+    posts = blog_posts(store, base_url, editor) if shows_posts else []
     blog_drop = article_drop = None
     if page == "blog":
         per_page = next(
             (s["settings"]["posts_per_page"] for s in template_data["sections"].values() if s["type"] == "main-blog"), 9
         )
-        blog_drop = _blog_drop(posts, settings, base_url, per_page, page_number)
+        blog_drop = _blog_drop(posts, settings, base_url, per_page, page_number, blog_filter)
     elif page == "article" and posts:
-        article_drop = _article_drop(posts, 0)
+        index = next((i for i, p in enumerate(posts) if p["handle"] == article), 0)
+        article_drop = _article_drop(posts, index)
 
     common = {
         "shop": dict(shop, blog_url=f"{base_url}/blog"),

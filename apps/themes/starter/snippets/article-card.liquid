@@ -3,6 +3,7 @@
   Usage: {% render 'article-card', article: article, show_image: true, show_excerpt: true,
            show_date: true, show_author: true, show_category: true, show_reading_time: true,
            ratio: 'landscape', card_style: 'plain', size: 'normal' %}
+  The "Read more" link shows unless show_read_more: false.
   With styles: true it outputs only the card styles (once per section that shows cards).
 {%- endcomment -%}
 {%- if styles -%}
@@ -29,6 +30,7 @@
   .post-card__title a { text-decoration: none; }
   .post-card__title a:hover { text-decoration: underline; }
   .post-card__excerpt { margin: 0; color: var(--muted); }
+  .post-card__more { justify-self: start; font-size: 14px; font-weight: 600; color: var(--text); }
   .post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; font-size: 13px; color: var(--muted); }
   .post-meta > * + *::before { content: "\00B7"; margin-right: 10px; }
   .post-card--large .post-card__title { font-size: clamp(24px, 3vw, 34px); }
@@ -60,6 +62,9 @@
       {%- if show_date -%}<time datetime="{{ article.published_at | date: '%Y-%m-%d' }}">{{ article.date }}</time>{%- endif -%}
       {%- if show_reading_time -%}<span>{{ article.reading_time }} min read</span>{%- endif -%}
     </p>
+    {%- if show_read_more != false -%}
+      <a class="post-card__more" href="{{ article.url }}" aria-label="Read more: {{ article.title }}">Read more &rarr;</a>
+    {%- endif -%}
   </div>
 </article>
 {%- endif -%}

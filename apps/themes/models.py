@@ -125,3 +125,50 @@ class ThemeImage(models.Model):
 
     def __str__(self):
         return f"{self.store_id}/{self.id}"
+
+
+class BlogPost(models.Model):
+    """A post on the store's blog: /blog lists the published ones, /blog/<handle> shows one."""
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    STATUSES = [(DRAFT, "Draft"), (PUBLISHED, "Published")]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.PROTECT,
+        db_column="store_id",
+        related_name="blog_posts",
+    )
+    title = models.CharField(max_length=255)
+    # Its address on the store: /blog/<handle>
+    handle = models.SlugField(max_length=255)
+    excerpt = models.TextField(blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    cover_image = models.TextField(blank=True, default="")
+    author = models.CharField(max_length=120, blank=True, default="")
+    category = models.CharField(max_length=120, blank=True, default="")
+    tags = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, choices=STATUSES, default=DRAFT)
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"themes"."blog_posts"'
+        verbose_name = "Blog Post"
+        verbose_name_plural = "Blog Posts"
+        constraints = [
+            models.UniqueConstraint(fields=["store", "handle"], name="uq_blog_post_store_handle"),
+        ]
+        indexes = [
+            models.Index(fields=["store", "status", "published_at"], name="ix_blog_post_store_status"),
+        ]
+
+    def __str__(self):
+        return self.title
