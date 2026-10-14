@@ -27,7 +27,7 @@
         <p class="product__meta">{{ product.vendor }}</p>
       {%- endif -%}
       <h1>{{ product.title }}</h1>
-      <div class="product__price" data-price>{% render 'price', product: product %}{% if product.is_sold_out %} <span class="price price--muted">Sold out</span>{% endif %}</div>
+      <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.is_sold_out %} <span class="price price--muted">Sold out</span>{% endif %}</div>
       {%- assign shown_variant = product.variants.first -%}
       <p class="product__stock{% if product.is_sold_out %} product__stock--out{% elsif shown_variant.available_total <= 5 %} product__stock--few{% endif %}" data-stock>
         {%- if product.is_sold_out %}Sold out{% elsif shown_variant.available_total <= 5 %}Only a few left{% else %}In stock{% endif -%}

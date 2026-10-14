@@ -22,7 +22,13 @@
     <span class="product-card__rating" aria-label="Rated {{ product.rating }} out of 5">&#9733; {{ product.rating }}{% if product.review_count > 0 %} <span>({{ product.review_count }})</span>{% endif %}</span>
   {%- endif -%}
   {%- if show_price != false -%}
-    {% render 'price', product: product %}
+    {%- if product.price == nil -%}
+      <span class="price price--muted">Price on request</span>
+    {%- elsif product.price_varies -%}
+      <span class="price">From {{ product.price | money }}</span>
+    {%- else -%}
+      <span class="price">{{ product.price | money }}</span>
+    {%- endif -%}
   {%- endif -%}
   {%- if show_tags and product.tags.size > 0 -%}
     <span class="product-card__tags">{% for tag in product.tags limit: 3 %}<span>{{ tag }}</span>{% endfor %}</span>
