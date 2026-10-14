@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -123,14 +124,18 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+# A single DATABASE_URL (what Render/Railway provide) wins over the separate DB_* variables.
+_db_url = urlparse(os.getenv("DATABASE_URL", ""))
+_db_from_url = bool(os.getenv("DATABASE_URL"))
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME"),
-        "USER": os.getenv("DB_USER"),
-        "PASSWORD": os.getenv("DB_PASSWORD"),
-        "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+        "NAME": unquote(_db_url.path.lstrip("/")) if _db_from_url else os.getenv("DB_NAME"),
+        "USER": unquote(_db_url.username or "") if _db_from_url else os.getenv("DB_USER"),
+        "PASSWORD": unquote(_db_url.password or "") if _db_from_url else os.getenv("DB_PASSWORD"),
+        "HOST": _db_url.hostname if _db_from_url else os.getenv("DB_HOST", "127.0.0.1"),
+        "PORT": str(_db_url.port or 5432) if _db_from_url else os.getenv("DB_PORT", "5432"),
         # Reuse connections, but verify them first so a connection the pooler dropped isn't reused
         # Default 0 (close per request): Supabase's pooler has a small client cap, and
         # persistent per-thread connections exhaust it (EMAXCONNSESSION)
