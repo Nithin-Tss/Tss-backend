@@ -1,13 +1,15 @@
 {%- assign s = section.settings -%}
-<section id="section-{{ section.id }}" class="section">
+<section id="section-{{ section.id }}"
+  class="section product-list card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
+  style="--cols: {{ s.columns }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
   <div class="page-width">
-    {%- if collection.image != blank -%}
+    {%- if s.show_image and collection.image != blank -%}
       <div class="collection-hero">
         <img src="{{ collection.image }}" alt="{{ collection.name }}">
       </div>
     {%- endif -%}
     <h1 class="section-heading">{{ collection.name }}</h1>
-    {%- if collection.description != blank -%}
+    {%- if s.show_description and collection.description != blank -%}
       <div class="collection-description">{{ collection.description }}</div>
     {%- endif -%}
     <style>
@@ -20,35 +22,45 @@
     </style>
 
     {%- if collection.products_count == 0 -%}
-      <div class="empty-state">No products yet.</div>
+      <div class="empty-state">{{ s.empty_text | default: 'No products yet.' }}</div>
     {%- else -%}
-      <div class="collection-toolbar">
-        <p class="product-list__sub" style="margin:0">{{ collection.products_count }} product{% if collection.products_count != 1 %}s{% endif %}</p>
-        <form action="{{ collection.url }}" method="get" class="field" style="grid-auto-flow:column;align-items:center">
-          <span>Sort by</span>
-          <select name="sort" onchange="this.form.submit()">
-            <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Newest</option>
-            <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price, low to high</option>
-            <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price, high to low</option>
-          </select>
-          <noscript><button class="button button--outline" type="submit">Sort</button></noscript>
-        </form>
-      </div>
+      {%- assign can_sort = false -%}
+      {%- if s.show_sort and collection.products_count > 1 -%}{%- assign can_sort = true -%}{%- endif -%}
+      {%- if s.show_count or can_sort -%}
+        <div class="collection-toolbar">
+          {%- if s.show_count -%}
+            <p class="product-list__sub" style="margin:0">{{ collection.products_count }} product{% if collection.products_count != 1 %}s{% endif %}</p>
+          {%- else -%}
+            <span></span>
+          {%- endif -%}
+          {%- if can_sort -%}
+            <form action="{{ collection.url }}" method="get" class="field" style="grid-auto-flow:column;align-items:center">
+              <label for="sort-{{ section.id }}">Sort by</label>
+              <select id="sort-{{ section.id }}" name="sort" onchange="this.form.submit()">
+                <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Newest</option>
+                <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price, low to high</option>
+                <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price, high to low</option>
+              </select>
+              <noscript><button class="button button--outline" type="submit">Sort</button></noscript>
+            </form>
+          {%- endif -%}
+        </div>
+      {%- endif -%}
 
-      <div class="product-grid product-grid--{{ s.columns }}">
+      <div class="product-list__grid">
         {%- for product in collection.products -%}
-          {% render 'product-card', product: product, show_vendor: s.show_vendor %}
+          {% render 'product-card', product: product, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
         {%- endfor -%}
       </div>
 
       {%- if collection.pages > 1 -%}
         <nav class="pagination" aria-label="Pages">
           {%- if collection.page > 1 -%}
-            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&page={{ collection.page | minus: 1 }}">Previous</a>
+            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&amp;page={{ collection.page | minus: 1 }}">Previous</a>
           {%- endif -%}
           <span>Page {{ collection.page }} of {{ collection.pages }}</span>
           {%- if collection.page < collection.pages -%}
-            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&page={{ collection.page | plus: 1 }}">Next</a>
+            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&amp;page={{ collection.page | plus: 1 }}">Next</a>
           {%- endif -%}
         </nav>
       {%- endif -%}

@@ -45,7 +45,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 15
+STARTER_REVISION = 16
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -64,7 +64,10 @@ STARTER_UPGRADES = {
         "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
         "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
     },
-    "sections/product-carousel.liquid": {"0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4"},
+    "sections/product-carousel.liquid": {
+        "0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4",
+        "a79be796dde0feb9dd8fceda3a0b4e00c8c1cc3469e6066e02c506dfa8d88055",  # revision 16: no empty box for shoppers, pause on focus
+    },
     "sections/rich-text.liquid": {
         "37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b",
         "8c115bfae9de1cfa75a8931aaafa91c3781837d743e9340440e22bbc95a6ebe8",  # revision 11: image shape, fit and focus
@@ -82,6 +85,7 @@ STARTER_UPGRADES = {
         "18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729",
         "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
         "6c8de76dd784aabf1a7e13c29a4a30eed779f80e8b2824ace5b232109ffad098",  # revision 15: price shown inline, no 'price' snippet
+        "e365056fcc5eb05b563e29fca7ab581c8158c4521faedfdc4acbe1701c887552",  # revision 16: option price/SKU fix, low-stock setting
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
@@ -98,6 +102,7 @@ STARTER_UPGRADES = {
     "sections/main-collection.liquid": {
         "80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5",
         "878a1da3a5ee2d1bd4e8d09dfd5c44f2509a75905e0177782b3e1f06ca018567",
+        "0c7227f63f577546d1926e69940b5e949b3a440f24621438231d33147d3445a8",  # revision 16: escaped pagination links, sort only with 2+ products
     },
 }
 

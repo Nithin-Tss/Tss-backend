@@ -983,11 +983,58 @@ SECTIONS["custom"]["settings"] = {
     **common_settings(alignment="left"),
 }
 
-for _type in ("main-product", "main-collection"):
-    SECTIONS[_type]["settings"] = {
-        **{k: dict(v, group=v.get("group", "content")) for k, v in SECTIONS[_type]["settings"].items()},
-        **common_settings(),
-    }
+# "Load more" only works on the grid, so the carousel doesn't offer it
+SECTIONS["product-carousel"]["settings"].pop("load_more", None)
+
+SECTIONS["main-collection"]["settings"] = {
+    "show_image": _opt("content", "checkbox", "Show the collection image", True),
+    "show_description": _opt("content", "checkbox", "Show the collection description", True),
+    "show_count": _opt("content", "checkbox", "Show the number of products", True),
+    "show_sort": _opt("content", "checkbox", "Show the \"Sort by\" menu", True),
+    "empty_text": _opt("content", "text", "Text when there are no products", "No products yet.", max=200),
+    "columns": _opt("layout", "range", "Products per row (desktop)", 4, min=2, max=6),
+    "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
+    "gap": _opt("layout", "range", "Gap between cards", 24, min=0, max=48, step=2, unit="px"),
+    "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
+    "show_price": _opt("style", "checkbox", "Show price", True),
+    "show_vendor": _opt("style", "checkbox", "Show vendor", False),
+    "show_rating": _opt("style", "checkbox", "Show rating", False, help="From approved product reviews."),
+    "show_tags": _opt("style", "checkbox", "Show product tags", False),
+    "show_add_to_cart": _opt(
+        "style", "checkbox", "Show \"Add to cart\" button", False,
+        help="Opens the product page, where shoppers pick options and add it to the cart.",
+    ),
+    "card_background": _opt("style", "color_optional", "Card background", ""),
+    "card_border": _opt("style", "checkbox", "Card border", False),
+    "card_hover": _choice(
+        "style", "Card hover effect", ["none", "lift", "zoom"], "zoom", ui="segmented",
+        labels={"zoom": "Zoom image"},
+    ),
+    **common_settings(),
+}
+
+SECTIONS["main-product"]["settings"] = {
+    "show_vendor": _opt("content", "checkbox", "Show vendor", True),
+    "show_price": _opt("content", "checkbox", "Show price", True),
+    "show_stock": _opt("content", "checkbox", "Show stock message", True),
+    "low_stock_threshold": _opt(
+        "content", "range", "\"Only a few left\" at or below", 5, min=1, max=20, show_if={"show_stock": True},
+        help="Shows the low-stock message when this many or fewer are in stock.",
+    ),
+    "show_sku": _opt("content", "checkbox", "Show SKU", False),
+    "show_quantity": _opt("content", "checkbox", "Show quantity selector", True),
+    "show_description": _opt("content", "checkbox", "Show description", True),
+    "add_to_cart_label": _opt("content", "text", "Add to cart button text", "Add to cart", max=40),
+    "sold_out_label": _opt("content", "text", "Sold out button text", "Sold out", max=40),
+    "show_thumbnails": _opt("layout", "checkbox", "Show image thumbnails", True),
+    "media_position": _choice("layout", "Image position", ["left", "right"], "left", ui="segmented"),
+    "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
+    "image_fit": _choice(
+        "layout", "Image fit", ["cover", "contain"], "cover", ui="segmented",
+        labels={"cover": "Fill (crop)", "contain": "Fit (whole image)"},
+    ),
+    **common_settings(),
+}
 
 # ---------------------------------------------------------------------------
 # Blog: the post list (blog page), one post (article page) and a "Latest
@@ -1588,7 +1635,7 @@ BLOCKS["button"]["settings"] = _insert_before_layout(_button, button_settings())
 # Sections: fonts and links for every section, button options where there are buttons
 for _type, _schema in SECTIONS.items():
     extra = section_text_settings()
-    if _type in ("hero", "slideshow", "rich-text", "custom", "product-carousel", "product-grid"):
+    if _type in ("hero", "slideshow", "rich-text", "custom", "product-carousel", "product-grid", "main-product", "main-collection"):
         extra.update(button_settings())
     settings = {k: v for k, v in _schema["settings"].items() if not (_type == "hero" and k in ("button_style", "button_color"))}
     _schema["settings"] = _insert_before_layout(settings, extra)

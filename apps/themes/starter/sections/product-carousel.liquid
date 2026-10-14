@@ -3,6 +3,8 @@
   switches between a grid and a scrolling carousel.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
+{%- comment -%} Nothing to show: shoppers see no empty box (e.g. "You may also like" with no other products); the customizer keeps it as a hint {%- endcomment -%}
+{%- if section.products.size > 0 or design_mode -%}
 <section id="section-{{ section.id }}"
   class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
   data-autoplay="{{ s.autoplay }}"
@@ -14,7 +16,7 @@
         {%- if s.subheading != blank -%}<p class="product-list__sub">{{ s.subheading }}</p>{%- endif -%}
       </div>
       <div class="product-list__actions">
-        {%- if s.view_all_label != blank -%}
+        {%- if s.view_all_label != blank and s.view_all_link != blank -%}
           <a class="product-list__view-all" href="{{ s.view_all_link | link }}">{{ s.view_all_label }} &rarr;</a>
         {%- endif -%}
         {%- if s.layout == 'carousel' and s.show_arrows and section.products.size > 1 -%}
@@ -30,7 +32,7 @@
       <div class="empty-state">Products you publish will appear here.</div>
     {%- else -%}
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
-        {%- if s.layout == 'carousel' %} tabindex="0" aria-label="{{ s.heading | default: 'Products' }}"{% endif %}>
+        {%- if s.layout == 'carousel' %} tabindex="0" role="region" aria-label="{{ s.heading | default: 'Products' | escape }}"{% endif %}>
         {%- for product in section.products -%}
           {% render 'product-card', product: product, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
         {%- endfor -%}
@@ -38,7 +40,7 @@
     {%- endif -%}
   </div>
 </section>
-{%- if s.layout == 'carousel' -%}
+{%- if s.layout == 'carousel' and section.products.size > 0 -%}
 <script>
   (function () {
     var root = document.getElementById("section-{{ section.id }}");
@@ -57,11 +59,25 @@
       btn.addEventListener("click", function () { step(Number(btn.dataset.dir)); });
     });
 
+    // Arrow keys scroll the focused track
+    track.addEventListener("keydown", function (event) {
+      if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
+      else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
+    });
+
+    // Auto-scroll: paused while hovered or focused, and while the tab is hidden
     var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (root.dataset.autoplay === "true" && !reduce) {
-      var timer = setInterval(function () { step(1); }, 4000);
-      root.addEventListener("mouseenter", function () { clearInterval(timer); });
+      var timer = null;
+      var start = function () { if (!timer) timer = setInterval(function () { if (!document.hidden) step(1); }, 4000); };
+      var stop = function () { clearInterval(timer); timer = null; };
+      start();
+      root.addEventListener("mouseenter", stop);
+      root.addEventListener("mouseleave", start);
+      root.addEventListener("focusin", stop);
+      root.addEventListener("focusout", start);
     }
   })();
 </script>
+{%- endif -%}
 {%- endif -%}
