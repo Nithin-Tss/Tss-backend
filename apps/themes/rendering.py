@@ -52,8 +52,8 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .tss-align-left{text-align:left}.tss-align-center{text-align:center}.tss-align-right{text-align:right}
 .tss-div-top,.tss-div-both{border-top:1px solid var(--line,rgba(0,0,0,.12))}
 .tss-div-bottom,.tss-div-both{border-bottom:1px solid var(--line,rgba(0,0,0,.12))}
-.tss-hs-small .section-heading{font-size:clamp(18px,2vw,22px)}.tss-hs-small .hero h1{font-size:clamp(26px,3.5vw,38px)}
-.tss-hs-large .section-heading{font-size:clamp(28px,4vw,42px)}.tss-hs-large .hero h1{font-size:clamp(40px,6.5vw,76px)}
+.tss-hs-small .section-heading{font-size:clamp(18px,2vw,22px)}.tss-hs-small .hero :is(h1,h2.hero__title){font-size:clamp(26px,3.5vw,38px)}
+.tss-hs-large .section-heading{font-size:clamp(28px,4vw,42px)}.tss-hs-large .hero :is(h1,h2.hero__title){font-size:clamp(40px,6.5vw,76px)}
 .tss-hw-regular :is(.section-heading,h1,h2,h3){font-weight:400}.tss-hw-medium :is(.section-heading,h1,h2,h3){font-weight:500}
 .tss-hw-semibold :is(.section-heading,h1,h2,h3){font-weight:600}.tss-hw-bold :is(.section-heading,h1,h2,h3){font-weight:700}
 @media (max-width:749px){.tss-vis-desktop{display:none!important}}
@@ -68,6 +68,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .hero--full{min-height:100vh}.hero--v-top{align-items:flex-start}.hero--v-bottom{align-items:flex-end}
 .hero--parallax{background-size:cover;background-attachment:fixed}
 .hero__inner h1,.hero__inner p{max-width:none}
+.hero h2.hero__title{font-size:clamp(32px,5vw,56px);max-width:720px}
 .hero__label{font-size:13px!important;text-transform:uppercase;letter-spacing:.12em;margin:0 0 12px!important;opacity:.85}
 .hero__buttons{display:flex;flex-wrap:wrap;gap:12px}
 .hero__buttons{gap:var(--b-gap,12px)}
@@ -1356,7 +1357,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 section["articles"] = shown[:ss.get("limit") or 3]
 
             # The slideshow template has no heading of its own; show the section heading above it
-            if section["type"] == "slideshow" and section["settings"].get("heading"):
+            if section["type"] == "slideshow" and section["settings"].get("heading") and section["blocks"]:
                 html.append(Markup(
                     '<div class="page-width" style="padding-top:32px">'
                     f'<h2 class="section-heading">{escape(section["settings"]["heading"])}</h2></div>'

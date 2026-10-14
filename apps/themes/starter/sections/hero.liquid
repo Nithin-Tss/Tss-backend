@@ -4,18 +4,18 @@
 {%- assign parallax = false -%}{%- if s.parallax and has_image and s.video_url == blank -%}{%- assign parallax = true -%}{%- endif -%}
 <section id="section-{{ section.id }}"
   class="hero hero--{{ s.height }} hero--v-{{ s.vertical_position }}{% if has_media %} hero--image{% else %} placeholder{% endif %}{% if parallax %} hero--parallax{% endif %}"
-  style="{% if s.height == 'custom' %}min-height:{{ s.custom_height }}px;{% endif %}{% if parallax %}background-image:url('{{ s.image_url }}');background-position:{{ s.image_position }};{% endif %}">
+  style="{% if s.height == 'custom' %}min-height:{{ s.custom_height }}px;{% endif %}{% if parallax %}background-image:url('{{ s.image_url | replace: "'", "%27" | replace: '"', "%22" | replace: "(", "%28" | replace: ")", "%29" }}');background-position:{{ s.image_position }};{% endif %}">
   {%- if has_image and parallax == false -%}
     <picture>
       {%- if s.mobile_image_url != blank -%}<source media="(max-width: 749px)" srcset="{{ s.mobile_image_url }}">{%- endif -%}
-      <img class="hero__media" src="{{ s.image_url }}" alt="" style="object-position:{{ s.image_position }}">
+      <img class="hero__media" src="{{ s.image_url }}" alt="{{ s.image_alt }}" style="object-position:{{ s.image_position }}">
     </picture>
   {%- endif -%}
   {%- if s.video_url != blank -%}
-    <video class="hero__media" src="{{ s.video_url }}" autoplay muted loop playsinline{% if has_image %} poster="{{ s.image_url }}"{% endif %}></video>
+    <video class="hero__media" src="{{ s.video_url }}" autoplay muted loop playsinline aria-hidden="true"{% if has_image %} poster="{{ s.image_url }}"{% endif %}></video>
   {%- endif -%}
   {%- if has_media -%}
-    <div class="hero__overlay" style="background: {{ s.overlay_color }}; opacity: {{ s.overlay_opacity | divided_by: 100.0 }}"></div>
+    <div class="hero__overlay" aria-hidden="true" style="background: {{ s.overlay_color }}; opacity: {{ s.overlay_opacity | divided_by: 100.0 }}"></div>
   {%- endif -%}
   <div class="page-width hero__content align-{{ s.text_alignment }}">
     <div class="hero__inner" style="max-width: {{ s.text_max_width }}px">
@@ -25,12 +25,11 @@
       {%- if s.button_label != blank or s.button2_label != blank -%}
         <div class="hero__buttons">
           {%- if s.button_label != blank -%}
-            <a class="button{% if s.button_style == 'outline' %} button--outline{% endif %}" href="{{ s.button_link | link }}"
-              {%- if s.button_new_tab %} target="_blank" rel="noopener"{% endif %}
-              {%- if s.button_color != blank %} style="--btn: {{ s.button_color }}"{% endif %}>{{ s.button_label }}</a>
+            <a class="button" href="{{ s.button_link | link }}"
+              {%- if s.button_new_tab %} target="_blank" rel="noopener"{% endif %}>{{ s.button_label }}</a>
           {%- endif -%}
           {%- if s.button2_label != blank -%}
-            <a class="button button--outline hero__button2" href="{{ s.button2_link | link }}">{{ s.button2_label }}</a>
+            <a class="button button--outline hero__button2" href="{{ s.button2_link | link }}"{% if s.button2_new_tab %} target="_blank" rel="noopener"{% endif %}>{{ s.button2_label }}</a>
           {%- endif -%}
         </div>
       {%- endif -%}
