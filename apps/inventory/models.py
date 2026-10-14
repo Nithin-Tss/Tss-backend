@@ -4,6 +4,8 @@ from django.db import models
 
 from apps.catalog.models import ProductVariant
 from apps.tenancy.models import Store
+from django.core.exceptions import ValidationError
+
 
 
 class Location(models.Model):
@@ -78,6 +80,29 @@ class InventoryItem(models.Model):
                 name="uq_inventory_item_variant_location",
             )
         ]
+
+    
+def clean(self):
+    super().clean()
+
+    errors = {}
+
+    quantity_fields = [
+        "unavailable",
+        "committed",
+        "available",
+        "on_hand",
+        "incoming",
+    ]
+
+    for field in quantity_fields:
+        value = getattr(self, field, None)
+
+        if value is not None and value < 0:
+            errors[field] = "This quantity cannot be negative."
+
+    if errors:
+        raise ValidationError(errors)
 
     def __str__(self):
         return f"{self.variant} - {self.location}"
