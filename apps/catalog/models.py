@@ -127,6 +127,15 @@ class Product(models.Model):
         blank=True,
     )
 
+    brand = models.ForeignKey(
+        Brand,
+        on_delete=models.PROTECT,
+        db_column="brand_id",
+        related_name="products",
+        null=True,
+        blank=True,
+    )
+
     product_type = models.CharField(
         max_length=100,
         null=True,
