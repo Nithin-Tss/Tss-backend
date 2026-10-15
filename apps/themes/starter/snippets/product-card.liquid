@@ -2,7 +2,7 @@
   Product card used by the grid, carousel and collection page.
   Usage: {% render 'product-card', product: product, show_vendor: true %}
   Optional: show_price (default on), show_rating, show_tags, show_add_to_cart,
-  show_wishlist (default on: the heart, see snippets/wishlist.liquid),
+  show_wishlist (default off: the heart, see snippets/wishlist.liquid),
   ratio ("square", "portrait" or "landscape").
 {%- endcomment -%}
 <div class="product-card-shell">
@@ -39,7 +39,7 @@
     <span class="button product-card__cta">Add to cart</span>
   {%- endif -%}
 </a>
-{%- if show_wishlist != false or wishlist_action == 'remove' -%}
+{%- if show_wishlist or wishlist_action == 'remove' -%}
   {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, wishlist_action: wishlist_action %}
 {%- endif -%}
 </div>

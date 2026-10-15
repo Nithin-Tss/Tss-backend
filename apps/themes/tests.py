@@ -899,6 +899,19 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         }, expect=201)
         self.base = f"/s/{self.store['storeSlug']}"
 
+    def show_hearts(self):
+        """What an owner does to get hearts: "Show wishlist heart" on every card section, and the product page block."""
+        data = self.ok("get", "/api/v1/themes/settings/")
+        for page in ("index", "collection", "product"):
+            sections = data["templates"][page]["sections"]
+            for section in sections.values():
+                if section["type"] in ("product-grid", "product-carousel", "main-collection"):
+                    section["settings"]["show_wishlist"] = True
+                if section["type"] == "main-product" and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
+                    section["blocks"].append({"type": "wishlist_heart", "settings": {}})
+            self.ok("patch", "/api/v1/themes/settings/", {"templates": {page: {
+                "order": data["templates"][page]["order"], "sections": sections}}})
+
     def test_empty_wishlist_and_header_navigation(self):
         response = self.client.get(f"{self.base}/wishlist/")
         self.assertEqual(response.status_code, 200)
@@ -913,6 +926,8 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
 
     def test_add_displays_product_and_session_retains_it_until_removed(self):
         from apps.catalog.models import ProductImage
+
+        self.show_hearts()
 
         ProductImage.objects.create(
             product_id=self.product["id"],
@@ -1085,7 +1100,35 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
                                                              "return_to": "javascript:alert(1)"})
         self.assertEqual(r["Location"], f"/s/{slug}/wishlist/")
 
+    def test_a_new_store_shows_no_hearts_but_the_wishlist_page_keeps_its_remove_button(self):
+        """Hearts are off by default: not on cards, not on the product page. The wishlist page still removes items."""
+        slug = self.store["storeSlug"]
+        for path in ("", "collections/all", f"products/{self.product['id']}"):
+            html = self.client.get(f"/s/{slug}/{path}").content.decode()
+            self.assertNotIn('class="product-card__wishlist-form"', html, path)
+            self.assertNotIn('class="product__wishlist-form"', html, path)
+        # ...yet the header icon is there, and a saved product can be removed on the wishlist page
+        self.client.post(f"/s/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
+        page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
+        self.assertIn("Blue mug", page)
+        self.assertIn('class="product-card__wishlist-remove"', page)
+        self.assertIn("data-wishlist-remove", page)
+        self.assertIn('aria-label="Wishlist"', page[page.index("<header"):page.index("</header>")])
+
+    def test_turning_the_hearts_on_shows_them_and_writes_the_setting_into_the_code(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        main = data["templates"]["collection"]["sections"]["main"]
+        self.assertFalse(main["settings"]["show_wishlist"])
+        main["settings"]["show_wishlist"] = True
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"collection": {
+            "order": data["templates"]["collection"]["order"], "sections": {"main": main}}}})
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        self.assertTrue(json.loads(files["templates/collection.json"])["sections"]["main"]["settings"]["show_wishlist"])
+        html = self.client.get(f"{self.base}/collections/all").content.decode()
+        self.assertIn('class="product-card__wishlist-form"', html)
+
     def test_add_from_product_page_and_invalid_redirect(self):
+        self.show_hearts()
         product_page = self.client.get(f"{self.base}/products/{self.product['id']}")
         self.assertEqual(product_page.status_code, 200)
         self.assertIn('class="product__wishlist-form"', product_page.content.decode())
@@ -1141,16 +1184,24 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
     def types(self, blocks):
         return [b["type"] for b in blocks]
 
-    def test_heart_block_is_there_by_default_with_its_settings(self):
-        self.assertIn("wishlist_heart", self.types(self.main()["blocks"]))
+    def add_block(self, **settings):
+        self.save_customizer(lambda m: m["blocks"].append({"type": "wishlist_heart", "settings": settings}))
+
+    def test_heart_block_is_not_added_by_default_but_can_be_added(self):
+        self.assertNotIn("wishlist_heart", self.types(self.main()["blocks"]))  # a new store: no heart on the product page
+        self.assertEqual(self.hearts(self.page()), 0)
         spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["main-product"]["blocks"]["wishlist_heart"]
-        self.assertEqual(spec["name"], "Wishlist heart")
+        self.assertEqual(spec["name"], "Wishlist heart")  # it is in "Add block"
         self.assertEqual(set(spec["settings"]), {"label", "size", "align"})
+        self.add_block()
+        self.assertIn("wishlist_heart", self.types(self.code()["sections"]["main"]["blocks"]))
         html = self.page()
         self.assertEqual(self.hearts(html), 1)
-        self.assertIn("Add to wishlist", html)  # the same look as before for every store
+        self.assertIn("Add to wishlist", html)
 
     def test_removing_and_adding_the_block_in_the_customizer(self):
+        self.add_block()
+        self.assertEqual(self.hearts(self.page()), 1)
         self.save_customizer(lambda m: m.update(blocks=[b for b in m["blocks"] if b["type"] != "wishlist_heart"]))
         self.assertNotIn("wishlist_heart", self.types(self.code()["sections"]["main"]["blocks"]))
         self.assertEqual(self.hearts(self.page()), 0)
@@ -1165,6 +1216,8 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
         self.assertIn('style="text-align:center"', html)
 
     def test_editing_the_block_in_code_updates_the_customizer(self):
+        self.add_block()
+
         def to_code(main):
             for block in main["blocks"]:
                 if block["type"] == "wishlist_heart":
@@ -1310,7 +1363,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 19)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 20)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -1335,6 +1388,92 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         self.theme()
         self.assertEqual(self.ok("get", "/api/v1/themes/sections/")["header"]["version"], version)
         self.assertEqual(self.file("sections/header.liquid"), code)
+
+    def make_store_that_shows_hearts(self, saved_templates):
+        """An existing store from before "Show wishlist heart" became opt-in: its theme was visited before, so it is not new."""
+        store_theme = self.theme()
+        theme = store_theme.theme
+        theme.theme_data = {k: v for k, v in theme.theme_data.items() if k != "wishlist_hearts"}
+        theme.save()
+        store_theme.custom_data = {"templates": saved_templates} if saved_templates else {}
+        store_theme.save()
+
+    def hearts(self, path):
+        html = self.client.get(f"{self.base}/{path}").content.decode()
+        return html.count('class="product-card__wishlist-form"')
+
+    def test_an_existing_store_keeps_its_hearts_after_the_upgrade(self):
+        """Sections that never saved the setting showed the heart (it was on by default): they keep it."""
+        self.make_store_that_shows_hearts({
+            "collection": {"order": ["main"], "sections": {"main": {"type": "main-collection", "settings": {"columns": 3}}}},
+        })  # the collection page was customized without the setting; the home and product pages never were
+        self.assertEqual(self.theme().theme.theme_data["wishlist_hearts"], 1)
+        settings = self.ok("get", "/api/v1/themes/settings/")["templates"]
+        self.assertTrue(settings["collection"]["sections"]["main"]["settings"]["show_wishlist"])
+        self.assertEqual(settings["collection"]["sections"]["main"]["settings"]["columns"], 3)  # the owner's choice is kept
+        for section in settings["index"]["sections"].values():
+            if section["type"] in ("product-grid", "product-carousel"):
+                self.assertTrue(section["settings"]["show_wishlist"], section["type"])
+        self.assertGreater(self.hearts("collections/all"), 0)
+        self.assertGreater(self.hearts(""), 0)
+        # what was saved is in the code (templates/*.json), so the owner can see and change it
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        self.assertTrue(json.loads(files["templates/collection.json"])["sections"]["main"]["settings"]["show_wishlist"])
+        # the product page keeps its heart too: its default block is saved
+        product = settings["product"]["sections"]["main"]
+        self.assertIn("wishlist_heart", [b["type"] for b in product["blocks"]])
+        self.assertEqual(self.product_page().count('class="product__wishlist-form"'), 1)
+
+    def test_an_owners_own_choice_is_not_changed_by_the_upgrade(self):
+        self.make_store_that_shows_hearts({
+            "collection": {"order": ["main"], "sections": {"main": {"type": "main-collection", "settings": {"show_wishlist": False}}}},
+            "index": {"order": ["grid"], "sections": {"grid": {"type": "product-grid", "settings": {"show_wishlist": True}}}},
+        })
+        settings = self.ok("get", "/api/v1/themes/settings/")["templates"]
+        self.assertFalse(settings["collection"]["sections"]["main"]["settings"]["show_wishlist"])  # turned off by the owner
+        self.assertTrue(settings["index"]["sections"]["grid"]["settings"]["show_wishlist"])
+        self.assertEqual(self.hearts("collections/all"), 0)
+
+    def test_the_upgrade_runs_once_and_a_new_store_is_left_off(self):
+        self.make_store_that_shows_hearts(None)
+        self.theme()
+        # the owner turns the hearts off after the upgrade: later visits do not turn them back on
+        data = self.ok("get", "/api/v1/themes/settings/")
+        main = data["templates"]["collection"]["sections"]["main"]
+        main["settings"]["show_wishlist"] = False
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"collection": {
+            "order": data["templates"]["collection"]["order"], "sections": {"main": main}}}})
+        self.theme()
+        self.assertEqual(self.hearts("collections/all"), 0)
+        # a store created now was never migrated: hearts off, nothing saved
+        other = self.sign_up("freshstore@example.com", "Fresh Store")[1]
+        self.ok("post", "/api/v1/catalog/products/", {"title": "Mug", "sku": "S-M", "status": "active", "price": "1"}, expect=201)
+        html = self.client.get(f"/s/{other['storeSlug']}/collections/all").content.decode()
+        self.assertNotIn('class="product-card__wishlist-form"', html)
+        from .models import StoreTheme
+
+        fresh = StoreTheme.objects.get(store__store_id=other["storeId"], is_active=True)
+        self.assertEqual(fresh.theme.theme_data["wishlist_hearts"], 1)  # marked done without saving anything
+        saved = fresh.custom_data.get("templates") or {}
+        self.assertFalse({"index", "collection", "product"} & set(saved))  # the card pages were not saved
+        self.assertNotIn("show_wishlist", json.dumps(saved))  # nothing was written into any section
+        self.assertFalse(self.ok("get", "/api/v1/themes/settings/")["templates"]["collection"]["sections"]["main"]
+                         ["settings"]["show_wishlist"])
+
+    def test_an_owner_edited_card_snippet_keeps_working_and_the_wishlist_page_can_remove(self):
+        mine = ("<!-- my card -->\n<div class=\"product-card-shell\"><a href=\"{{ product.url }}\">{{ product.title }}</a>"
+                "<form class=\"product-card__wishlist-form\" data-wishlist-form method=\"post\" "
+                "action=\"{{ shop.url }}/wishlist/items/\"><input type=\"hidden\" name=\"product_id\" value=\"{{ product.id }}\">"
+                "<input type=\"hidden\" name=\"action\" value=\"remove\" data-wishlist-action>"
+                "{% if wishlist_action == 'remove' %}<button class=\"product-card__wishlist-remove\" type=\"submit\" "
+                "data-wishlist-remove>Remove</button>{% endif %}</form></div>\n")
+        self.theme().theme.files.filter(file_path="snippets/product-card.liquid").update(content=mine, file_size=len(mine))
+        self.assertEqual(self.file("snippets/product-card.liquid"), mine)  # the upgrade does not touch it
+        self.client.post(f"{self.base}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
+        page = self.client.get(f"{self.base}/wishlist/").content.decode()
+        self.assertIn("<!-- my card -->", page)
+        self.assertIn("Clay mug", page)
+        self.assertIn('class="product-card__wishlist-remove"', page)  # still removable from the wishlist page
 
     def test_a_header_and_product_section_the_owner_edited_are_left_alone(self):
         self.make_store_from_before_the_wishlist_blocks(edited=("sections/header.liquid", "sections/main-product.liquid"))
@@ -1507,25 +1646,29 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
     def heading_blocks(self, *texts):
         return [{"type": "heading", "settings": {"text": t}} for t in texts]
 
-    def test_show_wishlist_heart_is_a_setting_in_both_editors(self):
-        """"Show wishlist heart": on by default; switching it off in the customizer or in the code hides the hearts."""
+    def test_show_wishlist_heart_is_off_until_the_owner_turns_it_on(self):
+        """"Show wishlist heart" starts OFF. The owner turns it on in the customizer or in the code; both follow."""
         hearts = lambda html: html.count('class="product-card__wishlist-form"')
-        self.assertTrue(self.customizer_grid()["settings"]["show_wishlist"])  # on by default: nothing changes for stores
-        self.assertEqual(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"], True)
-        shown_in_preview, shown_in_store = hearts(self.preview_html()), hearts(self.store_html())
-        self.assertGreater(shown_in_preview, 0)
+        self.assertFalse(self.customizer_grid()["settings"]["show_wishlist"])  # a new store: no hearts on cards
+        self.assertFalse(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"])
+        self.assertEqual(hearts(self.preview_html()), 0)
+        self.assertEqual(hearts(self.store_html()), 0)
 
         # Customizer -> code, preview and store
-        self.save_customizer_grid(lambda s: s["settings"].update(show_wishlist=False))
-        self.assertEqual(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"], False)
-        self.assertEqual(hearts(self.preview_html()), 0)
-        self.assertEqual(hearts(self.store_html()), shown_in_store - shown_in_preview)
+        self.save_customizer_grid(lambda s: s["settings"].update(show_wishlist=True))
+        self.assertEqual(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"], True)  # written to the code
+        shown_in_preview = hearts(self.preview_html())
+        self.assertGreater(shown_in_preview, 0)
+        self.assertEqual(hearts(self.store_html()), shown_in_preview)
 
         # Code -> customizer, preview and store
+        self.save_code_index(lambda s: s["settings"].update(show_wishlist=False))
+        self.assertFalse(self.customizer_grid()["settings"]["show_wishlist"])
+        self.assertEqual(hearts(self.preview_html()), 0)
+        self.assertEqual(hearts(self.store_html()), 0)
         self.save_code_index(lambda s: s["settings"].update(show_wishlist=True))
         self.assertTrue(self.customizer_grid()["settings"]["show_wishlist"])
         self.assertEqual(hearts(self.preview_html()), shown_in_preview)
-        self.assertEqual(hearts(self.store_html()), shown_in_store)
 
     def test_the_heart_markup_comes_from_the_wishlist_snippet(self):
         """Cards render the heart through {% render 'wishlist' %}: no wishlist markup of their own."""

@@ -54,7 +54,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 19
+STARTER_REVISION = 20
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -97,6 +97,8 @@ STARTER_UPGRADES = {
         "211c4b936c465237301a2a6a4373ff684ab6995e6ad769adbdc2e185ee8077e3",  # revision 18: wishlist toggle state
         "78fc98475a47063470123fffaa31a6058ccfe5c25ff7420137ea708fad314a83",  # revision 19: before the wishlist snippet
         "3197e89478b76a5ece309e65af5d1990856e32f29d8229f3ad04bd38b17b50a5",  # revision 19: same, with CRLF line endings
+        "b2d26d3b6c5b6958d032ef6c8d98250b02ae9575e9f2a4115bbe14272b035e3e",  # revision 20: the heart was on unless a section turned it off
+        "4be9e7feb8659b7f7f792207a15d7adf0924e9a0795770fb541fd81ad81d0360",  # revision 20: same, with CRLF line endings
     },
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
@@ -209,6 +211,7 @@ def get_store_theme(store):
         _upgrade_untouched_starter_files(current.theme)
         _add_synced_sections(current.theme, current.custom_data)
         _add_wishlist_blocks(current)
+        _keep_wishlist_hearts(current)
         _add_page_templates(current)
         return current
 
@@ -229,6 +232,7 @@ def get_store_theme(store):
     _upgrade_untouched_starter_files(installed.theme)
     _add_synced_sections(installed.theme, installed.custom_data)
     _add_wishlist_blocks(installed)
+    _keep_wishlist_hearts(installed, new_store=current is None)
     _add_page_templates(installed)
     return installed
 
@@ -295,6 +299,58 @@ def _add_wishlist_blocks(store_theme):
             store_theme.save(update_fields=["custom_data", "updated_at"])
 
     theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+# Sections that render product cards: their "Show wishlist heart" setting
+CARD_SECTIONS = ("product-grid", "product-carousel", "main-collection")
+
+
+def _keep_wishlist_hearts(store_theme, new_store=False):
+    """
+    Once per store: "Show wishlist heart" is now off unless the owner turns it on, and the product page
+    has no "Wishlist heart" block unless the owner adds it. A store that exists already showed both, so
+    it keeps them: show_wishlist = true is saved into every card section that never saved the setting,
+    and the product page gets its block.
+
+    Telling the stores apart:
+    - a NEW store (its theme is created just now) has nothing to keep: it starts with the hearts off;
+    - an existing store's section that has no "show_wishlist" in its saved settings never saved the
+      setting, so it has been showing the heart (it was on by default): true is saved. A section that
+      has the key, true or false, is the owner's choice and is left alone;
+    - a page the owner never customized (no saved template) shows its default sections, hearts
+      included: those default sections are saved as they are, with the heart on.
+    Runs inside get_store_theme, i.e. before any request reads the settings, so the customizer never
+    sees (and saves back) the new default for a section that was showing the heart.
+    """
+    theme = store_theme.theme
+    if (theme.theme_data or {}).get("wishlist_hearts"):
+        return
+    if not new_store:
+        product_file = theme.files.filter(file_path="sections/main-product.liquid").values_list("content", flat=True).first()
+        renders_block = "section.wishlist_heart" in (product_file or "")
+        templates = copy.deepcopy(store_theme.custom_data.get("templates") or {})
+        changed = False
+        for page in ("index", "collection", "product"):
+            if page not in templates:
+                templates[page] = {**default_template(page), "_default": True}
+                changed = True
+        for page in templates.values():
+            was_default = page.pop("_default", False)
+            for section in (page.get("sections") or {}).values():
+                kind = section.get("type")
+                if kind in CARD_SECTIONS:
+                    if not isinstance(section.get("settings"), dict):
+                        section["settings"] = {}
+                    if "show_wishlist" not in section["settings"]:
+                        section["settings"]["show_wishlist"] = True
+                        changed = True
+                elif kind == "main-product" and was_default and renders_block:
+                    section["blocks"] = [*(section.get("blocks") or []), {"type": "wishlist_heart", "settings": {}}]
+        if changed:
+            store_theme.custom_data = {**store_theme.custom_data, "templates": templates}
+            store_theme.save(update_fields=["custom_data", "updated_at"])
+    theme.theme_data = {**(theme.theme_data or {}), "wishlist_hearts": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 

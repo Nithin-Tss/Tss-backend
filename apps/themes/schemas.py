@@ -220,7 +220,7 @@ DEFAULT_TEMPLATES = {
     "product": {
         "order": ["main", "related"],
         "sections": {
-            "main": {"type": "main-product", "settings": {}, "blocks": [{"type": "wishlist_heart", "settings": {}}]},
+            "main": {"type": "main-product", "settings": {}},
             "related": {"type": "product-carousel", "settings": {"heading": "You may also like", "limit": 8}},
         },
     },
@@ -949,7 +949,7 @@ def _product_list_settings(layout, limit, heading):
             "style", "checkbox", "Show \"Add to cart\" button", False,
             help="Opens the product page, where shoppers pick options and add it to the cart.",
         ),
-        "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", True),
+        "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
         "card_background": _opt("style", "color_optional", "Card background", ""),
         "card_border": _opt("style", "checkbox", "Card border", False),
         "card_hover": _choice(
@@ -1025,7 +1025,7 @@ SECTIONS["main-collection"]["settings"] = {
         "style", "checkbox", "Show \"Add to cart\" button", False,
         help="Opens the product page, where shoppers pick options and add it to the cart.",
     ),
-    "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", True),
+    "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
     "card_background": _opt("style", "color_optional", "Card background", ""),
     "card_border": _opt("style", "checkbox", "Card border", False),
     "card_hover": _choice(
