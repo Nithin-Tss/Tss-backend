@@ -136,15 +136,12 @@ DATABASES = {
         "PASSWORD": unquote(_db_url.password or "") if _db_from_url else os.getenv("DB_PASSWORD"),
         "HOST": _db_url.hostname if _db_from_url else os.getenv("DB_HOST", "127.0.0.1"),
         "PORT": str(_db_url.port or 5432) if _db_from_url else os.getenv("DB_PORT", "5432"),
-        # Reuse connections, but verify them first so a connection the pooler dropped isn't reused
-        # Default 0 (close per request): Supabase's pooler has a small client cap, and
-        # persistent per-thread connections exhaust it (EMAXCONNSESSION)
-        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "0")),
+        # Reuse each worker's connection for 60s instead of reconnecting (TLS + auth, ~0.5-1s to a
+        # remote database) on every request. Set DB_CONN_MAX_AGE=0 behind a small-capped pooler.
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
         "CONN_HEALTH_CHECKS": True,
-        # Required when DB_PORT is 6543 (Supabase transaction pooler)
-        "DISABLE_SERVER_SIDE_CURSORS": True,
         "OPTIONS": {
-            # Supabase expects SSL; resilient timeout for cloud database connections
+            # Render requires SSL; generous timeout for cloud database connections
             "sslmode": os.getenv("DB_SSLMODE", "require"),
             "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "30")),
         },
