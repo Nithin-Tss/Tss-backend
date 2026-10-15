@@ -1745,10 +1745,11 @@ def storefront_article(store, request, params, handle):
 @_storefront
 def storefront_wishlist(store, request, params):
     del params
-    key = f"wishlist:{store.pk}"
-    ids = request.session.get(key, [])
-    if not isinstance(ids, list):
-        ids = []
+    # The shopper's cart id (cookie, or the link's ?cart=): the sandboxed page cannot send its session cookie
+    cart_session, cart_new = cart_data.session_for_page(store, request)
+    if cart_new:
+        request._cart_session = (cart_session, True)
+    ids = cart_data.get_wishlist(store, request, cart_session)
     valid_ids = []
     for value in ids:
         try:
@@ -1758,17 +1759,18 @@ def storefront_wishlist(store, request, params):
         if normalized not in valid_ids:
             valid_ids.append(normalized)
     if valid_ids != ids:
-        request.session[key] = valid_ids
+        cart_data.put_wishlist(store, request, cart_session, valid_ids)
 
     products = _catalog(store).filter(pk__in=valid_ids)
     ordered_products = {str(product.pk): product for product in products}
     visible_ids = [product_id for product_id in valid_ids if product_id in ordered_products]
     if visible_ids != valid_ids:
-        request.session[key] = visible_ids
+        cart_data.put_wishlist(store, request, cart_session, visible_ids)
     return render_page(
         store,
         "index",
         request=request,
+        cart_id=cart_session,
         wishlist_page_ids=visible_ids,
         wishlist_products=ordered_products,
     )
@@ -1908,12 +1910,11 @@ def storefront_cart(store, request, params):
 @csrf_exempt
 @require_POST
 def storefront_wishlist_item(request, store_slug):
-    """Update the guest session wishlist; these changes do not modify protected customer data."""
+    """Update the guest wishlist (kept under the shopper's cart id); these changes do not modify protected customer data."""
     store = get_object_or_404(Store, store_slug=store_slug)
-    key = f"wishlist:{store.pk}"
-    ids = request.session.get(key, [])
-    if not isinstance(ids, list):
-        ids = []
+    # The storefront page runs in a sandbox: it sends the cart id its heart was given instead of a cookie
+    cart_id = cart_data.clean_id(request.POST.get("cart") or request.headers.get("X-Cart-Session", ""))
+    ids = cart_data.get_wishlist(store, request, cart_id)
 
     action = request.POST.get("action")
     try:
@@ -1931,16 +1932,22 @@ def storefront_wishlist_item(request, store_slug):
     else:
         return HttpResponse("Invalid wishlist action.", status=400)
 
-    request.session[key] = ids
+    cart_data.put_wishlist(store, request, cart_id, ids)
     if "application/json" in request.headers.get("Accept", ""):
         # The wishlist script updates the hearts and the header count without reloading the page
         count = published_products(store).filter(pk__in=ids).count()
-        return JsonResponse({"saved": action == "add", "count": count, "product_id": product_id})
+        reply = JsonResponse({"saved": action == "add", "count": count, "product_id": product_id})
+        reply["Access-Control-Allow-Origin"] = "*"  # the sandboxed page is a foreign origin (no cookies are sent)
+        reply["Cache-Control"] = "no-store"
+        return reply
     destination = request.POST.get("return_to", "")
     parsed = urlsplit(destination)
     store_path = f"{shop_url(store)}/"
     if parsed.scheme or parsed.netloc or not parsed.path.startswith(store_path):
         destination = f"{shop_url(store)}/wishlist/"
+    if cart_id and "cart=" not in destination:
+        # a page that reloads in the sandbox keeps the shopper's id (no cookie comes back with it)
+        destination += ("&" if "?" in destination else "?") + f"cart={cart_id}"
     return HttpResponseRedirect(destination)
 
 

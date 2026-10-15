@@ -127,6 +127,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card__cart.is-added{background:var(--text)}
 .product-card__cart:disabled{opacity:.6;cursor:wait}
 .product-card__wishlist-add,.product__wishlist-add{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:40px;min-height:40px;padding:8px;border:0;border-radius:50%;background:var(--bg);color:var(--text);cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.16)}
+.product-card__wishlist-add{transition:transform .15s,box-shadow .15s}.product-card__wishlist-add:hover{transform:scale(1.1);box-shadow:0 2px 8px rgba(0,0,0,.25)}.product-card__wishlist-add:hover svg{stroke:#e11d48}
 .product-card__wishlist-add svg,.product__wishlist-add svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .product-card__wishlist-add.is-wishlisted svg,.product-card__wishlist-add[aria-pressed="true"] svg,.product__wishlist-add.is-wishlisted svg,.product__wishlist-add[aria-pressed="true"] svg{fill:#e11d48;stroke:#e11d48}
 .product-card__wishlist-remove{min-height:40px;padding:0 16px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--text);font:inherit;cursor:pointer}
@@ -1535,9 +1536,15 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     if product_drop_:
         product_drop_["details"] = product_details(product, store.field_labels)
     collection_drop = None
+    # The shopper's cart id: the cookie's, or a new one that the view puts in a cookie (see cart.py)
+    # (cart_id: given by the customizer's preview, which has no shopper request)
+    cart_session, cart_new = (cart_id, False) if cart_id else cart_data.session_for_page(store, request)
+    if cart_new:
+        request._cart_session = (cart_session, True)
+
     wishlist_ids = []
     if request is not None:
-        stored_ids = request.session.get(f"wishlist:{store.pk}", [])
+        stored_ids = cart_data.get_wishlist(store, request, cart_session)
         if isinstance(stored_ids, list):
             for value in stored_ids:
                 try:
@@ -1552,13 +1559,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         )
         wishlist_ids = [product_id for product_id in wishlist_ids if product_id in available_ids]
         if wishlist_ids != stored_ids:
-            request.session[f"wishlist:{store.pk}"] = wishlist_ids
+            cart_data.put_wishlist(store, request, cart_session, wishlist_ids)
 
-    # The shopper's cart id: the cookie's, or a new one that the view puts in a cookie (see cart.py)
-    # (cart_id: given by the customizer's preview, which has no shopper request)
-    cart_session, cart_new = (cart_id, False) if cart_id else cart_data.session_for_page(store, request)
-    if cart_new:
-        request._cart_session = (cart_session, True)
     cart_count = cart_data.item_count(store, cart_session)
 
     if page == "collection":
@@ -1701,6 +1703,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 # The "Wishlist heart" block: its settings, or None when the owner removed it (or hid it)
                 heart = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
                 section["wishlist_heart"] = heart["settings"] if heart else None
+
+            if "wishlist_heart" in SECTIONS[section["type"]]["blocks"] and section["type"] != "main-product":
+                # The "Wishlist heart" block of a section with product cards: its settings, or None when hidden or never added
+                heart_block = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
+                section["wishlist_heart"] = heart_block["settings"] if heart_block else None
 
             if "cart_icon" in SECTIONS[section["type"]]["blocks"]:
                 # The "Cart icon" block: its settings, or None when the owner hid it (or never added it)

@@ -2,7 +2,8 @@
   Product card used by the grid, carousel and collection page.
   Usage: {% render 'product-card', product: product, show_vendor: true %}
   Optional: show_price (default on), show_rating, show_tags, show_add_to_cart,
-  show_wishlist (default off: the heart, see snippets/wishlist.liquid),
+  show_wishlist (the section's "Wishlist heart" block settings, nothing when it has none or hides it: the heart,
+  always visible on the card, see snippets/wishlist.liquid),
   show_cart_icon (the section's "Cart icon" block settings, nothing when it has none or hides it). Adding the
   block ("Add block") adds the icon's code (the part that starts with the show_cart_icon condition) to this
   file, and the icon's code written here adds the block to the product sections: both stay in step.
@@ -44,6 +45,6 @@
   {%- endif -%}
 </a>
 {%- if show_wishlist or wishlist_action == 'remove' -%}
-  {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, wishlist_action: wishlist_action %}
+  {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, wishlist_action: wishlist_action, size: show_wishlist.size, label_text: show_wishlist.label %}
 {%- endif -%}
 </div>

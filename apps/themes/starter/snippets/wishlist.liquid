@@ -7,6 +7,7 @@
     {% render 'wishlist', mode: 'page', items: wishlist_items, wishlist_ids: wishlist_ids %}   the saved products
   Options: icon: label, show_count, attrs. button: placement ("card" or "product"), size (px),
   label_text ("product" only), align ("product" only), return_url, with_script.
+  A card's heart is always visible; hovering it only changes how it looks (see .product-card__wishlist-add:hover).
   The script is added by the icon, the page and any button with with_script: true.
 {%- endcomment -%}
 {%- assign heart = 'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z' -%}
@@ -25,15 +26,16 @@
   {%- assign kind = 'product-card' -%}
   {%- if placement == 'product' -%}{%- assign kind = 'product' -%}{%- endif -%}
   {%- assign add_text = label_text | default: 'Add to wishlist' -%}
-  <form class="{{ kind }}__wishlist-form" method="post" action="{{ shop.url }}/wishlist/items/" data-wishlist-form{% if placement == 'product' and align != blank %} style="text-align:{{ align }}"{% endif %}>
+  <form class="{{ kind }}__wishlist-form" method="post" action="{{ shop.url }}/wishlist/items/" data-wishlist-form data-cart-session="{{ cart_session }}"{% if placement == 'product' and align != blank %} style="text-align:{{ align }}"{% endif %}>
     <input type="hidden" name="product_id" value="{{ product.id }}">
     <input type="hidden" name="action" value="{% if is_wishlisted %}remove{% else %}add{% endif %}" data-wishlist-action>
     <input type="hidden" name="return_to" value="{{ return_url | default: product.url }}">
+    <input type="hidden" name="cart" value="{{ cart_session }}">
     <button class="{{ kind }}__wishlist-add{% if is_wishlisted %} is-wishlisted{% endif %}" type="submit"
       data-wishlist-toggle data-product-id="{{ product.id }}" data-product-title="{{ product.title | escape }}" aria-pressed="{% if is_wishlisted %}true{% else %}false{% endif %}"
       data-label-add="{{ add_text | escape }}" data-label-remove="Remove from wishlist"
       aria-label="{% if is_wishlisted %}Remove {{ product.title }} from{% else %}Add {{ product.title }} to{% endif %} wishlist"
-      title="{% if is_wishlisted %}Remove from wishlist{% else %}Add to wishlist{% endif %}">
+      title="{% if is_wishlisted %}Remove from wishlist{% else %}{{ add_text | escape }}{% endif %}">
       <svg viewBox="0 0 24 24" aria-hidden="true"{% if size != blank %} style="width:{{ size }}px;height:{{ size }}px"{% endif %}>
         <path d="{{ heart }}" />
       </svg>
@@ -73,7 +75,7 @@
       toggle.setAttribute("aria-pressed", saved ? "true" : "false");
       var title = toggle.getAttribute("data-product-title") || "product";
       toggle.setAttribute("aria-label", (saved ? "Remove " + title + " from" : "Add " + title + " to") + " wishlist");
-      toggle.title = saved ? "Remove from wishlist" : "Add to wishlist";
+      toggle.title = saved ? "Remove from wishlist" : (toggle.getAttribute("data-label-add") || "Add to wishlist");
       var label = toggle.querySelector("[data-wishlist-label]");
       if (label) label.textContent = saved ? toggle.getAttribute("data-label-remove") : toggle.getAttribute("data-label-add");
     });
@@ -83,6 +85,15 @@
       count.textContent = String(Math.max(0, value));
     });
   }
+  // The navbar link carries the cart id the page was given: the sandboxed page cannot send its cookie
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("a.site-header__wishlist");
+    if (!link) return;
+    var holder = document.querySelector("[data-cart-session]");
+    var id = holder ? holder.getAttribute("data-cart-session") : "";
+    var href = link.getAttribute("href");
+    if (id && href && !/[?&]cart=/.test(href)) link.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "cart=" + id);
+  });
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-wishlist-toggle], [data-wishlist-remove]");
     if (!button) return;
@@ -100,7 +111,8 @@
     paint(toggles, saved);
     var current = document.querySelector("[data-wishlist-count]");
     if (current && saved !== wasSaved) setCount(Number(current.textContent || 0) + (saved ? 1 : -1));
-    fetch(form.action, {
+    // getAttribute: the form has an input named "action", which hides form.action
+    fetch(form.getAttribute("action"), {
       method: "POST",
       body: new URLSearchParams(new FormData(form)),
       headers: { Accept: "application/json" },

@@ -56,8 +56,23 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 29
+STARTER_REVISION = 35
 STARTER_UPGRADES = {
+    # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
+    "snippets/wishlist.liquid": {
+        "bacf2337cd2d3e93a4ab383cb933621ab0d032e6e1dc8c7cd43355da5e06aff6",  # revision 35: before the heart script read form.getAttribute("action")
+        "9a483173a5c6859cd41f92b60b4418e554ab51eb1807574b3f4b4234892146c0",  # revision 35: before the heart script read form.getAttribute("action") (CRLF)
+        "c25c619e33d40a7df100870fea1e0d6da00f84e484197a3d44397c83dd77b339",  # revision 34: before the heart was always visible
+        "fc5df79003d8ee16938a0dee3e1327fcc925e8e8471ad0bc2a7ba2a087df259b",  # revision 34: before the heart was always visible (CRLF)
+        "985811bf51e06385a6386f549df2f5e9468b772dd04045b5b8c13ac5e0987b65",  # revision 33: before the heart block has a label
+        "69b666f890275a7952dcaac9856119d1a8257b9fda05fec5db705beda6ced4d6",  # revision 33: before the heart block has a label (CRLF)
+        "be5500d95437e865507e26779c33e18221703bb53c5db47427cbe8f8b5430e41",  # revision 32: before the heart decides its own hover
+        "84bd411c7471d9f4560177f86989819fc7df6371ba33f821f2de9d4af5275ddf",  # revision 32: before the heart decides its own hover (CRLF)
+        "bdfd3c4c66db7becf69166866166209334cd7a56ce4f250c127ab9cd68b00292",  # revision 31: before the wishlist heart became a block
+        "8bde6bb48555205f2ab7fd9411e53c6ca00bb37ee6e39eaaeffd07eb6013135e",  # revision 31: before the wishlist heart became a block (CRLF)
+        "875d4ad6e2fe56977f8331287812348d798207013fe80c645e851d232fa28102",  # before revision 30
+        "d7934cacb00087dd0cced6cf84ff16fed5488dfd464eb58e1a59900c892ff690",  # before revision 30 (CRLF)
+    },
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
         "fd2985d83d849f0cf76976dda632fb6d3747cb551e84d2d8dab86f87585618a3",  # revision 13: image description, no unused button settings
@@ -72,6 +87,8 @@ STARTER_UPGRADES = {
         "a831a51ab4d6a82271abf32b7238911be9d920471b2b2490dc13dc1b83ad4fe6",  # revision 12: before slideshow accessibility and swipe
     },
     "sections/product-grid.liquid": {
+        "2490f671fe83ecc1cf97fe530ee29a9e147b9e0cd0f0928463481110d521b4e2",  # revision 31: before the wishlist heart became a block
+        "1124400a0a1acc01e6bbdc80b0ccf44e1a17ac4969942673c78e44aecff107fe",  # revision 31: before the wishlist heart became a block (CRLF)
         "849a65ea615ec1126270a01748910eed928680a253b1cfc1562641fd52c97a5c",  # revision 27: before the cart icon became a block
         "424292334f8291c2c65454b6a2bef4b1c49ae553e76aeded619ddb2812e7c44b",  # revision 27: before the cart icon became a block (CRLF)
         "5918ac10692c4b012468cf17a6098d28048585bbfe50d12eb849c2d23fe30518",  # revision 26: an earlier cart icon draft
@@ -84,6 +101,8 @@ STARTER_UPGRADES = {
         "e6f1c4afcbd4615ea14a2fc5567c6c6af98ba5abdc1205314609b8e19ac9d08c",  # revision 19: same, with CRLF line endings
     },
     "sections/product-carousel.liquid": {
+        "85ed27b927b263e8c4bb71256c87070b24cd14bb62d6e69c1694f9a0990af3df",  # revision 31: before the wishlist heart became a block
+        "0fec34b8d1deafffbeb9b99f2be253e65469b75a0b56795291ba318a2b9c52cb",  # revision 31: before the wishlist heart became a block (CRLF)
         "6e8c18942a33473eb6d3a62d3ba4885ab73cc48fdb813e83f7609acafb21b473",  # revision 27: before the cart icon became a block
         "cee64069541967e657e8276b0a8a05d698fb73394305b84ff0eabdb80593f4d9",  # revision 27: before the cart icon became a block (CRLF)
         "a86cba7067b63ffa5ee2fdf527db65d849f42723790cb405842b6d6ade55ebed",  # revision 25: before the cart icon on product cards
@@ -101,6 +120,14 @@ STARTER_UPGRADES = {
         "1a5b5ca920bb489f2047302eda3da0179b9b5b270c26e4b0a4d693f4afc61746",  # revision 12: before image description
     },
     "snippets/product-card.liquid": {
+        "341a3a0163521377c7875e8a3cfdf8e08fd9dd62706e571f1694fb92b5904a55",  # revision 34: before the heart was always visible
+        "a2e09794890de06e1db5a67c118dd86cef2c18272f7dded78e128a7bc238eea3",  # revision 34: before the heart was always visible (CRLF)
+        "329dd5b842b8f6f8abdd9889a6decda78ab452d10163e330becf5ddf6564cde7",  # revision 33: before the heart block has a label
+        "a318fb03c038f1cf4df159ffae72df3ca05c325007dd8fca7db64660eb86242d",  # revision 33: before the heart block has a label (CRLF)
+        "efc9ce8bb519a39c06c643dae60217dcbbd533313bd348513c7bf49c96830efa",  # revision 32: before the heart decides its own hover
+        "9dc82c232603748f890c01e53b78886865b30a24e41db4c1837036f0a886915c",  # revision 32: before the heart decides its own hover (CRLF)
+        "b4ab8c333e9ea4c149ad730561b2d122ac67134d4b401a9233c371f8374a4f4e",  # revision 31: before the wishlist heart became a block
+        "af1f67c951e00667d9e432d3c4071a2819c6a675e6251d25e7dc4b555f196075",  # revision 31: before the wishlist heart became a block (CRLF)
         "8bea0981af9916bf3f0cf690082e4a1e7af0b409b39131ba50c8c2296fb8c419",  # revision 29: before the cart icon was added to the card by its block
         "fcd06f9be05274f8bf3ad855a66c337d4f3c3a22798cfec66b00effa9bc80880",  # revision 29: before the cart icon was added to the card by its block (CRLF)
         "f4ac32c3302297ee3417ba41b88d94fca4a8316e1214b2b2645fef3de3cda957",  # revision 27: before the cart icon became a block
@@ -165,6 +192,8 @@ STARTER_UPGRADES = {
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
+        "2e2ebeacc9f1e9d175ff16ba6ab53cf5b9633838bf3a4532988d300fa8f215d7",  # revision 31: before the wishlist heart became a block
+        "a6e33d8e535ba95094934f457f49dbe769020c86a41342f2ba1ea60a6232d2d2",  # revision 31: before the wishlist heart became a block (CRLF)
         "7230ca87ff484930cf8b845da2c3edf6cf6c17ee2d73fd25e7e0f24378559a5b",  # revision 27: before the cart icon became a block
         "2b0841eb55642dd3430e0e79b558a96e6c3239a09cb352dc254b321bea4142a2",  # revision 27: before the cart icon became a block (CRLF)
         "fdb1ffcf01148bfbf770f46c74e0a91bca95c84a1c4fa62798dcd452d3efd6f4",  # revision 25: before the cart icon on product cards

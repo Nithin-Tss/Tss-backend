@@ -11,10 +11,14 @@ import hashlib
 import hmac
 import re
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings as django_settings
+from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.sessions.models import Session
 from django.db.models import Sum
+from django.utils import timezone
 
 from apps.commerce import services
 from apps.commerce.models import Cart, CartItem
@@ -53,6 +57,46 @@ def clean_id(value):
 
 def new_id():
     return uuid.uuid4().hex
+
+
+# ---- the wishlist
+# The storefront runs in a sandbox: its clicks cannot send the browser's session cookie. So the wishlist is kept
+# under the shopper's cart id too (the page puts it in the heart's form), in the session table under its own key.
+# A browser that sends its session cookie but no id (an older page) keeps using the session.
+
+def _wishlist_row_key(cart_id):
+    return f"wl{cart_id}"
+
+
+def get_wishlist(store, request, cart_id):
+    """The product ids this shopper saved in this store: the list kept under their cart id, else the session's."""
+    cart_id = clean_id(cart_id)
+    if cart_id:
+        row = Session.objects.filter(session_key=_wishlist_row_key(cart_id), expire_date__gt=timezone.now()).first()
+        if row is not None:
+            ids = SessionStore().decode(row.session_data).get(f"wishlist:{store.pk}")
+            if isinstance(ids, list):
+                return ids
+    ids = request.session.get(f"wishlist:{store.pk}", []) if request is not None else []
+    return ids if isinstance(ids, list) else []
+
+
+def put_wishlist(store, request, cart_id, ids):
+    """Keep the shopper's list: under their cart id when they have one, otherwise in the session."""
+    cart_id = clean_id(cart_id)
+    if not cart_id:
+        if request is not None:
+            request.session[f"wishlist:{store.pk}"] = list(ids)
+        return
+    codec = SessionStore()
+    key = _wishlist_row_key(cart_id)
+    row = Session.objects.filter(session_key=key).first()
+    data = codec.decode(row.session_data) if row is not None else {}
+    data[f"wishlist:{store.pk}"] = list(ids)
+    Session.objects.update_or_create(session_key=key, defaults={
+        "session_data": codec.encode(data),
+        "expire_date": timezone.now() + timedelta(seconds=CART_COOKIE_AGE),
+    })
 
 
 def preview_id(store, user):

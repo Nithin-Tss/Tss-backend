@@ -305,10 +305,18 @@ def _clean_section(page, section_id, raw):
     if not isinstance(hidden, bool):
         raise serializers.ValidationError(f"{where}.hidden must be true or false.")
 
+    raw_settings = raw.get("settings", {})
+    legacy_heart = None
+    if isinstance(raw_settings, dict) and "show_wishlist" in raw_settings and "wishlist_heart" in schema.get("blocks", {}) \
+            and raw["type"] != "main-product":
+        # The old "Show wishlist heart" checkbox: true is a Wishlist heart block, false takes it away
+        raw_settings = {k: v for k, v in raw_settings.items() if k != "show_wishlist"}
+        legacy_heart = raw["settings"]["show_wishlist"]
+
     section = {
         "type": raw["type"],
         "hidden": hidden,
-        "settings": _clean_settings(schema["settings"], raw.get("settings", {}), f"{where}.settings"),
+        "settings": _clean_settings(schema["settings"], raw_settings, f"{where}.settings"),
     }
 
     if "blocks" in schema:
@@ -331,6 +339,11 @@ def _clean_section(page, section_id, raw):
                     block_schema["settings"], block.get("settings", {}), f"{where}.blocks[{i}].settings"
                 ),
             })
+
+        if legacy_heart is True and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
+            section["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}})
+        elif legacy_heart is False:
+            section["blocks"] = [b for b in section["blocks"] if b["type"] != "wishlist_heart"]
 
         # Some block types have their own limit (e.g. at most 8 slides)
         for type_, limit in schema.get("type_limits", {}).items():
@@ -426,6 +439,7 @@ def resolve(custom_data):
         for section in page["sections"].values():
             schema = SECTIONS[section["type"]]
             section["hidden"] = bool(section.get("hidden", False))
+            heart_saved = (section.get("settings") or {}).get("show_wishlist") is True
             section["settings"] = _with_defaults(schema["settings"], section.get("settings", {}))
             if "blocks" in schema:
                 section["blocks"] = [
@@ -437,6 +451,11 @@ def resolve(custom_data):
                     for b in section.get("blocks", [])
                     if b.get("type") in schema["blocks"]  # block types that no longer exist are dropped
                 ]
+                # A card section saved with the old "Show wishlist heart" on has the heart as a block now
+                if heart_saved and section["type"] != "main-product" and "wishlist_heart" in schema["blocks"] \
+                        and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
+                    section["blocks"].append({"type": "wishlist_heart", "hidden": False,
+                                              "settings": _with_defaults(schema["blocks"]["wishlist_heart"]["settings"], {})})
                 # Blocks the section always has, e.g. "Product information" on layouts saved before it existed
                 for type_ in reversed(schema.get("required_blocks", [])):
                     if not any(b["type"] == type_ for b in section["blocks"]):
@@ -949,7 +968,6 @@ def _product_list_settings(layout, limit, heading):
             "style", "checkbox", "Show \"Add to cart\" button", False,
             help="Opens the product page, where shoppers pick options and add it to the cart.",
         ),
-        "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
         "card_background": _opt("style", "color_optional", "Card background", ""),
         "card_border": _opt("style", "checkbox", "Card border", False),
         "card_hover": _choice(
@@ -1025,7 +1043,6 @@ SECTIONS["main-collection"]["settings"] = {
         "style", "checkbox", "Show \"Add to cart\" button", False,
         help="Opens the product page, where shoppers pick options and add it to the cart.",
     ),
-    "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
     "card_background": _opt("style", "color_optional", "Card background", ""),
     "card_border": _opt("style", "checkbox", "Card border", False),
     "card_hover": _choice(
@@ -1407,6 +1424,10 @@ SECTIONS["main-product"]["blocks"] = {
 }
 SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 1, "cart_icon": 1}
 
+# The wishlist heart on product cards (snippets/wishlist.liquid) is a block the same way: the owner picks "Wishlist
+# heart" in "Add block", hides it with the eye or deletes it, and the cards always show the heart while the block
+# is there and visible. It works on its own: nothing in it depends on the cart icon block. (The old "Show wishlist
+# heart" checkbox is gone: a saved `show_wishlist: true` is read as a Wishlist heart block, see resolve().)
 # The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Nothing adds it: the
 # owner picks "Cart icon" in "Add block" (one per section), hides it with the block's eye or deletes it, and the
 # cards show the icon on hover while the block is there and visible.
@@ -1421,7 +1442,17 @@ for _type in ("product-grid", "product-carousel", "main-collection"):
         },
         **SECTIONS[_type]["blocks"],
     }
-    SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1}
+    SECTIONS[_type]["blocks"] = {
+        "wishlist_heart": {
+            "name": "Wishlist heart",
+            "settings": {
+                "label": _opt("content", "text", "Label (tooltip)", "Add to wishlist", max=40),
+                "size": _opt("style", "range", "Icon size", 20, min=16, max=40, step=2, unit="px"),
+            },
+        },
+        **SECTIONS[_type]["blocks"],
+    }
+    SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1, "wishlist_heart": 1}
 SECTIONS["main-product"]["required_blocks"] = ["product_info"]
 
 SECTIONS["custom"]["settings"] = {

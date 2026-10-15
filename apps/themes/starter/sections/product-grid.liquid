@@ -33,10 +33,11 @@
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
         {%- if s.layout == 'carousel' %} tabindex="0" aria-label="{{ s.heading | default: 'Products' }}"{% endif %}>
         {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+        {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
         {%- for product in section.products -%}
           {%- comment -%} "Load more": cards after the first `limit` wait, hidden, for the button {%- endcomment -%}
           {%- if s.load_more and forloop.index > first_count -%}<div data-more style="display:none">{%- endif -%}
-          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: s.show_wishlist, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
           {%- if s.load_more and forloop.index > first_count -%}</div>{%- endif -%}
         {%- endfor -%}
       </div>
