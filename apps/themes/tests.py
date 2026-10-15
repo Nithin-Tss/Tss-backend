@@ -15,6 +15,61 @@ from apps.core.tests.test_flow import StoreClientMixin
 from . import section_sync as sync
 
 
+def legacy_header():
+    """The starter header from before the heart became a block: a "Show Wishlist" checkbox and inline markup."""
+    from .services import starter_files
+
+    header = starter_files()["sections/header.liquid"]
+    heart = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"
+    for new, old in (
+        ("""  The "Wishlist icon" block shows the heart with the saved count, on the right. It only links to
+  the wishlist page: everything the wishlist does is in snippets/wishlist.liquid.
+""", ""),
+        ("""{%- assign link_blocks = section.blocks | where: 'type', 'link' -%}
+{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
+""", ""),
+        ("""{%- if link_blocks.size > 0 -%}
+          {%- for block in link_blocks -%}""", """{%- if section.blocks.size > 0 -%}
+          {%- for block in section.blocks -%}"""),
+        ("""    {%- if wishlist_blocks.size > 0 -%}
+      <div class="site-header__actions">
+        {%- for block in wishlist_blocks -%}
+          {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}""", f"""    {{%- if s.show_wishlist -%}}
+      <div class="site-header__actions">
+        <a class="site-header__wishlist" href="{{{{ shop.url }}}}/wishlist/" aria-label="Wishlist" title="Wishlist">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="{heart}" />
+          </svg>
+          <span class="site-header__wishlist-count" data-wishlist-count aria-live="polite">{{{{ wishlist_count }}}}</span>
+        </a>
+      </div>
+    {{%- endif -%}}"""),
+        ("""    {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},
+""", """    {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},
+    {"type": "checkbox", "id": "show_wishlist", "label": "Show Wishlist", "default": true},
+"""),
+        ("""    },
+    {
+      "type": "wishlist",
+      "name": "Wishlist icon",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Wishlist"},
+        {"type": "checkbox", "id": "show_count", "label": "Show the number of saved products", "default": true}
+      ]
+    }
+  ],
+  "default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}]}""", """    }
+  ],
+  "default": {"blocks": []}"""),
+    ):
+        assert new in header, new[:60]
+        header = header.replace(new, old, 1)
+    return header
+
+
 class SyncedSectionMixin(StoreClientMixin):
     """Helpers for one synced section (NAME); each test class measures its own timings."""
 
@@ -424,44 +479,51 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.save_code(self.code().replace("{{ section.attrs }}", ""))
         self.assertTrue(self.preview(self.section()["values"]).startswith('<div data-tss-section="header"'))
 
-    def test_wishlist_visibility_is_customizable_and_persists(self):
+    def test_wishlist_icon_is_a_block_the_owner_can_add_and_remove(self):
+        """The header's heart is the "Wishlist icon" block: add or remove it in the customizer, and the code follows."""
         from .services import starter_files
 
         header = self.section()
-        setting = header["spec"]["settings"]["show_wishlist"]
-        self.assertEqual(setting["type"], "checkbox")
-        self.assertEqual(setting["label"], "Show Wishlist")
-        self.assertTrue(header["values"]["settings"]["show_wishlist"])
+        block = header["spec"]["blocks"]["wishlist"]
+        self.assertEqual(block["name"], "Wishlist icon")
+        self.assertEqual(block["settings"]["show_count"]["type"], "checkbox")
+        self.assertNotIn("show_wishlist", header["spec"]["settings"])  # no more checkbox: it is a block now
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist"])
         styles = next(file["content"] for file in self.ok("get", "/api/v1/themes/files/")["files"]
                       if file["path"] == "snippets/styles.liquid")
         self.assertIn(".site-header__wishlist", styles)
-        self.assertIn("width: 20px; height: 20px;", styles)
-        self.assertIn("stroke-width: 2;", styles)
         self.assertIn("@media (max-width: 640px)", styles)
         self.assertIn('.site-header[data-layout="center"] .site-header__actions', styles)
-        self.assertIn(
-            'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 '
-            '7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z',
-            starter_files()["sections/header.liquid"],
-        )
+        # No wishlist logic in the header: it only renders the snippet
+        self.assertIn("{% render 'wishlist', mode: 'icon'", starter_files()["sections/header.liquid"])
+        self.assertNotIn("M20.84 4.61", starter_files()["sections/header.liquid"])
 
         visible = self.home()
         self.assertIn('aria-label="Wishlist"', self.header_html(visible))
         self.assertIn(f'href="/s/{self.store["storeSlug"]}/wishlist/"', self.header_html(visible))
         self.assertIn('data-wishlist-count aria-live="polite">0</span>', self.header_html(visible))
 
+        # Remove the block in the customizer: the code and the store update
         values = header["values"]
-        values["settings"]["show_wishlist"] = False
-        self.save_values(values, header["version"])
-        refreshed = self.section()
-        self.assertFalse(refreshed["values"]["settings"]["show_wishlist"])
+        values["blocks"] = []
+        _, preview = self.save_values(values, header["version"])
+        self.assertNotIn("site-header__wishlist", preview)
+        self.assertEqual(self.schema_of(self.code())["default"]["blocks"], [])
         self.assertNotIn('aria-label="Wishlist"', self.header_html(self.home()))
+        # ... and with no menu links the automatic menu still shows
+        self.assertIn(">Home</a>", self.header_html(self.home()))
 
+        # Add it again, with its own settings
+        refreshed = self.section()
         values = refreshed["values"]
-        values["settings"]["show_wishlist"] = True
-        self.save_values(values, refreshed["version"])
-        self.assertIn('aria-label="Wishlist"', self.header_html(self.home()))
-        self.assertIn(f'href="/s/{self.store["storeSlug"]}/wishlist/"', self.header_html(self.home()))
+        values["blocks"] = self.links(("Shop", "/collections/all")) + [
+            {"type": "wishlist", "settings": {"label": "My favourites", "show_count": False}}]
+        _, preview = self.save_values(values, refreshed["version"])
+        html = self.header_html(self.home())
+        self.assertIn('aria-label="My favourites"', html)
+        self.assertNotIn('data-wishlist-count aria-live', html)  # the count is switched off
+        self.assertIn(">Shop</a>", html)  # a menu link, not mistaken for the icon
+        self.assertEqual([b["type"] for b in self.schema_of(self.code())["default"]["blocks"]], ["link", "wishlist"])
 
     def test_preview_marks_the_header_like_the_footer(self):
         """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
@@ -489,7 +551,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         for name in ("Autumn", "Basics", "Coats"):
             self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
         values = self.section()["values"]
-        self.assertEqual(values["blocks"], [])
+        self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist"])  # only the heart: no menu links
         values["settings"]["collections"] = 2
         _, preview = self.save_values(values)
         nav = self.header_html(self.home())
@@ -516,7 +578,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         store_theme.save()
 
         values = self.section()["values"]
-        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale"])
+        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale", "Wishlist"])
+        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "link", "wishlist"])
         self.assertEqual(values["blocks"][1]["settings"]["url"], "/collections/sale")
         settings = values["settings"]
         self.assertEqual((settings["sticky"], settings["border"], settings["background"], settings["text_color"]),
@@ -690,9 +753,9 @@ class HeaderMigrationTest(StoreClientMixin, APITestCase):
     def test_existing_synced_header_gets_wishlist_setting_without_losing_customizations(self):
         import re
 
-        from .services import _add_header_wishlist_setting, starter_files
+        from .services import _add_header_wishlist_setting
 
-        content = starter_files()["sections/header.liquid"]
+        content = legacy_header()
         content = re.sub(
             r'    \{%- if s\.show_wishlist -%}\r?\n.*?    \{%- endif -%}\r?\n',
             "",
@@ -756,7 +819,7 @@ class HeaderMigrationTest(StoreClientMixin, APITestCase):
             'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 '
             '7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z'
         )
-        content = starter_files()["sections/header.liquid"].replace(
+        content = legacy_header().replace(
             "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 "
             "7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z",
             old_path,

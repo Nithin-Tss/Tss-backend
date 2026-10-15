@@ -659,6 +659,8 @@ def _add_header_wishlist_styles(content):
 
 def _add_header_wishlist_setting(content):
     """Upgrade the wishlist icon and add its setting to standard synced headers."""
+    if "{% render 'wishlist'" in content:
+        return None  # already the newer header: its heart is the "Wishlist icon" block
     old_heart = (
         'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 '
         '7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z'
@@ -745,6 +747,8 @@ def _seed_header(s, store_name):
         label, url = label.strip(), url.strip() or label.strip()
         if label:
             blocks.append({"type": "link", "settings": {"label": label, "url": url}})
+    # The header has always shown the wishlist heart: it is now a block the owner can remove
+    blocks.append({"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True}})
     return {
         "settings": {
             "logo_text": s.get("header_logo_text", ""), "logo_image": s.get("header_logo_url", ""),

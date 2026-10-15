@@ -6,8 +6,12 @@
   and its links; they are empty on the store. Keep {{ section.attrs }} on the <header> element
   (not on a wrapper), so a sticky header still sticks.
   No menu links: Home, Shop all and the first collections are shown.
+  The "Wishlist icon" block shows the heart with the saved count, on the right. It only links to
+  the wishlist page: everything the wishlist does is in snippets/wishlist.liquid.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
+{%- assign link_blocks = section.blocks | where: 'type', 'link' -%}
+{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
 {%- capture header_style -%}
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
@@ -29,8 +33,8 @@
     </a>
     {%- if s.show_nav -%}
       <nav class="site-header__nav" aria-label="Main">
-        {%- if section.blocks.size > 0 -%}
-          {%- for block in section.blocks -%}
+        {%- if link_blocks.size > 0 -%}
+          {%- for block in link_blocks -%}
             <a href="{{ block.settings.url | default: '#' }}"{{ block.attrs }}>{{ block.settings.label }}</a>
           {%- endfor -%}
         {%- else -%}
@@ -42,14 +46,11 @@
         {%- endif -%}
       </nav>
     {%- endif -%}
-    {%- if s.show_wishlist -%}
+    {%- if wishlist_blocks.size > 0 -%}
       <div class="site-header__actions">
-        <a class="site-header__wishlist" href="{{ shop.url }}/wishlist/" aria-label="Wishlist" title="Wishlist">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
-          </svg>
-          <span class="site-header__wishlist-count" data-wishlist-count aria-live="polite">{{ wishlist_count }}</span>
-        </a>
+        {%- for block in wishlist_blocks -%}
+          {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+        {%- endfor -%}
       </div>
     {%- endif -%}
   </div>
@@ -65,7 +66,6 @@
     {"type": "range", "id": "logo_height", "label": "Logo image height", "min": 16, "max": 96, "step": 2, "unit": "px", "default": 36},
     {"type": "radio", "id": "layout", "label": "Logo position", "options": [{"value": "left", "label": "Left"}, {"value": "center", "label": "Centred"}], "default": "left"},
     {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},
-    {"type": "checkbox", "id": "show_wishlist", "label": "Show Wishlist", "default": true},
     {"type": "range", "id": "collections", "label": "Collections in the automatic menu", "min": 0, "max": 8, "step": 1, "default": 4, "info": "Used only when there are no menu links."},
     {"type": "checkbox", "id": "sticky", "label": "Keep the header at the top while scrolling", "default": true},
     {"type": "checkbox", "id": "border", "label": "Line under the header", "default": true},
@@ -80,8 +80,16 @@
         {"type": "text", "id": "label", "label": "Label", "default": "New link"},
         {"type": "url", "id": "url", "label": "Link", "default": "/collections/all", "info": "A page of your store (/collections/all) or a full web address."}
       ]
+    },
+    {
+      "type": "wishlist",
+      "name": "Wishlist icon",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Wishlist"},
+        {"type": "checkbox", "id": "show_count", "label": "Show the number of saved products", "default": true}
+      ]
     }
   ],
-  "default": {"blocks": []}
+  "default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}]}
 }
 {% endschema %}
