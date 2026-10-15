@@ -1648,6 +1648,13 @@ class CartTest(StoreClientMixin, APITestCase):
         values = header["values"]
         values["blocks"] = [b for b in values["blocks"] if b["type"] != "cart"]
         self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+        # the product cards' cart icon (a "Cart icon" block in each product section) needs the cart too: hide it
+        index = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]
+        for section in index["sections"].values():
+            for block in section.get("blocks", []):
+                if block["type"] == "cart_icon":
+                    block["hidden"] = True
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {"order": index["order"], "sections": index["sections"]}}})
         self.assertNotIn(f"tss_cart_{self.slug}", APIClient().get(f"/s/{self.slug}/").cookies)
 
     def test_the_endpoints_answer_cors_for_the_sandboxed_page(self):
@@ -1771,7 +1778,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 23)
+        self.assertEqual(theme.theme_data["starter_revision"], 27)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -1793,7 +1800,11 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         older = current[:start] + current[end:]
         click = '    if (target.closest("a.site-header__cart")) tagLinks();\n\n'
         assert click in older
-        return older.replace(click, "", 1)
+        older = older.replace(click, "", 1)
+        # the product card's cart icon came after: the revision-23 file did not have its click handler
+        quick = older.index("\n    // The cart icon on a product card")
+        quick_end = older.index("      return;\n    }\n", quick) + len("      return;\n    }\n")
+        return older[:quick] + older[quick_end:]
 
     def test_the_snippet_from_the_previous_revision_is_registered_for_the_upgrade(self):
         import hashlib
@@ -2412,7 +2423,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 23)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 27)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -2695,6 +2706,10 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
     def heading_blocks(self, *texts):
         return [{"type": "heading", "settings": {"text": t}} for t in texts]
 
+    def heading_texts(self, blocks):
+        """The texts of the heading blocks (a product section also always has its "Cart icon" block)."""
+        return [b["settings"]["text"] for b in blocks if b["type"] == "heading"]
+
     def test_show_wishlist_heart_is_off_until_the_owner_turns_it_on(self):
         """"Show wishlist heart" starts OFF. The owner turns it on in the customizer or in the code; both follow."""
         hearts = lambda html: html.count('class="product-card__wishlist-form"')
@@ -2747,13 +2762,12 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
     def test_3_blocks_add_reorder_hide_remove_in_both_editors(self):
         # Added in the code
         self.save_code_index(lambda s: s.update(blocks=self.heading_blocks("Block A", "Block B")))
-        self.assertEqual([b["settings"]["text"] for b in self.customizer_grid()["blocks"]], ["Block A", "Block B"])
+        self.assertEqual(self.heading_texts(self.customizer_grid()["blocks"]), ["Block A", "Block B"])
         html = self.store_html()
         self.assertLess(html.index("Block A"), html.index("Block B"))
         # Reordered in the customizer
         self.save_customizer_grid(lambda s: s["blocks"].reverse())
-        self.assertEqual([b["settings"]["text"] for b in self.code_index()["sections"]["featured"]["blocks"]],
-                         ["Block B", "Block A"])
+        self.assertEqual(self.heading_texts(self.code_index()["sections"]["featured"]["blocks"]), ["Block B", "Block A"])
         html = self.store_html()
         self.assertLess(html.index("Block B"), html.index("Block A"))
         # Hidden in the customizer, shown again in the code
@@ -2765,7 +2779,7 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         self.assertIn("Block B", self.preview_html())
         # Removed in the code
         self.save_code_index(lambda s: s["blocks"].pop(0))
-        self.assertEqual([b["settings"]["text"] for b in self.customizer_grid()["blocks"]], ["Block A"])
+        self.assertEqual(self.heading_texts(self.customizer_grid()["blocks"]), ["Block A"])
         self.assertNotIn("Block B", self.store_html())
 
     def test_4_custom_markup_survives_both_editors(self):
