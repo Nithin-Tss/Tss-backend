@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     BlogPostView,
     BlogPostsView,
+    MenuView,
+    MenusView,
     SectionHistoryView,
     SyncTimingsView,
     ThemeCustomizerView,
@@ -17,6 +19,8 @@ from .views import (
     ThemeSchemaView,
     ThemeSettingsView,
     StorefrontLinkView,
+    UrlRedirectView,
+    UrlRedirectsView,
     theme_css,
 )
  
@@ -115,6 +119,30 @@ urlpatterns = [
         "pages/<uuid:page_id>/",
         StorePageView.as_view(),
         name="theme_page",
+    ),
+
+    path(
+        "menus/",
+        MenusView.as_view(),
+        name="theme_menus",
+    ),
+
+    path(
+        "menus/<uuid:menu_id>/",
+        MenuView.as_view(),
+        name="theme_menu",
+    ),
+
+    path(
+        "redirects/",
+        UrlRedirectsView.as_view(),
+        name="theme_redirects",
+    ),
+
+    path(
+        "redirects/<uuid:redirect_id>/",
+        UrlRedirectView.as_view(),
+        name="theme_redirect",
     ),
 
     path(
