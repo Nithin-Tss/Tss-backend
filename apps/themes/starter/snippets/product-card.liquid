@@ -3,6 +3,9 @@
   Usage: {% render 'product-card', product: product, show_vendor: true %}
   Optional: show_price (default on), show_rating, show_tags, show_add_to_cart,
   show_wishlist (default off: the heart, see snippets/wishlist.liquid),
+  show_cart_icon (the "Cart icon" block's settings, nothing when it is hidden: an icon shown on hover that
+  adds the product to the cart, see snippets/cart.liquid; a product with options links to its page; the
+  section renders the cart script once),
   ratio ("square", "portrait" or "landscape").
 {%- endcomment -%}
 <div class="product-card-shell">
@@ -41,5 +44,18 @@
 </a>
 {%- if show_wishlist or wishlist_action == 'remove' -%}
   {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, wishlist_action: wishlist_action %}
+{%- endif -%}
+{%- if show_cart_icon and product.is_sold_out != true -%}
+  {%- comment -%} Shown on hover (always on touch screens), bottom right of the image {%- endcomment -%}
+  {%- capture cart_icon -%}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l1 12H5L6 8z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /><path d="M12 12v4M10 14h4" /></svg>{%- endcapture -%}
+  {%- assign cart_size = show_cart_icon.size | default: 44 -%}
+  {%- assign cart_label = show_cart_icon.label | default: 'Add to cart' -%}
+  <div class="product-card__cart-area product-card__cart-area--{{ ratio | default: 'square' }}">
+  {%- if product.variants.size > 1 -%}
+    <a class="product-card__cart" href="{{ product.url }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="Choose options for {{ product.title | escape }}" title="Choose options">{{ cart_icon }}</a>
+  {%- else -%}
+    <button class="product-card__cart" type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_icon }}</button>
+  {%- endif -%}
+  </div>
 {%- endif -%}
 </div>

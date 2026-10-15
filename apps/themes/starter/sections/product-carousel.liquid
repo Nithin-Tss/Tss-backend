@@ -33,8 +33,9 @@
     {%- else -%}
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
         {%- if s.layout == 'carousel' %} tabindex="0" role="region" aria-label="{{ s.heading | default: 'Products' | escape }}"{% endif %}>
+        {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
         {%- for product in section.products -%}
-          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: s.show_wishlist, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: s.show_wishlist, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
         {%- endfor -%}
       </div>
     {%- endif -%}

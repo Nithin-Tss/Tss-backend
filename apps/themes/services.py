@@ -56,7 +56,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 23
+STARTER_REVISION = 27
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -72,6 +72,11 @@ STARTER_UPGRADES = {
         "a831a51ab4d6a82271abf32b7238911be9d920471b2b2490dc13dc1b83ad4fe6",  # revision 12: before slideshow accessibility and swipe
     },
     "sections/product-grid.liquid": {
+        "849a65ea615ec1126270a01748910eed928680a253b1cfc1562641fd52c97a5c",  # revision 27: before the cart icon became a block
+        "424292334f8291c2c65454b6a2bef4b1c49ae553e76aeded619ddb2812e7c44b",  # revision 27: before the cart icon became a block (CRLF)
+        "5918ac10692c4b012468cf17a6098d28048585bbfe50d12eb849c2d23fe30518",  # revision 26: an earlier cart icon draft
+        "01c75442af5225cec879b9e2bac509f871d1de6e3d0606dd8b0ba5ab67b1af23",  # revision 25: before the cart icon on product cards
+        "667f08581ad9472d7855c582ca505e0b4a4428626206e1b20e981939c8280bf7",  # revision 25: before the cart icon on product cards (CRLF)
         "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
         "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
         "d98591d946fbc257e35e491777052a64ddea4602a59047da771ad6245d2fbe59",  # revision 18: pass wishlist state to cards
@@ -79,6 +84,11 @@ STARTER_UPGRADES = {
         "e6f1c4afcbd4615ea14a2fc5567c6c6af98ba5abdc1205314609b8e19ac9d08c",  # revision 19: same, with CRLF line endings
     },
     "sections/product-carousel.liquid": {
+        "6e8c18942a33473eb6d3a62d3ba4885ab73cc48fdb813e83f7609acafb21b473",  # revision 27: before the cart icon became a block
+        "cee64069541967e657e8276b0a8a05d698fb73394305b84ff0eabdb80593f4d9",  # revision 27: before the cart icon became a block (CRLF)
+        "a86cba7067b63ffa5ee2fdf527db65d849f42723790cb405842b6d6ade55ebed",  # revision 25: before the cart icon on product cards
+        "a562630dc065bf795acb39d99335e5bb98091b7545254286d83a4763a9e70567",  # revision 25: before the cart icon on product cards (CRLF)
+        "ed4653a5d5af7c5caee91d9839486ed92c854b758e6e11ac10f76d729fc8af2f",  # revision 25: older starter version some stores have
         "0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4",
         "a79be796dde0feb9dd8fceda3a0b4e00c8c1cc3469e6066e02c506dfa8d88055",  # revision 16: no empty box for shoppers, pause on focus
         "684361444547f8952a62f6f5f86c2ddd3e4c86c56e60b717ff38ad3e148d3897",  # revision 18: pass wishlist state to cards
@@ -91,6 +101,12 @@ STARTER_UPGRADES = {
         "1a5b5ca920bb489f2047302eda3da0179b9b5b270c26e4b0a4d693f4afc61746",  # revision 12: before image description
     },
     "snippets/product-card.liquid": {
+        "f4ac32c3302297ee3417ba41b88d94fca4a8316e1214b2b2645fef3de3cda957",  # revision 27: before the cart icon became a block
+        "fa8c2e225e5757b397003c24219be553dbabf86150a44c0949156d819d939143",  # revision 27: before the cart icon became a block (CRLF)
+        "34b896b532e6d75aa9e00770be9bddbe0a2e62f7a5475db1ee56961c470ee561",  # revision 26: an earlier cart icon draft
+        "fdf65276bf0ca2cd83113cbfa434325e5c08608885530bc41c66a2699959678b",  # revision 25: before the cart icon on product cards
+        "86bfa99a2c46e4750e9b7a9f0558a8e8f443fae62551dcbda6e0165254ad13f5",  # revision 25: before the cart icon on product cards (CRLF)
+        "3a3fbbc1982c57368b943d644f32f1c51aaffd475c5e3aab6c5d52abac5b1cff",  # revision 25: first cart icon draft
         "bc624bf8346fce0c29de1419f3d32ad1f66f052fe75ec9830685f219aee43eff",
         "386b5a2d330ef931de50ce9fa6f66cb49f0bae00b23582dfd4e27b6a84ad3723",
         "4af9942dd8108371e0d9225c91686e3b55a7aa04fad897345fbee7d6a1875dd3",
@@ -125,6 +141,8 @@ STARTER_UPGRADES = {
     },
     # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
     "snippets/cart.liquid": {
+        "477a7af3604ffac5bcd7b20d6536ba4d9cc9b399fe024ddfce348c5326da043f",  # revision 25: before the cart icon on product cards
+        "727965e2164a84285cb071a2fffe9265c80be8e817428e6e18aa04203d135d9b",  # revision 25: before the cart icon on product cards (CRLF)
         "4c9f20d277bfcd838ff1dc79c9983d48fcd2979e5950c2a6b10556f905b87579",
         "2c1428519b499c93128ff4616ba32bcc3d46c3ee1acb1951c8c272def021e091",  # same, with CRLF line endings
         "15a7993c54d5ebf2dba728947c7588b6a2d051224ec312aaf438396f7a913b3a",  # revision 23: before the cart link carried the cart id
@@ -143,6 +161,11 @@ STARTER_UPGRADES = {
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
+        "7230ca87ff484930cf8b845da2c3edf6cf6c17ee2d73fd25e7e0f24378559a5b",  # revision 27: before the cart icon became a block
+        "2b0841eb55642dd3430e0e79b558a96e6c3239a09cb352dc254b321bea4142a2",  # revision 27: before the cart icon became a block (CRLF)
+        "fdb1ffcf01148bfbf770f46c74e0a91bca95c84a1c4fa62798dcd452d3efd6f4",  # revision 25: before the cart icon on product cards
+        "67b4adb1291c001b094cd21e8b5ca589c380910704dbbfff883dceda6c229553",  # revision 25: before the cart icon on product cards (CRLF)
+        "74ee833ab04feed15b3ea97d9145a7a28dd34d17bd61035fb6c2efb43fdc8550",  # revision 25: older starter version some stores have
         "80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5",
         "878a1da3a5ee2d1bd4e8d09dfd5c44f2509a75905e0177782b3e1f06ca018567",
         "0c7227f63f577546d1926e69940b5e949b3a440f24621438231d33147d3445a8",  # revision 16: escaped pagination links, sort only with 2+ products

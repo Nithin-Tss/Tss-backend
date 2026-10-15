@@ -202,6 +202,24 @@
     }
     if (target.closest("[data-cart-close]")) { closeDrawer(); return; }
 
+    // The cart icon on a product card: adds the product (its only option) and updates the count
+    var quick = target.closest("[data-card-add]");
+    if (quick) {
+      event.preventDefault();
+      var quickCtx = context(quick);
+      if (!quickCtx || !quickCtx.session || quick.disabled) return;
+      quick.disabled = true;
+      call(quickCtx, "POST", "/add", { product: quick.getAttribute("data-product"), variant: quick.getAttribute("data-variant") || null, quantity: 1 })
+        .then(function (data) {
+          showLines(data);
+          quick.classList.add("is-added");
+          setTimeout(function () { quick.classList.remove("is-added"); }, 1500);
+        })
+        .catch(function (error) { window.alert(error.message); })
+        .then(function () { quick.disabled = false; });
+      return;
+    }
+
     var change = target.closest("[data-cart-change]");
     if (change) {
       event.preventDefault();

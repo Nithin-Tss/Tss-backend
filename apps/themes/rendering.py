@@ -117,6 +117,14 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card-shell{position:relative;min-width:0}.product-card-shell .product-card{width:100%}
 .product-card__wishlist-form{position:absolute;z-index:2;top:8px;right:8px;margin:0}
 .product-card__wishlist-form{display:flex;align-items:center;gap:6px}
+.product-card__cart-area{position:absolute;z-index:2;top:0;left:0;right:0;aspect-ratio:1;pointer-events:none}
+.product-card__cart-area--portrait{aspect-ratio:3/4}.product-card__cart-area--landscape{aspect-ratio:4/3}
+.product-card__cart{position:absolute;right:12px;bottom:12px;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--bg);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);text-decoration:none;pointer-events:auto;opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s}
+.product-card-shell:hover .product-card__cart,.product-card__cart:focus-visible,.product-card__cart.is-added{opacity:1;transform:none}
+@media (hover:none){.product-card__cart{opacity:1;transform:none}}
+.product-card__cart svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.product-card__cart.is-added{background:var(--text)}
+.product-card__cart:disabled{opacity:.6;cursor:wait}
 .product-card__wishlist-add,.product__wishlist-add{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:40px;min-height:40px;padding:8px;border:0;border-radius:50%;background:var(--bg);color:var(--text);cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.16)}
 .product-card__wishlist-add svg,.product__wishlist-add svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .product-card__wishlist-add.is-wishlisted svg,.product-card__wishlist-add[aria-pressed="true"] svg,.product__wishlist-add.is-wishlisted svg,.product__wishlist-add[aria-pressed="true"] svg{fill:#e11d48;stroke:#e11d48}
@@ -1692,6 +1700,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 # The "Wishlist heart" block: its settings, or None when the owner removed it (or hid it)
                 heart = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
                 section["wishlist_heart"] = heart["settings"] if heart else None
+
+            if "cart_icon" in SECTIONS[section["type"]].get("required_blocks", []):
+                # The "Cart icon" block: its settings, or None when the owner hid it
+                cart_block = next((b for b in all_blocks if b["type"] == "cart_icon" and not b.get("hidden")), None)
+                section["cart_icon"] = cart_block["settings"] if cart_block else None
 
             if SECTIONS[section["type"]].get("uses_products"):
                 ss = section["settings"]

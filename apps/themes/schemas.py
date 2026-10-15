@@ -949,7 +949,7 @@ def _product_list_settings(layout, limit, heading):
             "style", "checkbox", "Show \"Add to cart\" button", False,
             help="Opens the product page, where shoppers pick options and add it to the cart.",
         ),
-        "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
+        "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
         "card_background": _opt("style", "color_optional", "Card background", ""),
         "card_border": _opt("style", "checkbox", "Card border", False),
         "card_hover": _choice(
@@ -1025,7 +1025,7 @@ SECTIONS["main-collection"]["settings"] = {
         "style", "checkbox", "Show \"Add to cart\" button", False,
         help="Opens the product page, where shoppers pick options and add it to the cart.",
     ),
-    "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
+    "show_wishlist": _opt("style", "checkbox", "Show wishlist heart", False),
     "card_background": _opt("style", "color_optional", "Card background", ""),
     "card_border": _opt("style", "checkbox", "Card border", False),
     "card_hover": _choice(
@@ -1391,6 +1391,23 @@ SECTIONS["main-product"]["blocks"] = {
     **SECTIONS["main-product"]["blocks"],
 }
 SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 1}
+
+# The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Every section that
+# lists products has exactly one: the owner hides or shows it with the block's eye (resolve() adds it to saved
+# layouts that predate it), and the card shows the icon on hover.
+for _type in ("product-grid", "product-carousel", "main-collection"):
+    SECTIONS[_type]["blocks"] = {
+        "cart_icon": {
+            "name": "Cart icon",
+            "settings": {
+                "label": _opt("content", "text", "Label (for screen readers)", "Add to cart", max=40),
+                "size": _opt("style", "range", "Icon size", 44, min=32, max=64, step=2, unit="px"),
+            },
+        },
+        **SECTIONS[_type]["blocks"],
+    }
+    SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1}
+    SECTIONS[_type]["required_blocks"] = ["cart_icon"]
 SECTIONS["main-product"]["required_blocks"] = ["product_info"]
 
 SECTIONS["custom"]["settings"] = {
