@@ -525,6 +525,35 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn(">Shop</a>", html)  # a menu link, not mistaken for the icon
         self.assertEqual([b["type"] for b in self.schema_of(self.code())["default"]["blocks"]], ["link", "wishlist"])
 
+    def test_wishlist_block_schema_edited_in_code_updates_the_sidebar(self):
+        """Edit the wishlist block's schema in Edit code: the customizer's block options follow, values stay."""
+        values = self.section()["values"]
+        values["blocks"] = [{"type": "wishlist", "settings": {"label": "Saved", "show_count": True}}]
+        self.save_values(values)
+
+        def add_setting(schema):
+            block = next(b for b in schema["blocks"] if b["type"] == "wishlist")
+            block["name"] = "Heart"
+            block["settings"].append({"type": "text", "id": "tooltip", "label": "Tooltip", "default": "Your saved items"})
+
+        saved = self.save_code(self.with_schema(self.code(), add_setting))
+        spec = saved["sync"]["spec"]["blocks"]["wishlist"]
+        self.assertEqual(spec["name"], "Heart")
+        self.assertIn("tooltip", spec["settings"])
+        block = self.section()["values"]["blocks"][0]
+        self.assertEqual(block["settings"]["label"], "Saved")  # the owner's value is kept
+        self.assertEqual(block["settings"]["tooltip"], "Your saved items")  # the new option has its default
+
+    def test_invalid_wishlist_block_schema_is_refused_with_its_line(self):
+        before = self.code()
+        bad = before.replace('"id": "show_count", "label"', '"id": "show_count" "label"', 1)
+        error = self.save_code(bad, expect=400)
+        self.assertIn("schema is not valid JSON", error["content"][0] if isinstance(error["content"], list) else error["content"])
+        line = int(error["line"][0] if isinstance(error["line"], list) else error["line"])
+        self.assertIn("show_count", bad.splitlines()[line - 1])  # the error points at the broken wishlist setting
+        self.assertEqual(self.code(), before)  # the previous version keeps working
+        self.assertIn('aria-label="Wishlist"', self.header_html(self.home()))
+
     def test_preview_marks_the_header_like_the_footer(self):
         """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
         import re
@@ -967,6 +996,94 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertEqual(removed.json(), {"saved": False, "count": 1, "product_id": self.product["id"]})
         # no Accept header: the usual redirect, so it still works without JavaScript
         self.assertEqual(self.client.post(url, {"action": "remove", "product_id": other["id"]}).status_code, 302)
+
+    def make_store(self, email, name, quantity=None):
+        """A second store: its own admin, its own products. Returns (slug, product)."""
+        token, store = self.sign_up(email, name)
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)
+        body = {"title": f"{name} mug", "sku": f"SKU-{name[:3].upper()}", "status": "active", "price": "5"}
+        if quantity is not None:
+            body.update(location=location["id"], quantity=quantity)
+        product = self.ok("post", "/api/v1/catalog/products/", body, expect=201)
+        return store["storeSlug"], product
+
+    def post(self, slug, action, product_id, json=True):
+        headers = {"HTTP_ACCEPT": "application/json"} if json else {}
+        return self.client.post(f"/s/{slug}/wishlist/items/", {"action": action, "product_id": product_id}, **headers)
+
+    def test_click_a_heart_then_remove_it(self):
+        """Save a product: the count goes up and /wishlist shows it with Add to cart. Remove: it goes and the count drops."""
+        slug = self.store["storeSlug"]
+        self.assertEqual(self.post(slug, "add", self.product["id"]).json()["count"], 1)
+        page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
+        header = page[page.index("<header"):page.index("</header>")]
+        self.assertIn("Blue mug", page)
+        self.assertIn('data-wishlist-count aria-live="polite">1</span>', header)
+        self.assertIn('class="button product-card__cta">Add to cart</span>', page)  # the saved list has Add to cart
+        self.assertIn('data-wishlist-remove', page)
+
+        self.assertEqual(self.post(slug, "remove", self.product["id"]).json()["count"], 0)
+        page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
+        self.assertNotIn("Blue mug", page)
+        self.assertIn("Your wishlist is empty.", page)
+        self.assertIn('data-wishlist-count aria-live="polite">0</span>', page[page.index("<header"):page.index("</header>")])
+
+    def test_a_sold_out_product_shows_sold_out_in_the_wishlist(self):
+        slug = self.store["storeSlug"]
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)
+        gone = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Gone mug", "sku": "SKU-GONE", "status": "active", "price": "7",
+            "location": location["id"], "quantity": 0,
+        }, expect=201)
+        fresh = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Fresh mug", "sku": "SKU-FRESH", "status": "active", "price": "7",
+            "location": location["id"], "quantity": 3,
+        }, expect=201)
+        self.post(slug, "add", gone["id"])
+        self.post(slug, "add", fresh["id"])
+        page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
+        card = page[page.index("Gone mug") - 700:page.index("Gone mug") + 400]
+        self.assertIn("product-card--sold-out", card)
+        self.assertIn('product-card__badge">Sold out</span>', card)
+        self.assertEqual(page.count('product-card__badge">Sold out</span>'), 1)  # the mug in stock is not marked
+
+    def test_another_shopper_and_another_store_cannot_see_or_change_these_items(self):
+        slug = self.store["storeSlug"]
+        # (signing up the second store starts a new login session, so it is done before anything is saved)
+        other_slug, other_product = self.make_store("wishlist2@example.com", "Other Store")
+        self.post(slug, "add", self.product["id"])
+        # another shopper (a new session) has an empty wishlist, in the same store
+        from rest_framework.test import APIClient
+
+        stranger = APIClient()
+        page = stranger.get(f"/s/{slug}/wishlist/").content.decode()
+        self.assertIn("Your wishlist is empty.", page)
+        self.assertNotIn("Blue mug", page)
+
+        # another store: its page never shows this store's items, and ids don't cross stores
+        self.assertEqual(self.post(other_slug, "add", self.product["id"]).status_code, 404)  # not a product of that store
+        self.assertEqual(self.post(slug, "add", other_product["id"]).status_code, 404)
+        self.assertEqual(self.post(other_slug, "add", other_product["id"]).json()["count"], 1)
+        other_page = self.client.get(f"/s/{other_slug}/wishlist/").content.decode()
+        self.assertIn("Other Store mug", other_page)
+        self.assertNotIn("Blue mug", other_page)
+        # this shopper's list in the first store is untouched
+        self.assertIn("Blue mug", self.client.get(f"/s/{slug}/wishlist/").content.decode())
+        self.assertNotIn("Other Store mug", self.client.get(f"/s/{slug}/wishlist/").content.decode())
+
+    def test_output_is_escaped(self):
+        slug = self.store["storeSlug"]
+        evil = self.ok("post", "/api/v1/catalog/products/", {
+            "title": '<script>alert(1)</script> "x"', "sku": "SKU-EVIL", "status": "active", "price": "1",
+        }, expect=201)
+        self.post(slug, "add", evil["id"])
+        page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
+        self.assertNotIn("<script>alert(1)</script>", page)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
+        # a return address outside the store is ignored
+        r = self.client.post(f"/s/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"],
+                                                             "return_to": "javascript:alert(1)"})
+        self.assertEqual(r["Location"], f"/s/{slug}/wishlist/")
 
     def test_add_from_product_page_and_invalid_redirect(self):
         product_page = self.client.get(f"{self.base}/products/{self.product['id']}")

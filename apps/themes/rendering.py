@@ -531,34 +531,6 @@ document.addEventListener("click", function (e) {
 });
 </script>""")
 
-WISHLIST_JS = Markup("""<script>
-document.addEventListener("click", function (event) {
-  var button = event.target.closest && event.target.closest("[data-wishlist-toggle], [data-wishlist-remove]");
-  if (!button) return;
-  var form = button.closest("form.product-card__wishlist-form, form.product__wishlist-form");
-  if (!form) return;
-  var productId = form.querySelector('[name="product_id"]').value;
-  var action = form.querySelector("[data-wishlist-action]");
-  var toggles = document.querySelectorAll('[data-wishlist-toggle][data-product-id="' + productId + '"]');
-  var wasSaved = toggles.length > 0 && toggles[0].getAttribute("aria-pressed") === "true";
-  var saved = button.hasAttribute("data-wishlist-remove") ? false : !wasSaved;
-  action.value = saved ? "add" : "remove";
-  toggles.forEach(function (toggle) {
-    toggle.classList.toggle("is-wishlisted", saved);
-    toggle.setAttribute("aria-pressed", saved ? "true" : "false");
-    var title = toggle.getAttribute("data-product-title") || "product";
-    toggle.setAttribute("aria-label", (saved ? "Remove " + title + " from" : "Add " + title + " to") + " wishlist");
-    toggle.title = saved ? "Remove from wishlist" : "Add to wishlist";
-    var label = toggle.querySelector("[data-wishlist-label]");
-    if (label) label.textContent = saved ? "Remove from wishlist" : "Add to wishlist";
-  });
-  var count = document.querySelector("[data-wishlist-count]");
-  if (count && saved !== wasSaved) {
-    count.textContent = String(Math.max(0, Number(count.textContent || 0) + (saved ? 1 : -1)));
-  }
-});
-</script>""")
-
 
 def shop_url(store):
     return f"/s/{store.store_slug}"
