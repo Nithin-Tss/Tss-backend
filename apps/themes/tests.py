@@ -1071,6 +1071,168 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
         self.assertNotIn("data-wishlist-toggle", product)
 
 
+def legacy_main_product():
+    """The starter product section from before the heart became a block: the heart form was inline."""
+    from .services import starter_files
+
+    heart = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"
+    new = """      {%- comment -%} The "Wishlist heart" block: add, remove or move it in the customizer {%- endcomment -%}
+      {%- if section.wishlist_heart -%}
+        {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, placement: 'product', size: section.wishlist_heart.size, label_text: section.wishlist_heart.label, align: section.wishlist_heart.align, with_script: true %}
+      {%- endif -%}
+"""
+    old = f"""      {{%- assign is_wishlisted = false -%}}
+      {{%- if wishlist_ids contains product.id -%}}{{%- assign is_wishlisted = true -%}}{{%- endif -%}}
+      <form class="product__wishlist-form" method="post" action="{{{{ shop.url }}}}/wishlist/items/">
+        <input type="hidden" name="product_id" value="{{{{ product.id }}}}">
+        <input type="hidden" name="action" value="{{% if is_wishlisted %}}remove{{% else %}}add{{% endif %}}" data-wishlist-action>
+        <input type="hidden" name="return_to" value="{{{{ return_url }}}}">
+        <button class="product__wishlist-add{{% if is_wishlisted %}} is-wishlisted{{% endif %}}" type="submit"
+          data-wishlist-toggle data-product-id="{{{{ product.id }}}}" data-product-title="{{{{ product.title | escape }}}}" aria-pressed="{{% if is_wishlisted %}}true{{% else %}}false{{% endif %}}"
+          aria-label="{{% if is_wishlisted %}}Remove {{{{ product.title }}}} from{{% else %}}Add {{{{ product.title }}}} to{{% endif %}} wishlist">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="{heart}" />
+          </svg>
+          <span data-wishlist-label>{{% if is_wishlisted %}}Remove from wishlist{{% else %}}Add to wishlist{{% endif %}}</span>
+        </button>
+      </form>
+"""
+    product = starter_files()["sections/main-product.liquid"]
+    assert new in product
+    return product.replace(new, old, 1)
+
+
+class WishlistUpgradeTest(StoreClientMixin, APITestCase):
+    """Existing stores receive the wishlist through the starter revision; edited files are never overwritten."""
+
+    SNIPPET = "snippets/wishlist.liquid"
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        self.token, self.store = self.sign_up("wishupgrade@example.com", "Upgrade Store")
+        self.product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Clay mug", "sku": "SKU-MUG", "status": "active", "price": "12",
+        }, expect=201)
+        self.record = Store.objects.get(store_id=self.store["storeId"])
+        self.base = f"/s/{self.store['storeSlug']}"
+
+    def theme(self):
+        from .services import get_store_theme
+
+        return get_store_theme(self.record)
+
+    def file(self, path):
+        return self.theme().theme.files.filter(file_path=path).values_list("content", flat=True).first()
+
+    def stored(self, path):
+        """The file as it is stored right now, without visiting the theme (which would run the upgrade)."""
+        from .models import Theme
+
+        return Theme.objects.get(slug=f"store-{self.store['storeId']}").files.get(file_path=path).content
+
+    def header_html(self):
+        html = self.client.get(f"{self.base}/").content.decode()
+        return html[html.index("<header"):html.index("</header>")]
+
+    def product_page(self):
+        return self.client.get(f"{self.base}/products/{self.product['id']}").content.decode()
+
+    def make_store_from_before_the_wishlist_blocks(self, edited=()):
+        """The store as it was at revision 18: the old starter files, the heart as a setting, no snippet."""
+        store_theme = self.theme()
+        theme = store_theme.theme
+        old = {"sections/header.liquid": legacy_header(), "sections/main-product.liquid": legacy_main_product()}
+        for path, content in old.items():
+            content = content + "<!-- mine -->\n" if path in edited else content
+            theme.files.filter(file_path=path).update(content=content, file_size=len(content.encode("utf-8")))
+        theme.files.filter(file_path=self.SNIPPET).delete()
+        data = {k: v for k, v in theme.theme_data.items() if k != "wishlist_blocks"}
+        theme.theme_data = {**data, "starter_revision": 18}
+        theme.save()
+        store_theme.custom_data = {
+            "sections": {"header": {
+                "settings": {"show_wishlist": True, "logo_text": "Old shop"},
+                "blocks": [{"type": "link", "settings": {"label": "About", "url": "/pages/about"}}],
+            }},
+            "templates": {"product": {"order": ["main"], "sections": {"main": {"type": "main-product", "settings": {}}}}},
+        }
+        store_theme.save()
+
+    def test_new_store_has_the_snippet_and_it_is_in_the_file_tree(self):
+        files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
+        self.assertEqual([p for p in files if "wishlist" in p], [self.SNIPPET])
+        self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
+
+    def test_existing_store_gets_the_snippet_after_the_upgrade(self):
+        self.make_store_from_before_the_wishlist_blocks()
+        from .models import Theme
+        self.assertFalse(Theme.objects.get(slug=f"store-{self.store['storeId']}").files.filter(file_path=self.SNIPPET).exists())
+        files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
+        self.assertEqual([p for p in files if "wishlist" in p], [self.SNIPPET])
+        self.assertIn("mode == 'page'", self.file(self.SNIPPET))
+
+    def test_an_owner_edited_snippet_is_not_overwritten(self):
+        mine = "{%- comment -%} my own wishlist {%- endcomment -%}\n"
+        self.make_store_from_before_the_wishlist_blocks()  # the snippet is missing, as in an older store
+        self.theme().theme.files.filter(file_path=self.SNIPPET).update(content=mine, file_size=len(mine))
+        self.assertEqual(self.file(self.SNIPPET), mine)
+        self.theme()  # every later visit to the theme
+        self.assertEqual(self.file(self.SNIPPET), mine)
+
+    def test_untouched_files_are_upgraded_and_the_hearts_stay_visible(self):
+        import hashlib
+
+        from . import section_sync as sync
+        from .services import STARTER_UPGRADES
+
+        self.make_store_from_before_the_wishlist_blocks()
+        # the fixtures really are the old starter files (their hashes are registered for the upgrade)
+        for path in ("sections/header.liquid", "sections/main-product.liquid"):
+            digest = hashlib.sha256(self.stored(path).encode("utf-8")).hexdigest()
+            self.assertIn(digest, STARTER_UPGRADES[path])
+
+        store_theme = self.theme()
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 19)
+        self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
+        self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
+        self.assertIsNotNone(self.file(self.SNIPPET))
+        # the replaced header is kept in its history (Restore)
+        self.assertTrue(sync.history_of(store_theme.theme, "header"))
+
+        # the header keeps the owner's link and gets the heart as a block; "show_wishlist" is gone
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["link", "wishlist"])
+        self.assertEqual(header["values"]["settings"]["logo_text"], "Old shop")
+        self.assertEqual([b["type"] for b in sync.parse(self.file("sections/header.liquid"))["default"]["blocks"]],
+                         ["link", "wishlist"])
+        self.assertIn('aria-label="Wishlist"', self.header_html())
+        # the product page keeps its heart, now as a block
+        product = self.ok("get", "/api/v1/themes/settings/")["templates"]["product"]["sections"]["main"]
+        self.assertIn("wishlist_heart", [b["type"] for b in product["blocks"]])
+        self.assertEqual(self.product_page().count('class="product__wishlist-form"'), 1)
+
+        # running it again changes nothing
+        version = self.ok("get", "/api/v1/themes/sections/")["header"]["version"]
+        code = self.file("sections/header.liquid")
+        self.theme()
+        self.assertEqual(self.ok("get", "/api/v1/themes/sections/")["header"]["version"], version)
+        self.assertEqual(self.file("sections/header.liquid"), code)
+
+    def test_a_header_and_product_section_the_owner_edited_are_left_alone(self):
+        self.make_store_from_before_the_wishlist_blocks(edited=("sections/header.liquid", "sections/main-product.liquid"))
+        header, product = self.stored("sections/header.liquid"), self.stored("sections/main-product.liquid")
+        store_theme = self.theme()
+        self.assertEqual(self.file("sections/header.liquid"), header)
+        self.assertEqual(self.file("sections/main-product.liquid"), product)
+        values = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        self.assertEqual([b["type"] for b in values["blocks"]], ["link"])  # no block the code can't show
+        self.assertIsNone(store_theme.custom_data["templates"]["product"]["sections"]["main"].get("blocks"))
+        # and the heart still shows, from the owner's own markup
+        self.assertIn('aria-label="Wishlist"', self.header_html())
+        self.assertEqual(self.product_page().count('class="product__wishlist-form"'), 1)
+
+
 CARD = "snippets/product-card.liquid"
 
 

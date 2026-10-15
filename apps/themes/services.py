@@ -49,7 +49,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 18
+STARTER_REVISION = 19
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -68,11 +68,15 @@ STARTER_UPGRADES = {
         "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
         "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
         "d98591d946fbc257e35e491777052a64ddea4602a59047da771ad6245d2fbe59",  # revision 18: pass wishlist state to cards
+        "32c98d43a2af2295fe65fa4034b5d96b987721004ccb72386511164b4502c2a5",  # revision 19: before the wishlist snippet
+        "e6f1c4afcbd4615ea14a2fc5567c6c6af98ba5abdc1205314609b8e19ac9d08c",  # revision 19: same, with CRLF line endings
     },
     "sections/product-carousel.liquid": {
         "0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4",
         "a79be796dde0feb9dd8fceda3a0b4e00c8c1cc3469e6066e02c506dfa8d88055",  # revision 16: no empty box for shoppers, pause on focus
         "684361444547f8952a62f6f5f86c2ddd3e4c86c56e60b717ff38ad3e148d3897",  # revision 18: pass wishlist state to cards
+        "6c204389405b4509ce727a77be94de76318c5830102786803fb5c78be5a105bd",  # revision 19: before the wishlist snippet
+        "4ec5499f34fe94154eb984801cdb0dd50045de966a963bcab0bb04961e994604",  # revision 19: same, with CRLF line endings
     },
     "sections/rich-text.liquid": {
         "37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b",
@@ -86,6 +90,8 @@ STARTER_UPGRADES = {
         "1930541f426b1a8fb7c816b9c63b2afbf84379aa249d4871556299ba0e8f9dce",  # revision 15: price shown inline, no 'price' snippet
         "ec61086466c120f8ad0463a727c98777b07d9155bb9f167bd1224b51132fb4b7",  # revision 17: wishlist actions
         "211c4b936c465237301a2a6a4373ff684ab6995e6ad769adbdc2e185ee8077e3",  # revision 18: wishlist toggle state
+        "78fc98475a47063470123fffaa31a6058ccfe5c25ff7420137ea708fad314a83",  # revision 19: before the wishlist snippet
+        "3197e89478b76a5ece309e65af5d1990856e32f29d8229f3ad04bd38b17b50a5",  # revision 19: same, with CRLF line endings
     },
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
@@ -96,6 +102,13 @@ STARTER_UPGRADES = {
         "e365056fcc5eb05b563e29fca7ab581c8158c4521faedfdc4acbe1701c887552",  # revision 16: option price/SKU fix, low-stock setting
         "e50ac85c4dd9c6e69b590632b6b0e2333fd9dff7521c7493e5fca6a8a39f97e5",  # revision 17: wishlist action
         "533aa3c35440fbb925de41f7e9fc62f01286439a5252bb4194ee449144e74817",  # revision 18: wishlist toggle state
+        "d4c0b99cd99aeaf5718b6e828d101e4a83e3aa80e56dcee06afbc9c10fdc6432",  # revision 19: before the wishlist snippet
+        "81382355092a70c8283ccde62122814ddd4b657663747c81de2003833709c464",  # revision 19: same, with CRLF line endings
+    },
+    # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
+    "sections/header.liquid": {
+        "0447235775798d7cf5839634cfea58c3437e0571c024a24c300ac2f866a85d8b",  # revision 19: before the wishlist snippet
+        "5fb084f88335fd7971a07f17eb38a52fa5d81749e4ea625a1678b23f088b5a19",  # revision 19: same, with CRLF line endings
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
@@ -114,6 +127,8 @@ STARTER_UPGRADES = {
         "878a1da3a5ee2d1bd4e8d09dfd5c44f2509a75905e0177782b3e1f06ca018567",
         "0c7227f63f577546d1926e69940b5e949b3a440f24621438231d33147d3445a8",  # revision 16: escaped pagination links, sort only with 2+ products
         "a67252e6fa4f8a542b9581022bf8037ed5facf20b03603aaaf9114ee53d82035",  # revision 18: pass wishlist state to cards
+        "920955c03a592c48c8eb8abda3a32656231eff12dc1caa4acb59a3096eb1c306",  # revision 19: before the wishlist snippet
+        "f5741f0851fa01f20743d4d6c0cd8080b19ac1b31f1589af909cfc8a1043a866",  # revision 19: same, with CRLF line endings
     },
 }
 
@@ -188,6 +203,7 @@ def get_store_theme(store):
         _add_missing_starter_files(current.theme)
         _upgrade_untouched_starter_files(current.theme)
         _add_synced_sections(current.theme, current.custom_data)
+        _add_wishlist_blocks(current)
         return current
 
     if current:
@@ -206,6 +222,7 @@ def get_store_theme(store):
     _add_missing_starter_files(installed.theme)
     _upgrade_untouched_starter_files(installed.theme)
     _add_synced_sections(installed.theme, installed.custom_data)
+    _add_wishlist_blocks(installed)
     return installed
 
 
@@ -220,11 +237,57 @@ def _upgrade_untouched_starter_files(theme):
         digest = hashlib.sha256(file.content.encode("utf-8")).hexdigest()
         new = current.get(file.file_path)
         if new is not None and digest in STARTER_UPGRADES[file.file_path] and file.content != new:
+            section = sync.PATH_TO_SECTION.get(file.file_path)
+            if section:
+                # A synced section (the header): keep the replaced file in its history, like any other change
+                sync.record_version(theme, section, file.content, "upgrade")
+                sync.invalidate(theme.pk, file.file_path)
             file.content = new
             file.file_size = len(new.encode("utf-8"))
             file.save(update_fields=["content", "file_size", "updated_at"])
 
-    theme.theme_data = {**theme_data, "starter_revision": STARTER_REVISION}
+    theme.theme_data = {**(theme.theme_data or {}), "starter_revision": STARTER_REVISION}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _add_wishlist_blocks(store_theme):
+    """
+    Once per store: the header's heart and the product page's heart became blocks ("Wishlist icon",
+    "Wishlist heart"). A store that showed them keeps them, so nothing disappears. Only where its files
+    render the blocks: a file the owner edited keeps its own markup and its own settings.
+    """
+    theme = store_theme.theme
+    if (theme.theme_data or {}).get("wishlist_blocks"):
+        return
+    header_path, product_path = "sections/header.liquid", "sections/main-product.liquid"
+    files = dict(theme.files.filter(file_path__in=[header_path, product_path]).values_list("file_path", "content"))
+
+    saved = (store_theme.custom_data.get("sections") or {}).get("header")
+    if saved is not None and "{% render 'wishlist', mode: 'icon'" in files.get(header_path, ""):
+        settings = dict(saved.get("settings") or {})
+        blocks = [b for b in saved.get("blocks") or [] if isinstance(b, dict)]
+        if settings.pop("show_wishlist", True) and not any(b.get("type") == "wishlist" for b in blocks):
+            blocks.append({"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True}})
+            try:
+                save_section_values(store_theme, "header", {"settings": settings, "blocks": blocks}, client="upgrade")
+            except exceptions.ValidationError:
+                pass  # the header code is not valid right now: it keeps working as it is
+
+    if "section.wishlist_heart" in files.get(product_path, ""):
+        store_theme.refresh_from_db(fields=["custom_data"])
+        templates = copy.deepcopy(store_theme.custom_data.get("templates") or {})
+        changed = False
+        for section in ((templates.get("product") or {}).get("sections") or {}).values():
+            if section.get("type") == "main-product" and not any(
+                b.get("type") == "wishlist_heart" for b in section.get("blocks") or []
+            ):
+                section["blocks"] = [*(section.get("blocks") or []), {"type": "wishlist_heart", "settings": {}}]
+                changed = True
+        if changed:
+            store_theme.custom_data = {**store_theme.custom_data, "templates": templates}
+            store_theme.save(update_fields=["custom_data", "updated_at"])
+
+    theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 
