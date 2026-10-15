@@ -12,6 +12,8 @@ from .views import (
     ThemeImageView,
     ThemePreviewView,
     ThemeRenameView,
+    StorePagesView,
+    StorePageView,
     ThemeSchemaView,
     ThemeSettingsView,
     StorefrontLinkView,
@@ -101,6 +103,18 @@ urlpatterns = [
         "posts/<uuid:post_id>/",
         BlogPostView.as_view(),
         name="theme_blog_post",
+    ),
+
+    path(
+        "pages/",
+        StorePagesView.as_view(),
+        name="theme_pages",
+    ),
+
+    path(
+        "pages/<uuid:page_id>/",
+        StorePageView.as_view(),
+        name="theme_page",
     ),
 
     path(

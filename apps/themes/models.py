@@ -172,3 +172,48 @@ class BlogPost(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class StorePage(models.Model):
+    """A standalone page of the store (About us, Shipping policy, ...): /pages/<handle> shows it."""
+
+    HIDDEN = "hidden"
+    VISIBLE = "visible"
+    STATUSES = [(VISIBLE, "Visible"), (HIDDEN, "Hidden")]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.PROTECT,
+        db_column="store_id",
+        related_name="store_pages",
+    )
+    title = models.CharField(max_length=255)
+    # Its address on the store: /pages/<handle>
+    handle = models.SlugField(max_length=255)
+    body = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUSES, default=VISIBLE)
+    # Search engine listing
+    seo_title = models.CharField(max_length=255, blank=True, default="")
+    seo_description = models.TextField(blank=True, default="")
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"themes"."store_pages"'
+        verbose_name = "Page"
+        verbose_name_plural = "Pages"
+        constraints = [
+            models.UniqueConstraint(fields=["store", "handle"], name="uq_store_page_store_handle"),
+        ]
+        indexes = [
+            models.Index(fields=["store", "status"], name="ix_store_page_store_status"),
+        ]
+
+    def __str__(self):
+        return self.title

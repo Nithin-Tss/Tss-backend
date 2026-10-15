@@ -1371,6 +1371,69 @@ class BlogTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.ok("get", "/api/v1/themes/posts/"), [])
 
 
+class StorePagesTest(StoreClientMixin, APITestCase):
+    """Pages written in the admin (About us, ...): /pages/<handle>, the customizer and the code editor."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("pages@example.com", "Pages Store")
+
+    def create(self, expect=201, **fields):
+        body = {"title": "About us", "body": "<p>Our story.</p>", "status": "visible", **fields}
+        return self.ok("post", "/api/v1/themes/pages/", body, expect=expect)
+
+    def page(self, path, expect=200):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/{path}")
+        self.assertEqual(r.status_code, expect)
+        return r.content.decode()
+
+    def preview(self, **query):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        params = "&".join(f"{k}={v}" for k, v in {"page": "page", **query}.items())
+        return self.ok("post", f"/api/v1/themes/preview/?{params}", data)["html"]
+
+    def test_visible_page_has_its_own_url_and_hidden_one_is_not_found(self):
+        about = self.create()
+        self.assertEqual(about["handle"], "about-us")
+        self.assertEqual(self.create()["handle"], "about-us-2")
+        html = self.page("pages/about-us")
+        self.assertIn('<h1 class="page__title">About us</h1>', html)
+        self.assertIn("Our story.", html)
+        self.ok("patch", f"/api/v1/themes/pages/{about['id']}/", {"status": "hidden"})
+        self.page("pages/about-us", expect=404)
+        self.page("pages/nope", expect=404)
+
+    def test_edit_and_delete(self):
+        about = self.create()
+        self.ok("patch", f"/api/v1/themes/pages/{about['id']}/", {"body": "<p>New text</p>", "seo_title": "Hello"})
+        html = self.page("pages/about-us")
+        self.assertIn("New text", html)
+        self.assertIn("<title>Hello", html)
+        self.ok("delete", f"/api/v1/themes/pages/{about['id']}/", expect=204)
+        self.page("pages/about-us", expect=404)
+
+    def test_customizer_previews_a_sample_page_until_there_is_one(self):
+        self.assertIn("Our story", self.preview())
+        self.create(title="Shipping", body="<p>Ships in 2 days.</p>")
+        self.assertIn("Ships in 2 days.", self.preview())
+
+    def test_template_and_section_reach_the_code_editor_and_the_store(self):
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        self.assertIn("templates/page.liquid", files)
+        self.assertIn("sections/main-page.liquid", files)
+        self.assertIn("templates/page.json", files)
+        self.create()
+        path = "sections/main-page.liquid"
+        edited = files[path].replace('<h1 class="page__title">', '<p class="custom-kicker">Hi</p><h1 class="page__title">')
+        self.ok("post", "/api/v1/themes/files/", {"path": path, "content": edited})
+        self.assertIn("custom-kicker", self.page("pages/about-us"))
+
+    def test_other_stores_cannot_see_or_change_pages(self):
+        about = self.create()
+        self.sign_up("other-pages@example.com", "Other Pages Store")
+        self.ok("get", f"/api/v1/themes/pages/{about['id']}/", expect=404)
+        self.assertEqual(self.ok("get", "/api/v1/themes/pages/"), [])
+
+
 class HomeTemplateSyncTest(StoreClientMixin, APITestCase):
     """templates/index.liquid lists the Home page's sections; the customizer's list follows it, both ways."""
 

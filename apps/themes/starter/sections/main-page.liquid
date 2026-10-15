@@ -1,0 +1,33 @@
+{%- comment -%}
+  Page content: the title and text written in Pages.
+  `page` has title, handle, body, url, date (last updated) and updated_at.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- if page == nil -%}
+  <section class="section"><div class="page-width"><div class="empty-state">Add a page to see its content here.</div></div></section>
+{%- else -%}
+<article id="section-{{ section.id }}" class="section page page--{{ s.content_width }} page--title-{{ s.title_align }}">
+  <div class="page-width">
+    {%- if s.show_title -%}
+      <header class="page__header">
+        <h1 class="page__title">{{ page.title }}</h1>
+        {%- if s.show_updated -%}<p class="post-meta">Last updated <time datetime="{{ page.updated_at | date: '%Y-%m-%d' }}">{{ page.date }}</time></p>{%- endif -%}
+      </header>
+    {%- endif -%}
+    <div class="page__body">{{ page.body }}</div>
+  </div>
+</article>
+<style>
+  .page { --page-w: 720px; }
+  .page--narrow { --page-w: 600px; } .page--wide { --page-w: 960px; }
+  .page__header, .page__body { max-width: var(--page-w); margin-left: auto; margin-right: auto; }
+  .page--title-center .page__header { text-align: center; }
+  .page__title { font-size: clamp(30px, 5vw, 44px); margin: 0 0 8px; }
+  .page__body { margin-top: 24px; font-size: 17px; line-height: 1.75; overflow-wrap: anywhere; }
+  .page__body > :first-child { margin-top: 0; }
+  .page__body :is(h2, h3, h4) { margin: 1.6em 0 .5em; }
+  .page__body img, .page__body iframe { max-width: 100%; height: auto; border-radius: var(--radius); }
+  .page__body blockquote { margin: 1.5em 0; padding-left: 20px; border-left: 3px solid var(--accent); font-style: italic; color: var(--muted); }
+  .page__body table { width: 100%; border-collapse: collapse; } .page__body :is(td, th) { border: 1px solid var(--line); padding: 8px; }
+</style>
+{%- endif -%}

@@ -30,7 +30,7 @@ from apps.orders.models import OrderItem
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
-from .models import BlogPost, ThemeFile
+from .models import BlogPost, StorePage, ThemeFile
 from .services import get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
@@ -1367,11 +1367,68 @@ def _article_drop(posts, index):
     return post
 
 
+# ---------------------------------------------------------------- pages
+#
+# Pages (About us, Shipping policy, ...) are written in the admin (StorePage); /pages/<handle> shows
+# a visible one. The customizer previews the page template with a sample page until the store has one.
+
+SAMPLE_PAGE = {
+    "title": "About us",
+    "handle": "about-us",
+    "body": "<p>Tell your customers who you are. This is a sample page: write your own in Pages.</p>"
+            "<h2>Our story</h2><p>Share how the store started and what you care about.</p>"
+            "<h2>Get in touch</h2><p>Add your contact details, opening hours or shipping policy here.</p>",
+}
+
+
+def published_pages(store):
+    """The store's pages that shoppers can read: visible ones."""
+    return StorePage.objects.filter(store=store, status=StorePage.VISIBLE)
+
+
+def _page_drop(page, base_url):
+    """A saved page as the theme sees `page`."""
+    return {
+        "id": str(page.pk),
+        "title": page.title,
+        "handle": page.handle,
+        "url": f"{base_url}/pages/{page.handle}",
+        "body": Markup(sanitize_embed(page.body or "")),
+        "published_at": page.published_at,
+        "updated_at": page.updated_at,
+        "date": _date_text(page.updated_at),
+        "seo_title": page.seo_title,
+        "seo_description": page.seo_description,
+    }
+
+
+def _sample_page_drop(base_url):
+    now = timezone.now()
+    return {
+        "id": SAMPLE_PAGE["handle"], "title": SAMPLE_PAGE["title"], "handle": SAMPLE_PAGE["handle"],
+        "url": f"{base_url}/pages/{SAMPLE_PAGE['handle']}",
+        "body": Markup(sanitize_embed(SAMPLE_PAGE["body"])),
+        "published_at": now, "updated_at": now, "date": _date_text(now), "seo_title": "", "seo_description": "",
+    }
+
+
+def page_content(store, base_url, handle, editor):
+    """The page to show: the visible one with `handle` (else the first one, in the preview); a sample if none."""
+    pages = published_pages(store)
+    page = pages.filter(handle=handle).first() if handle else None
+    if page is None and editor:
+        page = pages.order_by("created_at").first()
+    if page is not None:
+        return _page_drop(page, base_url)
+    return _sample_page_drop(base_url) if editor else None
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
-                wishlist_page_ids=None, wishlist_products=None):
+                wishlist_page_ids=None, wishlist_products=None, page_handle=None):
     """
-    page: "index", "product", "collection", "blog" or "article".
+    page: "index", "product", "collection", "blog", "article" or "page".
+    page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
     product: a catalog Product (product page).
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
     article: the handle of the post the article page shows (the newest when None or not found).
@@ -1466,6 +1523,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         index = next((i for i, p in enumerate(posts) if p["handle"] == article), 0)
         article_drop = _article_drop(posts, index)
 
+    page_drop = page_content(store, base_url, page_handle, editor) if page == "page" else None
+
     common = {
         "shop": dict(shop, blog_url=f"{base_url}/blog"),
         "settings": settings,
@@ -1474,6 +1533,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "collections": nav,
         "blog": blog_drop,
         "article": article_drop,
+        "page": page_drop,
         "template": page,
         "return_url": request.get_full_path() if request else "",
         "wishlist_ids": wishlist_ids,
@@ -1681,6 +1741,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         title = "Wishlist"
     elif collection_drop:
         title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
+    elif page_drop:
+        title = page_drop["seo_title"] or page_drop["title"]
     elif article_drop:
         title = article_drop["title"]
     elif blog_drop:

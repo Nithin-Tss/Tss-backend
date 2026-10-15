@@ -30,8 +30,8 @@ from html.parser import HTMLParser
 
 from rest_framework import serializers
 
-PAGES = ("index", "product", "collection", "blog", "article")
-# Pages where product lists make sense (the blog pages are for reading)
+PAGES = ("index", "product", "collection", "blog", "article", "page")
+# Pages where product lists make sense (the blog and content pages are for reading)
 COMMERCE_PAGES = ("index", "product", "collection")
 
 THEME_SETTINGS = {
@@ -1103,6 +1103,20 @@ SECTIONS["main-article"] = {
     },
 }
 
+# Pages (About us, Shipping policy, ...): written in the admin (Pages); /pages/<handle> shows one.
+SECTIONS["main-page"] = {
+    "name": "Page content",
+    "pages": ("page",),
+    "required": True,
+    "settings": {
+        "show_title": _opt("content", "checkbox", "Show page title", True),
+        "show_updated": _opt("content", "checkbox", "Show \"last updated\" date", False),
+        "title_align": _choice("layout", "Title alignment", ["left", "center"], "left", ui="segmented"),
+        "content_width": _choice("layout", "Text width", ["narrow", "medium", "wide"], "medium", ui="segmented"),
+        **common_settings(),
+    },
+}
+
 SECTIONS["featured-posts"] = {
     "name": "Latest posts",
     "pages": PAGES,
@@ -1124,6 +1138,7 @@ SECTIONS["featured-posts"] = {
 
 DEFAULT_TEMPLATES["blog"] = {"order": ["main"], "sections": {"main": {"type": "main-blog", "settings": {}}}}
 DEFAULT_TEMPLATES["article"] = {"order": ["main"], "sections": {"main": {"type": "main-article", "settings": {}}}}
+DEFAULT_TEMPLATES["page"] = {"order": ["main"], "sections": {"main": {"type": "main-page", "settings": {}}}}
 
 GROUPS = [
     {"id": "content", "label": "Content"},

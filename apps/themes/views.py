@@ -35,10 +35,10 @@ from django.contrib.auth import get_user_model
 
 from apps.tenancy.models import Store, StoreMembership
 
-from .models import BlogPost, ThemeImage
+from .models import BlogPost, StorePage, ThemeImage
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
-from .rendering import _catalog, published_posts, render_page, render_synced_section_fast, shop_url
+from .rendering import _catalog, published_pages, published_posts, render_page, render_synced_section_fast, shop_url
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, public_schema, resolve, validate_custom_data
 from .services import (
@@ -447,7 +447,7 @@ PREVIEW_EDITOR = """
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
     if (!m) return null;
     var path = (m[1] || "/").replace(/\\/+$/, "") || "/";
-    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2})?$/i.test(path) ? path : null;
+    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+)?$/i.test(path) ? path : null;
   }
 
   // Edit mode: a click selects the section or block under it, and does nothing else -
@@ -455,7 +455,7 @@ PREVIEW_EDITOR = """
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog)\\/[^/]+$/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -889,6 +889,111 @@ class BlogPostView(StoreThemeView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# ---------------------------------------------------------------- pages
+
+
+def _unique_page_handle(store, title, exclude_pk=None):
+    """slugify(title), with -2, -3, ... added while another page of the store uses it."""
+    base = slugify(title or "")[:200].strip("-") or "page"
+    used = set(StorePage.objects.filter(store=store, handle__startswith=base)
+               .exclude(pk=exclude_pk).values_list("handle", flat=True))
+    handle, n = base, 2
+    while handle in used:
+        handle, n = f"{base}-{n}", n + 1
+    return handle
+
+
+class StorePageSerializer(serializers.ModelSerializer):
+    """A page as the admin edits it. handle: typed, or made from the title; unique in the store."""
+
+    title = serializers.CharField(max_length=255)
+    handle = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    body = serializers.CharField(required=False, allow_blank=True, max_length=200000)
+    seo_title = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    seo_description = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    url = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
+    class Meta:
+        model = StorePage
+        fields = [
+            "id", "title", "handle", "body", "status", "seo_title", "seo_description",
+            "published_at", "url", "createdAt", "updatedAt",
+        ]
+        read_only_fields = ["published_at"]
+
+    def get_url(self, page):
+        request = self.context["request"]
+        return request.build_absolute_uri(f"{shop_url(page.store)}/pages/{page.handle}")
+
+    def validate_title(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Title is required.")
+        return value.strip()
+
+    def validate_handle(self, value):
+        return slugify(value)[:255].strip("-")
+
+    def validate(self, attrs):
+        store = self.context["request"].store
+        current = self.instance
+        if attrs.get("handle"):
+            taken = StorePage.objects.filter(store=store, handle=attrs["handle"])
+            if current is not None:
+                taken = taken.exclude(pk=current.pk)
+            if taken.exists():
+                raise serializers.ValidationError({"handle": "Another page already uses this URL handle."})
+        elif "handle" in attrs or current is None:
+            title = attrs.get("title") or (current.title if current else "")
+            attrs["handle"] = _unique_page_handle(store, title, exclude_pk=current.pk if current else None)
+        # Visible for the first time: that is the page's publish date
+        visible = attrs.get("status", current.status if current else StorePage.VISIBLE) == StorePage.VISIBLE
+        if visible and not (current and current.published_at):
+            attrs["published_at"] = timezone.now()
+        return attrs
+
+    def create(self, validated_data):
+        return StorePage.objects.create(store=self.context["request"].store, **validated_data)
+
+
+class StorePagesView(StoreThemeView):
+    """
+    GET  /api/v1/themes/pages/   the store's pages, newest first (hidden ones too)
+    POST /api/v1/themes/pages/   create {title, handle?, body, status, seo_title, seo_description}
+    """
+
+    def get(self, request):
+        pages = StorePage.objects.filter(store=request.store).select_related("store").order_by("-created_at")
+        return Response(StorePageSerializer(pages, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        serializer = StorePageSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class StorePageView(StoreThemeView):
+    """GET / PATCH / DELETE /api/v1/themes/pages/<id>/"""
+
+    def get_page(self, page_id):
+        return get_object_or_404(StorePage.objects.select_related("store"), store=self.request.store, pk=page_id)
+
+    def get(self, request, page_id):
+        return Response(StorePageSerializer(self.get_page(page_id), context={"request": request}).data)
+
+    def patch(self, request, page_id):
+        serializer = StorePageSerializer(self.get_page(page_id), data=request.data, partial=True, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, page_id):
+        self.get_page(page_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 def _preview_target(request):
     """
     (page, render_page arguments, message) for ?page=index|product|collection|blog|article.
@@ -911,6 +1016,9 @@ def _preview_target(request):
         if product is None:
             return page, {}, "Add an active product on the Online Store to preview the product page."
         return page, {"product": product}, None
+    if page == "page":
+        # ?handle=<handle>: that page; otherwise the first visible one, or a sample
+        return page, {"page_handle": request.query_params.get("handle") or None}, None
     if page == "article":
         # ?article=<handle>: that post; otherwise the newest
         return page, {"article": request.query_params.get("article") or None}, None
@@ -1388,3 +1496,11 @@ def storefront_wishlist_item(request, store_slug):
     if parsed.scheme or parsed.netloc or not parsed.path.startswith(store_path):
         destination = f"{shop_url(store)}/wishlist/"
     return HttpResponseRedirect(destination)
+
+
+@_storefront
+def storefront_page(store, request, params, handle):
+    """/pages/<handle>: one visible page; hidden ones and unknown handles are not found."""
+    if not published_pages(store).filter(handle=handle).exists():
+        raise Http404("Page not found.")
+    return render_page(store, "page", page_handle=handle, request=request)
