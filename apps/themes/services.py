@@ -38,8 +38,7 @@ REQUIRED_FILES = {
     "templates/article.liquid",
     # Pages (About us, ...)
     "templates/page.liquid",
-    # Wishlist: the page and the snippet with all its markup and script
-    "templates/wishlist.liquid",
+    # Wishlist: one snippet with all its markup, the page and the script
     "snippets/wishlist.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024

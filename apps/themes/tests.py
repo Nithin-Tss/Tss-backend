@@ -878,6 +878,16 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn('class="product-card__wishlist-add"', collection_after_remove)
         self.assertNotIn('class="product-card__wishlist-add is-wishlisted"', collection_after_remove)
 
+    def test_the_theme_has_exactly_one_wishlist_file(self):
+        """snippets/wishlist.liquid is the only wishlist file; the page needs no template."""
+        from .services import REQUIRED_FILES, starter_files
+
+        self.assertEqual([p for p in starter_files() if "wishlist" in p], ["snippets/wishlist.liquid"])
+        self.assertEqual([p for p in REQUIRED_FILES if "wishlist" in p], ["snippets/wishlist.liquid"])
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        self.assertEqual([f["path"] for f in files if "wishlist" in f["path"]], ["snippets/wishlist.liquid"])
+        self.assertEqual(self.client.get(f"{self.base}/wishlist/").status_code, 200)
+
     def test_script_requests_json_and_gets_the_new_count(self):
         """The heart script posts with Accept: application/json and updates the count without a reload."""
         other = self.ok("post", "/api/v1/catalog/products/", {

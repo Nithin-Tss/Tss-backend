@@ -1,6 +1,0 @@
-{%- comment -%}
-  Wishlist page: the products the shopper saved. Everything it does is in snippets/wishlist.liquid.
-  `wishlist_items` are the saved products, `wishlist_ids` their ids.
-{%- endcomment -%}
-{%- assign back_to = shop.url | append: '/wishlist/' -%}
-{% render 'wishlist', mode: 'page', items: wishlist_items, wishlist_ids: wishlist_ids, return_url: back_to %}

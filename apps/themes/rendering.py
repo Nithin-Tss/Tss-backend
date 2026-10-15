@@ -1696,12 +1696,13 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         )
 
     if wishlist_page_ids is not None:
-        # The wishlist page: templates/wishlist.liquid renders the saved products (see snippets/wishlist.liquid)
+        # The wishlist page is the wishlist snippet in 'page' mode (see snippets/wishlist.liquid): no template file
         products = wishlist_products or {}
         saved = [product_drop(products[pid], base_url) for pid in wishlist_page_ids if pid in products]
-        wishlist_content = env.get_template("templates/wishlist.liquid").render(
-            **{**common, "wishlist_items": saved, "wishlist_ids": wishlist_page_ids}
-        )
+        wishlist_content = env.from_string(
+            "{%- assign back_to = shop.url | append: '/wishlist/' -%}"
+            "{% render 'wishlist', mode: 'page', items: wishlist_items, wishlist_ids: wishlist_ids, return_url: back_to %}"
+        ).render(**{**common, "wishlist_items": saved, "wishlist_ids": wishlist_page_ids})
         content = Markup("".join((
             str(theme_css(settings, tokens)),
             str(SECTION_CSS),
