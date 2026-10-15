@@ -634,6 +634,9 @@ def product_drop(product, base_url):
     prices = [v.price for v in variants]
     stock = {v.id: _available(v) for v in variants}
     available_total = sum(stock.values())
+    # A variant that keeps selling when out of stock is never "sold out"
+    selling_on = any(v.continue_selling for v in variants)
+    sold_out = available_total <= 0 and not selling_on
 
     return {
         "id": str(product.id),
@@ -650,13 +653,17 @@ def product_drop(product, base_url):
         "tags": [pt.tag.name for pt in product.product_tags.all()],
         # Stock for the templates: a number and a true/false. Quantity 0 (or no stock record) is sold out.
         "available_total": available_total,
-        "is_sold_out": available_total <= 0,
+        "is_sold_out": sold_out,
         "few_left": 0 < available_total <= FEW_LEFT,
-        "sold_out": available_total <= 0,  # older name, kept for theme copies that still use it
+        "sold_out": sold_out,  # older name, kept for theme copies that still use it
         "rating": round(float(product.avg_rating), 1) if getattr(product, "avg_rating", None) else None,
         "review_count": getattr(product, "review_count", 0) or 0,
         "variants": [
-            {"id": str(v.id), "sku": v.sku or "", "price": v.price, "available_total": stock[v.id]}
+            {
+                "id": str(v.id), "sku": v.sku or "", "price": v.price, "available_total": stock[v.id],
+                "continue_selling": v.continue_selling,
+                "is_sold_out": stock[v.id] <= 0 and not v.continue_selling,
+            }
             for v in variants
         ],
     }

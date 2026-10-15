@@ -54,13 +54,14 @@ class OrderViewSet(
             request.store,
             v.pop("items"),
             currency=v.pop("currency_code"),
+            user=request.user,
             **v,
         )
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        order = services.cancel_order(self.get_object())
+        order = services.cancel_order(self.get_object(), user=request.user)
         return Response(OrderSerializer(order).data)
 
 
@@ -161,7 +162,7 @@ class DraftOrderViewSet(StoreScopedViewSet):
                 raise ValidationError("Custom items (without a product) can't be ordered yet.")
 
             order = services.create_order(
-                request.store, lines, customer=draft.customer, currency=draft.currency_code
+                request.store, lines, customer=draft.customer, currency=draft.currency_code, user=request.user
             )
             draft.order = order
             draft.status = COMPLETED_DRAFT

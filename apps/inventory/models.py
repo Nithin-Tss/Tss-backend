@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 from apps.catalog.models import ProductVariant
@@ -106,6 +107,80 @@ class InventoryItem(models.Model):
 
     def __str__(self):
         return f"{self.variant} - {self.location}"
+
+
+class AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Stock history can't be edited.")
+
+    def delete(self):
+        raise ValidationError("Stock history can't be deleted.")
+
+
+class InventoryHistory(models.Model):
+    """One row per stock change, written by inventory.services.adjust_inventory. Never edited or deleted."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    store = models.ForeignKey(
+        Store, on_delete=models.PROTECT, db_column="store_id", related_name="inventory_history"
+    )
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, db_column="variant_id", related_name="inventory_history"
+    )
+    location = models.ForeignKey(
+        Location, on_delete=models.PROTECT, db_column="location_id", related_name="inventory_history"
+    )
+
+    reason = models.CharField(max_length=40)
+    source = models.CharField(max_length=40)
+    reference_id = models.CharField(max_length=64, null=True, blank=True)
+    note = models.CharField(max_length=500, blank=True, default="")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="user_id",
+        related_name="+",
+    )
+
+    # Available before/after, and the change to it
+    before = models.IntegerField()
+    after = models.IntegerField()
+    change = models.IntegerField()
+
+    # How much committed and unavailable moved (for the breakdowns), and where all numbers ended up
+    committed_change = models.IntegerField(default=0)
+    unavailable_change = models.IntegerField(default=0)
+    committed = models.IntegerField()
+    unavailable = models.IntegerField()
+    on_hand = models.IntegerField()
+    incoming = models.IntegerField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = AppendOnlyQuerySet.as_manager()
+
+    class Meta:
+        db_table = '"inventory"."inventory_history"'
+        verbose_name = "Inventory History"
+        verbose_name_plural = "Inventory History"
+        indexes = [
+            models.Index(fields=["store", "variant", "-created_at"], name="invhist_variant_idx"),
+            models.Index(fields=["store", "reference_id"], name="invhist_reference_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Stock history can't be edited.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Stock history can't be deleted.")
+
+    def __str__(self):
+        return f"{self.variant} {self.change:+d} ({self.reason})"
 
 
 class Transfer(models.Model):

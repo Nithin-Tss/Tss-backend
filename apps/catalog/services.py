@@ -282,7 +282,7 @@ def link_active_products_to_online_store(store=None):
 
 
 @transaction.atomic
-def save_product(store, data, product=None):
+def save_product(store, data, product=None, user=None):
     """
     Create or update a product from the admin form, including its
     category, collections, tags and variants, as one unit.
@@ -358,9 +358,17 @@ def save_product(store, data, product=None):
             raise ValidationError({"sku": "Every product needs a SKU."})
         check_skus(store, skus, exclude_product=product, allowed_skus=original_skus)
 
+    # "Continue selling when out of stock" on its own (no variant list): applies to every variant
+    if "continue_selling" in data and "variants" not in data:
+        product.variants.update(continue_selling=bool(data["continue_selling"]))
+
     # Opening stock for the chosen location, on the product's first variant
     if data.get("location") is not None and data.get("quantity") is not None:
-        set_available(product.variants.order_by("created_at").first(), data["location"], data["quantity"])
+        set_available(
+            product.variants.order_by("created_at").first(), data["location"], data["quantity"],
+            user_id=getattr(user, "pk", None), source="product_page", reason="product_edit",
+            reference_id=product.pk,
+        )
 
     return product
 
@@ -413,6 +421,8 @@ def delete_products(store, ids):
 
 def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
+    if "continue_selling" in row:
+        variant.continue_selling = bool(row["continue_selling"])
     if "sku" in row:
         variant.sku = (row["sku"] or "").strip() or None
     variant.save()
@@ -429,7 +439,11 @@ def _replace_variants(product, data):
     Either way, variants referenced by orders or inventory keep their ids.
     """
     rows = data.get("variants") or [
-        {"price": data.get("price"), **({"sku": data["sku"]} if "sku" in data else {})}
+        {
+            "price": data.get("price"),
+            **({"sku": data["sku"]} if "sku" in data else {}),
+            **({"continue_selling": data["continue_selling"]} if "continue_selling" in data else {}),
+        }
     ]
     existing = list(product.variants.order_by("created_at"))
     default_price = data.get("price")
@@ -496,7 +510,7 @@ def _name_map(model, store, names):
 
 
 @transaction.atomic
-def import_products(store, rows):
+def import_products(store, rows, user=None):
     """
     Create many products at once from validated rows (see ProductInputSerializer).
 
@@ -579,7 +593,10 @@ def import_products(store, rows):
 
     fallback = default_location(store)
     for variant, (row, _) in zip(variants, fresh):
-        set_available(variant, row.get("location") or fallback, row.get("quantity") or 0)
+        set_available(
+            variant, row.get("location") or fallback, row.get("quantity") or 0,
+            user_id=getattr(user, "pk", None), source="import", reason="import", reference_id=variant.product_id,
+        )
 
     # bulk_create sends no signals: put the new products in the automated collections they match
     refresh_automated_collections(store, [p.pk for p in products])

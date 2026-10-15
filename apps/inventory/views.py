@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Sum
 from rest_framework import mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -8,12 +9,14 @@ from apps.core.numbering import next_number
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 from . import services
-from .models import InventoryItem, Location, Transfer, TransferItem
+from .models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
 from .serializers import (
+    InventoryHistorySerializer,
     InventoryItemSerializer,
     LocationSerializer,
     StockChangeSerializer,
     TransferSerializer,
+    UnavailableChangeSerializer,
 )
 
 PENDING, COMPLETED, CANCELLED = "pending", "completed", "cancelled"
@@ -35,8 +38,11 @@ class InventoryItemViewSet(
     """
     GET  /api/v1/inventory/items/?product=&variant=&location=
     POST /api/v1/inventory/items/set/     {variant, location, available}
-    POST /api/v1/inventory/items/adjust/  {variant, location, delta}
-    Stock is never edited directly, only through these actions.
+    POST /api/v1/inventory/items/adjust/  {variant, location, delta, reason, note}
+    POST /api/v1/inventory/items/unavailable/  {variant, location, quantity, reason, release, note}
+    GET  /api/v1/inventory/items/history/?product=&variant=&location=&limit=
+    GET  /api/v1/inventory/items/<id>/breakdown/   what makes up Unavailable and Committed
+    Stock is never edited directly, only through these actions (services.adjust_inventory).
     """
 
     permission_resource = "inventory"
@@ -63,10 +69,11 @@ class InventoryItemViewSet(
             raise ValidationError({field: "This field is required."})
 
         v = data.validated_data
+        extra = {"user_id": request.user.pk, "source": "admin", "reason": v["reason"], "note": v["note"]}
         if field == "available":
-            item = services.set_available(v["variant"], v["location"], v["available"])
+            item = services.set_available(v["variant"], v["location"], v["available"], **extra)
         else:
-            item = services.adjust(v["variant"], v["location"], v["delta"])
+            item = services.adjust(v["variant"], v["location"], v["delta"], **extra)
         return Response(InventoryItemSerializer(item).data)
 
     @action(detail=False, methods=["post"])
@@ -76,6 +83,70 @@ class InventoryItemViewSet(
     @action(detail=False, methods=["post"])
     def adjust(self, request):
         return self._change(request, "delta")
+
+    @action(detail=False, methods=["post"])
+    def unavailable(self, request):
+        data = UnavailableChangeSerializer(data=request.data, context={"request": request})
+        data.is_valid(raise_exception=True)
+        v = data.validated_data
+        change = services.release_unavailable if v["release"] else services.mark_unavailable
+        item = change(
+            v["variant"], v["location"], v["quantity"], v["reason"],
+            user_id=request.user.pk, source="admin", note=v["note"],
+        )
+        return Response(InventoryItemSerializer(item).data)
+
+    @action(detail=False, methods=["get"])
+    def history(self, request):
+        rows = (
+            InventoryHistory.objects.filter(store=request.store)
+            .select_related("variant__product", "location", "user")
+            .order_by("-created_at", "-id")
+        )
+        for param, lookup in (("product", "variant__product"), ("variant", "variant"), ("location", "location")):
+            if request.query_params.get(param):
+                rows = rows.filter(**{lookup: request.query_params[param]})
+        try:
+            limit = min(max(int(request.query_params.get("limit", 100)), 1), 500)
+        except ValueError:
+            limit = 100
+        return Response(InventoryHistorySerializer(rows[:limit], many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def breakdown(self, request, pk=None):
+        """What makes up Unavailable (by reason) and Committed (by open order), from the stock history."""
+        from apps.orders.models import Order
+
+        item = self.get_object()
+        rows = InventoryHistory.objects.filter(store=request.store, variant=item.variant, location=item.location)
+
+        unavailable = []
+        for why in services.UNAVAILABLE_REASONS:
+            net = rows.filter(reason__in=(f"unavailable_{why}", f"unavailable_released_{why}")).aggregate(
+                n=Sum("unavailable_change")
+            )["n"] or 0
+            if net > 0:
+                unavailable.append({"reason": why, "quantity": net})
+
+        per_order = {}
+        for ref, change in rows.exclude(committed_change=0).values_list("reference_id", "committed_change"):
+            if ref:
+                per_order[ref] = per_order.get(ref, 0) + change
+        open_orders = {ref: qty for ref, qty in per_order.items() if qty > 0}
+        numbers = {
+            str(pk): number
+            for pk, number in Order.objects.filter(store=request.store, pk__in=list(open_orders))
+            .values_list("pk", "order_number")
+        }
+        committed = [
+            {"order": ref, "order_number": numbers.get(ref), "quantity": qty} for ref, qty in open_orders.items()
+        ]
+        return Response({
+            "unavailable": unavailable,
+            "committed": committed,
+            "unavailable_total": item.unavailable,
+            "committed_total": item.committed,
+        })
 
 
 class TransferViewSet(StoreScopedViewSet):
@@ -114,7 +185,8 @@ class TransferViewSet(StoreScopedViewSet):
             transfer = self._pending()
             for item in transfer.items.select_related("variant__product"):
                 services.move(
-                    item.variant, transfer.source_location, transfer.destination_location, item.quantity
+                    item.variant, transfer.source_location, transfer.destination_location, item.quantity,
+                    user_id=request.user.pk, reference_id=transfer.pk,
                 )
             transfer.status = COMPLETED
             transfer.save(update_fields=["status", "updated_at"])

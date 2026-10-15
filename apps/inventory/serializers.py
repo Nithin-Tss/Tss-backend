@@ -3,7 +3,8 @@ from rest_framework import serializers
 from apps.catalog.models import ProductVariant
 from apps.core.viewsets import StoreScopedSerializerMixin
 
-from .models import InventoryItem, Location, Transfer, TransferItem
+from .models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
+from .services import MANUAL_REASONS, UNAVAILABLE_REASONS
 
 
 class LocationSerializer(serializers.ModelSerializer):
@@ -32,6 +33,8 @@ class StockChangeSerializer(StoreScopedSerializerMixin, serializers.Serializer):
     location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
     available = serializers.IntegerField(required=False, min_value=0)
     delta = serializers.IntegerField(required=False)
+    reason = serializers.ChoiceField(choices=list(MANUAL_REASONS), required=False, default="correction")
+    note = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
 
     def validate_delta(self, value):
         if value == 0:
@@ -42,6 +45,46 @@ class StockChangeSerializer(StoreScopedSerializerMixin, serializers.Serializer):
         if "available" in data and "delta" in data:
             raise serializers.ValidationError("Send either available or delta, not both.")
         return data
+
+
+class UnavailableChangeSerializer(StoreScopedSerializerMixin, serializers.Serializer):
+    """Set stock aside (damaged, ...) or put it back (release=true)."""
+
+    variant = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())
+    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+    reason = serializers.ChoiceField(choices=list(UNAVAILABLE_REASONS))
+    release = serializers.BooleanField(required=False, default=False)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
+
+
+class InventoryHistorySerializer(serializers.ModelSerializer):
+    """One line of the history: date, change, reason, who, new quantity."""
+
+    reason_label = serializers.SerializerMethodField()
+    who = serializers.SerializerMethodField()
+    location_name = serializers.CharField(source="location.name", read_only=True)
+    sku = serializers.CharField(source="variant.sku", read_only=True)
+    product_title = serializers.CharField(source="variant.product.title", read_only=True)
+
+    class Meta:
+        model = InventoryHistory
+        fields = [
+            "id", "variant", "sku", "product_title", "location", "location_name", "created_at",
+            "reason", "reason_label", "source", "reference_id", "note", "who",
+            "before", "after", "change", "committed_change", "unavailable_change",
+            "committed", "unavailable", "on_hand", "incoming",
+        ]
+        read_only_fields = fields
+
+    def get_reason_label(self, row):
+        return MANUAL_REASONS.get(row.reason) or row.reason.replace("_", " ").capitalize()
+
+    def get_who(self, row):
+        user = row.user
+        if user is None:
+            return "System"
+        return f"{user.first_name} {user.last_name}".strip() or user.email
 
 
 class TransferItemSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):

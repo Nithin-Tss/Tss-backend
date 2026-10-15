@@ -112,6 +112,8 @@ def _open_cart(cart):
 
 def _check_stock(product, variant, quantity):
     """Quantity 0 (or no stock record) is sold out; never sell more than is available."""
+    if variant is not None and variant.continue_selling:
+        return  # the store keeps selling when out of stock
     in_stock = sellable(variant) if variant is not None else 0
     if in_stock <= 0:
         raise ValidationError({"product": f"{product.title} is sold out."})

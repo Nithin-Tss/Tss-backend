@@ -34,7 +34,7 @@ class FulfillmentViewSet(
         data = FulfillSerializer(data=request.data, context={"request": request})
         data.is_valid(raise_exception=True)
         v = data.validated_data
-        fulfillment = services.fulfill(v["order"], v.get("items"), v.get("delivery_method") or None)
+        fulfillment = services.fulfill(v["order"], v.get("items"), v.get("delivery_method") or None, user=request.user)
         return Response(
             FulfillmentSerializer(self.get_queryset().get(pk=fulfillment.pk)).data,
             status=status.HTTP_201_CREATED,

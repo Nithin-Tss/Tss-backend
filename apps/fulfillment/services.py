@@ -35,7 +35,7 @@ def remaining(order):
 
 
 @transaction.atomic
-def fulfill(order, lines=None, delivery_method=None):
+def fulfill(order, lines=None, delivery_method=None, user=None):
     """lines: [{"order_item", "quantity"}], or None for everything left."""
     order = Order.objects.select_for_update().get(pk=order.pk)
 
@@ -66,7 +66,10 @@ def fulfill(order, lines=None, delivery_method=None):
         FulfillmentItem.objects.create(
             fulfillment=fulfillment, order_item=line["order_item"], quantity=line["quantity"]
         )
-        inventory.ship(line["order_item"].variant, line["quantity"])
+        inventory.ship(
+            line["order_item"].variant, line["quantity"],
+            user_id=getattr(user, "pk", None), reference_id=order.pk,  # the order, so its committed units net out
+        )
 
     order.fulfillment_status = FULFILLED if not remaining(order) else PARTIAL
     order.save(update_fields=["fulfillment_status", "updated_at"])

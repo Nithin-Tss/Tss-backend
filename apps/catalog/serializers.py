@@ -27,6 +27,7 @@ class VariantInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+    continue_selling = serializers.BooleanField(required=False)
 
     def validate_sku(self, value):
         return value.strip()
@@ -87,6 +88,7 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         queryset=Location.objects.all(), required=False, allow_null=True
     )
     quantity = serializers.IntegerField(min_value=0, required=False, allow_null=True)
+    continue_selling = serializers.BooleanField(required=False)
 
     def get_fields(self):
         fields = super().get_fields()
@@ -144,6 +146,7 @@ class ProductSerializer(serializers.ModelSerializer):
     collections = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
     variants = serializers.SerializerMethodField()
+    quantity = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     sales_channels = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
@@ -154,7 +157,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = [
             "id", "title", "status", "description", "category", "category_id", "product_type",
             "vendor", "seo_title", "seo_description", "theme_template", "price", "sku",
-            "collections", "tags", "variants", "images", "sales_channels", "createdAt", "updatedAt",
+            "collections", "tags", "variants", "quantity", "images", "sales_channels", "createdAt", "updatedAt",
             *EXTRA_FIELDS,
         ]
 
@@ -175,9 +178,19 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_tags(self, product):
         return [pt.tag.name for pt in product.product_tags.all()]
 
+    def get_quantity(self, product):
+        """Available stock over every variant and location (what the store sells)."""
+        return sum(i.available for v in product.variants.all() for i in v.inventory_items.all())
+
     def get_variants(self, product):
         return [
-            {"id": str(v.id), "sku": v.sku or "", "price": str(v.price)}
+            {
+                "id": str(v.id),
+                "sku": v.sku or "",
+                "price": str(v.price),
+                "continue_selling": v.continue_selling,
+                "quantity": sum(i.available for i in v.inventory_items.all()),
+            }
             for v in self._variants(product)
         ]
 

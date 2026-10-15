@@ -38,6 +38,7 @@ def create_order(
     shipping_amount=ZERO,
     sales_channel=None,
     delivery_method=None,
+    user=None,
 ):
     """
     lines: [{"product", "variant", "quantity", "unit_price" (optional),
@@ -92,7 +93,7 @@ def create_order(
             total=max(gross - discount, ZERO),
             is_deleted=False,
         )
-        inventory.commit(variant, quantity)
+        inventory.commit(variant, quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
 
         subtotal += gross
         line_discounts += discount
@@ -107,7 +108,7 @@ def create_order(
 
 
 @transaction.atomic
-def cancel_order(order):
+def cancel_order(order, user=None):
     order = Order.objects.select_for_update().get(pk=order.pk)
 
     if order.status == CANCELLED:
@@ -116,7 +117,7 @@ def cancel_order(order):
         raise ValidationError("Orders with shipped items can't be cancelled.")
 
     for item in order.items.filter(is_deleted=False):
-        inventory.release(item.variant, item.quantity)
+        inventory.release(item.variant, item.quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
 
     order.status = CANCELLED
     order.save(update_fields=["status", "updated_at"])

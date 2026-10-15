@@ -141,7 +141,7 @@ class ProductViewSet(StoreScopedViewSet):
 
         try:
 
-            product = save_product(request.store, data.validated_data, product)
+            product = save_product(request.store, data.validated_data, product, user=request.user)
 
         except ProductInUse as e:
 
@@ -211,7 +211,7 @@ class ProductViewSet(StoreScopedViewSet):
                 parts.append(f"{field}: {message}")
             errors.append({"index": index, "message": "; ".join(parts)})
 
-        created, skipped = import_products(request.store, valid) if valid else (0, 0)
+        created, skipped = import_products(request.store, valid, user=request.user) if valid else (0, 0)
         return Response({"created": created, "skipped": skipped, "errors": errors})
 
     @action(detail=False, methods=["post"], url_path="bulk-delete")

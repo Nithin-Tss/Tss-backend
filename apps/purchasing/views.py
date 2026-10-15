@@ -83,6 +83,8 @@ class PurchaseOrderViewSet(StoreScopedViewSet):
         with transaction.atomic():
             po = self._move((DRAFT, ORDERED), RECEIVED)
             for item in po.items.select_related("variant"):
-                inventory.receive(item.variant, location, item.quantity)
+                inventory.receive(
+                    item.variant, location, item.quantity, user_id=request.user.pk, reference_id=po.pk
+                )
 
         return Response(self.get_serializer(po).data)

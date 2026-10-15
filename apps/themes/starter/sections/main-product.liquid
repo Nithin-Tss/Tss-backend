@@ -9,7 +9,7 @@
   {%- endif -%}
 {%- endfor -%}
 {%- assign shown_out = false -%}
-{%- if product.is_sold_out or shown_variant.available_total <= 0 -%}{%- assign shown_out = true -%}{%- endif -%}
+{%- if product.is_sold_out or shown_variant.is_sold_out -%}{%- assign shown_out = true -%}{%- endif -%}
 <section id="section-{{ section.id }}" class="section">
   <div class="page-width product{% if s.media_position == 'right' %} product--media-right{% endif %}">
     <div class="product__media">
