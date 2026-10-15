@@ -18,5 +18,6 @@ python-liquid==2.3.4
 pytz==2026.5
 six==1.17.0
 sqlparse==0.6.0
+tblib==3.2.2
 gunicorn==26.2.0
 whitenoise==6.12.0
