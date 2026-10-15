@@ -915,6 +915,21 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         # The fast preview path reads the collections the same way
         self.assertEqual(shown, [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in preview])
 
+    def test_menu_from_admin_menus_shows_on_the_navbar(self):
+        self.ok("post", "/api/v1/themes/menus/", {"name": "Main menu", "items": [
+            {"title": "Sale", "url": "/collections/sale"}, {"title": "Journal", "url": "/blog"}]}, expect=201)
+        nav = self.header_html(self.home())
+        self.assertIn(">Sale</a>", nav)
+        self.assertIn(">Journal</a>", nav)
+        self.assertLess(nav.index(">Sale</a>"), nav.index(">Journal</a>"))
+        self.assertNotIn(">Shop all</a>", nav)
+
+    def test_new_stores_have_no_menus_and_the_navbar_has_home_and_shop_all(self):
+        self.assertEqual(self.ok("get", "/api/v1/themes/menus/"), [])
+        nav = self.header_html(self.home())
+        self.assertIn(">Home</a>", nav)
+        self.assertIn(">Shop all</a>", nav)
+
     def test_existing_header_settings_are_copied_into_the_section(self):
         from .services import get_store_theme
         from apps.tenancy.models import Store

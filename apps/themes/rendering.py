@@ -31,7 +31,7 @@ from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
-from .models import BlogPost, StorePage, ThemeFile
+from .models import BlogPost, Menu, StorePage, ThemeFile
 from .services import get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
@@ -598,9 +598,29 @@ def _menu_links(text, base_url):
     return links
 
 
-def layout_data(settings, base_url, nav):
+NAVBAR_MENU_HANDLES = ("main-menu", "header", "navbar", "main")
+NOT_NAVBAR = ("footer", "account")
+
+
+def navbar_menu_links(store, base_url):
+    """
+    [{"label", "url"}] from the store's navbar menu in Admin > Menus, [] when it has none.
+    The menu is the one with handle main-menu/header/navbar/main, else the oldest that is not a
+    footer or account menu. Only top-level items show: the header has no dropdowns.
+    """
+    menus = list(Menu.objects.filter(store=store).prefetch_related("items").order_by("created_at"))
+    menu = next((m for h in NAVBAR_MENU_HANDLES for m in menus if m.handle == h), None) or next(
+        (m for m in menus if not any(w in f"{m.name} {m.handle}".lower() for w in NOT_NAVBAR)), None
+    )
+    if menu is None:
+        return []
+    items = sorted((i for i in menu.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
+    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.title and i.url]
+
+
+def layout_data(settings, base_url, nav, menu_links=None):
     """Header links, footer links and footer social links for layout/theme.liquid."""
-    header = _menu_links(settings.get("header_menu"), base_url)
+    header = _menu_links(settings.get("header_menu"), base_url) or list(menu_links or [])
     if not header:
         header = [{"label": "Home", "url": f"{base_url}/"}, {"label": "Shop all", "url": f"{base_url}/collections/all"}]
         header += [{"label": c["name"], "url": c["url"]} for c in nav[: int(settings.get("header_collections") or 0)]]
@@ -1140,6 +1160,13 @@ def _env_key(files, base_url, currency):
 
 def _synced_html(store, store_theme, name, section, data, env, env_key, context, editor):
     raw = (data.get("sections") or {}).get(name)
+    if name == "header":
+        # Links from Admin > Menus fill the navbar while the header has no menu links of its own
+        values = raw if raw is not None else section["values"]
+        blocks = list(values.get("blocks") or [])
+        if not any(b.get("type") == "link" and not b.get("hidden") for b in blocks) and context.get("menu_links"):
+            link = [{"type": "link", "settings": {"label": m["label"], "url": m["raw"]}} for m in context["menu_links"]]
+            raw = dict(values, blocks=link + blocks)
     return sync.render_section(
         name, theme_id=store_theme.theme_id, content=section["content"],
         values=raw if raw is not None else section["values"], env=env, env_key=env_key,
@@ -1566,6 +1593,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     page_drop = page_content(store, base_url, page_handle, editor, page) if base_page(page) == "page" else None
 
+    menu_links = navbar_menu_links(store, base_url)
     common = {
         "shop": dict(shop, blog_url=f"{base_url}/blog"),
         "settings": settings,
@@ -1585,7 +1613,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "cart_session": cart_session,
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
-        **layout_data(settings, base_url, nav),
+        "menu_links": menu_links,
+        **layout_data(settings, base_url, nav, menu_links),
     }
 
     # The synced sections, rendered from their saved (or, in the preview, unsaved) values

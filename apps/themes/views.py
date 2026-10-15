@@ -1073,39 +1073,6 @@ def _sync_menu_items(menu, items_data):
                 )
 
 
-def _seed_default_menus_if_empty(store):
-    """Seeds the 3 standard dynamic store menus if the store currently has none."""
-    if Menu.objects.filter(store=store).exists():
-        return
-    # Default 1: Footer menu
-    footer = Menu.objects.create(store=store, name="Footer menu", handle="footer-menu")
-    MenuItem.objects.create(menu=footer, title="Search", url="/search", order=0)
-    MenuItem.objects.create(menu=footer, title="About Us", url="/pages/about-us", order=1)
-
-    # Default 2: Explore
-    explore = Menu.objects.create(store=store, name="Explore", handle="explore")
-    explore_links = [
-        ("Home", "/"),
-        ("Shop All", "/collections/all"),
-        ("Ready To Drink", "/collections/ready-to-drink"),
-        ("Deals", "/collections/deals"),
-        ("Beer & Cider", "/collections/beer-cider"),
-        ("Wine", "/collections/wine"),
-        ("Spirits & Whisky", "/collections/spirits-whisky"),
-        ("Premix", "/collections/premix"),
-        ("Zero%*", "/collections/zero-percent"),
-    ]
-    for idx, (title, url) in enumerate(explore_links):
-        MenuItem.objects.create(menu=explore, title=title, url=url, order=idx)
-
-    # Default 3: Customer account main menu
-    account_menu = Menu.objects.create(
-        store=store, name="Customer account main menu", handle="customer-account-main-menu"
-    )
-    MenuItem.objects.create(menu=account_menu, title="Orders", url="/orders", order=0)
-    MenuItem.objects.create(menu=account_menu, title="Profile", url="/profile", order=1)
-
-
 class MenuSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(read_only=True)
     name = serializers.CharField(max_length=255)
@@ -1176,7 +1143,6 @@ class MenusView(StoreThemeView):
     """
 
     def get(self, request):
-        _seed_default_menus_if_empty(request.store)
         menus = Menu.objects.filter(store=request.store).prefetch_related("items").order_by("created_at")
         return Response(MenuSerializer(menus, many=True, context={"request": request}).data)
 
