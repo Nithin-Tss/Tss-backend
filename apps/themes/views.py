@@ -35,7 +35,7 @@ from django.contrib.auth import get_user_model
 
 from apps.tenancy.models import Store, StoreMembership
 
-from .models import BlogPost, StorePage, ThemeImage
+from .models import BlogPost, Menu, MenuItem, StorePage, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
 from .rendering import _catalog, published_pages, published_posts, render_page, render_synced_section_fast, shop_url
@@ -991,6 +991,287 @@ class StorePageView(StoreThemeView):
 
     def delete(self, request, page_id):
         self.get_page(page_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------- menus & redirects
+
+class MenuItemSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(read_only=True)
+    title = serializers.CharField(max_length=255)
+    url = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
+    order = serializers.IntegerField(default=0)
+    parent = serializers.PrimaryKeyRelatedField(queryset=MenuItem.objects.all(), required=False, allow_null=True)
+    children = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MenuItem
+        fields = ["id", "title", "url", "order", "parent", "children"]
+
+    def get_children(self, obj):
+        children = obj.children.all().order_by("order", "created_at")
+        if not children.exists():
+            return []
+        return MenuItemSerializer(children, many=True).data
+
+
+def _sync_menu_items(menu, items_data):
+    """Replaces or syncs menu items with given array: [{ title, url, order?, children? }]"""
+    menu.items.all().delete()
+    for idx, item in enumerate(items_data):
+        title = item.get("title", "").strip() if isinstance(item, dict) else ""
+        if not title:
+            continue
+        url = item.get("url", "").strip()
+        order = item.get("order", idx)
+        parent_item = MenuItem.objects.create(
+            menu=menu,
+            title=title,
+            url=url,
+            order=order,
+        )
+        children = item.get("children", [])
+        if isinstance(children, list):
+            for c_idx, child in enumerate(children):
+                c_title = child.get("title", "").strip() if isinstance(child, dict) else ""
+                if not c_title:
+                    continue
+                MenuItem.objects.create(
+                    menu=menu,
+                    parent=parent_item,
+                    title=c_title,
+                    url=child.get("url", "").strip(),
+                    order=child.get("order", c_idx),
+                )
+
+
+def _seed_default_menus_if_empty(store):
+    """Seeds the 3 standard dynamic store menus if the store currently has none."""
+    if Menu.objects.filter(store=store).exists():
+        return
+    # Default 1: Footer menu
+    footer = Menu.objects.create(store=store, name="Footer menu", handle="footer-menu")
+    MenuItem.objects.create(menu=footer, title="Search", url="/search", order=0)
+    MenuItem.objects.create(menu=footer, title="About Us", url="/pages/about-us", order=1)
+
+    # Default 2: Explore
+    explore = Menu.objects.create(store=store, name="Explore", handle="explore")
+    explore_links = [
+        ("Home", "/"),
+        ("Shop All", "/collections/all"),
+        ("Ready To Drink", "/collections/ready-to-drink"),
+        ("Deals", "/collections/deals"),
+        ("Beer & Cider", "/collections/beer-cider"),
+        ("Wine", "/collections/wine"),
+        ("Spirits & Whisky", "/collections/spirits-whisky"),
+        ("Premix", "/collections/premix"),
+        ("Zero%*", "/collections/zero-percent"),
+    ]
+    for idx, (title, url) in enumerate(explore_links):
+        MenuItem.objects.create(menu=explore, title=title, url=url, order=idx)
+
+    # Default 3: Customer account main menu
+    account_menu = Menu.objects.create(
+        store=store, name="Customer account main menu", handle="customer-account-main-menu"
+    )
+    MenuItem.objects.create(menu=account_menu, title="Orders", url="/orders", order=0)
+    MenuItem.objects.create(menu=account_menu, title="Profile", url="/profile", order=1)
+
+
+class MenuSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(max_length=255)
+    handle = serializers.SlugField(max_length=255, required=False, allow_blank=True, default="")
+    items = serializers.SerializerMethodField()
+    items_summary = serializers.SerializerMethodField()
+    items_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Menu
+        fields = ["id", "name", "handle", "items", "items_summary", "items_count", "created_at", "updated_at"]
+
+    def get_items(self, obj):
+        top_items = obj.items.filter(parent__isnull=True).order_by("order", "created_at")
+        return MenuItemSerializer(top_items, many=True).data
+
+    def get_items_summary(self, obj):
+        titles = list(
+            obj.items.filter(parent__isnull=True).order_by("order", "created_at").values_list("title", flat=True)
+        )
+        return ", ".join(titles)
+
+    def get_items_count(self, obj):
+        return obj.items.count()
+
+    def validate_name(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("Menu name is required.")
+        return value.strip()
+
+    def validate(self, attrs):
+        store = self.context["request"].store
+        name = attrs.get("name")
+        if name:
+            qs = Menu.objects.filter(store=store, name__iexact=name.strip())
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({"name": "A menu with this name already exists."})
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        raw_items = request.data.get("items", [])
+        name = validated_data["name"].strip()
+        handle = validated_data.get("handle") or slugify(name)[:255]
+        menu = Menu.objects.create(store=request.store, name=name, handle=handle)
+        _sync_menu_items(menu, raw_items)
+        return menu
+
+    def update(self, instance, validated_data):
+        request = self.context["request"]
+        instance.name = validated_data.get("name", instance.name).strip()
+        if "handle" in validated_data and validated_data["handle"]:
+            instance.handle = validated_data["handle"]
+        elif "name" in validated_data:
+            instance.handle = slugify(instance.name)[:255]
+        instance.save()
+        if "items" in request.data:
+            _sync_menu_items(instance, request.data.get("items", []))
+        return instance
+
+
+class MenusView(StoreThemeView):
+    """
+    GET  /api/v1/themes/menus/    list all menus for store
+    POST /api/v1/themes/menus/    create menu { name, handle?, items?: [...] }
+    """
+
+    def get(self, request):
+        _seed_default_menus_if_empty(request.store)
+        menus = Menu.objects.filter(store=request.store).prefetch_related("items").order_by("created_at")
+        return Response(MenuSerializer(menus, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        serializer = MenuSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class MenuView(StoreThemeView):
+    """GET / PUT / PATCH / DELETE /api/v1/themes/menus/<id>/"""
+
+    def get_menu(self, menu_id):
+        return get_object_or_404(
+            Menu.objects.prefetch_related("items"), store=self.request.store, pk=menu_id
+        )
+
+    def get(self, request, menu_id):
+        return Response(MenuSerializer(self.get_menu(menu_id), context={"request": request}).data)
+
+    def put(self, request, menu_id):
+        serializer = MenuSerializer(self.get_menu(menu_id), data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def patch(self, request, menu_id):
+        serializer = MenuSerializer(
+            self.get_menu(menu_id), data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, menu_id):
+        self.get_menu(menu_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class UrlRedirectSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(read_only=True)
+    path = serializers.CharField(max_length=500)
+    target = serializers.CharField(max_length=500)
+
+    class Meta:
+        model = UrlRedirect
+        fields = ["id", "path", "target", "created_at", "updated_at"]
+
+    def validate_path(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Redirect from path is required.")
+        if not val.startswith("/"):
+            val = "/" + val
+        return val
+
+    def validate_target(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Redirect to target is required.")
+        if not (val.startswith("/") or val.startswith("http://") or val.startswith("https://")):
+            val = "/" + val
+        return val
+
+    def validate(self, attrs):
+        store = self.context["request"].store
+        path = attrs.get("path")
+        target = attrs.get("target")
+        if path and target and path.rstrip("/") == target.rstrip("/"):
+            raise serializers.ValidationError(
+                {"target": "Destination path cannot be identical to the redirect from path."}
+            )
+        if path:
+            qs = UrlRedirect.objects.filter(store=store, path=path)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({"path": "A redirect for this path already exists."})
+        return attrs
+
+    def create(self, validated_data):
+        return UrlRedirect.objects.create(store=self.context["request"].store, **validated_data)
+
+
+class UrlRedirectsView(StoreThemeView):
+    """
+    GET  /api/v1/themes/redirects/    list all URL redirects
+    POST /api/v1/themes/redirects/    create URL redirect { path, target }
+    """
+
+    def get(self, request):
+        redirects = UrlRedirect.objects.filter(store=request.store).order_by("-created_at")
+        return Response(UrlRedirectSerializer(redirects, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        serializer = UrlRedirectSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class UrlRedirectView(StoreThemeView):
+    """GET / PATCH / DELETE /api/v1/themes/redirects/<id>/"""
+
+    def get_redirect(self, redirect_id):
+        return get_object_or_404(UrlRedirect, store=self.request.store, pk=redirect_id)
+
+    def get(self, request, redirect_id):
+        return Response(
+            UrlRedirectSerializer(self.get_redirect(redirect_id), context={"request": request}).data
+        )
+
+    def patch(self, request, redirect_id):
+        serializer = UrlRedirectSerializer(
+            self.get_redirect(redirect_id), data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, redirect_id):
+        self.get_redirect(redirect_id).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -217,3 +217,105 @@ class StorePage(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class Menu(models.Model):
+    """A navigation menu of the store (e.g., Footer menu, Explore, Customer account main menu)."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        db_column="store_id",
+        related_name="menus",
+    )
+    name = models.CharField(max_length=255)
+    handle = models.SlugField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"themes"."menus"'
+        verbose_name = "Menu"
+        verbose_name_plural = "Menus"
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["store", "name"], name="uq_menu_store_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class MenuItem(models.Model):
+    """An individual link item within a Menu, supporting hierarchical order and nesting."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    menu = models.ForeignKey(
+        Menu,
+        on_delete=models.CASCADE,
+        db_column="menu_id",
+        related_name="items",
+    )
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        db_column="parent_id",
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+    title = models.CharField(max_length=255)
+    url = models.CharField(max_length=500, blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"themes"."menu_items"'
+        verbose_name = "Menu Item"
+        verbose_name_plural = "Menu Items"
+        ordering = ["order", "created_at"]
+
+    def __str__(self):
+        return self.title
+
+
+class UrlRedirect(models.Model):
+    """A URL redirect rule mapping an old path to a new path within a store."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        db_column="store_id",
+        related_name="url_redirects",
+    )
+    path = models.CharField(max_length=500)
+    target = models.CharField(max_length=500)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"themes"."url_redirects"'
+        verbose_name = "URL Redirect"
+        verbose_name_plural = "URL Redirects"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["store", "path"], name="uq_redirect_store_path"),
+        ]
+
+    def __str__(self):
+        return f"{self.path} -> {self.target}"
