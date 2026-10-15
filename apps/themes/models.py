@@ -197,6 +197,8 @@ class StorePage(models.Model):
     handle = models.SlugField(max_length=255)
     body = models.TextField(blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUSES, default=VISIBLE)
+    # The page template that shows it ("page.contact" = templates/page.contact.liquid); empty = the base Page template
+    template = models.CharField(max_length=60, blank=True, default="")
     # Search engine listing
     seo_title = models.CharField(max_length=255, blank=True, default="")
     seo_description = models.TextField(blank=True, default="")

@@ -40,7 +40,7 @@ from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
 from .rendering import _catalog, published_pages, published_posts, render_page, render_synced_section_fast, shop_url
 from .rendering import _collect_fonts, google_fonts_link
-from .schemas import PAGES, public_schema, resolve, validate_custom_data
+from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
     delete_path,
     generate_css_variables,
@@ -54,6 +54,10 @@ from .services import (
     synced_sections,
     templates_changed,
     code_files,
+    create_page_template,
+    create_template_for_page,
+    page_template_keys,
+    page_templates,
 )
 
 
@@ -226,8 +230,13 @@ class ThemeSettingsView(StoreThemeView):
             raise ValidationError({"templates": "Expected an object."})
 
         for page, changes in templates.items():
-            if page not in PAGES or not isinstance(changes, dict):
+            if not is_page_key(page) or not isinstance(changes, dict):
                 raise ValidationError({"templates": f"Unknown page: {page}."})
+            if page not in merged["templates"]:
+                if page in PAGES:
+                    merged["templates"][page] = default_template(page)
+                else:
+                    raise ValidationError({"templates": f"Unknown page template: {page}."})
             target = merged["templates"][page]
             for section_id, section in (changes.get("sections") or {}).items():
                 if section is None:
@@ -911,6 +920,7 @@ class StorePageSerializer(serializers.ModelSerializer):
     body = serializers.CharField(required=False, allow_blank=True, max_length=200000)
     seo_title = serializers.CharField(required=False, allow_blank=True, max_length=255)
     seo_description = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    template = serializers.CharField(required=False, allow_blank=True, max_length=60)
     url = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
@@ -918,7 +928,7 @@ class StorePageSerializer(serializers.ModelSerializer):
     class Meta:
         model = StorePage
         fields = [
-            "id", "title", "handle", "body", "status", "seo_title", "seo_description",
+            "id", "title", "handle", "body", "status", "template", "seo_title", "seo_description",
             "published_at", "url", "createdAt", "updatedAt",
         ]
         read_only_fields = ["published_at"]
@@ -926,6 +936,15 @@ class StorePageSerializer(serializers.ModelSerializer):
     def get_url(self, page):
         request = self.context["request"]
         return request.build_absolute_uri(f"{shop_url(page.store)}/pages/{page.handle}")
+
+    def validate_template(self, value):
+        """Empty (the base Page template) or a page template the store has."""
+        value = (value or "").strip()
+        if value in ("", "page"):
+            return ""
+        if value not in page_template_keys(get_store_theme(self.context["request"].store).custom_data):
+            raise serializers.ValidationError("Choose one of the store's page templates.")
+        return value
 
     def validate_title(self, value):
         if not value.strip():
@@ -970,8 +989,12 @@ class StorePagesView(StoreThemeView):
     def post(self, request):
         serializer = StorePageSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        page = serializer.save()
+        if not page.template:
+            # Every new page gets its own template in the code editor: templates/page.<handle>.liquid
+            page.template = create_template_for_page(self.store_theme(), page)
+            page.save(update_fields=["template"])
+        return Response(StorePageSerializer(page, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class StorePageView(StoreThemeView):
@@ -1275,6 +1298,32 @@ class UrlRedirectView(StoreThemeView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class PageTemplatesView(StoreThemeView):
+    """
+    GET    /api/v1/themes/page-templates/              Page and its alternate templates: [{key, label, path, liquid_path}]
+    POST   /api/v1/themes/page-templates/  {name}      a new template (a copy of Page): templates/page.<name>.liquid + .json
+    DELETE /api/v1/themes/page-templates/?key=page.x   delete it (its pages go back to Page)
+    """
+
+    def get(self, request):
+        return Response({"templates": page_templates(self.store_theme())})
+
+    def post(self, request):
+        store_theme = self.store_theme()
+        key = create_page_template(store_theme, request.data.get("name"))
+        return Response(
+            {"key": key, "templates": page_templates(store_theme)}, status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request):
+        key = request.query_params.get("key") or ""
+        store_theme = self.store_theme()
+        if key not in page_template_keys(store_theme.custom_data):
+            raise ValidationError({"key": "Unknown page template."})
+        delete_path(store_theme, f"templates/{key}.liquid")
+        return Response({"templates": page_templates(store_theme)})
+
+
 def _preview_target(request):
     """
     (page, render_page arguments, message) for ?page=index|product|collection|blog|article.
@@ -1283,8 +1332,8 @@ def _preview_target(request):
     message: why the page can't be shown (no product to show), else None.
     """
     page = request.query_params.get("page") or "index"
-    if page not in PAGES:
-        raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}."})
+    if not is_page_key(page):
+        raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
     if page == "collection":
         return page, {"collection": {"name": "All products", "obj": None}}, None
     if page == "product":
@@ -1297,7 +1346,7 @@ def _preview_target(request):
         if product is None:
             return page, {}, "Add an active product on the Online Store to preview the product page."
         return page, {"product": product}, None
-    if page == "page":
+    if base_page(page) == "page":
         # ?handle=<handle>: that page; otherwise the first visible one, or a sample
         return page, {"page_handle": request.query_params.get("handle") or None}, None
     if page == "article":
@@ -1786,6 +1835,8 @@ def storefront_wishlist_item(request, store_slug):
 @_storefront
 def storefront_page(store, request, params, handle):
     """/pages/<handle>: one visible page; hidden ones and unknown handles are not found."""
-    if not published_pages(store).filter(handle=handle).exists():
+    page = published_pages(store).filter(handle=handle).first()
+    if page is None:
         raise Http404("Page not found.")
-    return render_page(store, "page", page_handle=handle, request=request)
+    # The page template the page uses (page.contact); render_page falls back to Page if its file is gone
+    return render_page(store, page.template or "page", page_handle=handle, request=request)

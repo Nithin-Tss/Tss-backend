@@ -31,6 +31,19 @@ from html.parser import HTMLParser
 from rest_framework import serializers
 
 PAGES = ("index", "product", "collection", "blog", "article", "page")
+# Alternate page templates (Shopify's page.contact): templates/page.<name>.liquid, edited like the Page template
+PAGE_TEMPLATE = re.compile(r"^page\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_PAGE_TEMPLATES = 100
+
+
+def is_page_key(key):
+    """A page the customizer can edit: a built-in one, or an alternate page template (page.<name>)."""
+    return key in PAGES or (isinstance(key, str) and len(key) <= 40 and bool(PAGE_TEMPLATE.match(key)))
+
+
+def base_page(key):
+    """"page.contact" -> "page"; sections are allowed per base page."""
+    return key.split(".", 1)[0]
 # Pages where product lists make sense (the blog and content pages are for reading)
 COMMERCE_PAGES = ("index", "product", "collection")
 
@@ -284,7 +297,7 @@ def _clean_section(page, section_id, raw):
 
     schema = SECTIONS[raw["type"]]
 
-    if page not in schema["pages"]:
+    if base_page(page) not in schema["pages"]:
         raise serializers.ValidationError(f"{where}: {schema['name']} can't be used on the {page} page.")
 
     # Hidden sections stay saved but aren't shown on the store
@@ -339,8 +352,10 @@ def validate_custom_data(data):
     }
     templates = data.get("templates", {})
 
-    if not isinstance(templates, dict) or set(templates) - set(PAGES):
-        raise serializers.ValidationError(f"templates may only contain: {', '.join(PAGES)}.")
+    if not isinstance(templates, dict) or not all(is_page_key(key) for key in templates):
+        raise serializers.ValidationError(f"templates may only contain: {', '.join(PAGES)}, and page.<name> templates.")
+    if sum(1 for key in templates if key not in PAGES) > MAX_PAGE_TEMPLATES:
+        raise serializers.ValidationError(f"A theme can have at most {MAX_PAGE_TEMPLATES} page templates.")
 
     for page, raw in templates.items():
         if not isinstance(raw, dict):
@@ -363,7 +378,7 @@ def validate_custom_data(data):
             cleaned[section_id] = _clean_section(page, section_id, section)
 
         for type_, schema in SECTIONS.items():
-            if schema.get("required") and page in schema["pages"] and not any(
+            if schema.get("required") and base_page(page) in schema["pages"] and not any(
                 s["type"] == type_ and not s["hidden"] for s in cleaned.values()
             ):
                 raise serializers.ValidationError(f"templates.{page} must include a {schema['name']} section.")
@@ -394,6 +409,11 @@ def _with_defaults(schema, values):
         key: _coerce(spec, values[key]) if key in values else copy.deepcopy(spec["default"])
         for key, spec in schema.items()
     }
+
+
+def default_template(page):
+    """The sections a new template of `page` starts with (page.contact -> the Page template's)."""
+    return copy.deepcopy(DEFAULT_TEMPLATES[base_page(page)])
 
 
 def resolve(custom_data):
@@ -1141,6 +1161,38 @@ SECTIONS["featured-posts"] = {
 DEFAULT_TEMPLATES["blog"] = {"order": ["main"], "sections": {"main": {"type": "main-blog", "settings": {}}}}
 DEFAULT_TEMPLATES["article"] = {"order": ["main"], "sections": {"main": {"type": "main-article", "settings": {}}}}
 DEFAULT_TEMPLATES["page"] = {"order": ["main"], "sections": {"main": {"type": "main-page", "settings": {}}}}
+
+# Page templates every store starts with besides the base Page template. Each has a file
+# (starter/templates/page.<name>.liquid) and these sections; a store can edit or delete them.
+STARTER_PAGE_TEMPLATES = {
+    "page.about": {
+        "order": ["intro", "main"],
+        "sections": {
+            "intro": {"type": "rich-text", "settings": {
+                "heading": "Our story",
+                "text": "Tell customers who you are, how the store started and what you care about.",
+            }},
+            "main": {"type": "main-page", "settings": {}},
+        },
+    },
+    "page.contact": {
+        "order": ["main"],
+        "sections": {"main": {"type": "main-page", "settings": {"title_align": "center", "content_width": "narrow"}}},
+    },
+    "page.faq": {
+        "order": ["main", "questions"],
+        "sections": {
+            "main": {"type": "main-page", "settings": {"title_align": "center", "content_width": "narrow"}},
+            "questions": {"type": "custom", "settings": {"heading": "Frequently asked questions"}, "blocks": [
+                {"type": "accordion", "settings": {"open_first": True}},
+            ]},
+        },
+    },
+    "page.policy": {
+        "order": ["main"],
+        "sections": {"main": {"type": "main-page", "settings": {"content_width": "narrow", "show_updated": True}}},
+    },
+}
 
 GROUPS = [
     {"id": "content", "label": "Content"},

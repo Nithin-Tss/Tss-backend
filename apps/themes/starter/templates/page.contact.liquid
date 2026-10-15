@@ -1,0 +1,17 @@
+{%- comment -%}
+  Contact page template (page.contact). `sections` is the HTML of this template's sections;
+  `page` is the page being shown. The details below are plain Liquid: edit them here.
+{%- endcomment -%}
+{{ sections }}
+<section class="section contact-details">
+  <div class="page-width">
+    <h2 class="section-heading">Contact {{ shop.name }}</h2>
+    <p>Email: <a href="mailto:hello@example.com">hello@example.com</a></p>
+    <p>Phone: <a href="tel:+910000000000">+91 00000 00000</a></p>
+    <p>Hours: Monday to Saturday, 10am to 6pm</p>
+  </div>
+</section>
+<style>
+  .contact-details { text-align: center; }
+  .contact-details p { margin: 6px 0; color: var(--muted); }
+</style>

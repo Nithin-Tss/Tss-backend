@@ -21,8 +21,13 @@ from liquid.exceptions import LiquidError
 from rest_framework import exceptions
 
 from . import section_sync as sync
-from .models import StoreTheme, Theme, ThemeFile
-from .schemas import PAGES, SECTIONS as SECTION_SCHEMAS, resolve, validate_custom_data
+from django.utils.text import slugify
+
+from .models import StorePage, StoreTheme, Theme, ThemeFile
+from .schemas import (
+    MAX_PAGE_TEMPLATES, PAGE_TEMPLATE, PAGES, SECTIONS as SECTION_SCHEMAS, STARTER_PAGE_TEMPLATES,
+    default_template, resolve, validate_custom_data,
+)
 
 STARTER_DIR = Path(__file__).resolve().parent / "starter"
 STARTER_VERSION = "1.0.0"
@@ -204,6 +209,7 @@ def get_store_theme(store):
         _upgrade_untouched_starter_files(current.theme)
         _add_synced_sections(current.theme, current.custom_data)
         _add_wishlist_blocks(current)
+        _add_page_templates(current)
         return current
 
     if current:
@@ -223,6 +229,7 @@ def get_store_theme(store):
     _upgrade_untouched_starter_files(installed.theme)
     _add_synced_sections(installed.theme, installed.custom_data)
     _add_wishlist_blocks(installed)
+    _add_page_templates(installed)
     return installed
 
 
@@ -309,6 +316,31 @@ def theme_files(store_theme):
 SETTINGS_FILE = "config/settings_data.json"
 TEMPLATE_FILES = {f"templates/{page}.json": page for page in PAGES}
 SETTINGS_FILES = (SETTINGS_FILE, *TEMPLATE_FILES, "assets/images.json")
+# Alternate page templates (page.contact, ...) have a settings file and a Liquid file each
+PAGE_TEMPLATE_JSON = re.compile(r"^templates/(page\.[a-z0-9]+(?:-[a-z0-9]+)*)\.json$")
+PAGE_TEMPLATE_LIQUID = re.compile(r"^templates/(page\.[a-z0-9]+(?:-[a-z0-9]+)*)\.liquid$")
+PAGE_TEMPLATES_REVISION = 1
+DEFAULT_PAGE_LIQUID = (
+    "{%- comment -%}\n"
+    "  Page template. `sections` is the HTML of this template's sections;\n"
+    "  `page` is the page being shown. Add your own Liquid around {{ sections }}.\n"
+    "{%- endcomment -%}\n"
+    "{{ sections }}\n"
+)
+
+
+def page_template_keys(custom_data):
+    """The alternate page templates the store has: ["page.about", "page.contact", ...]."""
+    return sorted(key for key in resolve(custom_data)["templates"] if key not in PAGES)
+
+
+def settings_paths(store_theme):
+    """Every settings file of the theme, including the alternate page templates'."""
+    return (*SETTINGS_FILES, *(f"templates/{key}.json" for key in page_template_keys(store_theme.custom_data)))
+
+
+def _is_settings_path(path):
+    return path in SETTINGS_FILES or bool(PAGE_TEMPLATE_JSON.match(path))
 
 
 def _dump(value):
@@ -321,6 +353,8 @@ def settings_files(store_theme):
     files = {SETTINGS_FILE: _dump(data["settings"])}
     for path, page in TEMPLATE_FILES.items():
         files[path] = _dump(data["templates"][page])
+    for key in page_template_keys(store_theme.custom_data):
+        files[f"templates/{key}.json"] = _dump(data["templates"][key])
     return files
 
 
@@ -355,10 +389,10 @@ def code_files(store_theme):
     return {**theme_files(store_theme), **settings_files(store_theme), IMAGES_FILE: images_file(store_theme)}
 
 
-def _settings_conflict(path):
+def _settings_conflict(store_theme, path):
     """A path that is, or holds, a settings file: those can't be deleted, moved or replaced."""
     path = path.strip("/")
-    if any(p == path or p.startswith(path + "/") for p in SETTINGS_FILES):
+    if any(p == path or p.startswith(path + "/") for p in settings_paths(store_theme)):
         raise exceptions.ValidationError(
             "Settings files are managed by the customizer. Edit what is inside them instead of deleting or renaming them."
         )
@@ -382,7 +416,7 @@ def _save_settings_file(store_theme, path, content):
     if path == SETTINGS_FILE:
         merged["settings"] = parsed
     else:
-        page = TEMPLATE_FILES[path]
+        page = TEMPLATE_FILES.get(path) or PAGE_TEMPLATE_JSON.match(path).group(1)
         if set(parsed) - {"order", "sections"}:
             raise exceptions.ValidationError({"content": f"{path} may only contain \"order\" and \"sections\"."})
         merged["templates"][page] = parsed
@@ -394,6 +428,8 @@ def _save_settings_file(store_theme, path, content):
         # Say which file the problem is in
         raise exceptions.ValidationError({"content": f"{path}: " + " ".join(str(m) for m in _messages(error.detail))})
     store_theme.save(update_fields=["custom_data", "updated_at"])
+    if PAGE_TEMPLATE_JSON.match(path):
+        _ensure_page_file(store_theme.theme, page)
     templates_changed(store_theme, before, source="code")
     return SimpleNamespace(file_path=path, file_size=len(content.encode("utf-8")))
 
@@ -404,6 +440,127 @@ def _messages(detail):
     if isinstance(detail, (list, tuple)):
         return [m for value in detail for m in _messages(value)]
     return [detail]
+
+
+# ------------------------------------------------- alternate page templates (page.contact, ...)
+#
+# A page template is templates/page.<name>.liquid (the markup) plus its sections in
+# custom_data["templates"]["page.<name>"] (shown as templates/page.<name>.json). Each store page
+# picks one (StorePage.template; empty = the base Page template).
+
+def _ensure_page_file(theme, key, content=DEFAULT_PAGE_LIQUID):
+    path = f"templates/{key}.liquid"
+    if not theme.files.filter(file_path=path).exists():
+        _new_file(theme, path, content).save()
+
+
+def _ensure_page_data(store_theme, key, template=None):
+    """The template's sections in custom_data (the Page template's defaults when none are given)."""
+    templates = dict(store_theme.custom_data.get("templates") or {})
+    if key in templates:
+        return
+    templates[key] = template if template is not None else default_template(key)
+    store_theme.custom_data = {**store_theme.custom_data, "templates": templates}
+    store_theme.save(update_fields=["custom_data", "updated_at"])
+
+
+def _forget_page_template(store_theme, key):
+    """Its file is gone: drop its sections and send its pages back to the base Page template."""
+    templates = dict(store_theme.custom_data.get("templates") or {})
+    if key in templates:
+        templates.pop(key)
+        store_theme.custom_data = {**store_theme.custom_data, "templates": templates}
+        store_theme.save(update_fields=["custom_data", "updated_at"])
+    StorePage.objects.filter(store_id=store_theme.store_id, template=key).update(template="")
+
+
+def template_label(key):
+    return "Page" if key == "page" else key.split(".", 1)[1].replace("-", " ").capitalize()
+
+
+def page_templates(store_theme):
+    """[{key, label, path, liquid_path}] for the base Page template and every alternate one."""
+    keys = ["page", *page_template_keys(store_theme.custom_data)]
+    return [
+        {"key": key, "label": template_label(key), "path": f"templates/{key}.json", "liquid_path": f"templates/{key}.liquid"}
+        for key in keys
+    ]
+
+
+def _make_page_template(store_theme, key, header=""):
+    """templates/<key>.liquid (the base Page's Liquid, under `header`) and the base Page's sections."""
+    theme = store_theme.theme
+    base = theme.files.filter(file_path="templates/page.liquid").values_list("content", flat=True).first()
+    with transaction.atomic():
+        _ensure_page_file(theme, key, header + (base if base is not None else DEFAULT_PAGE_LIQUID))
+        _ensure_page_data(store_theme, key, copy.deepcopy(resolve(store_theme.custom_data)["templates"]["page"]))
+    return key
+
+
+def _template_exists(store_theme, key):
+    return key in page_template_keys(store_theme.custom_data) or         store_theme.theme.files.filter(file_path=f"templates/{key}.liquid").exists()
+
+
+def create_page_template(store_theme, name):
+    """A new page template that starts as a copy of the base Page template (its Liquid and sections)."""
+    slug = slugify(name or "")[:30].strip("-")
+    if not slug or not PAGE_TEMPLATE.match(f"page.{slug}"):
+        raise exceptions.ValidationError({"name": "Give the template a name (letters and numbers)."})
+    key = f"page.{slug}"
+    if _template_exists(store_theme, key):
+        raise exceptions.ValidationError({"name": "A page template with that name already exists."})
+    if len(page_template_keys(store_theme.custom_data)) >= MAX_PAGE_TEMPLATES:
+        raise exceptions.ValidationError({"name": f"A theme can have at most {MAX_PAGE_TEMPLATES} page templates."})
+    return _make_page_template(store_theme, key)
+
+
+def create_template_for_page(store_theme, page):
+    """
+    A template of its own for a new store page: templates/page.<handle>.liquid (and .json) appear in
+    the code editor and the customizer's page list. Returns its key, or "" when the theme is at its limit.
+    """
+    if len(page_template_keys(store_theme.custom_data)) >= MAX_PAGE_TEMPLATES:
+        return ""
+    base = slugify(page.handle or page.title or "")[:26].strip("-") or "page"
+    slug, n = base, 2
+    while not PAGE_TEMPLATE.match(f"page.{slug}") or _template_exists(store_theme, f"page.{slug}"):
+        slug, n = f"{base}-{n}", n + 1
+    key = f"page.{slug}"
+    title = (page.title or "").replace("-%}", "").replace("{%", "").replace("%}", "")
+    header = "\n".join([
+        "{%- comment -%}",
+        f"  Template of the page \"{title}\" (/pages/{page.handle}). Edit the Liquid below, or its sections",
+        f"  in templates/{key}.json or the theme editor.",
+        "{%- endcomment -%}",
+        "",
+    ])
+    return _make_page_template(store_theme, key, header)
+
+
+def _add_page_templates(store_theme):
+    """
+    The starter's page templates (About, Contact, FAQ, Policy) for themes that don't have them yet.
+    Runs once per theme: a template the store deletes later is not brought back.
+    """
+    theme = store_theme.theme
+    if (theme.theme_data or {}).get("page_templates", 0) >= PAGE_TEMPLATES_REVISION:
+        return
+    with transaction.atomic():
+        locked = Theme.objects.select_for_update().get(pk=theme.pk)
+        data = locked.theme_data or {}
+        if data.get("page_templates", 0) < PAGE_TEMPLATES_REVISION:
+            starter = starter_files()
+            have = set(locked.files.values_list("file_path", flat=True))
+            ThemeFile.objects.bulk_create([
+                _new_file(locked, f"templates/{key}.liquid", starter[f"templates/{key}.liquid"])
+                for key in STARTER_PAGE_TEMPLATES
+                if f"templates/{key}.liquid" not in have and f"templates/{key}.liquid" in starter
+            ])
+            for key, template in STARTER_PAGE_TEMPLATES.items():
+                _ensure_page_data(store_theme, key, copy.deepcopy(template))
+            locked.theme_data = {**data, "page_templates": PAGE_TEMPLATES_REVISION}
+            locked.save(update_fields=["theme_data", "updated_at"])
+    theme.theme_data = locked.theme_data
 
 
 # ---------------------------------------------------------------- files
@@ -466,7 +623,7 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
     if isinstance(path, str) and path.strip().strip("/") == IMAGES_FILE:
         raise exceptions.ValidationError({"content": "assets/images.json lists your uploaded pictures and can't be edited."})
 
-    if isinstance(path, str) and path.strip().strip("/") in SETTINGS_FILES:
+    if isinstance(path, str) and _is_settings_path(path.strip().strip("/")):
         path = path.strip().strip("/")
         if not isinstance(content, str):
             raise exceptions.ValidationError({"content": "Content must be text."})
@@ -486,7 +643,8 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
         return save_synced_code(store_theme, sync.PATH_TO_SECTION[path], content, base_version=base_version, client=client,
                                 started_at=started_at)
 
-    if path in CHECKED_FILES:
+    page_template = PAGE_TEMPLATE_LIQUID.match(path)
+    if path in CHECKED_FILES or page_template:
         _check_liquid(content)
 
     theme = store_theme.theme
@@ -501,8 +659,15 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
     if theme.files.count() >= MAX_FILES:
         raise exceptions.ValidationError({"path": f"A theme can have at most {MAX_FILES} files."})
 
+    if page_template and page_template.group(1) not in page_template_keys(store_theme.custom_data) \
+            and len(page_template_keys(store_theme.custom_data)) >= MAX_PAGE_TEMPLATES:
+        raise exceptions.ValidationError({"path": f"A theme can have at most {MAX_PAGE_TEMPLATES} page templates."})
+
     new = _new_file(theme, path, content)
     new.save()
+    if page_template:
+        # A new templates/page.<name>.liquid is a new template in the customizer's page list
+        _ensure_page_data(store_theme, page_template.group(1))
     return new
 
 
@@ -516,7 +681,7 @@ def _matching(theme, path):
 def delete_path(store_theme, path):
     path = (path or "").strip().strip("/")
     if path:
-        _settings_conflict(path)
+        _settings_conflict(store_theme, path)
     files = _matching(store_theme.theme, path) if path else []
 
     if not files:
@@ -526,7 +691,10 @@ def delete_path(store_theme, path):
     if required:
         raise exceptions.ValidationError(f"{required[0]} is required by the theme and can't be deleted.")
 
+    removed_templates = [m.group(1) for f in files if (m := PAGE_TEMPLATE_LIQUID.match(f.file_path))]
     ThemeFile.objects.filter(pk__in=[f.pk for f in files]).delete()
+    for key in removed_templates:
+        _forget_page_template(store_theme, key)
     return len(files)
 
 
@@ -535,7 +703,7 @@ def rename_path(store_theme, source, target):
     source = (source or "").strip().strip("/")
     theme = store_theme.theme
     if source:
-        _settings_conflict(source)
+        _settings_conflict(store_theme, source)
     files = _matching(theme, source) if source else []
 
     if not files:
@@ -553,6 +721,10 @@ def rename_path(store_theme, source, target):
 
     if any(old in REQUIRED_FILES for old in moves):
         raise exceptions.ValidationError("Required theme files can't be moved or renamed.")
+    if any(PAGE_TEMPLATE_LIQUID.match(old) or PAGE_TEMPLATE_LIQUID.match(new) for old, new in moves.items()):
+        raise exceptions.ValidationError(
+            "Page templates can't be renamed or moved. Create a new template and delete this one."
+        )
     if theme.files.filter(file_path__in=list(moves.values())).exclude(pk__in=[f.pk for f in files]).exists():
         raise exceptions.ValidationError({"target": "A file with that name already exists."})
 

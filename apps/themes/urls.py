@@ -14,6 +14,7 @@ from .views import (
     ThemeImageView,
     ThemePreviewView,
     ThemeRenameView,
+    PageTemplatesView,
     StorePagesView,
     StorePageView,
     ThemeSchemaView,
@@ -143,6 +144,12 @@ urlpatterns = [
         "redirects/<uuid:redirect_id>/",
         UrlRedirectView.as_view(),
         name="theme_redirect",
+    ),
+
+    path(
+        "page-templates/",
+        PageTemplatesView.as_view(),
+        name="theme_page_templates",
     ),
 
     path(

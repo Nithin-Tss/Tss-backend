@@ -27,7 +27,7 @@ from apps.catalog.models import EXTRA_FIELDS
 from apps.catalog.services import published_collections, published_products
 from apps.orders.models import OrderItem
 
-from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, StorePage, ThemeFile
@@ -1384,12 +1384,16 @@ def _sample_page_drop(base_url):
     }
 
 
-def page_content(store, base_url, handle, editor):
-    """The page to show: the visible one with `handle` (else the first one, in the preview); a sample if none."""
+def page_content(store, base_url, handle, editor, template="page"):
+    """
+    The page to show: the visible one with `handle` (else, in the preview, the first one that uses
+    `template`, then the first one); a sample if none.
+    """
     pages = published_pages(store)
     page = pages.filter(handle=handle).first() if handle else None
     if page is None and editor:
-        page = pages.order_by("created_at").first()
+        ordered = pages.order_by("created_at")
+        page = ordered.filter(template="" if template == "page" else template).first() or ordered.first()
     if page is not None:
         return _page_drop(page, base_url)
     return _sample_page_drop(base_url) if editor else None
@@ -1399,7 +1403,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
                 wishlist_page_ids=None, wishlist_products=None, page_handle=None):
     """
-    page: "index", "product", "collection", "blog", "article" or "page".
+    page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
     product: a catalog Product (product page).
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
@@ -1413,6 +1417,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     store_theme = get_store_theme(store)
     files = theme_files(store_theme)
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
+    # A page template whose file is gone shows the base Page template
+    if page != base_page(page) and f"templates/{page}.liquid" not in files:
+        page = base_page(page)
     settings = data["settings"]
     base_url = shop_url(store)
     # The header and footer are synced sections (sections/<name>.liquid) when the theme has
@@ -1478,7 +1485,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "pages": pages,
         }
 
-    template_data = data["templates"][page]
+    template_data = data["templates"].get(page) or default_template(page)
 
     # Posts are read only where they show: the blog pages and "Latest posts" sections
     shows_posts = page in ("blog", "article") or any(
@@ -1495,7 +1502,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         index = next((i for i, p in enumerate(posts) if p["handle"] == article), 0)
         article_drop = _article_drop(posts, index)
 
-    page_drop = page_content(store, base_url, page_handle, editor) if page == "page" else None
+    page_drop = page_content(store, base_url, page_handle, editor, page) if base_page(page) == "page" else None
 
     common = {
         "shop": dict(shop, blog_url=f"{base_url}/blog"),

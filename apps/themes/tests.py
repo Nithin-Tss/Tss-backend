@@ -1923,6 +1923,104 @@ class StorePagesTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.ok("get", "/api/v1/themes/pages/"), [])
 
 
+class PageTemplatesTest(StoreClientMixin, APITestCase):
+    """Alternate page templates (page.contact, ...): picker, code editor, and the pages that use them."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("templates@example.com", "Templates Store")
+
+    def files(self):
+        return {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+
+    def keys(self):
+        return [t["key"] for t in self.ok("get", "/api/v1/themes/page-templates/")["templates"]]
+
+    def page(self, path, expect=200):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/{path}")
+        self.assertEqual(r.status_code, expect)
+        return r.content.decode()
+
+    def test_starter_templates_are_in_the_picker_and_the_code_editor(self):
+        self.assertEqual(self.keys(), ["page", "page.about", "page.contact", "page.faq", "page.policy"])
+        files = self.files()
+        for key in ("page.about", "page.contact", "page.faq", "page.policy"):
+            self.assertIn(f"templates/{key}.liquid", files)
+            self.assertIn(f"templates/{key}.json", files)
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertIn("page.faq", settings["templates"])
+
+    def test_page_uses_the_template_it_picked(self):
+        page = self.ok("post", "/api/v1/themes/pages/", {"title": "Contact", "body": "<p>Hi</p>", "template": "page.contact"}, expect=201)
+        self.assertEqual(page["template"], "page.contact")
+        self.assertIn("contact-details", self.page("pages/contact"))
+        other = self.ok("post", "/api/v1/themes/pages/", {"title": "Plain", "body": "<p>x</p>"}, expect=201)
+        self.assertEqual(other["template"], "page.plain")
+        self.assertNotIn("contact-details", self.page("pages/plain"))
+        self.ok("post", "/api/v1/themes/pages/", {"title": "Bad", "template": "page.nope"}, expect=400)
+
+    def test_new_page_gets_its_own_template_in_the_code_editor(self):
+        page = self.ok("post", "/api/v1/themes/pages/", {"title": "Size Guide", "body": "<p>S M L</p>"}, expect=201)
+        self.assertEqual(page["template"], "page.size-guide")
+        files = self.files()
+        self.assertIn("Size Guide", files["templates/page.size-guide.liquid"])
+        self.assertIn("{{ sections }}", files["templates/page.size-guide.liquid"])
+        self.assertIn("templates/page.size-guide.json", files)
+        self.assertIn("S M L", self.page("pages/size-guide"))
+        again = self.ok("post", "/api/v1/themes/pages/", {"title": "Size Guide", "body": "<p>2</p>"}, expect=201)
+        self.assertEqual(again["template"], "page.size-guide-2")
+        self.assertEqual(self.ok("post", "/api/v1/themes/pages/", {"title": "T", "template": "page.faq"}, expect=201)["template"], "page.faq")
+
+    def test_liquid_edited_in_the_code_editor_shows_on_the_store(self):
+        self.ok("post", "/api/v1/themes/pages/", {"title": "FAQ", "body": "<p>x</p>", "template": "page.faq"}, expect=201)
+        liquid = self.files()["templates/page.faq.liquid"]
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/page.faq.liquid", "content": liquid + "<p id=\"added\">Added</p>"})
+        self.assertIn('id="added"', self.page("pages/faq"))
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/page.faq.liquid", "content": "{% if %}"}, expect=400)
+
+    def test_new_template_from_the_editor_appears_in_the_code_editor(self):
+        made = self.ok("post", "/api/v1/themes/page-templates/", {"name": "Size Guide"}, expect=201)
+        self.assertEqual(made["key"], "page.size-guide")
+        files = self.files()
+        self.assertIn("templates/page.size-guide.liquid", files)
+        self.assertIn("templates/page.size-guide.json", files)
+        self.ok("post", "/api/v1/themes/page-templates/", {"name": "Size Guide"}, expect=400)
+
+    def test_customizer_changes_reach_the_json_file_and_back(self):
+        self.ok("get", "/api/v1/themes/page-templates/")
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"page.contact": {"sections": {
+            "extra": {"type": "rich-text", "settings": {"heading": "Find us"}}}, "order": ["main", "extra"]}}})
+        data = json.loads(self.files()["templates/page.contact.json"])
+        self.assertEqual(data["order"], ["main", "extra"])
+        data["sections"]["extra"]["settings"]["heading"] = "Visit us"
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/page.contact.json", "content": json.dumps(data)})
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(settings["templates"]["page.contact"]["sections"]["extra"]["settings"]["heading"], "Visit us")
+
+    def test_new_liquid_or_json_file_creates_a_template(self):
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/page.team.liquid", "content": "{{ sections }}"})
+        self.assertIn("page.team", self.keys())
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/page.jobs.json",
+                "content": json.dumps({"order": ["main"], "sections": {"main": {"type": "main-page", "settings": {}}}})})
+        self.assertIn("page.jobs", self.keys())
+        self.assertIn("templates/page.jobs.liquid", self.files())
+
+    def test_deleting_a_template_sends_its_pages_back_to_page(self):
+        self.ok("post", "/api/v1/themes/pages/", {"title": "FAQ", "body": "<p>x</p>", "template": "page.faq"}, expect=201)
+        self.ok("delete", "/api/v1/themes/files/?path=templates/page.faq.liquid")
+        self.assertNotIn("page.faq", self.keys())
+        pages = self.ok("get", "/api/v1/themes/pages/")
+        self.assertEqual(pages[0]["template"], "")
+        self.assertIn('class="page__title"', self.page("pages/faq"))
+        self.ok("delete", "/api/v1/themes/files/?path=templates/page.liquid", expect=400)
+        self.ok("post", "/api/v1/themes/files/rename/", {"source": "templates/page.about.liquid", "target": "templates/page.us.liquid"}, expect=400)
+
+    def test_customizer_previews_a_template(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        html = self.ok("post", "/api/v1/themes/preview/?page=page.contact", data)["html"]
+        self.assertIn("contact-details", html)
+        self.ok("post", "/api/v1/themes/preview/?page=page.bad_name", data, expect=400)
+
+
 class HomeTemplateSyncTest(StoreClientMixin, APITestCase):
     """templates/index.liquid lists the Home page's sections; the customizer's list follows it, both ways."""
 
