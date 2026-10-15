@@ -211,6 +211,7 @@ def get_store_theme(store):
         _upgrade_untouched_starter_files(current.theme)
         _add_synced_sections(current.theme, current.custom_data)
         _add_wishlist_blocks(current)
+        _offer_wishlist_icon_block(current.theme)
         _keep_wishlist_hearts(current)
         _add_page_templates(current)
         return current
@@ -232,6 +233,7 @@ def get_store_theme(store):
     _upgrade_untouched_starter_files(installed.theme)
     _add_synced_sections(installed.theme, installed.custom_data)
     _add_wishlist_blocks(installed)
+    _offer_wishlist_icon_block(installed.theme)
     _keep_wishlist_hearts(installed, new_store=current is None)
     _add_page_templates(installed)
     return installed
@@ -299,6 +301,29 @@ def _add_wishlist_blocks(store_theme):
             store_theme.save(update_fields=["custom_data", "updated_at"])
 
     theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _offer_wishlist_icon_block(theme):
+    """
+    Once per store: a header the owner edited, or one that came from an older starter, may not offer the
+    "Wishlist icon" block, so it is missing from "Add block". It is added by inserting only: the block type
+    into the schema's "blocks" list, and the loop that renders it unless the header has one already
+    (see section_sync.add_wishlist_block). Nothing else in the header changes, the replaced code is kept
+    in the header's history, and a header the insert cannot be made into safely is left exactly as it is.
+    Done once: an owner who later removes the block type from the code does not get it back.
+    """
+    if (theme.theme_data or {}).get("wishlist_icon_offered"):
+        return
+    file = theme.files.filter(file_path="sections/header.liquid").first()
+    patched = sync.add_wishlist_block(file.content) if file else None
+    if patched is not None:
+        sync.record_version(theme, "header", file.content, "upgrade")
+        file.content = patched
+        file.file_size = len(patched.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        sync.invalidate(theme.pk, file.file_path)
+    theme.theme_data = {**(theme.theme_data or {}), "wishlist_icon_offered": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 

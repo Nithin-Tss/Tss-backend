@@ -232,6 +232,131 @@ def parse(content, path="section"):
     return schema
 
 
+# ======================================================================= the header's Wishlist icon block, added to an existing header
+
+# What a header needs to offer the "Wishlist icon" block: the block type in its schema and one loop that
+# renders it. The loop only calls the wishlist snippet: nothing about the wishlist lives in the header.
+WISHLIST_BLOCK_SCHEMA = """{
+      "type": "wishlist",
+      "name": "Wishlist icon",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Wishlist"},
+        {"type": "checkbox", "id": "show_count", "label": "Show the number of saved products", "default": true}
+      ]
+    }"""
+WISHLIST_BLOCK_MARKUP = """    {%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
+    {%- if wishlist_blocks.size > 0 -%}
+      <div class="site-header__actions">
+        {%- for block in wishlist_blocks -%}
+          {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+"""
+
+
+def _json_string_end(text, start):
+    """Index of the closing quote of the JSON string that opens at text[start]."""
+    i = start + 1
+    while i < len(text) and text[i] != '"':
+        i += 2 if text[i] == "\\" else 1
+    return i
+
+
+def _bracket_end(text, start):
+    """Index of the bracket that closes the [ or { at text[start] (strings are skipped), or None."""
+    depth, i = 0, start
+    while i < len(text):
+        if text[i] == '"':
+            i = _json_string_end(text, i)
+        elif text[i] in "[{":
+            depth += 1
+        elif text[i] in "]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _top_level_blocks_array(text):
+    """(index of "[", index of "]") of the schema's own "blocks" list (not "default": {"blocks": ...})."""
+    depth, i = 0, 0
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            end = _json_string_end(text, i)
+            if depth == 1 and text[i + 1:end] == "blocks":
+                k = end + 1
+                while k < len(text) and text[k] in " \t\r\n:":
+                    k += 1
+                if k < len(text) and text[k] == "[":
+                    close = _bracket_end(text, k)
+                    return (k, close) if close is not None else None
+            i = end + 1
+            continue
+        if c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+        i += 1
+    return None
+
+
+def add_wishlist_block(content):
+    """
+    The header code with the "Wishlist icon" block type added, or None when nothing should (or can safely)
+    be added. Only inserts: every other character of the header stays as the owner wrote it.
+      - the block type is added to the schema's "blocks" list;
+      - the loop that renders it is added before the header's closing </div></header>, unless the header
+        already renders the wishlist snippet.
+    None when the type is there already, when the places to insert are not found, or when the result is
+    not valid Liquid and schema (the header is then left exactly as it is).
+    """
+    markup, schema_text, start = split(content)
+    if schema_text is None:
+        return None
+    try:
+        existing = json.loads(schema_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(existing, dict) or any(
+        isinstance(b, dict) and b.get("type") == "wishlist" for b in existing.get("blocks") or []
+    ):
+        return None
+    span = _top_level_blocks_array(schema_text)
+    if span is None:
+        return None
+    nl = "\r\n" if "\r\n" in content else "\n"
+    block = WISHLIST_BLOCK_SCHEMA.replace("\n", nl)
+    open_at, close_at = span
+    inner = schema_text[open_at + 1:close_at]
+    if inner.strip():
+        last = open_at + 1 + len(inner.rstrip())
+        schema_new = schema_text[:last] + "," + nl + "    " + block + schema_text[last:]
+    else:
+        schema_new = schema_text[:open_at + 1] + nl + "    " + block + nl + "  " + schema_text[close_at:]
+    patched = content[:start] + schema_new + content[start + len(schema_text):]
+
+    if "render 'wishlist'" not in markup:
+        header_end = patched.rfind("</header>", 0, start)
+        div_at = patched.rfind("</div>", 0, header_end) if header_end != -1 else -1
+        if header_end == -1 or div_at == -1 or patched[div_at + len("</div>"):header_end].strip():
+            return None
+        line_start = patched.rfind("\n", 0, div_at) + 1
+        if patched[line_start:div_at].strip():
+            return None
+        patched = patched[:line_start] + WISHLIST_BLOCK_MARKUP.replace("\n", nl) + patched[line_start:]
+
+    try:
+        schema = parse(patched, "sections/header.liquid")
+    except SectionCodeError:
+        return None
+    if not any(b.get("type") == "wishlist" for b in schema.get("blocks") or []):
+        return None
+    return patched
+
+
 # ======================================================================= schema -> customizer options
 
 def _field(s):

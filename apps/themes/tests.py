@@ -70,6 +70,47 @@ def legacy_header():
     return header
 
 
+def edited_header():
+    """
+    A header an owner edited: menu links, an account icon, a Profile picture block and their own note,
+    and no Wishlist icon block (the shape of the headers that come from older starters or from Edit code).
+    """
+    from . import section_sync as sync
+    from .services import starter_files
+
+    header = starter_files()["sections/header.liquid"]
+    block_markup = sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1]  # without the assign line
+    for old, new in (
+        ("{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}\n", ""),
+        (block_markup, """    {%- if s.show_account -%}
+      <a class="site-header__account" href="{{ shop.url }}/account" aria-label="Account">Account</a>
+    {%- endif -%}
+    {%- for block in section.blocks -%}
+      {%- if block.type == 'profile' -%}
+        <a class="site-header__profile" href="{{ block.settings.url | default: '/account' }}"{{ block.attrs }}><img src="{{ block.settings.image }}" alt="" width="{{ block.settings.size }}"></a>
+      {%- endif -%}
+    {%- endfor -%}
+    <!-- owner note: keep this line -->
+"""),
+        ('    {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},\n',
+         '    {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},\n'
+         '    {"type": "checkbox", "id": "show_account", "label": "Show account icon", "default": true},\n'),
+        ("    " + sync.WISHLIST_BLOCK_SCHEMA, """    {
+      "type": "profile",
+      "name": "Profile picture",
+      "settings": [
+        {"type": "image", "id": "image", "label": "Profile picture", "default": ""},
+        {"type": "range", "id": "size", "label": "Picture size", "min": 24, "max": 64, "step": 2, "unit": "px", "default": 36},
+        {"type": "url", "id": "url", "label": "Link", "default": "/account"}
+      ]
+    }"""),
+        ('"default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}]}', '"default": {"blocks": []}'),
+    ):
+        assert old in header, old[:70]
+        header = header.replace(old, new, 1)
+    return header
+
+
 class SyncedSectionMixin(StoreClientMixin):
     """Helpers for one synced section (NAME); each test class measures its own timings."""
 
@@ -554,6 +595,129 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertEqual(self.code(), before)  # the previous version keeps working
         self.assertIn('aria-label="Wishlist"', self.header_html(self.home()))
 
+    def wishlist_block(self, **settings):
+        return {"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True, **settings}}
+
+    def hearts(self, html):
+        return html.count('class="site-header__wishlist"')
+
+    def default_block_types(self):
+        return [b["type"] for b in self.schema_of(self.code())["default"]["blocks"]]
+
+    def test_wishlist_icon_is_in_the_add_block_list(self):
+        spec = self.section()["spec"]["blocks"]
+        self.assertEqual(spec["wishlist"]["name"], "Wishlist icon")
+        self.assertEqual(set(spec["wishlist"]["settings"]), {"label", "show_count"})
+        self.assertEqual(set(spec), {"link", "wishlist"})  # what "Add block" offers
+
+    def test_adding_hiding_reordering_and_removing_the_icon_in_the_customizer(self):
+        header = self.section()
+        values = header["values"]
+        # remove it (a new store starts with one), then add it after a menu link
+        values["blocks"] = []
+        saved, preview = self.save_values(values, header["version"])
+        self.assertEqual((self.hearts(preview), self.default_block_types()), (0, []))
+        values["blocks"] = self.links(("Shop", "/collections/all")) + [self.wishlist_block()]
+        _, preview = self.save_values(values)
+        self.assertEqual(self.hearts(preview), 1)
+        self.assertEqual(self.default_block_types(), ["link", "wishlist"])  # written into the code, in order
+        self.assertEqual(self.hearts(self.header_html(self.home())), 1)
+        self.assertIn("{% render 'wishlist', mode: 'icon'", self.code())  # the code only calls the snippet
+
+        # reorder: the order is the code's order (the heart is always shown on the right, links in the menu)
+        values["blocks"] = [self.wishlist_block()] + self.links(("Shop", "/collections/all"))
+        _, preview = self.save_values(values)
+        self.assertEqual(self.default_block_types(), ["wishlist", "link"])
+        self.assertEqual(self.hearts(preview), 1)
+        self.assertIn(">Shop</a>", preview)
+
+        # hide it: kept in the code, not shown
+        values["blocks"][0]["hidden"] = True
+        _, preview = self.save_values(values)
+        self.assertEqual(self.hearts(preview), 0)
+        self.assertEqual(self.hearts(self.header_html(self.home())), 0)
+        self.assertTrue(self.schema_of(self.code())["default"]["blocks"][0].get("hidden"))
+        # show it again
+        values["blocks"][0]["hidden"] = False
+        _, preview = self.save_values(values)
+        self.assertEqual(self.hearts(preview), 1)
+
+        # remove it: gone from the code and the store
+        values["blocks"] = self.links(("Shop", "/collections/all"))
+        _, preview = self.save_values(values)
+        self.assertEqual((self.hearts(preview), self.default_block_types()), (0, ["link"]))
+        self.assertEqual(self.hearts(self.header_html(self.home())), 0)
+
+    def test_removing_and_adding_the_block_type_in_code_updates_add_block_the_sidebar_and_the_store(self):
+        from . import section_sync as sync
+
+        header = self.section()
+        values = header["values"]
+        values["blocks"] = [self.wishlist_block()]
+        self.save_values(values, header["version"])
+        self.assertEqual(self.hearts(self.header_html(self.home())), 1)
+
+        # remove the block type from the code (the schema's "blocks" list and the markup that renders it)
+        code = self.code()
+        without = code.replace(sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1], "").replace(
+            "{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}\n", "")
+        without = self.with_schema(without, lambda s: (s.update(blocks=[b for b in s["blocks"] if b["type"] != "wishlist"]),
+                                                       s["default"].update(blocks=[])))
+        saved = self.save_code(without)
+        self.assertNotIn("wishlist", saved["sync"]["spec"]["blocks"])  # gone from "Add block"
+        self.assertEqual([b["type"] for b in self.section()["values"]["blocks"]], [])  # and from the sidebar
+        self.assertEqual(self.hearts(self.header_html(self.home())), 0)
+
+        # add it back in the code: it is offered again, and the owner can add it in the sidebar
+        restored = sync.add_wishlist_block(self.code())
+        self.assertIsNotNone(restored)
+        saved = self.save_code(restored)
+        self.assertEqual(saved["sync"]["spec"]["blocks"]["wishlist"]["name"], "Wishlist icon")
+        self.assertEqual(self.hearts(self.header_html(self.home())), 0)  # offered, not added
+        current = self.section()
+        values = current["values"]
+        values["blocks"] = [self.wishlist_block(label="Saved items")]
+        _, preview = self.save_values(values, current["version"])
+        self.assertIn('aria-label="Saved items"', preview)
+        self.assertIn('aria-label="Saved items"', self.header_html(self.home()))
+
+    def test_the_heart_does_not_depend_on_the_account_icon_or_a_profile_picture(self):
+        """On an edited header with an account icon and a Profile picture block, the heart shows on its own."""
+        from . import section_sync as sync
+
+        patched = sync.add_wishlist_block(edited_header())
+        self.save_code(patched)
+        header = self.section()
+        self.assertEqual(set(header["spec"]["blocks"]), {"link", "profile", "wishlist"})
+        values = header["values"]
+        values["settings"]["show_account"] = False  # "Show account icon" is off
+        values["blocks"] = [
+            {"type": "profile", "settings": {"image": "", "size": 36, "url": "/account"}},
+            self.wishlist_block(),
+        ]
+        _, preview = self.save_values(values, header["version"])
+        for html in (preview, self.header_html(self.home())):
+            self.assertEqual(self.hearts(html), 1)
+            self.assertIn('class="site-header__profile"', html)  # the profile picture is there too
+            self.assertNotIn("site-header__account", html)  # and the account icon is off
+        # with the account icon on and no profile picture, the heart is still there
+        values["settings"]["show_account"] = True
+        values["blocks"] = [self.wishlist_block()]
+        _, preview = self.save_values(values)
+        self.assertEqual(self.hearts(preview), 1)
+        self.assertIn("site-header__account", preview)
+
+    def test_broken_wishlist_markup_is_refused_with_its_line_and_the_header_keeps_working(self):
+        values = self.section()["values"]
+        values["blocks"] = [self.wishlist_block()]
+        self.save_values(values)
+        good = self.code()
+        bad = good.replace("{%- for block in wishlist_blocks -%}", "{%- for block in wishlist_blocks -%}{%- if -%}", 1)
+        error = self.save_code(bad, expect=400)
+        self.assertIn("Line", str(error["content"]))
+        self.assertEqual(self.code(), good)  # the previous version keeps working
+        self.assertEqual(self.hearts(self.header_html(self.home())), 1)
+
     def test_preview_marks_the_header_like_the_footer(self):
         """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
         import re
@@ -889,6 +1053,120 @@ class HeaderMigrationTest(StoreClientMixin, APITestCase):
         self.assertIn("width: 20px; height: 20px;", styles)
         self.assertIn("stroke-width: 2;", styles)
         self.assertNotIn("width: 22px; height: 22px;", styles)
+
+
+class HeaderWishlistBlockPatchTest(StoreClientMixin, APITestCase):
+    """An existing header gets the "Wishlist icon" block by inserting only; the owner's edits are never lost."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("headerpatch@example.com", "Patch Store")
+        self.base = f"/s/{self.store['storeSlug']}"
+
+    def theme(self):
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        return get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+
+    def stored(self):
+        from .models import Theme
+
+        return Theme.objects.get(slug=f"store-{self.store['storeId']}").files.get(file_path="sections/header.liquid").content
+
+    def install(self, content):
+        """The store's header is now `content`, and the store has not had the one-time patch yet."""
+        theme = self.theme().theme
+        theme.files.filter(file_path="sections/header.liquid").update(content=content, file_size=len(content.encode("utf-8")))
+        theme.theme_data = {k: v for k, v in theme.theme_data.items() if k != "wishlist_icon_offered"}
+        theme.save()
+
+    def test_a_header_without_the_block_gets_the_type_and_the_loop_and_nothing_else_changes(self):
+        from . import section_sync as sync
+
+        header = edited_header()
+        patched = sync.add_wishlist_block(header)
+        self.assertIsNotNone(patched)
+        sync.parse(patched, "sections/header.liquid")
+        spec = sync.spec_of("header", sync.parse(patched))
+        self.assertEqual(set(spec["blocks"]), {"link", "profile", "wishlist"})
+        # only insertions: taking them out gives the owner's header back, character for character
+        undone = patched.replace(sync.WISHLIST_BLOCK_MARKUP, "").replace(",\n    " + sync.WISHLIST_BLOCK_SCHEMA, "")
+        self.assertEqual(undone, header)
+        self.assertIn("owner note: keep this line", patched)
+        self.assertIn("site-header__account", patched)  # the account icon and the profile picture stay
+        self.assertIn("{% render 'wishlist', mode: 'icon'", patched)
+        self.assertIsNone(sync.add_wishlist_block(patched))  # done once: nothing more to add
+
+    def test_a_header_that_renders_the_heart_but_lacks_the_block_type_gets_only_the_type(self):
+        from . import section_sync as sync
+
+        with_loop = sync.add_wishlist_block(edited_header())
+        no_type = with_loop.replace(",\n    " + sync.WISHLIST_BLOCK_SCHEMA, "")
+        self.assertNotIn('"type": "wishlist"', no_type)  # like a store whose block type was removed from the schema
+        patched = sync.add_wishlist_block(no_type)
+        self.assertEqual(patched, with_loop)  # the loop is not added a second time
+
+    def test_crlf_headers_keep_their_line_endings(self):
+        from . import section_sync as sync
+
+        header = edited_header().replace("\n", "\r\n")
+        patched = sync.add_wishlist_block(header)
+        self.assertIsNotNone(patched)
+        self.assertNotIn("\r\r\n", patched)
+        self.assertEqual(patched.count("\n"), patched.count("\r\n"))
+        sync.parse(patched, "sections/header.liquid")
+
+    def test_a_header_it_cannot_patch_safely_is_left_alone(self):
+        from . import section_sync as sync
+
+        header = edited_header()
+        self.assertIsNone(sync.add_wishlist_block(header.replace("</header>", "")))  # no closing tag to insert before
+        self.assertIsNone(sync.add_wishlist_block(header.replace("{% endschema %}", "")))  # no schema
+        broken = header.replace('"max_blocks": 12,', '"max_blocks": 12 ,,')
+        self.assertIsNone(sync.add_wishlist_block(broken))  # the schema is not valid JSON
+        self.assertIsNone(sync.add_wishlist_block(header.replace('"blocks": [', '"things": [', 1)))  # no blocks list
+
+    def test_the_store_upgrade_patches_an_edited_header_once_and_keeps_its_history(self):
+        from . import section_sync as sync
+
+        header = edited_header()
+        self.install(header)
+        store_theme = self.theme()
+        patched = self.stored()
+        self.assertNotEqual(patched, header)
+        self.assertIn("owner note: keep this line", patched)
+        self.assertIn("wishlist", [b["type"] for b in sync.parse(patched)["blocks"]])
+        self.assertEqual(sync.history_of(store_theme.theme, "header")[0]["preview"], header[:160])  # the old code can be restored
+        # the sections list now offers the block
+        self.assertIn("wishlist", self.ok("get", "/api/v1/themes/sections/")["header"]["spec"]["blocks"])
+
+        # an owner who removes the block type later does not get it back
+        removed = patched.replace(",\n    " + sync.WISHLIST_BLOCK_SCHEMA, "").replace(sync.WISHLIST_BLOCK_MARKUP, "")
+        self.ok("post", "/api/v1/themes/files/", {"path": "sections/header.liquid", "content": removed})
+        self.theme()
+        self.assertEqual(self.stored(), removed)
+
+    def test_an_owner_edited_header_that_already_shows_the_heart_keeps_it(self):
+        """The legacy "Show Wishlist" header: its heart, its setting and its markup stay as they are."""
+        legacy = legacy_header() + "<!-- mine -->\n"
+        self.install(legacy)
+        store_theme = self.theme()
+        # like a store that has always had it: the heart is the setting, there is no block saved
+        store_theme.custom_data = {"sections": {"header": {"settings": {"show_wishlist": True}, "blocks": []}}}
+        store_theme.save()
+        patched = self.stored()
+        self.assertIn("show_wishlist", patched)  # their own heart and its setting
+        self.assertIn("<!-- mine -->", patched)
+        home = self.client.get(f"{self.base}/").content.decode()
+        header = home[home.index("<header"):home.index("</header>")]
+        self.assertEqual(header.count('class="site-header__wishlist"'), 1)  # still one heart, not two
+
+    def test_an_unpatchable_header_is_marked_done_and_not_retried_on_every_visit(self):
+        broken = edited_header().replace("</header>", "")
+        self.install(broken)
+        self.theme()
+        self.assertEqual(self.stored(), broken)
+        self.assertEqual(self.theme().theme.theme_data["wishlist_icon_offered"], 1)
 
 
 class StorefrontWishlistTest(StoreClientMixin, APITestCase):
