@@ -78,7 +78,6 @@ class HasStorePermission(BasePermission):
         if membership is None:
             return False
 
-        area = getattr(view, "permission_resource", None)
         # A store's owner (or a platform admin, who gets an owner membership) has full
         # access to that store; everyone else only what their roles grant.
         if membership.role == OWNER:
