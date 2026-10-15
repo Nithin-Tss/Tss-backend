@@ -207,7 +207,7 @@ DEFAULT_TEMPLATES = {
     "product": {
         "order": ["main", "related"],
         "sections": {
-            "main": {"type": "main-product", "settings": {}},
+            "main": {"type": "main-product", "settings": {}, "blocks": [{"type": "wishlist_heart", "settings": {}}]},
             "related": {"type": "product-carousel", "settings": {"heading": "You may also like", "limit": 8}},
         },
     },
@@ -1327,9 +1327,18 @@ SECTIONS["main-product"]["blocks"] = {
             "divider_color": _opt("style", "color_optional", "Divider color", "", help="None uses the theme's light line."),
         },
     },
+    # The heart that saves the product to the shopper's wishlist (see snippets/wishlist.liquid)
+    "wishlist_heart": {
+        "name": "Wishlist heart",
+        "settings": {
+            "label": _opt("content", "text", "Label", "Add to wishlist", max=40, help="Leave empty to show only the heart."),
+            "size": _opt("style", "range", "Icon size", 20, min=16, max=40, step=2, unit="px"),
+            "align": _choice("style", "Position", ["left", "center", "right"], "left", ui="segmented"),
+        },
+    },
     **SECTIONS["main-product"]["blocks"],
 }
-SECTIONS["main-product"]["type_limits"] = {"product_info": 1}
+SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 1}
 SECTIONS["main-product"]["required_blocks"] = ["product_info"]
 
 SECTIONS["custom"]["settings"] = {

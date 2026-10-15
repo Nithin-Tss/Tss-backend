@@ -1615,6 +1615,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 if info:
                     product_info = _product_info_html(info[1], info[0], product_drop_["details"], section_id, editor)
                 section["product_info"] = Markup(product_info)
+                # The "Wishlist heart" block: its settings, or None when the owner removed it (or hid it)
+                heart = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
+                section["wishlist_heart"] = heart["settings"] if heart else None
 
             if SECTIONS[section["type"]].get("uses_products"):
                 ss = section["settings"]

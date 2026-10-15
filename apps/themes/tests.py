@@ -981,6 +981,96 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn("Blue mug", self.client.get(f"{self.base}/wishlist/").content.decode())
 
 
+class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
+    """The product page's "Wishlist heart" block, in the customizer (blocks) and in Edit code (templates/product.json)."""
+
+    PRODUCT_JSON = "templates/product.json"
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("heartblock@example.com", "Heart Store")
+        self.product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Clay mug", "sku": "SKU-MUG", "status": "active", "price": "12",
+        }, expect=201)
+
+    def page(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/products/{self.product['id']}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def main(self):
+        return self.ok("get", "/api/v1/themes/settings/")["templates"]["product"]["sections"]["main"]
+
+    def save_customizer(self, change):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        main = data["templates"]["product"]["sections"]["main"]
+        change(main)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"product": {
+            "order": data["templates"]["product"]["order"], "sections": {"main": main}}}})
+
+    def code(self):
+        files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+        return json.loads(files[self.PRODUCT_JSON])
+
+    def save_code(self, change):
+        product = self.code()
+        change(product["sections"]["main"])
+        r = self.client.post("/api/v1/themes/files/", {"path": self.PRODUCT_JSON, "content": json.dumps(product, indent=2)},
+                             format="json")
+        self.assertEqual(r.status_code, 200, r.content[:500])
+
+    def hearts(self, html):
+        return html.count('class="product__wishlist-form"')
+
+    def types(self, blocks):
+        return [b["type"] for b in blocks]
+
+    def test_heart_block_is_there_by_default_with_its_settings(self):
+        self.assertIn("wishlist_heart", self.types(self.main()["blocks"]))
+        spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["main-product"]["blocks"]["wishlist_heart"]
+        self.assertEqual(spec["name"], "Wishlist heart")
+        self.assertEqual(set(spec["settings"]), {"label", "size", "align"})
+        html = self.page()
+        self.assertEqual(self.hearts(html), 1)
+        self.assertIn("Add to wishlist", html)  # the same look as before for every store
+
+    def test_removing_and_adding_the_block_in_the_customizer(self):
+        self.save_customizer(lambda m: m.update(blocks=[b for b in m["blocks"] if b["type"] != "wishlist_heart"]))
+        self.assertNotIn("wishlist_heart", self.types(self.code()["sections"]["main"]["blocks"]))
+        self.assertEqual(self.hearts(self.page()), 0)
+
+        self.save_customizer(lambda m: m["blocks"].append(
+            {"type": "wishlist_heart", "settings": {"label": "Save for later", "size": 32, "align": "center"}}))
+        self.assertIn("wishlist_heart", self.types(self.code()["sections"]["main"]["blocks"]))
+        html = self.page()
+        self.assertEqual(self.hearts(html), 1)
+        self.assertIn("Save for later", html)
+        self.assertIn('style="width:32px;height:32px"', html)
+        self.assertIn('style="text-align:center"', html)
+
+    def test_editing_the_block_in_code_updates_the_customizer(self):
+        def to_code(main):
+            for block in main["blocks"]:
+                if block["type"] == "wishlist_heart":
+                    block["settings"].update(label="", size=24, align="right")
+        self.save_code(to_code)
+        block = next(b for b in self.main()["blocks"] if b["type"] == "wishlist_heart")
+        self.assertEqual((block["settings"]["label"], block["settings"]["size"], block["settings"]["align"]), ("", 24, "right"))
+        html = self.page()
+        self.assertNotIn("<span data-wishlist-label>", html)  # an empty label shows only the heart
+        self.assertIn('style="text-align:right"', html)
+
+        self.save_code(lambda main: main.update(blocks=[b for b in main["blocks"] if b["type"] != "wishlist_heart"]))
+        self.assertNotIn("wishlist_heart", self.types(self.main()["blocks"]))
+        self.assertEqual(self.hearts(self.page()), 0)
+
+    def test_the_block_calls_the_snippet_and_the_product_page_has_no_wishlist_markup(self):
+        from .services import starter_files
+
+        product = starter_files()["sections/main-product.liquid"]
+        self.assertIn("{% render 'wishlist', mode: 'button'", product)
+        self.assertNotIn("data-wishlist-toggle", product)
+
+
 CARD = "snippets/product-card.liquid"
 
 

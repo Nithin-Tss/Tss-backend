@@ -38,21 +38,10 @@
         <p class="product__meta">{{ product.vendor }}</p>
       {%- endif -%}
       <h1>{{ product.title }}</h1>
-      {%- assign is_wishlisted = false -%}
-      {%- if wishlist_ids contains product.id -%}{%- assign is_wishlisted = true -%}{%- endif -%}
-      <form class="product__wishlist-form" method="post" action="{{ shop.url }}/wishlist/items/">
-        <input type="hidden" name="product_id" value="{{ product.id }}">
-        <input type="hidden" name="action" value="{% if is_wishlisted %}remove{% else %}add{% endif %}" data-wishlist-action>
-        <input type="hidden" name="return_to" value="{{ return_url }}">
-        <button class="product__wishlist-add{% if is_wishlisted %} is-wishlisted{% endif %}" type="submit"
-          data-wishlist-toggle data-product-id="{{ product.id }}" data-product-title="{{ product.title | escape }}" aria-pressed="{% if is_wishlisted %}true{% else %}false{% endif %}"
-          aria-label="{% if is_wishlisted %}Remove {{ product.title }} from{% else %}Add {{ product.title }} to{% endif %} wishlist">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
-          </svg>
-          <span data-wishlist-label>{% if is_wishlisted %}Remove from wishlist{% else %}Add to wishlist{% endif %}</span>
-        </button>
-      </form>
+      {%- comment -%} The "Wishlist heart" block: add, remove or move it in the customizer {%- endcomment -%}
+      {%- if section.wishlist_heart -%}
+        {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, placement: 'product', size: section.wishlist_heart.size, label_text: section.wishlist_heart.label, align: section.wishlist_heart.align, with_script: true %}
+      {%- endif -%}
       {%- if s.show_price -%}
         <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.is_sold_out %} <span class="price price--muted">{{ s.sold_out_label | default: 'Sold out' }}</span>{% endif %}</div>
       {%- endif -%}
