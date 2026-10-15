@@ -1679,7 +1679,6 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     html.append(ANIMATION_JS)
     html.append(BLOCKS_JS)
     html.append(PRODUCT_INFO_JS)
-    html.append(WISHLIST_JS)
 
     if slots is None:
         content = env.get_template(template_path).render(
@@ -1697,41 +1696,17 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         )
 
     if wishlist_page_ids is not None:
+        # The wishlist page: templates/wishlist.liquid renders the saved products (see snippets/wishlist.liquid)
         products = wishlist_products or {}
-        cards = []
-        for product_id in wishlist_page_ids:
-            item = products.get(product_id)
-            if item is None:
-                continue
-            cards.append(env.get_template("product-card").render(**{
-                **common,
-                "product": product_drop(item, base_url),
-                "show_vendor": False,
-                "wishlist_action": "remove",
-                "return_url": f"{base_url}/wishlist/",
-                "ratio": "portrait",
-            }))
-        if cards:
-            wishlist_content = (
-                '<section class="wishlist-page"><div class="page-width">'
-                '<h1>Wishlist</h1><div class="wishlist-page__grid">'
-                + "".join(cards)
-                + "</div></div></section>"
-            )
-        else:
-            wishlist_content = (
-                '<section class="wishlist-page"><div class="page-width">'
-                '<h1>Wishlist</h1><div class="wishlist-page__empty">'
-                '<p>Your wishlist is empty.</p>'
-                f'<a class="button" href="{escape(base_url)}/collections/all">Continue shopping</a>'
-                "</div></div></section>"
-            )
+        saved = [product_drop(products[pid], base_url) for pid in wishlist_page_ids if pid in products]
+        wishlist_content = env.get_template("templates/wishlist.liquid").render(
+            **{**common, "wishlist_items": saved, "wishlist_ids": wishlist_page_ids}
+        )
         content = Markup("".join((
             str(theme_css(settings, tokens)),
             str(SECTION_CSS),
             str(TYPE_CSS),
             str(CUSTOM_CSS),
-            str(WISHLIST_JS),
             wishlist_content,
         )))
 

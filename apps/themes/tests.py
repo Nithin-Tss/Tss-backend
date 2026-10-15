@@ -843,7 +843,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn(".product-card__wishlist-add.is-wishlisted svg", html)
         self.assertIn('.product-card__wishlist-add[aria-pressed="true"] svg', html)
         self.assertIn('.product__wishlist-add[aria-pressed="true"] svg', html)
-        self.assertIn('button.closest("form.product-card__wishlist-form, form.product__wishlist-form")', html)
+        self.assertIn('button.closest("form[data-wishlist-form]")', html)  # the script now lives in snippets/wishlist.liquid
         self.assertIn('class="product-card__wishlist-remove"', html)
         self.assertIn('class="product-card__wishlist-add is-wishlisted"', html)
         self.assertIn('aria-pressed="true"', html)
@@ -877,6 +877,23 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         collection_after_remove = self.client.get(f"{self.base}/collections/all").content.decode()
         self.assertIn('class="product-card__wishlist-add"', collection_after_remove)
         self.assertNotIn('class="product-card__wishlist-add is-wishlisted"', collection_after_remove)
+
+    def test_script_requests_json_and_gets_the_new_count(self):
+        """The heart script posts with Accept: application/json and updates the count without a reload."""
+        other = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Red mug", "sku": "SKU-RED", "status": "active", "price": "9.00",
+        }, expect=201)
+        url = f"{self.base}/wishlist/items/"
+        headers = {"HTTP_ACCEPT": "application/json"}
+        first = self.client.post(url, {"action": "add", "product_id": self.product["id"]}, **headers)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), {"saved": True, "count": 1, "product_id": self.product["id"]})
+        second = self.client.post(url, {"action": "add", "product_id": other["id"]}, **headers)
+        self.assertEqual(second.json()["count"], 2)
+        removed = self.client.post(url, {"action": "remove", "product_id": self.product["id"]}, **headers)
+        self.assertEqual(removed.json(), {"saved": False, "count": 1, "product_id": self.product["id"]})
+        # no Accept header: the usual redirect, so it still works without JavaScript
+        self.assertEqual(self.client.post(url, {"action": "remove", "product_id": other["id"]}).status_code, 302)
 
     def test_add_from_product_page_and_invalid_redirect(self):
         product_page = self.client.get(f"{self.base}/products/{self.product['id']}")

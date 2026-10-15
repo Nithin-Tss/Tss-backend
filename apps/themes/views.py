@@ -10,7 +10,7 @@ from django.core import signing
 from django.core.files.storage import default_storage
 from django.db import connection
 from django.db.models import F
-from django.http import Http404, HttpResponse, HttpResponseRedirect, StreamingHttpResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -1490,6 +1490,10 @@ def storefront_wishlist_item(request, store_slug):
         return HttpResponse("Invalid wishlist action.", status=400)
 
     request.session[key] = ids
+    if "application/json" in request.headers.get("Accept", ""):
+        # The wishlist script updates the hearts and the header count without reloading the page
+        count = published_products(store).filter(pk__in=ids).count()
+        return JsonResponse({"saved": action == "add", "count": count, "product_id": product_id})
     destination = request.POST.get("return_to", "")
     parsed = urlsplit(destination)
     store_path = f"{shop_url(store)}/"
