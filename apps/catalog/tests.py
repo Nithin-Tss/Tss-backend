@@ -279,7 +279,7 @@ class ProductFormSchemaTests(APITestCase):
             "/api/v1/catalog/categories/", {"name": "White", "parent": parent["id"]}, format="json"
         ).json()
         channels = self.client.get("/api/v1/catalog/sales-channels/").json()
-        self.assertEqual([c["name"] for c in channels], ["Online Store", "Point of Sale"])
+        self.assertEqual([c["name"] for c in channels], ["Online Store", "Point of Sale", "Shop"])
         location = self.client.post("/api/v1/inventory/locations/", {"name": "Shop"}, format="json").json()
 
         r = self.client.post(URL, {
