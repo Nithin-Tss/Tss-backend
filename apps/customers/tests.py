@@ -288,3 +288,52 @@ class CustomerAddressManagementTest(StoreClientMixin, APITestCase):
         s2_get = self.client.get(f"/api/v1/customers/addresses/{addr1_id}/")
         self.assertEqual(s2_get.status_code, status.HTTP_404_NOT_FOUND)
 
+
+    def _alice_address(self):
+        self.auth_alice()
+        res = self.client.post("/api/v1/customers/addresses/", {
+            "address_type": "shipping",
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "address_line_1": "1 Store One Way",
+            "city": "Perth",
+            "state": "WA",
+            "postal_code": "6000",
+            "country": "Australia",
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        return res.json()["id"]
+
+    def test_owner_of_another_store_cannot_see_this_stores_addresses(self):
+        addr_id = self._alice_address()
+
+        owner2_token, _ = self.sign_up("owner2@example.com", "Second Store")
+        # Owner 2 is not a member of store 1, so they get shopper access only
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {owner2_token}",
+            HTTP_X_STORE_ID=self.store_id,
+        )
+        listing = self.client.get("/api/v1/customers/addresses/")
+        self.assertEqual(listing.status_code, status.HTTP_200_OK)
+        self.assertNotIn(addr_id, [a["id"] for a in listing.json()])
+
+        detail = self.client.get(f"/api/v1/customers/addresses/{addr_id}/")
+        self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
+        delete = self.client.delete(f"/api/v1/customers/addresses/{addr_id}/")
+        self.assertEqual(delete.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(CustomerAddress.objects.filter(pk=addr_id).exists())
+
+    def test_staff_without_customer_permission_only_sees_own_addresses(self):
+        addr_id = self._alice_address()
+
+        # Bob becomes staff of the store with no roles at all
+        bob = User.objects.get(email="bob@example.com")
+        StoreMembership.objects.create(
+            user=bob, store=Store.objects.get(pk=self.store_id), role="staff", status="active",
+        )
+        self.auth_bob()
+        listing = self.client.get("/api/v1/customers/addresses/")
+        self.assertEqual(listing.status_code, status.HTTP_200_OK)
+        self.assertNotIn(addr_id, [a["id"] for a in listing.json()])
+        detail = self.client.get(f"/api/v1/customers/addresses/{addr_id}/")
+        self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
