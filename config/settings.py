@@ -228,6 +228,11 @@ CORS_ALLOW_HEADERS = [
     'content-type',
     'x-store-id',
 ]
+# The public storefront (/s/<store>/...) runs sandboxed (origin "null") and its cart endpoints answer
+# CORS themselves (apps/themes/views.py CART_API_HEADERS). Leave them out of django-cors-headers, which
+# would otherwise answer their preflight first, without the cart headers, and the browser would
+# report "Failed to fetch" on Add to cart.
+CORS_URLS_REGEX = r'^/(?!s/).*$'
 
 
 # API: every endpoint needs a signed-in user unless the view says otherwise.

@@ -1378,6 +1378,18 @@ class CartTest(StoreClientMixin, APITestCase):
 
         return int(re.search(r'data-cart-items="(\d+)"', html).group(1))
 
+    def test_the_cart_preflight_from_the_sandboxed_storefront_is_allowed(self):
+        # The storefront page has origin "null" and sends X-Cart-Session: the browser asks first (preflight)
+        # and blocks "Add to cart" ("Failed to fetch") unless this answer carries the CORS headers.
+        r = self.shopper.options(
+            f"/s/{self.slug}/cart/add", HTTP_ORIGIN="null",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-cart-session",
+        )
+        self.assertEqual(r.status_code, 204)
+        self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+        self.assertIn("X-Cart-Session", r["Access-Control-Allow-Headers"])
+
     def test_adding_to_the_cart_raises_the_header_count_each_time(self):
         self.assertEqual(self.count_in(self.header()), 0)
         first = self.add(self.mug)
