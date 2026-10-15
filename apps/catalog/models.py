@@ -39,6 +39,28 @@ class Category(models.Model):
         verbose_name = "Category"
         verbose_name_plural = "Categories"
 
+        constraints = [
+            # Unique top-level category names within each store.
+            models.UniqueConstraint(
+                models.functions.Lower(
+                    models.functions.Trim("name")
+                ),
+                "store",
+                condition=models.Q(parent__isnull=True),
+                name="uq_cat_store_top_name_ci",
+            ),
+            # Unique child category names for each parent within each store.
+            models.UniqueConstraint(
+                models.functions.Lower(
+                    models.functions.Trim("name")
+                ),
+                "store",
+                "parent",
+                condition=models.Q(parent__isnull=False),
+                name="uq_cat_store_parent_name_ci",
+            ),
+        ]
+
     def __str__(self):
         return self.name
 
