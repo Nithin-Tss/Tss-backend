@@ -557,24 +557,24 @@ class SoldOutBadgeTests(APITestCase):
         self.assertNotIn("Sold out", self.card(listing, "Full vase"))
 
         page = self.html(f"products/{empty['id']}")
-        self.assertRegex(page, r"data-add disabled>\s*Sold out")
+        self.assertRegex(page, r"data-add[^>]*\sdisabled>\s*Sold out")
         self.assertIn("data-quantity disabled", page)
-        self.assertNotRegex(page, r"data-add>\s*Add to cart")  # the button itself
+        self.assertNotRegex(page, r"data-add[^>]*>\s*Add to cart")  # the button itself
 
         page = self.html(f"products/{stocked['id']}")
         # ("Sold out" still appears on this page: the "You may also like" card of the empty vase)
         self.assertNotIn('price--muted">Sold out', page)
-        self.assertNotIn("data-add disabled", page)
-        self.assertRegex(page, r"data-add>\s*Add to cart")
-        self.assertRegex(page, r"data-stock>\s*In stock")
+        self.assertNotRegex(page, r"data-add[^>]*\sdisabled")
+        self.assertRegex(page, r"data-add[^>]*>\s*Add to cart")
+        self.assertRegex(page, r"data-stock[^>]*>\s*In stock")
 
     def test_few_left_and_no_stock_record(self):
         few = self.product("Last ones", "SO-3", 3)
-        self.assertRegex(self.html(f"products/{few['id']}"), r"data-stock>\s*Only a few left")
+        self.assertRegex(self.html(f"products/{few['id']}"), r"data-stock[^>]*>\s*Only a few left")
 
         untracked = self.product("Never stocked", "SO-NONE", None)  # no stock record at all
         self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
-        self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add disabled>\s*Sold out")
+        self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add[^>]*\sdisabled>\s*Sold out")
 
     def test_stock_value_is_a_number(self):
         from apps.themes.rendering import product_drop

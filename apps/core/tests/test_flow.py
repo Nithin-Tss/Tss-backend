@@ -361,7 +361,12 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         png = SimpleUploadedFile("banner.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
         r = self.client.post("/api/v1/themes/images/", {"image": png}, format="multipart")
         self.assertEqual(r.status_code, 201, r.content)
-        self.assertIn("/media/themes/", r.json()["url"])
+        url = r.json()["url"]
+        self.assertIn("/s/_img/", url)
+
+        served = self.client.get(url.split("testserver", 1)[-1])
+        self.assertEqual(served.status_code, 200)
+        self.assertEqual(served["Content-Type"], "image/png")
 
         bad = SimpleUploadedFile("banner.png", b"plain text")
         self.assertEqual(self.client.post("/api/v1/themes/images/", {"image": bad}, format="multipart").status_code, 400)

@@ -10,11 +10,15 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.catalog.services import published_products
+from apps.discounts import services as discounts
+from apps.discounts.models import OrderDiscount
 from apps.inventory.services import sellable
+from apps.orders import services as orders
+from apps.orders.models import Order
 
 from .models import Cart, CartItem, Checkout, CheckoutItem
 
-CART_OPEN, CART_CHECKED_OUT = "open", "checked_out"
+CART_OPEN, CART_CHECKED_OUT, CART_MERGED = "open", "checked_out", "merged"
 CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "abandoned"
 
 ZERO = Decimal("0.00")
@@ -46,6 +50,57 @@ def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
             is_deleted=False,
         )
     return cart
+
+
+@transaction.atomic
+def merge_carts(source, target):
+    """
+    Fold `source` (usually a guest cart) into `target` (a customer's cart).
+    Same product + variant adds up, capped at available stock; lines that are
+    sold out are dropped rather than failing the merge. `source` is closed.
+    Returns the target cart.
+    """
+    if source.pk == target.pk:
+        return target
+    # Lock in a fixed order so two concurrent merges can't deadlock
+    locked = {c.pk: c for c in Cart.objects.select_for_update().filter(pk__in=[source.pk, target.pk]).order_by("pk")}
+    source, target = locked[source.pk], locked[target.pk]
+
+    if source.store_id != target.store_id:
+        raise ValidationError("Carts belong to different stores.")
+    if source.status != CART_OPEN or target.status != CART_OPEN:
+        raise ValidationError("Only open carts can be merged.")
+
+    now = timezone.now()
+    for item in list(active_items(source)):
+        in_stock = sellable(item.variant) if item.variant is not None else 0
+        existing = CartItem.objects.filter(
+            cart=target, product=item.product, variant=item.variant, is_deleted=False
+        ).first()
+
+        if existing:
+            existing.quantity = min(existing.quantity + item.quantity, max(in_stock, existing.quantity))
+            existing.save(update_fields=["quantity", "updated_at"])
+        elif in_stock > 0:
+            item.cart = target
+            item.quantity = min(item.quantity, in_stock)
+            item.save(update_fields=["cart", "quantity", "updated_at"])
+            continue
+        item.is_deleted, item.deleted_at = True, now
+        item.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+
+    source.status = CART_MERGED
+    source.save(update_fields=["status", "updated_at"])
+    return target
+
+
+def claim_session_cart(store, session_id, customer):
+    """A shopper signed in: their customer cart absorbs the guest cart from this session."""
+    target = get_or_create_cart(store, customer=customer)
+    guest = Cart.objects.filter(
+        store=store, status=CART_OPEN, is_deleted=False, session_id=session_id, customer__isnull=True
+    ).first()
+    return merge_carts(guest, target) if guest else target
 
 
 def _open_cart(cart):
@@ -131,7 +186,7 @@ def cart_subtotal(cart):
 
 
 @transaction.atomic
-def start_checkout(cart, email=None, shipping_address=None, billing_address=None):
+def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None):
     """Freeze the cart's lines into a checkout. Reuses the cart's open checkout."""
     cart = _open_cart(cart)
     items = list(active_items(cart))
@@ -180,13 +235,43 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
     checkout.subtotal = subtotal
     checkout.total_amount = subtotal
     checkout.abandoned_at = None
-    update_checkout(checkout, email=email, shipping_address=shipping_address, billing_address=billing_address)
+    update_checkout(
+        checkout, email=email, shipping_address=shipping_address,
+        billing_address=billing_address, discount_code=discount_code,
+    )
     return checkout
 
 
+def _price_discount(checkout, new_code):
+    """Keep checkout.discount_amount in step with the subtotal and the applied code."""
+    metadata = dict(checkout.metadata or {})
+    code = metadata.get("discount_code") if new_code is None else new_code.strip()
+
+    if not code:
+        metadata.pop("discount_code", None)
+        checkout.discount_amount = ZERO
+    elif new_code is None:
+        # Subtotal may have changed: re-price, drop the code if it no longer qualifies
+        try:
+            match = discounts.find_code(checkout.store, code)
+            checkout.discount_amount = discounts.amount_for(match.discount, checkout.subtotal)
+        except ValidationError:
+            metadata.pop("discount_code", None)
+            checkout.discount_amount = ZERO
+    else:
+        match = discounts.find_code(checkout.store, code)
+        checkout.discount_amount = discounts.amount_for(match.discount, checkout.subtotal)
+        metadata["discount_code"] = match.code
+
+    checkout.metadata = metadata
+
+
 @transaction.atomic
-def update_checkout(checkout, email=None, shipping_address=None, billing_address=None):
-    """Contact and address details; totals are recomputed from the lines."""
+def update_checkout(checkout, email=None, shipping_address=None, billing_address=None, discount_code=None):
+    """Contact, addresses and discount code; totals are recomputed from the lines.
+
+    discount_code: a code to apply, or "" to remove the applied one.
+    """
     checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
 
     if checkout.status != CHECKOUT_OPEN:
@@ -200,6 +285,7 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
         checkout.billing_address = billing_address
 
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
+    _price_discount(checkout, discount_code)
     checkout.total_amount = max(
         checkout.subtotal - checkout.discount_amount + checkout.tax_amount + checkout.shipping_amount, ZERO
     )
@@ -223,6 +309,66 @@ def complete_checkout(checkout):
 
     Cart.objects.filter(pk=checkout.cart_id).update(status=CART_CHECKED_OUT, updated_at=now)
     return checkout
+
+
+@transaction.atomic
+def place_order(checkout):
+    """
+    Turn an open checkout into an order: commits stock, records the discount,
+    closes the checkout and its cart. Safe to repeat: a completed checkout
+    returns the order it already produced.
+    """
+    checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
+
+    if checkout.status == CHECKOUT_COMPLETED:
+        order = Order.objects.filter(pk=(checkout.metadata or {}).get("order_id")).first()
+        if order is None:
+            raise ValidationError("This checkout is already completed.")
+        return order
+    if checkout.status != CHECKOUT_OPEN:
+        raise ValidationError("This checkout is no longer open.")
+
+    if not checkout.email:
+        raise ValidationError({"email": "An email is required to place the order."})
+    if not checkout.shipping_address:
+        raise ValidationError({"shipping_address": "A shipping address is required to place the order."})
+
+    items = list(checkout.items.filter(is_deleted=False).select_related("product", "variant"))
+    if not items:
+        raise ValidationError("The checkout has no items.")
+
+    # Catalogue prices may have moved since the cart was frozen
+    for item in items:
+        _check_stock(item.product, item.variant, item.quantity)
+
+    order = orders.create_order(
+        checkout.store,
+        [
+            {"product": i.product, "variant": i.variant, "quantity": i.quantity, "unit_price": i.unit_price}
+            for i in items
+        ],
+        customer=checkout.customer,
+        currency=checkout.currency,
+        discount_amount=checkout.discount_amount,
+        tax_amount=checkout.tax_amount,
+        shipping_amount=checkout.shipping_amount,
+    )
+
+    code = (checkout.metadata or {}).get("discount_code")
+    if code and checkout.discount_amount > ZERO:
+        match = discounts.find_code(checkout.store, code)
+        OrderDiscount.objects.create(
+            order=order,
+            discount=match.discount,
+            discount_code=match,
+            discount_amount=checkout.discount_amount,
+            is_deleted=False,
+        )
+
+    checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk)}
+    checkout.save(update_fields=["metadata", "updated_at"])
+    complete_checkout(checkout)
+    return order
 
 
 def mark_abandoned(store, idle_for):
