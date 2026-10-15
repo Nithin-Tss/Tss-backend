@@ -1138,6 +1138,36 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
     def heading_blocks(self, *texts):
         return [{"type": "heading", "settings": {"text": t}} for t in texts]
 
+    def test_show_wishlist_heart_is_a_setting_in_both_editors(self):
+        """"Show wishlist heart": on by default; switching it off in the customizer or in the code hides the hearts."""
+        hearts = lambda html: html.count('class="product-card__wishlist-form"')
+        self.assertTrue(self.customizer_grid()["settings"]["show_wishlist"])  # on by default: nothing changes for stores
+        self.assertEqual(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"], True)
+        shown_in_preview, shown_in_store = hearts(self.preview_html()), hearts(self.store_html())
+        self.assertGreater(shown_in_preview, 0)
+
+        # Customizer -> code, preview and store
+        self.save_customizer_grid(lambda s: s["settings"].update(show_wishlist=False))
+        self.assertEqual(self.code_index()["sections"]["featured"]["settings"]["show_wishlist"], False)
+        self.assertEqual(hearts(self.preview_html()), 0)
+        self.assertEqual(hearts(self.store_html()), shown_in_store - shown_in_preview)
+
+        # Code -> customizer, preview and store
+        self.save_code_index(lambda s: s["settings"].update(show_wishlist=True))
+        self.assertTrue(self.customizer_grid()["settings"]["show_wishlist"])
+        self.assertEqual(hearts(self.preview_html()), shown_in_preview)
+        self.assertEqual(hearts(self.store_html()), shown_in_store)
+
+    def test_the_heart_markup_comes_from_the_wishlist_snippet(self):
+        """Cards render the heart through {% render 'wishlist' %}: no wishlist markup of their own."""
+        from .services import starter_files
+
+        card = starter_files()["snippets/product-card.liquid"]
+        self.assertIn("{% render 'wishlist', mode: 'button'", card)
+        self.assertNotIn("data-wishlist-toggle", card)
+        for section in ("product-grid", "product-carousel", "main-collection"):
+            self.assertIn("show_wishlist: s.show_wishlist", starter_files()[f"sections/{section}.liquid"])
+
     def test_1_code_setting_reaches_customizer_preview_and_store(self):
         self.save_code_index(lambda s: s["settings"].update(heading="From code", show_vendor=True))
         self.assertEqual(self.customizer_grid()["settings"]["heading"], "From code")

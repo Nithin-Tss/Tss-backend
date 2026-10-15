@@ -49,7 +49,7 @@
 
       <div class="product-list__grid">
         {%- for product in collection.products -%}
-          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: s.show_wishlist, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
         {%- endfor -%}
       </div>
 
