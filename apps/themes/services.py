@@ -116,6 +116,8 @@ STARTER_UPGRADES = {
     "sections/header.liquid": {
         "0447235775798d7cf5839634cfea58c3437e0571c024a24c300ac2f866a85d8b",  # revision 19: before the wishlist snippet
         "5fb084f88335fd7971a07f17eb38a52fa5d81749e4ea625a1678b23f088b5a19",  # revision 19: same, with CRLF line endings
+        "277d600b241b3901c697cd7ad88b6917de60d38e8a72a01e81d7af6e8c1600a3",  # revision 19: the starter header minus the wishlist block
+        "7a37239697538e3009d9087c7e3de973f307594351d7361982357f444d3d35b4",  # same, with CRLF line endings
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
