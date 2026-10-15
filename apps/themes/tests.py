@@ -865,6 +865,167 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
             self.assertIn(name, schema["sections"])
 
 
+class PromotionsSectionTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.token, self.store = self.sign_up("promotions@example.com", "Promotions Store")
+
+    def test_promotions_is_available_for_home_without_changing_default_layout(self):
+        schema = self.ok("get", "/api/v1/themes/schema/")
+        self.assertEqual(schema["sections"]["promotions"]["pages"], ["index"])
+        self.assertEqual(schema["sections"]["promotions"]["type_limits"]["promotion"], 8)
+        self.assertIn("promotion", schema["sections"]["promotions"]["blocks"])
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(settings["templates"]["index"]["order"],
+                         ["slideshow", "featured", "carousel", "hero", "about"])
+        self.assertNotIn("promotions", settings["templates"]["index"]["sections"])
+
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        self.assertIn("sections/promotions.liquid", {item["path"] for item in files})
+
+    def test_existing_theme_gets_only_the_missing_promotions_file(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        theme.files.filter(file_path="sections/promotions.liquid").delete()
+        hero = theme.files.get(file_path="sections/hero.liquid")
+        hero_content = hero.content
+        get_store_theme(store)
+
+        self.assertTrue(theme.files.filter(file_path="sections/promotions.liquid").exists())
+        self.assertEqual(theme.files.get(file_path="sections/hero.liquid").content, hero_content)
+
+    def test_promotions_schema_metadata_is_not_rendered_as_liquid(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        promotions = theme.files.get(file_path="sections/promotions.liquid")
+        promotions.content += '\n{% schema %}\n{"name": "Promotions"}\n{% endschema %}\n'
+        promotions.save(update_fields=["content", "updated_at"])
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        index = settings["templates"]["index"]
+        index["order"].append("promotions-test")
+        index["sections"]["promotions-test"] = {"type": "promotions", "settings": {}}
+        self.ok("put", "/api/v1/themes/settings/", settings)
+
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('class="section promotions"', html)
+        self.assertNotIn("Liquid error in sections/promotions.liquid", html)
+
+    def test_promotions_can_be_saved_previewed_and_rendered(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Seasonal promotional item",
+            "sku": "PROMO-ITEM-1",
+            "status": "active",
+            "price": "19.99",
+        }, expect=201)
+        collection = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Seasonal Promotions",
+            "status": "active",
+            "products": [product["id"]],
+        }, expect=201)
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        index = settings["templates"]["index"]
+        section_id = "spring-offers"
+        index["order"].append(section_id)
+        index["sections"][section_id] = {
+            "type": "promotions",
+            "settings": {
+                "heading": "Seasonal offers",
+                "columns": "3",
+                "view_all_collection": collection["id"],
+            },
+            "blocks": [{
+                "type": "promotion",
+                "settings": {
+                    "heading": "Spring <script>alert(1)</script>",
+                    "text": "Save on seasonal favorites.",
+                    "image_url": "https://example.com/spring.jpg",
+                    "image_alt": "Spring collection",
+                    "discount_text": "15% off",
+                    "button_label": "Shop Offers",
+                    "button_link": "http://localhost:5173/",
+                    "background_color": "#F2F4F7",
+                },
+            }, {
+                "type": "button",
+                "settings": {
+                    "label": "Shop Offers",
+                    "link": "http://localhost:5173/",
+                },
+            }],
+        }
+        self.ok("put", "/api/v1/themes/settings/", settings)
+
+        saved = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(saved["templates"]["index"]["order"][-1], section_id)
+        preview = self.ok("post", "/api/v1/themes/preview/", saved)["html"]
+        self.assertIn("Seasonal offers", preview)
+        self.assertIn("15% off", preview)
+        self.assertIn("Save on seasonal favorites.", preview)
+        self.assertIn("https://example.com/spring.jpg", preview)
+        promotions_url = f'/s/{self.store["storeSlug"]}/collections/{collection["handle"]}'
+        self.assertIn(f'href="{promotions_url}">View all &rarr;</a>', preview)
+        shop_offers_url = f'/s/{self.store["storeSlug"]}/collections/promotions'
+        self.assertIn(f'href="{shop_offers_url}">Shop Offers</a>', preview)
+        self.assertNotIn("localhost:5173", preview)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", preview)
+        self.assertNotIn("<script>alert(1)</script>", preview)
+
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        home_html = response.content.decode()
+        self.assertIn("Seasonal offers", home_html)
+        self.assertIn(f'href="{promotions_url}">View all &rarr;</a>', home_html)
+
+        promotion_page = self.client.get(promotions_url)
+        self.assertEqual(promotion_page.status_code, 200)
+        self.assertIn("Seasonal Promotions", promotion_page.content.decode())
+        self.assertIn("Seasonal promotional item", promotion_page.content.decode())
+
+    def test_shop_offers_route_shows_welcome_then_promotional_collection_products(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Promotional item",
+            "sku": "PROMO-ROUTE-1",
+            "status": "active",
+            "price": "19.99",
+        }, expect=201)
+        promotion_url = f'/s/{self.store["storeSlug"]}/collections/promotions'
+
+        empty_page = self.client.get(promotion_url)
+        self.assertEqual(empty_page.status_code, 200)
+        empty_html = empty_page.content.decode()
+        self.assertIn("Welcome! Promotional products and special offers will appear here soon.", empty_html)
+        self.assertNotIn("Promotional item", empty_html)
+
+        self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Promotions",
+            "status": "active",
+            "products": [product["id"]],
+        }, expect=201)
+        populated_page = self.client.get(promotion_url)
+        self.assertEqual(populated_page.status_code, 200)
+        self.assertIn("Promotional item", populated_page.content.decode())
+
+    def test_promotions_cannot_be_added_to_non_home_pages(self):
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        product = settings["templates"]["product"]
+        section_id = "product-promotion"
+        product["order"].append(section_id)
+        product["sections"][section_id] = {"type": "promotions", "settings": {}}
+
+        response = self.client.put("/api/v1/themes/settings/", settings, format="json")
+        self.assertEqual(response.status_code, 400)
+
+
 # The first starter header (2df94aa), before the header followed Theme settings
 OLDEST_STARTER_HEADER = """<header class="site-header">
   <div class="page-width site-header__inner">

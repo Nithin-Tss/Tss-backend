@@ -45,6 +45,8 @@ REQUIRED_FILES = {
     "templates/page.liquid",
     # Wishlist: one snippet with all its markup, the page and the script
     "snippets/wishlist.liquid",
+    # Promotions is available in the customizer for existing private starter themes too
+    "sections/promotions.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500

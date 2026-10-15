@@ -1454,6 +1454,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     """
     store_theme = get_store_theme(store)
     files = theme_files(store_theme)
+    promotions_path = "sections/promotions.liquid"
+    if promotions_path in files:
+        promotions_markup, promotions_schema, _ = sync.split(files[promotions_path])
+        if promotions_schema is not None:
+            files[promotions_path] = promotions_markup
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
     # A page template whose file is gone shows the base Page template
     if page != base_page(page) and f"templates/{page}.liquid" not in files:
@@ -1621,6 +1626,24 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 t_classes, t_style = text_attrs(own["settings"])
                 own["settings"] = dict(own["settings"], _t_class=" ".join(t_classes), _t_style=";".join(t_style))
             extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
+
+            if section["type"] == "promotions":
+                promotions_path = "/collections/promotions"
+                for block in section["blocks"]:
+                    if str(block["settings"].get("button_label") or "").strip().casefold() == "shop offers":
+                        block["settings"]["button_link"] = promotions_path
+                for block in extra_blocks:
+                    if block["type"] == "button" and str(
+                        block["settings"].get("label") or ""
+                    ).strip().casefold() == "shop offers":
+                        block["settings"]["link"] = promotions_path
+
+                promotions_collection = _find_collection(
+                    store, section["settings"].get("view_all_collection")
+                )
+                section["view_all_url"] = (
+                    collection_url(base_url, promotions_collection) if promotions_collection else ""
+                )
 
             # The product page's "Product information" accordion; the template places it under the description
             product_info = ""

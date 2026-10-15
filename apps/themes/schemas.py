@@ -134,6 +134,46 @@ SECTIONS = {
             "text_alignment": _ALIGN,
         },
     },
+    "promotions": {
+        "name": "Promotions",
+        "pages": ("index",),
+        "settings": {
+            "heading": {"type": "text", "label": "Heading", "default": "Promotions"},
+            "columns": {
+                "type": "select",
+                "label": "Cards per row",
+                "options": ["2", "3", "4"],
+                "default": "3",
+            },
+            "view_all_label": {"type": "text", "label": "View all button label", "default": "View all"},
+            "view_all_collection": {
+                "type": "collection",
+                "label": "Promotions collection",
+                "default": "",
+                "help": "Choose a collection containing the promotional products. View all opens that collection page.",
+            },
+        },
+        "blocks": {
+            "promotion": {
+                "name": "Promotion card",
+                "settings": {
+                    "heading": {"type": "text", "label": "Heading", "default": "Special offer"},
+                    "text": {"type": "textarea", "label": "Description", "default": ""},
+                    "image_url": {"type": "image", "label": "Image URL", "default": ""},
+                    "image_alt": {"type": "text", "label": "Image description", "default": ""},
+                    "discount_text": {"type": "text", "label": "Discount text", "default": ""},
+                    "button_label": {"type": "text", "label": "Button label", "default": ""},
+                    "button_link": {"type": "url", "label": "Button link", "default": ""},
+                    "background_color": {
+                        "type": "color",
+                        "label": "Card background",
+                        "default": "#F5F5F5",
+                    },
+                },
+            },
+        },
+        "type_limits": {"promotion": 8},
+    },
     "main-product": {
         "name": "Product information",
         "pages": ("product",),
