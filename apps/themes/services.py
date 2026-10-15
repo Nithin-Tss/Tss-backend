@@ -1069,7 +1069,7 @@ def _seed_header(s, store_name):
         "settings": {
             "logo_text": s.get("header_logo_text", ""), "logo_image": s.get("header_logo_url", ""),
             "logo_height": s.get("header_logo_height", 36), "layout": s.get("header_layout", "left"),
-            "show_nav": s.get("header_show_nav", True), "collections": s.get("header_collections", 4),
+            "show_nav": s.get("header_show_nav", True), "collections": s.get("header_collections", 0),
             "sticky": s.get("header_sticky", True), "border": s.get("header_border", True),
             "background": s.get("header_bg", ""), "text_color": s.get("header_text", ""),
         },

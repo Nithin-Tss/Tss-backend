@@ -30,7 +30,7 @@ from apps.orders.models import OrderItem
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
-from .models import BlogPost, StorePage, ThemeFile
+from .models import BlogPost, Menu, StorePage, ThemeFile
 from .services import get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
@@ -555,9 +555,29 @@ def _menu_links(text, base_url):
     return links
 
 
-def layout_data(settings, base_url, nav):
+_NON_HEADER_MENUS = ("footer", "account", "customer")
+_HEADER_MENU_HANDLES = ("main-menu", "header", "navbar", "main")
+
+
+def admin_header_links(store, base_url):
+    """Top-level items of the store's navigation menu made in Admin > Menus ("Main menu" or the
+    first menu that is not a footer or account menu). [] when there is none."""
+    menus = list(Menu.objects.filter(store=store).prefetch_related("items").order_by("created_at"))
+    menu = next((m for h in _HEADER_MENU_HANDLES for m in menus if m.handle == h), None) or next(
+        (m for m in menus if not any(w in m.handle or w in m.name.lower() for w in _NON_HEADER_MENUS)), None
+    )
+    if not menu:
+        return []
+    items = sorted((i for i in menu.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
+    return [
+        {"label": i.title, "url": _resolve_link(base_url, i.url)} for i in items if i.title.strip() and i.url.strip()
+    ]
+
+
+def layout_data(settings, base_url, nav, store=None):
     """Header links, footer links and footer social links for layout/theme.liquid."""
-    header = _menu_links(settings.get("header_menu"), base_url)
+    admin_links = admin_header_links(store, base_url) if store else []
+    header = _menu_links(settings.get("header_menu"), base_url) or admin_links
     if not header:
         header = [{"label": "Home", "url": f"{base_url}/"}, {"label": "Shop all", "url": f"{base_url}/collections/all"}]
         header += [{"label": c["name"], "url": c["url"]} for c in nav[: int(settings.get("header_collections") or 0)]]
@@ -571,7 +591,7 @@ def layout_data(settings, base_url, nav):
         for key, name in SOCIAL_NAMES.items()
         if settings.get(f"footer_{key}")
     ]
-    return {"header_links": header, "footer_links": footer, "footer_social": social}
+    return {"header_links": header, "admin_header_links": admin_links, "footer_links": footer, "footer_social": social}
 
 
 def _environment(files, base_url, currency, overrides=None):
@@ -1095,11 +1115,28 @@ def _env_key(files, base_url, currency):
     return hashlib.sha256(json.dumps([base_url, currency, snippets]).encode("utf-8")).hexdigest()
 
 
+def with_admin_menu(name, values, store, base_url):
+    """The header's values with the links of Admin > Menus as "link" blocks, when it has no links
+    of its own (a stored theme file keeps its old code, so the links go in as data)."""
+    if name != "header":
+        return values
+    values = values if isinstance(values, dict) else {}
+    blocks = list(values.get("blocks") or [])
+    if any(b.get("type") == "link" for b in blocks if isinstance(b, dict)):
+        return values
+    links = admin_header_links(store, base_url)[:10]
+    if not links:
+        return values
+    added = [{"type": "link", "settings": {"label": l["label"], "url": l["url"]}} for l in links]
+    return {**values, "blocks": added + blocks}
+
+
 def _synced_html(store, store_theme, name, section, data, env, env_key, context, editor):
     raw = (data.get("sections") or {}).get(name)
+    raw = with_admin_menu(name, raw if raw is not None else section["values"], store, shop_url(store))
     return sync.render_section(
         name, theme_id=store_theme.theme_id, content=section["content"],
-        values=raw if raw is not None else section["values"], env=env, env_key=env_key,
+        values=raw, env=env, env_key=env_key,
         context=context, editor=editor, link=lambda url: _resolve_link(shop_url(store), url),
     )
 
@@ -1158,7 +1195,8 @@ def render_synced_section_fast(store, name, custom_data):
         context["collections"] = _LazyList(lambda: _nav(store, base_url))
     try:
         return sync.render_section(
-            name, theme_id=row["theme_id"], content=row["content"], values=(data.get("sections") or {}).get(name) or {},
+            name, theme_id=row["theme_id"], content=row["content"],
+            values=with_admin_menu(name, (data.get("sections") or {}).get(name) or {}, store, base_url),
             env=env, env_key=("fast", base_url, settings["currency_symbol"]),
             context=context, editor=True, link=lambda url: _resolve_link(base_url, url),
         )
@@ -1519,7 +1557,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "wishlist_count": len(wishlist_ids),
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
-        **layout_data(settings, base_url, nav),
+        **layout_data(settings, base_url, nav, store),
     }
 
     # The synced sections, rendered from their saved (or, in the preview, unsaved) values

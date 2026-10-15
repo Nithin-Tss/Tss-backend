@@ -1638,10 +1638,10 @@ THEME_SETTINGS.update({
     "header_show_nav": _theme_opt("header", "checkbox", "Show the navigation menu", True),
     "header_menu": _theme_opt(
         "header", "menu", "Menu links", "",
-        help="One link per line: Label | /page. Leave empty for Home, Shop all and your collections.",
+        help="One link per line: Label | /page. Leave empty for just Home and Shop all.",
     ),
     "header_collections": _theme_opt(
-        "header", "range", "Collections in the automatic menu", 4, min=0, max=8,
+        "header", "range", "Collections in the automatic menu", 0, min=0, max=8,
         help="Used only when the menu links above are empty.",
     ),
     "header_sticky": _theme_opt("header", "checkbox", "Keep the header at the top while scrolling", True),
