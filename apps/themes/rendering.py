@@ -113,6 +113,19 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card__tags{display:flex;flex-wrap:wrap;gap:6px}
 .product-card__tags span{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--muted)}
 .product-card__cta{min-height:38px;padding:0 16px;font-size:14px;align-self:flex-start}
+.product-card-shell{position:relative;min-width:0}.product-card-shell .product-card{width:100%}
+.product-card__wishlist-form{position:absolute;z-index:2;top:8px;right:8px;margin:0}
+.product-card__wishlist-form{display:flex;align-items:center;gap:6px}
+.product-card__wishlist-add,.product__wishlist-add{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:40px;min-height:40px;padding:8px;border:0;border-radius:50%;background:var(--bg);color:var(--text);cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.16)}
+.product-card__wishlist-add svg,.product__wishlist-add svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.product-card__wishlist-add.is-wishlisted svg,.product-card__wishlist-add[aria-pressed="true"] svg,.product__wishlist-add.is-wishlisted svg,.product__wishlist-add[aria-pressed="true"] svg{fill:#e11d48;stroke:#e11d48}
+.product-card__wishlist-remove{min-height:40px;padding:0 16px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--text);font:inherit;cursor:pointer}
+.product__wishlist-form{margin:-8px 0 20px}.product__wishlist-add{border:1px solid var(--line);border-radius:999px}
+.site-header__wishlist-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:4px;font-size:12px;font-weight:600}
+.wishlist-page{padding:48px 0 64px}.wishlist-page__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.wishlist-page__empty{padding:48px 24px;text-align:center;border:1px solid var(--line);border-radius:var(--radius)}
+.wishlist-page__empty p{color:var(--muted)}
+@media (min-width:750px){.wishlist-page__grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 
 /* Rich text */
 .rich-text--narrow{max-width:560px}.rich-text--medium{max-width:780px}.rich-text--wide{max-width:none}
@@ -515,6 +528,34 @@ document.addEventListener("click", function (e) {
     root.querySelectorAll('.tss-pinfo__toggle[aria-expanded="true"]').forEach(function (b) { set(b, false); });
   }
   set(button, open);
+});
+</script>""")
+
+WISHLIST_JS = Markup("""<script>
+document.addEventListener("click", function (event) {
+  var button = event.target.closest && event.target.closest("[data-wishlist-toggle], [data-wishlist-remove]");
+  if (!button) return;
+  var form = button.closest("form.product-card__wishlist-form, form.product__wishlist-form");
+  if (!form) return;
+  var productId = form.querySelector('[name="product_id"]').value;
+  var action = form.querySelector("[data-wishlist-action]");
+  var toggles = document.querySelectorAll('[data-wishlist-toggle][data-product-id="' + productId + '"]');
+  var wasSaved = toggles.length > 0 && toggles[0].getAttribute("aria-pressed") === "true";
+  var saved = button.hasAttribute("data-wishlist-remove") ? false : !wasSaved;
+  action.value = saved ? "add" : "remove";
+  toggles.forEach(function (toggle) {
+    toggle.classList.toggle("is-wishlisted", saved);
+    toggle.setAttribute("aria-pressed", saved ? "true" : "false");
+    var title = toggle.getAttribute("data-product-title") || "product";
+    toggle.setAttribute("aria-label", (saved ? "Remove " + title + " from" : "Add " + title + " to") + " wishlist");
+    toggle.title = saved ? "Remove from wishlist" : "Add to wishlist";
+    var label = toggle.querySelector("[data-wishlist-label]");
+    if (label) label.textContent = saved ? "Remove from wishlist" : "Add to wishlist";
+  });
+  var count = document.querySelector("[data-wishlist-count]");
+  if (count && saved !== wasSaved) {
+    count.textContent = String(Math.max(0, Number(count.textContent || 0) + (saved ? 1 : -1)));
+  }
 });
 </script>""")
 
@@ -1320,7 +1361,8 @@ def _article_drop(posts, index):
 
 
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
-                sort="newest", page_number=1, article=None, blog_filter=None):
+                sort="newest", page_number=1, article=None, blog_filter=None, request=None,
+                wishlist_page_ids=None, wishlist_products=None):
     """
     page: "index", "product", "collection", "blog" or "article".
     product: a catalog Product (product page).
@@ -1359,6 +1401,24 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     if product_drop_:
         product_drop_["details"] = product_details(product, store.field_labels)
     collection_drop = None
+    wishlist_ids = []
+    if request is not None:
+        stored_ids = request.session.get(f"wishlist:{store.pk}", [])
+        if isinstance(stored_ids, list):
+            for value in stored_ids:
+                try:
+                    product_id = str(uuid.UUID(str(value)))
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if product_id not in wishlist_ids:
+                    wishlist_ids.append(product_id)
+        available_ids = set(
+            str(product_id)
+            for product_id in published_products(store).filter(pk__in=wishlist_ids).values_list("pk", flat=True)
+        )
+        wishlist_ids = [product_id for product_id in wishlist_ids if product_id in available_ids]
+        if wishlist_ids != stored_ids:
+            request.session[f"wishlist:{store.pk}"] = wishlist_ids
 
     if page == "collection":
         sort = sort if sort in SORTS else "newest"
@@ -1408,6 +1468,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "blog": blog_drop,
         "article": article_drop,
         "template": page,
+        "return_url": request.get_full_path() if request else "",
+        "wishlist_ids": wishlist_ids,
+        "wishlist_count": len(wishlist_ids),
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         **layout_data(settings, base_url, nav),
@@ -1549,6 +1612,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     html.append(ANIMATION_JS)
     html.append(BLOCKS_JS)
     html.append(PRODUCT_INFO_JS)
+    html.append(WISHLIST_JS)
 
     if slots is None:
         content = env.get_template(template_path).render(
@@ -1565,8 +1629,49 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "\n".join(html[scripts_start:]),
         )
 
+    if wishlist_page_ids is not None:
+        products = wishlist_products or {}
+        cards = []
+        for product_id in wishlist_page_ids:
+            item = products.get(product_id)
+            if item is None:
+                continue
+            cards.append(env.get_template("product-card").render(**{
+                **common,
+                "product": product_drop(item, base_url),
+                "show_vendor": False,
+                "wishlist_action": "remove",
+                "return_url": f"{base_url}/wishlist/",
+                "ratio": "portrait",
+            }))
+        if cards:
+            wishlist_content = (
+                '<section class="wishlist-page"><div class="page-width">'
+                '<h1>Wishlist</h1><div class="wishlist-page__grid">'
+                + "".join(cards)
+                + "</div></div></section>"
+            )
+        else:
+            wishlist_content = (
+                '<section class="wishlist-page"><div class="page-width">'
+                '<h1>Wishlist</h1><div class="wishlist-page__empty">'
+                '<p>Your wishlist is empty.</p>'
+                f'<a class="button" href="{escape(base_url)}/collections/all">Continue shopping</a>'
+                "</div></div></section>"
+            )
+        content = Markup("".join((
+            str(theme_css(settings, tokens)),
+            str(SECTION_CSS),
+            str(TYPE_CSS),
+            str(CUSTOM_CSS),
+            str(WISHLIST_JS),
+            wishlist_content,
+        )))
+
     if product:
         title = product.seo_title or product.title
+    elif wishlist_page_ids is not None:
+        title = "Wishlist"
     elif collection_drop:
         title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
     elif article_drop:

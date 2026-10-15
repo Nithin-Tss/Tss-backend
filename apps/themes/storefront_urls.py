@@ -2,12 +2,15 @@
 from django.urls import path
 
 from .views import (
-    storefront_article, storefront_blog, storefront_collection, storefront_home, storefront_product, theme_image,
+    storefront_article, storefront_blog, storefront_collection, storefront_home, storefront_product,
+    storefront_wishlist, storefront_wishlist_item, theme_image,
 )
 
 
 urlpatterns = [
     path("_img/<uuid:image_id>", theme_image, name="theme-image"),
+    path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
+    path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),
     path("<slug:store_slug>/products/<uuid:product_id>", storefront_product, name="storefront-product"),
     path("<slug:store_slug>/collections/all", storefront_collection, name="storefront-collection-all"),

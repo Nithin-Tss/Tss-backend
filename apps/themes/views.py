@@ -2,9 +2,10 @@ import json
 import re
 import time
 import uuid
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
 from django.core import signing
 from django.core.files.storage import default_storage
 from django.db import connection
@@ -14,7 +15,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
 from django.views.decorators.clickjacking import xframe_options_exempt
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from liquid.exceptions import LiquidError
 from markupsafe import escape
@@ -37,7 +38,7 @@ from apps.tenancy.models import Store, StoreMembership
 from .models import BlogPost, ThemeImage
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
-from .rendering import published_posts, render_page, render_synced_section_fast, shop_url
+from .rendering import _catalog, published_posts, render_page, render_synced_section_fast, shop_url
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, public_schema, resolve, validate_custom_data
 from .services import (
@@ -1169,11 +1170,7 @@ def _storefront(render):
             return _admin_bar_redirect(request, store)
 
         try:
-            html = render(
-                store,
-                request.GET,
-                **kwargs,
-            )
+            html = render(store, request, request.GET, **kwargs)
 
             status_code = 200
 
@@ -1225,16 +1222,18 @@ def _storefront(render):
 
 
 @_storefront
-def storefront_home(store, params):
+def storefront_home(store, request, params):
     return render_page(
         store,
         "index",
+        request=request,
     )
 
 
 @_storefront
 def storefront_product(
     store,
+    request,
     params,
     product_id,
 ):
@@ -1250,6 +1249,7 @@ def storefront_product(
         store,
         "product",
         product=product,
+        request=request,
     )
 
 
@@ -1265,6 +1265,7 @@ def _listing(params):
 @_storefront
 def storefront_collection(
     store,
+    request,
     params,
     collection_id=None,
     handle=None,
@@ -1277,6 +1278,7 @@ def storefront_collection(
                 "name": "All products",
                 "obj": None,
             },
+            request=request,
             **_listing(params),
         )
 
@@ -1291,6 +1293,7 @@ def storefront_collection(
             "name": collection.name,
             "obj": collection,
         },
+        request=request,
         **_listing(params),
     )
 
@@ -1298,7 +1301,7 @@ BLOG_FILTERS = ("category", "tagged", "author")
 
 
 @_storefront
-def storefront_blog(store, params, kind=None, handle=None):
+def storefront_blog(store, request, params, kind=None, handle=None):
     """/blog, and /blog/category|tagged|author/<handle>: the published posts, newest first."""
     try:
         page_number = int(params.get("page", 1))
@@ -1309,12 +1312,79 @@ def storefront_blog(store, params, kind=None, handle=None):
         if kind not in BLOG_FILTERS:
             raise Http404("Page not found.")
         blog_filter = {"kind": kind, "handle": handle}
-    return render_page(store, "blog", blog_filter=blog_filter, page_number=page_number)
+    return render_page(store, "blog", blog_filter=blog_filter, page_number=page_number, request=request)
 
 
 @_storefront
-def storefront_article(store, params, handle):
+def storefront_article(store, request, params, handle):
     """/blog/<handle>: one published post; drafts and unknown handles are not found."""
     if not published_posts(store).filter(handle=handle).exists():
         raise Http404("Post not found.")
-    return render_page(store, "article", article=handle)
+    return render_page(store, "article", article=handle, request=request)
+
+
+@_storefront
+def storefront_wishlist(store, request, params):
+    del params
+    key = f"wishlist:{store.pk}"
+    ids = request.session.get(key, [])
+    if not isinstance(ids, list):
+        ids = []
+    valid_ids = []
+    for value in ids:
+        try:
+            normalized = str(uuid.UUID(str(value)))
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if normalized not in valid_ids:
+            valid_ids.append(normalized)
+    if valid_ids != ids:
+        request.session[key] = valid_ids
+
+    products = _catalog(store).filter(pk__in=valid_ids)
+    ordered_products = {str(product.pk): product for product in products}
+    visible_ids = [product_id for product_id in valid_ids if product_id in ordered_products]
+    if visible_ids != valid_ids:
+        request.session[key] = visible_ids
+    return render_page(
+        store,
+        "index",
+        request=request,
+        wishlist_page_ids=visible_ids,
+        wishlist_products=ordered_products,
+    )
+
+
+@csrf_exempt
+@require_POST
+def storefront_wishlist_item(request, store_slug):
+    """Update the guest session wishlist; these changes do not modify protected customer data."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    key = f"wishlist:{store.pk}"
+    ids = request.session.get(key, [])
+    if not isinstance(ids, list):
+        ids = []
+
+    action = request.POST.get("action")
+    try:
+        product_id = str(uuid.UUID(request.POST.get("product_id", "")))
+    except (ValueError, TypeError, AttributeError):
+        return HttpResponse("Invalid product.", status=400)
+
+    if action == "add":
+        if not published_products(store).filter(pk=product_id).exists():
+            raise Http404("Product not found.")
+        if product_id not in ids:
+            ids.append(product_id)
+    elif action == "remove":
+        ids = [value for value in ids if value != product_id]
+    else:
+        return HttpResponse("Invalid wishlist action.", status=400)
+
+    request.session[key] = ids
+    destination = request.POST.get("return_to", "")
+    parsed = urlsplit(destination)
+    store_path = f"{shop_url(store)}/"
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith(store_path):
+        destination = f"{shop_url(store)}/wishlist/"
+    return HttpResponseRedirect(destination)
