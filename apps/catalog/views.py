@@ -115,7 +115,7 @@ class ProductViewSet(StoreScopedViewSet):
     action_permissions = {"bulk_delete": "products.delete"}
     queryset = Product.objects.select_related("category").prefetch_related(
 
-        "variants",
+        "variants__inventory_items",
 
         "images",
 
