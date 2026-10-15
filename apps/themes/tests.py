@@ -1778,7 +1778,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 27)
+        self.assertEqual(theme.theme_data["starter_revision"], 29)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2223,6 +2223,51 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.hearts(html), 1)
         self.assertIn("Add to wishlist", html)
 
+    def test_the_cart_icon_block_stays_in_step_between_the_customizer_and_the_code(self):
+        carts = lambda html: html.count('class="site-header__cart"')
+        base = carts(self.page())  # the header's own cart icon
+        cart_blocks = lambda blocks: [b for b in blocks if b["type"] == "cart_icon"]
+        self.assertEqual(cart_blocks(self.main()["blocks"]), [])  # nothing adds it
+        self.assertEqual(cart_blocks(self.code()["sections"]["main"]["blocks"]), [])
+        spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["main-product"]["blocks"]["cart_icon"]
+        self.assertEqual(spec["name"], "Cart icon")  # it is in "Add block"
+
+        # Add block (customizer) -> code, store
+        self.save_customizer(lambda m: m["blocks"].append({"type": "cart_icon", "settings": {}}))
+        self.assertEqual(len(cart_blocks(self.code()["sections"]["main"]["blocks"])), 1)
+        self.assertEqual(carts(self.page()), base + 1)
+
+        # Edited in the code -> customizer, store
+        def to_code(main):
+            for block in cart_blocks(main["blocks"]):
+                block["settings"].update(label="Basket", size=30, align="right", opens="page")
+        self.save_code(to_code)
+        block = cart_blocks(self.main()["blocks"])[0]
+        self.assertEqual((block["settings"]["label"], block["settings"]["size"], block["settings"]["align"]), ("Basket", 30, "right"))
+        html = self.page()
+        self.assertEqual(carts(html), base + 1)
+        self.assertIn('aria-label="Basket"', html)
+        self.assertIn("width:30px", html)
+        self.assertIn("text-align:right", html)
+
+        # Hidden (customizer) -> code, store
+        self.save_customizer(lambda m: cart_blocks(m["blocks"])[0].update(hidden=True))
+        self.assertTrue(cart_blocks(self.code()["sections"]["main"]["blocks"])[0]["hidden"])
+        self.assertEqual(carts(self.page()), base)
+        self.save_code(lambda m: cart_blocks(m["blocks"])[0].update(hidden=False))  # shown again in the code
+        self.assertFalse(cart_blocks(self.main()["blocks"])[0].get("hidden"))
+        self.assertEqual(carts(self.page()), base + 1)
+
+        # Deleted (code) -> customizer, store
+        self.save_code(lambda m: m.update(blocks=[b for b in m["blocks"] if b["type"] != "cart_icon"]))
+        self.assertEqual(cart_blocks(self.main()["blocks"]), [])
+        self.assertEqual(carts(self.page()), base)
+
+        # Added in the code -> customizer, store
+        self.save_code(lambda m: m["blocks"].append({"type": "cart_icon", "settings": {"size": 28}}))
+        self.assertEqual(len(cart_blocks(self.main()["blocks"])), 1)
+        self.assertEqual(carts(self.page()), base + 1)
+
     def test_removing_and_adding_the_block_in_the_customizer(self):
         self.add_block()
         self.assertEqual(self.hearts(self.page()), 1)
@@ -2271,6 +2316,12 @@ def wishlist_era_main_product():
 
     product = starter_files()["sections/main-product.liquid"]
     for new, old in (
+        # the "Cart icon" block, added to the product page after the cart
+        ("""      {%- comment -%} The "Cart icon" block: add, hide or move it in the customizer {%- endcomment -%}
+      {%- if section.cart_icon -%}
+        <div class="product__cart-icon" style="text-align:{{ section.cart_icon.align | default: 'left' }}">{% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: section.cart_icon %}</div>
+      {%- endif -%}
+""", ""),
         ("""      <form class="product__form" data-product-form data-cart-add data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}">
         <input type="hidden" name="product" value="{{ product.id }}">
 """, """      <form class="product__form" data-product-form>
@@ -2423,7 +2474,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 27)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 29)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -2811,6 +2862,133 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         self.save_customizer_grid(lambda s: s["settings"].update(show_price=True))
         self.assertEqual(self.store_html().count('<span class="price">'), prices)
         self.assertTrue(self.code_index()["sections"]["featured"]["settings"]["show_price"])
+
+    def test_8_cart_icon_block_stays_in_step_between_the_customizer_and_the_code(self):
+        icons = lambda html: html.count('class="product-card__cart"')
+        cart_blocks = lambda blocks: [b for b in blocks if b["type"] == "cart_icon"]
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
+        }, expect=201)
+
+        # Added in the code -> customizer, preview, store
+        self.save_code_index(lambda s: s.setdefault("blocks", []).append({"type": "cart_icon", "settings": {"size": 52}}))
+        block = cart_blocks(self.customizer_grid()["blocks"])
+        self.assertEqual(len(block), 1)
+        self.assertEqual(block[0]["settings"]["size"], 52)
+        shown = icons(self.store_html())
+        self.assertGreater(shown, 0)
+        self.assertIn("width:52px", self.store_html())
+        self.assertEqual(icons(self.preview_html()), shown)
+
+        # Changed in the customizer -> code, store
+        self.save_customizer_grid(lambda s: cart_blocks(s["blocks"])[0]["settings"].update(size=40, label="Quick add"))
+        saved = cart_blocks(self.code_index()["sections"]["featured"]["blocks"])[0]["settings"]
+        self.assertEqual((saved["size"], saved["label"]), (40, "Quick add"))
+        html = self.store_html()
+        self.assertIn("width:40px", html)
+        self.assertIn("Quick add", html)
+
+        # Hidden in the customizer -> code, store; shown again in the code
+        self.save_customizer_grid(lambda s: cart_blocks(s["blocks"])[0].update(hidden=True))
+        self.assertTrue(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])[0]["hidden"])
+        self.assertEqual(icons(self.store_html()), 0)
+        self.save_code_index(lambda s: cart_blocks(s["blocks"])[0].update(hidden=False))
+        self.assertFalse(cart_blocks(self.customizer_grid()["blocks"])[0].get("hidden"))
+        self.assertEqual(icons(self.store_html()), shown)
+
+        # Deleted in the code -> customizer, store
+        self.save_code_index(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart_icon"]))
+        self.assertEqual(cart_blocks(self.customizer_grid()["blocks"]), [])
+        self.assertEqual(icons(self.store_html()), 0)
+
+        # Added in the customizer -> code
+        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
+        self.assertEqual(len(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])), 1)
+        self.assertEqual(icons(self.store_html()), shown)
+
+    def test_9_cart_icon_block_and_the_cards_code_follow_each_other(self):
+        CARD = "snippets/product-card.liquid"
+        has_icon = lambda: "if show_cart_icon" in self.files()[CARD]
+        cart_blocks = lambda blocks: [b for b in blocks if b["type"] == "cart_icon"]
+        icons = lambda: self.store_html().count('class="product-card__cart"')
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
+        }, expect=201)
+        original = self.files()[CARD]
+
+        # a new store: no block and no icon in the card's code
+        self.assertFalse(has_icon())
+        self.assertEqual(icons(), 0)
+
+        # Block added in the customizer -> the card's code gets the icon, the store shows it
+        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
+        self.assertTrue(has_icon())
+        self.assertIn("data-card-add", self.files()[CARD])
+        self.assertGreater(icons(), 0)
+
+        # Last block removed in the customizer -> the icon is taken out of the card's code (and nothing else)
+        self.save_customizer_grid(lambda s: s["blocks"].clear())
+        self.assertFalse(has_icon())
+        self.assertEqual(self.files()[CARD], original)
+        self.assertEqual(icons(), 0)
+
+        # Icon written in the card's code -> a block appears in the product sections (customizer and templates/index.json), and in the store
+        from .section_sync import add_card_cart_icon
+        self.save_file(CARD, add_card_cart_icon(original))
+        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
+        self.assertEqual(len(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])), 1)
+        self.assertGreater(icons(), 0)
+
+        # Saving the card again with the icon where it was does not add another block
+        self.save_file(CARD, self.files()[CARD] + "<!-- note -->")
+        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
+
+        # A section that lost its block gets it back when the card (which has the icon) is saved again
+        self.save_customizer_grid(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart_icon"]))
+        self.assertTrue(has_icon())  # the carousel still has its block, so the card keeps the icon
+        self.save_file(CARD, self.files()[CARD] + "<!-- again -->")
+        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
+
+        # Icon taken out of the card's code -> the blocks go, the store shows no icon
+        self.save_file(CARD, original)
+        self.assertEqual(cart_blocks(self.customizer_grid()["blocks"]), [])
+        self.assertEqual(cart_blocks(self.code_index()["sections"]["featured"]["blocks"]), [])
+        self.assertEqual(icons(), 0)
+
+        # Block added in templates/index.json (Edit code) -> the card's code gets the icon
+        self.save_code_index(lambda s: s.setdefault("blocks", []).append({"type": "cart_icon", "settings": {}}))
+        self.assertTrue(has_icon())
+        self.assertGreater(icons(), 0)
+
+    def test_7_cart_icon_is_a_block_the_owner_adds_hides_and_deletes(self):
+        icons = lambda html: html.count('class="product-card__cart"')
+        spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["product-grid"]
+        self.assertIn("cart_icon", spec["blocks"])  # offered in "Add block"
+        self.assertNotIn("cart_icon", spec.get("required_blocks", []))
+        # a product in stock (a sold-out one never shows the icon)
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
+        }, expect=201)
+        # nothing adds it
+        self.assertEqual([b["type"] for b in self.customizer_grid()["blocks"]], [])
+        self.assertEqual(icons(self.store_html()), 0)
+        # "Add block"
+        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
+        shown = icons(self.store_html())
+        self.assertGreater(shown, 0)
+        self.assertEqual(icons(self.preview_html()), shown)
+        # the eye
+        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=True))
+        self.assertEqual(icons(self.store_html()), 0)
+        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=False))
+        self.assertEqual(icons(self.store_html()), shown)
+        # delete
+        self.save_customizer_grid(lambda s: s["blocks"].clear())
+        self.assertEqual([b["type"] for b in self.customizer_grid()["blocks"]], [])
+        self.assertEqual(icons(self.store_html()), 0)
 
 
 STYLES = "snippets/styles.liquid"

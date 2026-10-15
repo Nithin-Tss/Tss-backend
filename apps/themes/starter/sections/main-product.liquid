@@ -42,6 +42,10 @@
       {%- if section.wishlist_heart -%}
         {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, placement: 'product', size: section.wishlist_heart.size, label_text: section.wishlist_heart.label, align: section.wishlist_heart.align, with_script: true %}
       {%- endif -%}
+      {%- comment -%} The "Cart icon" block: add, hide or move it in the customizer {%- endcomment -%}
+      {%- if section.cart_icon -%}
+        <div class="product__cart-icon" style="text-align:{{ section.cart_icon.align | default: 'left' }}">{% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: section.cart_icon %}</div>
+      {%- endif -%}
       {%- if s.show_price -%}
         <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.is_sold_out %} <span class="price price--muted">{{ s.sold_out_label | default: 'Sold out' }}</span>{% endif %}</div>
       {%- endif -%}

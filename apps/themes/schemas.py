@@ -1388,13 +1388,28 @@ SECTIONS["main-product"]["blocks"] = {
             "align": _choice("style", "Position", ["left", "center", "right"], "left", ui="segmented"),
         },
     },
+    # A cart icon with the number of items, for the product page (see snippets/cart.liquid). The cart's drawer and
+    # checkout options are the header's "Cart icon" block's.
+    "cart_icon": {
+        "name": "Cart icon",
+        "settings": {
+            "label": _opt("content", "text", "Label (for screen readers)", "Cart", max=40),
+            "show_count": _opt("content", "checkbox", "Show the number of items", True),
+            "opens": _choice(
+                "content", "Clicking the icon opens", ["page", "drawer"], "page", ui="segmented",
+                labels={"page": "Cart page", "drawer": "Side drawer"},
+            ),
+            "size": _opt("style", "range", "Icon size", 24, min=18, max=40, step=2, unit="px"),
+            "align": _choice("style", "Position", ["left", "center", "right"], "left", ui="segmented"),
+        },
+    },
     **SECTIONS["main-product"]["blocks"],
 }
-SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 1}
+SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 1, "cart_icon": 1}
 
-# The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Every section that
-# lists products has exactly one: the owner hides or shows it with the block's eye (resolve() adds it to saved
-# layouts that predate it), and the card shows the icon on hover.
+# The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Nothing adds it: the
+# owner picks "Cart icon" in "Add block" (one per section), hides it with the block's eye or deletes it, and the
+# cards show the icon on hover while the block is there and visible.
 for _type in ("product-grid", "product-carousel", "main-collection"):
     SECTIONS[_type]["blocks"] = {
         "cart_icon": {
@@ -1407,7 +1422,6 @@ for _type in ("product-grid", "product-carousel", "main-collection"):
         **SECTIONS[_type]["blocks"],
     }
     SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1}
-    SECTIONS[_type]["required_blocks"] = ["cart_icon"]
 SECTIONS["main-product"]["required_blocks"] = ["product_info"]
 
 SECTIONS["custom"]["settings"] = {

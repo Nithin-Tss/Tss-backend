@@ -56,7 +56,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 27
+STARTER_REVISION = 29
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -101,6 +101,8 @@ STARTER_UPGRADES = {
         "1a5b5ca920bb489f2047302eda3da0179b9b5b270c26e4b0a4d693f4afc61746",  # revision 12: before image description
     },
     "snippets/product-card.liquid": {
+        "8bea0981af9916bf3f0cf690082e4a1e7af0b409b39131ba50c8c2296fb8c419",  # revision 29: before the cart icon was added to the card by its block
+        "fcd06f9be05274f8bf3ad855a66c337d4f3c3a22798cfec66b00effa9bc80880",  # revision 29: before the cart icon was added to the card by its block (CRLF)
         "f4ac32c3302297ee3417ba41b88d94fca4a8316e1214b2b2645fef3de3cda957",  # revision 27: before the cart icon became a block
         "fa8c2e225e5757b397003c24219be553dbabf86150a44c0949156d819d939143",  # revision 27: before the cart icon became a block (CRLF)
         "34b896b532e6d75aa9e00770be9bddbe0a2e62f7a5475db1ee56961c470ee561",  # revision 26: an earlier cart icon draft
@@ -121,6 +123,8 @@ STARTER_UPGRADES = {
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
     "sections/main-product.liquid": {
+        "2685ec1e87b5219e6e06820aa4ae289a5535386e223a2224b03bf6fe4908eb44",  # revision 28: before the cart icon block on the product page
+        "9ce1235a40d399e6785771e625150423c6d0a63d360fb557fc23f4c45a575ac2",  # revision 28: before the cart icon block on the product page (CRLF)
         "a7e5eb025dc28325a5b321a418da4f4fe0ec60105e4d9b683752a2c53f1b90ce",  # revision 21: before the cart snippet
         "0e1504eb9340bb893a9b83c173943ff55430a9efde792269119e1441fdb17d35",  # revision 21: same, with CRLF line endings
         "18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729",
@@ -251,6 +255,7 @@ def get_store_theme(store):
         _offer_cart_icon_block(current.theme)
         _keep_wishlist_hearts(current)
         _add_page_templates(current)
+        sync_card_cart_icon(current)
         return current
 
     if current:
@@ -274,6 +279,7 @@ def get_store_theme(store):
     _offer_cart_icon_block(installed.theme)
     _keep_wishlist_hearts(installed, new_store=current is None)
     _add_page_templates(installed)
+    sync_card_cart_icon(installed)
     return installed
 
 
@@ -340,6 +346,72 @@ def _add_wishlist_blocks(store_theme):
 
     theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _card_sections(templates):
+    """Every section of the pages that shows product cards and can have the "Cart icon" block."""
+    for page in templates.values():
+        for section in page["sections"].values():
+            blocks = SECTION_SCHEMAS[section["type"]].get("blocks", {})
+            if "cart_icon" in blocks and section["type"] != "main-product":
+                yield section
+
+
+def _has_cart_icon_block(templates):
+    return any(b["type"] == "cart_icon" for s in _card_sections(templates) for b in s.get("blocks") or [])
+
+
+def sync_card_cart_icon(store_theme, before=None):
+    """
+    Blocks -> Code: the sections' "Cart icon" blocks were saved (customizer, or templates/<page>.json), or the
+    store's files were just brought up to date. While a section has the block, the card's code has the icon: it
+    is added to snippets/product-card.liquid if it is missing. When the last block was just removed (`before`
+    is the pages as they were), the icon is taken out of the card's code. Everything else in the file stays.
+    """
+    file = store_theme.theme.files.filter(file_path=sync.CARD_PATH).first()
+    if file is None:
+        return
+    templates = resolve(store_theme.custom_data)["templates"]
+    if _has_cart_icon_block(templates):
+        patched = sync.add_card_cart_icon(file.content)
+    elif before is not None and _has_cart_icon_block(before):
+        patched = sync.remove_card_cart_icon(file.content)
+    else:
+        return
+    if patched is None or patched == file.content:
+        return
+    try:
+        _check_liquid(patched)
+    except exceptions.ValidationError:
+        return  # the card's own code can't take it: it keeps what it has
+    file.content = patched
+    file.file_size = len(patched.encode("utf-8"))
+    file.save(update_fields=["content", "file_size", "updated_at"])
+
+
+def _blocks_from_card_code(store_theme, new):
+    """
+    Code -> Blocks: snippets/product-card.liquid was saved. While it has the icon, every product section that
+    has no "Cart icon" block gets one (blocks that are there, hidden or not, are left as they are); when the icon
+    is not in it, the blocks go (the code has no icon to show).
+    """
+    has = sync.has_card_cart_icon(new)
+    merged = resolve(store_theme.custom_data)
+    changed = False
+    for section in _card_sections(merged["templates"]):
+        blocks = section.get("blocks") or []
+        if has:
+            if not any(b["type"] == "cart_icon" for b in blocks):
+                section["blocks"] = [*blocks, {"type": "cart_icon", "hidden": False, "settings": {}}]
+                changed = True
+        else:
+            kept = [b for b in blocks if b["type"] != "cart_icon"]
+            if len(kept) != len(blocks):
+                section["blocks"] = kept
+                changed = True
+    if changed:
+        store_theme.custom_data = validate_custom_data(merged)
+        store_theme.save(update_fields=["custom_data", "updated_at"])
 
 
 def _offer_cart_icon_block(theme):
@@ -795,6 +867,8 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
         existing.content = content
         existing.file_size = len(content.encode("utf-8"))
         existing.save(update_fields=["content", "file_size", "updated_at"])
+        if path == sync.CARD_PATH:
+            _blocks_from_card_code(store_theme, content)
         return existing
 
     if theme.files.count() >= MAX_FILES:
@@ -1417,6 +1491,7 @@ def templates_changed(store_theme, before, client="", base_versions=None, starte
         theme.save(update_fields=["theme_data", "updated_at"])
         _publish_template(store_theme, name, source, version, after, code, client, started_at)
         results[name] = {"version": version, "conflict": conflict}
+    sync_card_cart_icon(store_theme, before)
     return results
 
 

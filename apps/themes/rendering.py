@@ -117,6 +117,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card-shell{position:relative;min-width:0}.product-card-shell .product-card{width:100%}
 .product-card__wishlist-form{position:absolute;z-index:2;top:8px;right:8px;margin:0}
 .product-card__wishlist-form{display:flex;align-items:center;gap:6px}
+.product__cart-icon{margin:-8px 0 16px}.product__cart-icon .site-header__cart{margin-left:0}
 .product-card__cart-area{position:absolute;z-index:2;top:0;left:0;right:0;aspect-ratio:1;pointer-events:none}
 .product-card__cart-area--portrait{aspect-ratio:3/4}.product-card__cart-area--landscape{aspect-ratio:4/3}
 .product-card__cart{position:absolute;right:12px;bottom:12px;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--bg);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);text-decoration:none;pointer-events:auto;opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s}
@@ -1701,8 +1702,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 heart = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
                 section["wishlist_heart"] = heart["settings"] if heart else None
 
-            if "cart_icon" in SECTIONS[section["type"]].get("required_blocks", []):
-                # The "Cart icon" block: its settings, or None when the owner hid it
+            if "cart_icon" in SECTIONS[section["type"]]["blocks"]:
+                # The "Cart icon" block: its settings, or None when the owner hid it (or never added it)
                 cart_block = next((b for b in all_blocks if b["type"] == "cart_icon" and not b.get("hidden")), None)
                 section["cart_icon"] = cart_block["settings"] if cart_block else None
 

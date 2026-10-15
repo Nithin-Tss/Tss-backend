@@ -1075,3 +1075,95 @@ def set_removed_sections(theme, name, removed):
     state = {**_state(theme, name), "removed": dict(list(removed.items())[-MAX_REMOVED:])}
     data["section_sync"] = {**(data.get("section_sync") or {}), name: state}
     theme.theme_data = data
+
+
+# ======================================================================= the product card's cart icon
+# The "Cart icon" block of the product sections says where the icon is shown (it is saved in the customizer and in
+# templates/<page>.json); the card's code (snippets/product-card.liquid) says how it looks: it is whatever sits
+# inside the card's show_cart_icon condition. These functions read, add and remove that part of the code;
+# services.sync_card_cart_icon() keeps the blocks and the code in step.
+CARD_PATH = "snippets/product-card.liquid"
+
+# What is added to the card when the owner adds a "Cart icon" block
+CARD_CART_MARKUP = """{%- if show_cart_icon and product.is_sold_out != true -%}
+  {%- comment -%} The "Cart icon" block's icon: shown on hover (always on touch screens), bottom right of the image {%- endcomment -%}
+  {%- capture cart_icon -%}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l1 12H5L6 8z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /><path d="M12 12v4M10 14h4" /></svg>{%- endcapture -%}
+  {%- assign cart_size = show_cart_icon.size | default: 44 -%}
+  {%- assign cart_label = show_cart_icon.label | default: 'Add to cart' -%}
+  <div class="product-card__cart-area product-card__cart-area--{{ ratio | default: 'square' }}">
+  {%- if product.variants.size > 1 -%}
+    <a class="product-card__cart" href="{{ product.url }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="Choose options for {{ product.title | escape }}" title="Choose options">{{ cart_icon }}</a>
+  {%- else -%}
+    <button class="product-card__cart" type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_icon }}</button>
+  {%- endif -%}
+  </div>
+{%- endif -%}
+"""
+
+_CARD_GUARD = re.compile(r"\{%-?\s*if\s+show_cart_icon\b[^%]*?-?%\}")
+_CARD_TAG = re.compile(r"\{%-?\s*(\w+)[^%]*?-?%\}")
+_CARD_BLOCK_TAGS = {"if", "unless", "case", "for", "tablerow", "capture", "comment"}
+_CARD_COMMENT = re.compile(r"\{%-?\s*comment\s*-?%\}.*?\{%-?\s*endcomment\s*-?%\}", re.S)
+
+
+def _card_without_comments(content):
+    """The code with every Liquid comment blanked out (same length), so a note is never taken for code."""
+    return _CARD_COMMENT.sub(lambda m: re.sub(r"[^\r\n]", " ", m.group(0)), content)
+
+
+def card_cart_region(content):
+    """(start, end) of the card's whole {% if show_cart_icon %} ... {% endif %}, with its own lines, or None."""
+    code = _card_without_comments(content)
+    guard = _CARD_GUARD.search(code)
+    if guard is None:
+        return None
+    depth, end = 1, None
+    for tag in _CARD_TAG.finditer(code, guard.end()):
+        name = tag.group(1)
+        if name in _CARD_BLOCK_TAGS:
+            depth += 1
+        elif name.startswith("end") and name[3:] in _CARD_BLOCK_TAGS:
+            depth -= 1
+            if depth == 0:
+                end = tag.end()
+                break
+    if end is None:
+        return None
+    start = guard.start()
+    line_start = content.rfind("\n", 0, start) + 1
+    if not content[line_start:start].strip():
+        start = line_start
+    rest = content[end:]
+    skip = len(rest) - len(rest.lstrip(" \t"))
+    if rest[skip:skip + 2] == "\r\n":
+        end += skip + 2
+    elif rest[skip:skip + 1] == "\n":
+        end += skip + 1
+    return start, end
+
+
+def has_card_cart_icon(content):
+    return card_cart_region(content) is not None
+
+
+def add_card_cart_icon(content):
+    """The card code with the cart icon added before the card's closing </div>, or None when it has one already
+    or the closing </div> is not on a line of its own (the code is then left exactly as it is)."""
+    if card_cart_region(content) is not None:
+        return None
+    close = content.rstrip().rfind("</div>")
+    if close == -1:
+        return None
+    line_start = content.rfind("\n", 0, close) + 1
+    if content[line_start:close].strip():
+        return None
+    newline = "\r\n" if "\r\n" in content else "\n"
+    return content[:line_start] + CARD_CART_MARKUP.replace("\n", newline) + content[line_start:]
+
+
+def remove_card_cart_icon(content):
+    """The card code without its cart icon, or None when it has none."""
+    region = card_cart_region(content)
+    if region is None:
+        return None
+    return content[:region[0]] + content[region[1]:]
