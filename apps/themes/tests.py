@@ -1040,6 +1040,477 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
             self.assertIn(name, schema["sections"])
 
 
+class PromotionsSectionTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.token, self.store = self.sign_up("promotions@example.com", "Promotions Store")
+
+    def test_promotions_is_available_for_home_without_changing_default_layout(self):
+        schema = self.ok("get", "/api/v1/themes/schema/")
+        self.assertEqual(schema["sections"]["promotions"]["pages"], ["index"])
+        self.assertEqual(schema["sections"]["promotions"]["type_limits"]["promotion"], 8)
+        self.assertIn("promotion", schema["sections"]["promotions"]["blocks"])
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(settings["templates"]["index"]["order"],
+                         ["slideshow", "featured", "carousel", "hero", "about"])
+        self.assertNotIn("promotions", settings["templates"]["index"]["sections"])
+
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        self.assertIn("sections/promotions.liquid", {item["path"] for item in files})
+
+    def test_existing_theme_gets_only_the_missing_promotions_file(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        theme.files.filter(file_path="sections/promotions.liquid").delete()
+        hero = theme.files.get(file_path="sections/hero.liquid")
+        hero_content = hero.content
+        get_store_theme(store)
+
+        self.assertTrue(theme.files.filter(file_path="sections/promotions.liquid").exists())
+        self.assertEqual(theme.files.get(file_path="sections/hero.liquid").content, hero_content)
+
+    def test_promotions_schema_metadata_is_not_rendered_as_liquid(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        theme = get_store_theme(store).theme
+        promotions = theme.files.get(file_path="sections/promotions.liquid")
+        promotions.content += '\n{% schema %}\n{"name": "Promotions"}\n{% endschema %}\n'
+        promotions.save(update_fields=["content", "updated_at"])
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        index = settings["templates"]["index"]
+        index["order"].append("promotions-test")
+        index["sections"]["promotions-test"] = {"type": "promotions", "settings": {}}
+        self.ok("put", "/api/v1/themes/settings/", settings)
+
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn('class="section promotions"', html)
+        self.assertNotIn("Liquid error in sections/promotions.liquid", html)
+
+    def test_promotions_can_be_saved_previewed_and_rendered(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Seasonal promotional item",
+            "sku": "PROMO-ITEM-1",
+            "status": "active",
+            "price": "19.99",
+        }, expect=201)
+        collection = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Seasonal Promotions",
+            "status": "active",
+            "products": [product["id"]],
+        }, expect=201)
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        index = settings["templates"]["index"]
+        section_id = "spring-offers"
+        index["order"].append(section_id)
+        index["sections"][section_id] = {
+            "type": "promotions",
+            "settings": {
+                "heading": "Seasonal offers",
+                "columns": "3",
+                "view_all_collection": collection["id"],
+            },
+            "blocks": [{
+                "type": "promotion",
+                "settings": {
+                    "heading": "Spring <script>alert(1)</script>",
+                    "text": "Save on seasonal favorites.",
+                    "image_url": "https://example.com/spring.jpg",
+                    "image_alt": "Spring collection",
+                    "discount_text": "15% off",
+                    "button_label": "Shop Offers",
+                    "button_link": "http://localhost:5173/",
+                    "background_color": "#F2F4F7",
+                },
+            }, {
+                "type": "button",
+                "settings": {
+                    "label": "Shop Offers",
+                    "link": "http://localhost:5173/",
+                },
+            }],
+        }
+        self.ok("put", "/api/v1/themes/settings/", settings)
+
+        saved = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(saved["templates"]["index"]["order"][-1], section_id)
+        preview = self.ok("post", "/api/v1/themes/preview/", saved)["html"]
+        self.assertIn("Seasonal offers", preview)
+        self.assertIn("15% off", preview)
+        self.assertIn("Save on seasonal favorites.", preview)
+        self.assertIn("https://example.com/spring.jpg", preview)
+        promotions_url = f'/s/{self.store["storeSlug"]}/collections/{collection["handle"]}'
+        self.assertIn(f'href="{promotions_url}">View all &rarr;</a>', preview)
+        shop_offers_url = f'/s/{self.store["storeSlug"]}/collections/promotions'
+        self.assertIn(f'href="{shop_offers_url}">Shop Offers</a>', preview)
+        self.assertNotIn("localhost:5173", preview)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", preview)
+        self.assertNotIn("<script>alert(1)</script>", preview)
+
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        home_html = response.content.decode()
+        self.assertIn("Seasonal offers", home_html)
+        self.assertIn(f'href="{promotions_url}">View all &rarr;</a>', home_html)
+
+        promotion_page = self.client.get(promotions_url)
+        self.assertEqual(promotion_page.status_code, 200)
+        self.assertIn("Seasonal Promotions", promotion_page.content.decode())
+        self.assertIn("Seasonal promotional item", promotion_page.content.decode())
+
+    def test_shop_offers_route_shows_welcome_then_promotional_collection_products(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Promotional item",
+            "sku": "PROMO-ROUTE-1",
+            "status": "active",
+            "price": "19.99",
+        }, expect=201)
+        promotion_url = f'/s/{self.store["storeSlug"]}/collections/promotions'
+
+        empty_page = self.client.get(promotion_url)
+        self.assertEqual(empty_page.status_code, 200)
+        empty_html = empty_page.content.decode()
+        self.assertIn("Welcome! Promotional products and special offers will appear here soon.", empty_html)
+        self.assertNotIn("Promotional item", empty_html)
+
+        self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Promotions",
+            "status": "active",
+            "products": [product["id"]],
+        }, expect=201)
+        populated_page = self.client.get(promotion_url)
+        self.assertEqual(populated_page.status_code, 200)
+        self.assertIn("Promotional item", populated_page.content.decode())
+
+    def test_promotions_cannot_be_added_to_non_home_pages(self):
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        product = settings["templates"]["product"]
+        section_id = "product-promotion"
+        product["order"].append(section_id)
+        product["sections"][section_id] = {"type": "promotions", "settings": {}}
+
+        response = self.client.put("/api/v1/themes/settings/", settings, format="json")
+        self.assertEqual(response.status_code, 400)
+
+
+class PromotionsSyncTest(StoreClientMixin, APITestCase):
+    """
+    A Home page Promotions section in both editors, like the Product grid ("All products"): its values
+    are its entry in templates/index.json in Edit code and its panel in the customizer (one saved copy);
+    its line in templates/index.liquid follows the sections list; its markup is sections/promotions.liquid,
+    which neither editor's value changes ever rewrite.
+    """
+
+    PROMOTIONS = "sections/promotions.liquid"
+    INDEX_JSON = "templates/index.json"
+    INDEX_LIQUID = "templates/index.liquid"
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("promo-sync@example.com", "Promo Sync Store")
+        # Added in the customizer, like a merchant picking it from "Add section"
+        data = self.ok("get", "/api/v1/themes/settings/")
+        index = data["templates"]["index"]
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": index["order"] + ["offers"],
+            "sections": {"offers": {"type": "promotions", "settings": {"heading": "Weekly offers"},
+                                    "blocks": self.cards("Card A", "Card B")}},
+        }}})
+
+    def cards(self, *headings):
+        return [{"type": "promotion", "settings": {"heading": h, "discount_text": f"{h} deal"}} for h in headings]
+
+    def files(self):
+        return {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
+
+    def save_file(self, path, content, expect=200):
+        r = self.client.post("/api/v1/themes/files/", {"path": path, "content": content}, format="json")
+        self.assertEqual(r.status_code, expect, r.content[:500])
+        return r.json()
+
+    def code_index(self):
+        return json.loads(self.files()[self.INDEX_JSON])
+
+    def save_code_index(self, change):
+        index = self.code_index()
+        change(index["sections"]["offers"])
+        self.save_file(self.INDEX_JSON, json.dumps(index, indent=2))
+
+    def customizer_offers(self):
+        return self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["offers"]
+
+    def save_customizer_offers(self, change):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["offers"]
+        change(section)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"offers": section}}}})
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        return self.ok("post", "/api/v1/themes/preview/?section=offers", data)["html"]
+
+    def card_headings(self, section):
+        return [b["settings"]["heading"] for b in section["blocks"]]
+
+    def test_1_code_setting_reaches_customizer_preview_and_store(self):
+        self.save_code_index(lambda s: s["settings"].update(heading="From code", columns="2"))
+        self.assertEqual(self.customizer_offers()["settings"]["heading"], "From code")
+        self.assertEqual(self.customizer_offers()["settings"]["columns"], "2")
+        for html in (self.preview_html(), self.store_html()):
+            self.assertIn("From code", html)
+            self.assertIn("--promotions-columns: 2", html)
+
+    def test_2_customizer_setting_reaches_code_preview_and_store(self):
+        def change(s):
+            s["settings"].update(heading="From sidebar", columns="4")
+            s["blocks"][0]["settings"].update(discount_text="30% off", button_label="Shop now", button_link="/collections/all",
+                                              image_url="https://example.com/sale.jpg", background_color="#112233")
+        self.save_customizer_offers(change)
+
+        offers = self.code_index()["sections"]["offers"]  # written to the code, in the same data format
+        self.assertEqual(offers["settings"]["heading"], "From sidebar")
+        self.assertEqual(offers["settings"]["columns"], "4")
+        card = offers["blocks"][0]["settings"]
+        self.assertEqual((card["discount_text"], card["button_label"], card["button_link"], card["image_url"],
+                          card["background_color"]),
+                         ("30% off", "Shop now", "/collections/all", "https://example.com/sale.jpg", "#112233"))
+        for html in (self.preview_html(), self.store_html()):
+            self.assertIn("From sidebar", html)
+            self.assertIn("30% off", html)
+            self.assertIn("https://example.com/sale.jpg", html)
+            self.assertIn("background-color: #112233", html)
+            self.assertIn(f'href="/s/{self.store["storeSlug"]}/collections/all">Shop now</a>', html)
+
+    def test_3_cards_add_reorder_hide_remove_in_both_editors(self):
+        # Added in the code
+        self.save_code_index(lambda s: s["blocks"].extend(self.cards("Card C")))
+        self.assertEqual(self.card_headings(self.customizer_offers()), ["Card A", "Card B", "Card C"])
+        self.assertIn("Card C", self.store_html())
+        # Reordered in the customizer
+        self.save_customizer_offers(lambda s: s["blocks"].reverse())
+        self.assertEqual(self.card_headings(self.code_index()["sections"]["offers"]), ["Card C", "Card B", "Card A"])
+        html = self.store_html()
+        self.assertLess(html.index("Card C"), html.index("Card A"))
+        # Hidden in the customizer, shown again in the code
+        self.save_customizer_offers(lambda s: s["blocks"][0].update(hidden=True))
+        self.assertTrue(self.code_index()["sections"]["offers"]["blocks"][0]["hidden"])
+        self.assertNotIn("Card C", self.store_html())
+        self.save_code_index(lambda s: s["blocks"][0].update(hidden=False))
+        self.assertFalse(self.customizer_offers()["blocks"][0].get("hidden"))
+        self.assertIn("Card C", self.preview_html())
+        # Removed in the code
+        self.save_code_index(lambda s: s["blocks"].pop(0))
+        self.assertEqual(self.card_headings(self.customizer_offers()), ["Card B", "Card A"])
+        self.assertNotIn("Card C", self.store_html())
+
+    def test_4_adding_the_section_in_either_editor_updates_the_other(self):
+        # Added in the customizer (setUp): its line is written into templates/index.liquid
+        self.assertIn("offers", [t["id"] for t in sync.template_tags(self.files()[self.INDEX_LIQUID])])
+        # Added in the code: a new line creates a Promotions section with its default settings
+        code = self.files()[self.INDEX_LIQUID]
+        line = "{% section 'offers', type: 'promotions' %}"
+        self.assertIn(line, code)
+        self.save_file(self.INDEX_LIQUID, code.replace(line, line + "\n{% section 'more-offers', type: 'promotions' %}"))
+        index = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]
+        self.assertEqual(index["order"][index["order"].index("offers") + 1], "more-offers")
+        self.assertEqual(index["sections"]["more-offers"]["type"], "promotions")
+        self.assertEqual(index["sections"]["more-offers"]["settings"]["heading"], "Promotions")
+        self.assertEqual(self.store_html().count('class="section promotions"'), 2)
+
+    def test_5_custom_markup_survives_both_editors(self):
+        edited = self.files()[self.PROMOTIONS].replace(
+            '<section id="section-{{ section.id }}"', '<p class="promo-note">Hand made</p><section id="section-{{ section.id }}"', 1)
+        self.assertNotEqual(edited, self.files()[self.PROMOTIONS])
+        self.save_file(self.PROMOTIONS, edited)
+        self.save_customizer_offers(lambda s: s["settings"].update(heading="Sidebar"))
+        self.save_code_index(lambda s: s["settings"].update(heading="Code"))
+        self.assertEqual(self.files()[self.PROMOTIONS], edited)  # neither value change rewrote the markup
+        self.assertIn('class="promo-note"', self.preview_html())
+        self.assertIn('class="promo-note"', self.store_html())
+
+    def test_6_invalid_promotions_code_is_refused_and_store_keeps_working(self):
+        saved = self.files()[self.PROMOTIONS]
+        r = self.save_file(self.PROMOTIONS, saved.replace("{%- endif -%}", "", 1), expect=400)
+        self.assertIn("Line", r["content"][0] if isinstance(r["content"], list) else r["content"])
+        self.assertEqual(self.files()[self.PROMOTIONS], saved)
+        html = self.store_html()
+        self.assertNotIn("Liquid error", html)
+        self.assertIn("Weekly offers", html)
+
+
+class PromotionsProductsTest(StoreClientMixin, APITestCase):
+    """
+    Promotions shows the products of the collection chosen in the customizer, with the shared product
+    cards, under its promotion cards. The collection is read on every render; nothing is copied into the theme.
+    """
+
+    INDEX_JSON = "templates/index.json"
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("promo-products@example.com", "Promo Products Store")
+        self.a = self.product("Product A", "500", images=["https://example.com/a.jpg"])
+        self.b = self.product("Product B", "800")
+        self.c = self.product("Product C", "1000")  # no image
+        self.collection = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Promotions", "status": "active", "products": [self.a["id"], self.c["id"]],
+        }, expect=201)
+        self.save_offers({"heading": "Deals", "view_all_collection": self.collection["id"]},
+                         [{"type": "promotion", "settings": {"heading": "Card deal", "discount_text": "10% off"}}])
+
+    def product(self, title, price, images=()):
+        return self.ok("post", "/api/v1/catalog/products/", {
+            "title": title, "sku": title.replace(" ", "-").upper(), "status": "active", "price": price,
+            "images": list(images),
+        }, expect=201)
+
+    def save_offers(self, settings, blocks=None):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        index = data["templates"]["index"]
+        section = index["sections"].get("offers", {"type": "promotions", "settings": {}, "blocks": []})
+        section["settings"].update(settings)
+        if blocks is not None:
+            section["blocks"] = blocks
+        order = index["order"] if "offers" in index["order"] else index["order"] + ["offers"]
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {"order": order, "sections": {"offers": section}}}})
+
+    def offers(self):
+        return self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["offers"]
+
+    def promotions_html(self, html=None):
+        """Just the Promotions section (the home page's All products grid lists every product too)."""
+        if html is None:
+            r = self.client.get(f"/s/{self.store['storeSlug']}/")
+            self.assertEqual(r.status_code, 200)
+            html = r.content.decode()
+        self.assertNotIn("Liquid error", html)
+        start = html.index('class="section promotions"')
+        return html[start:html.index("</section>", start)]
+
+    def preview_html(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        return self.ok("post", "/api/v1/themes/preview/?section=offers", data)["html"]
+
+    def cards(self, html):
+        return html.count('class="product-card-shell"')
+
+    def url(self, product):
+        return f'/s/{self.store["storeSlug"]}/products/{product["id"]}'
+
+    def test_selected_collection_shows_only_its_products_with_title_image_price_and_link(self):
+        for html in (self.promotions_html(), self.promotions_html(self.preview_html())):
+            self.assertEqual(self.cards(html), 2)
+            self.assertIn("Product A", html)
+            self.assertIn("Product C", html)
+            self.assertNotIn("Product B", html)
+            self.assertIn('src="https://example.com/a.jpg"', html)
+            self.assertIn("500.00</span>", html)  # the product's own price: nothing is discounted for being promoted
+            self.assertIn("1,000.00</span>", html)
+            self.assertIn(f'href="{self.url(self.a)}"', html)
+            self.assertIn(f'href="{self.url(self.c)}"', html)
+            self.assertIn("Card deal", html)  # the promotion cards stay
+            self.assertIn("10% off", html)
+
+    def test_adding_and_removing_collection_products_shows_on_the_next_render(self):
+        self.ok("patch", f"/api/v1/catalog/collections/{self.collection['id']}/",
+                {"products": [self.c["id"], self.b["id"]]})
+        html = self.promotions_html()
+        self.assertIn("Product B", html)
+        self.assertNotIn("Product A", html)
+        self.assertIn("Product C", html)
+        self.assertNotIn(self.b["id"], json.dumps(self.offers()))  # nothing about the products is saved in the theme
+
+    def test_view_all_opens_the_selected_collection_page(self):
+        page_url = f'/s/{self.store["storeSlug"]}/collections/{self.collection["handle"]}'
+        self.assertIn(f'href="{page_url}">View all &rarr;</a>', self.promotions_html())
+        page = self.client.get(page_url)
+        self.assertEqual(page.status_code, 200)
+        html = page.content.decode()
+        self.assertIn("Product A", html)
+        self.assertIn("Product C", html)
+        self.assertNotIn("Product B", html)
+
+    def test_product_limit_and_columns(self):
+        self.save_offers({"product_limit": 1, "product_columns": 3, "product_columns_mobile": 1})
+        html = self.promotions_html()
+        self.assertEqual(self.cards(html), 1)
+        self.assertIn("--cols: 3; --cols-mobile: 1", html)
+
+    def test_empty_or_no_collection_is_safe_and_cards_only_stay_as_before(self):
+        empty = self.ok("post", "/api/v1/catalog/collections/", {"name": "Empty offers", "status": "active"}, expect=201)
+        self.save_offers({"view_all_collection": empty["id"]})
+        html = self.promotions_html()
+        self.assertEqual(self.cards(html), 0)
+        self.assertIn("No products yet.", html)
+        # No collection: only the promotion cards, as before this feature
+        self.save_offers({"view_all_collection": ""})
+        html = self.promotions_html()
+        self.assertEqual(self.cards(html), 0)
+        self.assertNotIn("No products yet.", html)
+        self.assertNotIn("View all", html)
+        self.assertIn("Card deal", html)
+
+    def test_products_hidden_from_the_store_are_left_out(self):
+        self.ok("patch", f"/api/v1/catalog/products/{self.a['id']}/", {"status": "draft"})
+        html = self.promotions_html()
+        self.assertNotIn("Product A", html)
+        self.assertIn("Product C", html)
+
+    def test_settings_persist_and_sync_with_the_code_both_ways(self):
+        # Customizer -> code
+        self.save_offers({"product_limit": 2, "product_columns": 5})
+        code = json.loads({f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}[self.INDEX_JSON])
+        saved = code["sections"]["offers"]["settings"]
+        self.assertEqual((saved["view_all_collection"], saved["product_limit"], saved["product_columns"]),
+                         (self.collection["id"], 2, 5))
+        # Code -> customizer, preview and store
+        code["sections"]["offers"]["settings"].update(product_limit=1, product_columns_mobile=1)
+        r = self.client.post("/api/v1/themes/files/", {"path": self.INDEX_JSON, "content": json.dumps(code)}, format="json")
+        self.assertEqual(r.status_code, 200, r.content[:500])
+        reloaded = self.offers()["settings"]
+        self.assertEqual((reloaded["product_limit"], reloaded["product_columns"], reloaded["product_columns_mobile"]),
+                         (1, 5, 1))
+        self.assertEqual(reloaded["view_all_collection"], self.collection["id"])
+        self.assertEqual(self.offers()["blocks"][0]["settings"]["heading"], "Card deal")
+        for html in (self.promotions_html(), self.promotions_html(self.preview_html())):
+            self.assertEqual(self.cards(html), 1)
+            self.assertIn("--cols: 5; --cols-mobile: 1", html)
+
+    def test_an_untouched_promotions_file_gets_the_product_grid_and_an_edited_one_is_kept(self):
+        import hashlib
+
+        from apps.tenancy.models import Store
+        from .services import STARTER_UPGRADES, get_store_theme, starter_files
+
+        new = starter_files()["sections/promotions.liquid"]
+        start = new.index("    {%- comment -%} The chosen collection's products")
+        css = "  #section-{{ section.id }} .promotions__grid + .promotions__products {\n    margin-top: 32px;\n  }\n"
+        old = (new[:start] + new[new.index("  </div>\n</section>"):]).replace(css, "")
+        self.assertIn(hashlib.sha256(old.encode("utf-8")).hexdigest(), STARTER_UPGRADES["sections/promotions.liquid"])
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        for content, expected in ((old, new), (old + "{%- comment -%} mine {%- endcomment -%}\n", None)):
+            theme = get_store_theme(store).theme
+            theme.files.filter(file_path="sections/promotions.liquid").update(content=content)
+            theme.theme_data = {**theme.theme_data, "starter_revision": 35}
+            theme.save()
+            get_store_theme(store)
+            stored = theme.files.get(file_path="sections/promotions.liquid").content
+            self.assertEqual(stored, expected or content)
+
+
 # The first starter header (2df94aa), before the header followed Theme settings
 OLDEST_STARTER_HEADER = """<header class="site-header">
   <div class="page-width site-header__inner">
@@ -1778,7 +2249,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 35)
+        self.assertEqual(theme.theme_data["starter_revision"], 36)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2511,7 +2982,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 35)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 36)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))

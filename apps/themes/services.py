@@ -47,6 +47,8 @@ REQUIRED_FILES = {
     "snippets/wishlist.liquid",
     # Cart: one snippet with the icon, the drawer, the cart page and the script
     "snippets/cart.liquid",
+    # Promotions is available in the customizer for existing private starter themes too
+    "sections/promotions.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -56,7 +58,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 35
+STARTER_REVISION = 36
 STARTER_UPGRADES = {
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
@@ -205,6 +207,10 @@ STARTER_UPGRADES = {
         "a67252e6fa4f8a542b9581022bf8037ed5facf20b03603aaaf9114ee53d82035",  # revision 18: pass wishlist state to cards
         "920955c03a592c48c8eb8abda3a32656231eff12dc1caa4acb59a3096eb1c306",  # revision 19: before the wishlist snippet
         "f5741f0851fa01f20743d4d6c0cd8080b19ac1b31f1589af909cfc8a1043a866",  # revision 19: same, with CRLF line endings
+    },
+    "sections/promotions.liquid": {
+        "cd2410ae1fb9c2213d1e549004ebf3e452af8506686638925b0aac16b8563a38",  # revision 36: before the collection's products
+        "e08231172a0b48b7759637318a7175e9af93cb47ba1f5f18137b18cf213be7cd",  # revision 36: same, with CRLF line endings
     },
 }
 
@@ -846,9 +852,9 @@ def _new_file(theme, path, content):
     )
 
 
-# Product list code (the card every list renders, and the Product grid section): code that doesn't
-# compile is refused (with its line), so the saved version keeps the grid, carousel and collection page working
-CHECKED_FILES = {"snippets/product-card.liquid", "sections/product-grid.liquid"}
+# Product list code (the card every list renders, and the Product grid section) and the Promotions
+# section: code that doesn't compile is refused (with its line), so the saved version keeps the home page working
+CHECKED_FILES = {"snippets/product-card.liquid", "sections/product-grid.liquid", "sections/promotions.liquid"}
 
 
 def _check_liquid(content):

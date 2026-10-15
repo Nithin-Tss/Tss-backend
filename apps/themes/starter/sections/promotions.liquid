@@ -1,0 +1,127 @@
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section promotions">
+  <div class="page-width">
+    {%- if s.heading != blank or s.view_all_label != blank and section.view_all_url != blank -%}
+      <div class="promotions__header">
+        {%- if s.heading != blank -%}<h2 class="section-heading promotions__heading">{{ s.heading }}</h2>{%- endif -%}
+        {%- if s.view_all_label != blank and section.view_all_url != blank -%}
+          <a class="promotions__view-all" href="{{ section.view_all_url }}">{{ s.view_all_label }} &rarr;</a>
+        {%- endif -%}
+      </div>
+    {%- endif -%}
+    {%- if section.blocks.size > 0 -%}
+      <div class="promotions__grid" style="--promotions-columns: {{ s.columns }}">
+        {%- for block in section.blocks -%}
+          {%- assign b = block.settings -%}
+          <article class="promotions__card" style="background-color: {{ b.background_color }}">
+            {%- if b.image_url != blank -%}
+              <div class="promotions__image">
+                <img src="{{ b.image_url }}" alt="{{ b.image_alt }}" loading="lazy">
+              </div>
+            {%- endif -%}
+            <div class="promotions__content">
+              {%- if b.discount_text != blank -%}
+                <p class="promotions__discount">{{ b.discount_text }}</p>
+              {%- endif -%}
+              {%- if b.heading != blank -%}
+                <h3 class="promotions__title">{{ b.heading }}</h3>
+              {%- endif -%}
+              {%- if b.text != blank -%}
+                <p class="promotions__text">{{ b.text }}</p>
+              {%- endif -%}
+              {%- if b.button_label != blank and b.button_link != blank -%}
+                <a class="button promotions__button" href="{{ b.button_link | link }}">{{ b.button_label }}</a>
+              {%- endif -%}
+            </div>
+          </article>
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+    {%- comment -%} The chosen collection's products, with the same cards as the product grid {%- endcomment -%}
+    {%- if section.has_collection -%}
+      {%- if section.products.size == 0 -%}
+        <div class="empty-state promotions__products">No products yet.</div>
+      {%- else -%}
+        <div class="product-list__grid promotions__products" style="--cols: {{ s.product_columns }}; --cols-mobile: {{ s.product_columns_mobile }}">
+          {%- for product in section.products -%}
+            {% render 'product-card', product: product, wishlist_ids: wishlist_ids, return_url: return_url %}
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+    {%- endif -%}
+  </div>
+</section>
+<style>
+  #section-{{ section.id }} .promotions__header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  #section-{{ section.id }} .promotions__heading {
+    margin-bottom: 24px;
+  }
+  #section-{{ section.id }} .promotions__view-all {
+    flex: none;
+    color: inherit;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  #section-{{ section.id }} .promotions__view-all:hover {
+    text-decoration: underline;
+  }
+  #section-{{ section.id }} .promotions__grid {
+    display: grid;
+    grid-template-columns: repeat(var(--promotions-columns, 3), minmax(0, 1fr));
+    gap: 20px;
+  }
+  #section-{{ section.id }} .promotions__card {
+    min-width: 0;
+    overflow: hidden;
+    border-radius: var(--radius, 14px);
+  }
+  #section-{{ section.id }} .promotions__image {
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+  }
+  #section-{{ section.id }} .promotions__image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  #section-{{ section.id }} .promotions__content {
+    padding: 22px;
+  }
+  #section-{{ section.id }} .promotions__discount {
+    margin: 0 0 8px;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  #section-{{ section.id }} .promotions__title {
+    margin: 0 0 8px;
+    font-size: 20px;
+  }
+  #section-{{ section.id }} .promotions__text {
+    margin: 0 0 18px;
+    white-space: pre-line;
+  }
+  #section-{{ section.id }} .promotions__button {
+    margin-top: 2px;
+  }
+  #section-{{ section.id }} .promotions__grid + .promotions__products {
+    margin-top: 32px;
+  }
+  @media (max-width: 800px) {
+    #section-{{ section.id }} .promotions__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 520px) {
+    #section-{{ section.id }} .promotions__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

@@ -28,6 +28,7 @@ from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.catalog.models import Collection
 from apps.catalog.services import published_collections, published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import HasStorePermission, IsStoreMember
@@ -1703,7 +1704,16 @@ def storefront_collection(
 
     # Draft collections, and ones off the Online Store, are not found
     lookup = {"pk": collection_id} if collection_id is not None else {"handle": handle}
-    collection = get_object_or_404(published_collections(store), **lookup)
+    collection = published_collections(store).filter(**lookup).first()
+    if collection is None and handle == "promotions":
+        collection = Collection(
+            store=store,
+            name="Promotions",
+            handle="promotions",
+            description="Welcome! Promotional products and special offers will appear here soon.",
+        )
+    elif collection is None:
+        raise Http404("Collection not found.")
 
     return render_page(
         store,
