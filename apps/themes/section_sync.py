@@ -98,8 +98,8 @@ SYNCED_FILES = {
 }
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
-# Revision 2: older starter snippets and CRLF line endings count as untouched
-ORIGINALS_REVISION = 2
+# Revision 6: show the guest wishlist item count beside existing header hearts
+ORIGINALS_REVISION = 6
 
 
 def is_original_snippet(name, content):

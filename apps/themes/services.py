@@ -45,7 +45,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 16
+STARTER_REVISION = 18
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -63,10 +63,12 @@ STARTER_UPGRADES = {
     "sections/product-grid.liquid": {
         "b5bc74b7ad19eb53aa7935de4d44ecd407b7748445ba5a73ab65ada18b24e184",
         "197e7ad9e76dda5adcb0b762a69623d0ebb407baf1e3391edd794d26fa41275f",
+        "d98591d946fbc257e35e491777052a64ddea4602a59047da771ad6245d2fbe59",  # revision 18: pass wishlist state to cards
     },
     "sections/product-carousel.liquid": {
         "0609acb6e9af090ad850a2f416005ac19ae7716ba1acb730c063864e7e6776d4",
         "a79be796dde0feb9dd8fceda3a0b4e00c8c1cc3469e6066e02c506dfa8d88055",  # revision 16: no empty box for shoppers, pause on focus
+        "684361444547f8952a62f6f5f86c2ddd3e4c86c56e60b717ff38ad3e148d3897",  # revision 18: pass wishlist state to cards
     },
     "sections/rich-text.liquid": {
         "37ec79026e20ea886f79c150c660ffdfb6ca04b4614bb4878a6d263e1a58b10b",
@@ -78,6 +80,8 @@ STARTER_UPGRADES = {
         "386b5a2d330ef931de50ce9fa6f66cb49f0bae00b23582dfd4e27b6a84ad3723",
         "4af9942dd8108371e0d9225c91686e3b55a7aa04fad897345fbee7d6a1875dd3",
         "1930541f426b1a8fb7c816b9c63b2afbf84379aa249d4871556299ba0e8f9dce",  # revision 15: price shown inline, no 'price' snippet
+        "ec61086466c120f8ad0463a727c98777b07d9155bb9f167bd1224b51132fb4b7",  # revision 17: wishlist actions
+        "211c4b936c465237301a2a6a4373ff684ab6995e6ad769adbdc2e185ee8077e3",  # revision 18: wishlist toggle state
     },
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
@@ -86,6 +90,8 @@ STARTER_UPGRADES = {
         "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
         "6c8de76dd784aabf1a7e13c29a4a30eed779f80e8b2824ace5b232109ffad098",  # revision 15: price shown inline, no 'price' snippet
         "e365056fcc5eb05b563e29fca7ab581c8158c4521faedfdc4acbe1701c887552",  # revision 16: option price/SKU fix, low-stock setting
+        "e50ac85c4dd9c6e69b590632b6b0e2333fd9dff7521c7493e5fca6a8a39f97e5",  # revision 17: wishlist action
+        "533aa3c35440fbb925de41f7e9fc62f01286439a5252bb4194ee449144e74817",  # revision 18: wishlist toggle state
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
@@ -103,6 +109,7 @@ STARTER_UPGRADES = {
         "80571d6bf2f85bfe5f4dc13210c1a575a1a0c57bc4a6b8bddaeb954241d294b5",
         "878a1da3a5ee2d1bd4e8d09dfd5c44f2509a75905e0177782b3e1f06ca018567",
         "0c7227f63f577546d1926e69940b5e949b3a440f24621438231d33147d3445a8",  # revision 16: escaped pagination links, sort only with 2+ products
+        "a67252e6fa4f8a542b9581022bf8037ed5facf20b03603aaaf9114ee53d82035",  # revision 18: pass wishlist state to cards
     },
 }
 
@@ -560,6 +567,8 @@ def _add_synced_sections(theme, custom_data=None):
                 paths.append(config["path"])
                 if config["kind"] == "section":
                     paths.append(f"snippets/{config['snippet']}.liquid")
+                    if name == "header":
+                        paths.append("snippets/styles.liquid")
             files = dict(locked.files.filter(file_path__in=paths).values_list("file_path", "content"))
             for name in todo:
                 config = sync.SYNCED_FILES[name]
@@ -567,13 +576,150 @@ def _add_synced_sections(theme, custom_data=None):
                     _convert_template(locked, name, files.get(config["path"]), custom_data)
                     continue
                 if config["path"] in files:
+                    if name == "header":
+                        file = locked.files.get(file_path=config["path"])
+                        upgraded = _add_header_wishlist_setting(file.content)
+                        if upgraded is not None:
+                            sync.record_version(locked, name, file.content, "upgrade")
+                            file.content = upgraded
+                            file.file_size = len(upgraded.encode("utf-8"))
+                            file.save(update_fields=["content", "file_size", "updated_at"])
+                            sync.invalidate(locked.pk, config["path"])
+                    if name == "header":
+                        _upgrade_header_wishlist_styles(locked, files.get("snippets/styles.liquid"))
                     continue
                 snippet = files.get(f"snippets/{config['snippet']}.liquid")
                 if snippet is None or sync.is_original_snippet(name, snippet):
                     _new_file(locked, config["path"], starter_files()[config["path"]]).save()
-            locked.theme_data = {**data, "synced_sections": {**checked, **{n: sync.ORIGINALS_REVISION for n in todo}}}
+                if name == "header":
+                    _upgrade_header_wishlist_styles(locked, files.get("snippets/styles.liquid"))
+            locked.theme_data = {
+                **(locked.theme_data or data),
+                "synced_sections": {**checked, **{n: sync.ORIGINALS_REVISION for n in todo}},
+            }
             locked.save(update_fields=["theme_data", "updated_at"])
     theme.theme_data = locked.theme_data
+
+
+def _upgrade_header_wishlist_styles(theme, content):
+    if content is None:
+        return
+    upgraded = _add_header_wishlist_styles(content)
+    if upgraded is None:
+        return
+    file = theme.files.get(file_path="snippets/styles.liquid")
+    file.content = upgraded
+    file.file_size = len(upgraded.encode("utf-8"))
+    file.save(update_fields=["content", "file_size", "updated_at"])
+
+
+def _add_header_wishlist_styles(content):
+    """Upgrade wishlist icon sizing or add responsive styles in a standard theme stylesheet."""
+    old_icon_rule = (
+        "  .site-header__wishlist svg { width: 22px; height: 22px; fill: none; stroke: currentColor; "
+        "stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }"
+    )
+    icon_rule = (
+        "  .site-header__wishlist svg { width: 20px; height: 20px; fill: none; stroke: currentColor; "
+        "stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }"
+    )
+    if old_icon_rule in content:
+        return content.replace(old_icon_rule, icon_rule, 1)
+    if ".site-header__wishlist" in content:
+        return None
+    anchor = "  .site-header__nav a:hover { opacity: 1; }"
+    if content.count(anchor) != 1:
+        return None
+    newline = "\r\n" if "\r\n" in content else "\n"
+    styles = newline.join((
+        "  .site-header__actions { display: flex; align-items: center; margin-left: auto; }",
+        "  .site-header__wishlist {",
+        "    display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;",
+        "    padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit;",
+        "    cursor: pointer; opacity: .8; transition: opacity .15s, background-color .15s;",
+        "  }",
+        "  .site-header__wishlist:hover { opacity: 1; background: var(--soft); }",
+        "  .site-header__wishlist:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }",
+        icon_rule,
+        '  .site-header[data-layout="center"] .site-header__actions { margin-left: 0; }',
+        "  @media (max-width: 640px) {",
+        "    .site-header__inner { flex-wrap: wrap; }",
+        "    .site-header__nav { order: 3; flex: 1 0 100%; justify-content: center; gap: 14px; }",
+        "    .site-header__actions { order: 2; }",
+        '    .site-header[data-layout="center"] .site-header__nav { order: 2; flex: initial; }',
+        '    .site-header[data-layout="center"] .site-header__actions { order: 3; }',
+        "  }",
+    ))
+    return content.replace(anchor, anchor + newline + styles, 1)
+
+
+def _add_header_wishlist_setting(content):
+    """Upgrade the wishlist icon and add its setting to standard synced headers."""
+    old_heart = (
+        'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 '
+        '7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z'
+    )
+    heart = (
+        'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 '
+        '7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z'
+    )
+    has_old_heart = old_heart in content
+    if has_old_heart:
+        content = content.replace(old_heart, heart, 1)
+    if "show_wishlist" in content:
+        upgraded = re.sub(
+            r'<button class="site-header__wishlist" type="button" aria-label="Wishlist" title="Wishlist">(.*?)</button>',
+            r'<a class="site-header__wishlist" href="{{ shop.url }}/wishlist/" aria-label="Wishlist" title="Wishlist">\1</a>',
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+        if "data-wishlist-count" not in upgraded:
+            upgraded = re.sub(
+                r'(<a class="site-header__wishlist"[^>]*>.*?</svg>)(\s*)(</a>)',
+                r'\1\2<span class="site-header__wishlist-count" data-wishlist-count aria-live="polite">{{ wishlist_count }}</span>\2\3',
+                upgraded,
+                count=1,
+                flags=re.DOTALL,
+            )
+        return upgraded if upgraded != content else (content if has_old_heart else None)
+
+    _, schema_text, schema_start = sync.split(content)
+    if schema_text is None:
+        return None
+    newline = "\r\n" if "\r\n" in content else "\n"
+    markup_anchor = f'    {{%- endif -%}}{newline}  </div>{newline}</header>'
+    schema_anchor = re.compile(
+        r'^([ \t]*\{"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", '
+        r'"default": (?:true|false)\},)[ \t]*\r?$',
+        re.MULTILINE,
+    )
+    markup_prefix = content[:schema_start]
+    if markup_prefix.count(markup_anchor) != 1 or len(schema_anchor.findall(schema_text)) != 1:
+        return None
+
+    wishlist_markup = newline.join((
+        '    {%- if s.show_wishlist -%}',
+        '      <div class="site-header__actions">',
+        '        <a class="site-header__wishlist" href="{{ shop.url }}/wishlist/" aria-label="Wishlist" title="Wishlist">',
+        '          <svg viewBox="0 0 24 24" aria-hidden="true">',
+        f'            <path d="{heart}" />',
+        '          </svg>',
+        '          <span class="site-header__wishlist-count" data-wishlist-count aria-live="polite">{{ wishlist_count }}</span>',
+        '        </a>',
+        '      </div>',
+        '    {%- endif -%}',
+    )) + newline
+    upgraded_markup = markup_prefix.replace(markup_anchor, wishlist_markup + markup_anchor, 1)
+    wishlist_setting = (
+        '{"type": "checkbox", "id": "show_wishlist", "label": "Show Wishlist", "default": true},'
+    )
+    upgraded_schema = schema_anchor.sub(
+        lambda match: match.group(1) + newline + "    " + wishlist_setting,
+        schema_text,
+        count=1,
+    )
+    return upgraded_markup + upgraded_schema + content[schema_start + len(schema_text):]
 
 
 def _convert_template(theme, name, content, custom_data):

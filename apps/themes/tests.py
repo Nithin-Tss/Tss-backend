@@ -424,6 +424,45 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.save_code(self.code().replace("{{ section.attrs }}", ""))
         self.assertTrue(self.preview(self.section()["values"]).startswith('<div data-tss-section="header"'))
 
+    def test_wishlist_visibility_is_customizable_and_persists(self):
+        from .services import starter_files
+
+        header = self.section()
+        setting = header["spec"]["settings"]["show_wishlist"]
+        self.assertEqual(setting["type"], "checkbox")
+        self.assertEqual(setting["label"], "Show Wishlist")
+        self.assertTrue(header["values"]["settings"]["show_wishlist"])
+        styles = next(file["content"] for file in self.ok("get", "/api/v1/themes/files/")["files"]
+                      if file["path"] == "snippets/styles.liquid")
+        self.assertIn(".site-header__wishlist", styles)
+        self.assertIn("width: 20px; height: 20px;", styles)
+        self.assertIn("stroke-width: 2;", styles)
+        self.assertIn("@media (max-width: 640px)", styles)
+        self.assertIn('.site-header[data-layout="center"] .site-header__actions', styles)
+        self.assertIn(
+            'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 '
+            '7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z',
+            starter_files()["sections/header.liquid"],
+        )
+
+        visible = self.home()
+        self.assertIn('aria-label="Wishlist"', self.header_html(visible))
+        self.assertIn(f'href="/s/{self.store["storeSlug"]}/wishlist/"', self.header_html(visible))
+        self.assertIn('data-wishlist-count aria-live="polite">0</span>', self.header_html(visible))
+
+        values = header["values"]
+        values["settings"]["show_wishlist"] = False
+        self.save_values(values, header["version"])
+        refreshed = self.section()
+        self.assertFalse(refreshed["values"]["settings"]["show_wishlist"])
+        self.assertNotIn('aria-label="Wishlist"', self.header_html(self.home()))
+
+        values = refreshed["values"]
+        values["settings"]["show_wishlist"] = True
+        self.save_values(values, refreshed["version"])
+        self.assertIn('aria-label="Wishlist"', self.header_html(self.home()))
+        self.assertIn(f'href="/s/{self.store["storeSlug"]}/wishlist/"', self.header_html(self.home()))
+
     def test_preview_marks_the_header_like_the_footer(self):
         """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
         import re
@@ -647,6 +686,209 @@ class HeaderMigrationTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.upgrade(), 1)
         from .models import ThemeFile
         self.assertEqual(ThemeFile.objects.filter(theme=self.theme, file_path="sections/footer.liquid").count(), 1)
+
+    def test_existing_synced_header_gets_wishlist_setting_without_losing_customizations(self):
+        import re
+
+        from .services import _add_header_wishlist_setting, starter_files
+
+        content = starter_files()["sections/header.liquid"]
+        content = re.sub(
+            r'    \{%- if s\.show_wishlist -%}\r?\n.*?    \{%- endif -%}\r?\n',
+            "",
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+        content = re.sub(
+            r'^\s*\{"type": "checkbox", "id": "show_wishlist".*\r?\n',
+            "",
+            content,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        content = content.replace('"id": "logo_text", "label": "Logo text", "default": ""',
+                                  '"id": "logo_text", "label": "Logo text", "default": "Saved brand"')
+        crlf_upgraded = _add_header_wishlist_setting(content.replace("\n", "\r\n"))
+        self.assertIsNotNone(crlf_upgraded)
+        self.assertIn('aria-label="Wishlist"', crlf_upgraded)
+        self.assertNotIn("\r\r\n", crlf_upgraded)
+        sync.parse(crlf_upgraded, "sections/header.liquid")
+        self.theme.files.filter(file_path="sections/header.liquid").update(
+            content=content,
+            file_size=len(content.encode("utf-8")),
+        )
+        self.theme.files.filter(file_path="snippets/styles.liquid").update(
+            content="  .site-header__nav a:hover { opacity: 1; }\n",
+            file_size=len("  .site-header__nav a:hover { opacity: 1; }\n"),
+        )
+        self.theme.theme_data = {
+            **self.theme.theme_data,
+            "synced_sections": {"header": 2, "footer": sync.ORIGINALS_REVISION, "index": sync.ORIGINALS_REVISION},
+        }
+        self.theme.save()
+
+        self.assertEqual(self.upgrade(), 1)
+        upgraded = self.theme.files.get(file_path="sections/header.liquid").content
+        self.assertIn('"id": "show_wishlist", "label": "Show Wishlist", "default": true', upgraded)
+        self.assertIn('aria-label="Wishlist"', upgraded)
+        self.assertIn('href="{{ shop.url }}/wishlist/"', upgraded)
+        self.assertIn('data-wishlist-count aria-live="polite">{{ wishlist_count }}</span>', upgraded)
+        self.assertIn('"default": "Saved brand"', upgraded)
+        self.assertEqual(self.upgrade(), 1)
+        self.assertEqual(self.theme.files.get(file_path="sections/header.liquid").content, upgraded)
+        upgraded_theme = self.theme.__class__.objects.get(pk=self.theme.pk)
+        self.assertEqual(sync.section_state(upgraded_theme, "header")["source"], "upgrade")
+
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        self.assertTrue(header["values"]["settings"]["show_wishlist"])
+        styles = self.theme.files.get(file_path="snippets/styles.liquid").content
+        self.assertIn(".site-header__wishlist", styles)
+        self.assertIn("@media (max-width: 640px)", styles)
+        home = self.client.get(f"/s/{self.store.store_slug}/")
+        self.assertEqual(home.status_code, 200)
+        self.assertIn('aria-label="Wishlist"', home.content.decode())
+
+    def test_existing_wishlist_icon_and_styles_are_upgraded(self):
+        from .services import starter_files
+
+        old_path = (
+            'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 '
+            '7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z'
+        )
+        content = starter_files()["sections/header.liquid"].replace(
+            "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 "
+            "7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z",
+            old_path,
+        )
+        content = content.replace(
+            '<a class="site-header__wishlist" href="{{ shop.url }}/wishlist/" aria-label="Wishlist" title="Wishlist">',
+            '<button class="site-header__wishlist" type="button" aria-label="Wishlist" title="Wishlist">',
+            1,
+        ).replace(
+            "        </a>\n      </div>\n    {%- endif -%}",
+            "        </button>\n      </div>\n    {%- endif -%}",
+            1,
+        )
+        old_styles = starter_files()["snippets/styles.liquid"].replace(
+            "width: 20px; height: 20px;",
+            "width: 22px; height: 22px;",
+        ).replace("stroke-width: 2;", "stroke-width: 1.8;")
+        self.theme.files.filter(file_path="sections/header.liquid").update(
+            content=content,
+            file_size=len(content.encode("utf-8")),
+        )
+        self.theme.files.filter(file_path="snippets/styles.liquid").update(
+            content=old_styles,
+            file_size=len(old_styles.encode("utf-8")),
+        )
+        self.theme.theme_data = {
+            **self.theme.theme_data,
+            "synced_sections": {"header": 3, "footer": sync.ORIGINALS_REVISION, "index": sync.ORIGINALS_REVISION},
+        }
+        self.theme.save()
+
+        self.assertEqual(self.upgrade(), 1)
+        upgraded_header = self.theme.files.get(file_path="sections/header.liquid").content
+        self.assertIn("M20.84 4.61", upgraded_header)
+        self.assertIn('href="{{ shop.url }}/wishlist/"', upgraded_header)
+        self.assertNotIn('<button class="site-header__wishlist"', upgraded_header)
+        styles = self.theme.files.get(file_path="snippets/styles.liquid").content
+        self.assertIn("width: 20px; height: 20px;", styles)
+        self.assertIn("stroke-width: 2;", styles)
+        self.assertNotIn("width: 22px; height: 22px;", styles)
+
+
+class StorefrontWishlistTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.token, self.store = self.sign_up("wishlist@example.com", "Wishlist Store")
+        self.product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Blue mug", "sku": "SKU-MUG", "status": "active", "price": "12.50",
+        }, expect=201)
+        self.base = f"/s/{self.store['storeSlug']}"
+
+    def test_empty_wishlist_and_header_navigation(self):
+        response = self.client.get(f"{self.base}/wishlist/")
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertIn("Your wishlist is empty.", html)
+        self.assertIn(f'href="{self.base}/collections/all">Continue shopping</a>', html)
+        self.assertIn(f'href="{self.base}/wishlist/" aria-label="Wishlist"', html)
+        self.assertIn('class="wishlist-page__empty"', html)
+        from .rendering import SECTION_CSS
+        self.assertIn(".wishlist-page__grid{display:grid;grid-template-columns:repeat(2", SECTION_CSS)
+        self.assertIn("@media (min-width:750px){.wishlist-page__grid", SECTION_CSS)
+
+    def test_add_displays_product_and_session_retains_it_until_removed(self):
+        from apps.catalog.models import ProductImage
+
+        ProductImage.objects.create(
+            product_id=self.product["id"],
+            url="/media/blue-mug.png",
+            position=0,
+        )
+        add = self.client.post(f"{self.base}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
+        })
+        self.assertEqual(add.status_code, 302)
+        first_load = self.client.get(f"{self.base}/wishlist/")
+        self.assertEqual(first_load.status_code, 200)
+        html = first_load.content.decode()
+        header = html[html.index('<header class="site-header"'):html.index("</header>")]
+        self.assertIn("Blue mug", html)
+        self.assertIn('<img src="/media/blue-mug.png" alt="Blue mug" loading="lazy">', html)
+        self.assertIn("12.50", html)
+        self.assertIn("product-card__media--portrait", html)
+        self.assertIn(".wishlist-page__grid{display:grid;grid-template-columns:repeat(2", html)
+        self.assertIn(".product-card__wishlist-add.is-wishlisted svg", html)
+        self.assertIn('.product-card__wishlist-add[aria-pressed="true"] svg', html)
+        self.assertIn('.product__wishlist-add[aria-pressed="true"] svg', html)
+        self.assertIn('button.closest("form.product-card__wishlist-form, form.product__wishlist-form")', html)
+        self.assertIn('class="product-card__wishlist-remove"', html)
+        self.assertIn('class="product-card__wishlist-add is-wishlisted"', html)
+        self.assertIn('aria-pressed="true"', html)
+        self.assertIn('data-wishlist-count aria-live="polite">1</span>', header)
+        self.assertNotIn("Your wishlist is empty.", html)
+
+        collection_html = self.client.get(f"{self.base}/collections/all").content.decode()
+        self.assertIn('class="product-card__wishlist-add is-wishlisted"', collection_html)
+        self.assertIn('aria-pressed="true"', collection_html)
+        product_html = self.client.get(f"{self.base}/products/{self.product['id']}").content.decode()
+        self.assertIn('class="product__wishlist-add is-wishlisted"', product_html)
+        self.assertIn('aria-pressed="true"', product_html)
+
+        refreshed = self.client.get(f"{self.base}/wishlist/")
+        self.assertIn("Blue mug", refreshed.content.decode())
+        self.assertIn('data-wishlist-count aria-live="polite">1</span>', refreshed.content.decode())
+        duplicate = self.client.post(f"{self.base}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
+        })
+        self.assertEqual(duplicate.status_code, 302)
+        self.assertEqual(len(self.client.session[f"wishlist:{self.store['storeId']}"]), 1)
+
+        remove = self.client.post(f"{self.base}/wishlist/items/", {
+            "action": "remove", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
+        })
+        self.assertEqual(remove.status_code, 302)
+        empty = self.client.get(f"{self.base}/wishlist/").content.decode()
+        self.assertIn("Your wishlist is empty.", empty)
+        self.assertNotIn("Blue mug", empty)
+        self.assertIn('data-wishlist-count aria-live="polite">0</span>', empty)
+        collection_after_remove = self.client.get(f"{self.base}/collections/all").content.decode()
+        self.assertIn('class="product-card__wishlist-add"', collection_after_remove)
+        self.assertNotIn('class="product-card__wishlist-add is-wishlisted"', collection_after_remove)
+
+    def test_add_from_product_page_and_invalid_redirect(self):
+        product_page = self.client.get(f"{self.base}/products/{self.product['id']}")
+        self.assertEqual(product_page.status_code, 200)
+        self.assertIn('class="product__wishlist-form"', product_page.content.decode())
+        collection_page = self.client.get(f"{self.base}/collections/all")
+        self.assertIn('class="product-card__wishlist-form"', collection_page.content.decode())
+        response = self.client.post(f"{self.base}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "return_to": "https://example.com/",
+        })
+        self.assertEqual(response["Location"], f"{self.base}/wishlist/")
+        self.assertIn("Blue mug", self.client.get(f"{self.base}/wishlist/").content.decode())
 
 
 CARD = "snippets/product-card.liquid"

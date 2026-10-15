@@ -4,6 +4,9 @@
   Optional: show_price (default on), show_rating, show_tags, show_add_to_cart,
   ratio ("square", "portrait" or "landscape").
 {%- endcomment -%}
+{%- assign is_wishlisted = false -%}
+{%- if wishlist_ids contains product.id -%}{%- assign is_wishlisted = true -%}{%- endif -%}
+<div class="product-card-shell">
 <a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
   <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}">
     {%- comment -%} Quantity 0: still listed and clickable, marked "Sold out" {%- endcomment -%}
@@ -37,3 +40,20 @@
     <span class="button product-card__cta">Add to cart</span>
   {%- endif -%}
 </a>
+<form class="product-card__wishlist-form" method="post" action="{{ shop.url }}/wishlist/items/">
+  <input type="hidden" name="product_id" value="{{ product.id }}">
+  <input type="hidden" name="action" value="{% if is_wishlisted %}remove{% else %}add{% endif %}" data-wishlist-action>
+  <input type="hidden" name="return_to" value="{{ return_url | default: product.url }}">
+  <button class="product-card__wishlist-add{% if is_wishlisted %} is-wishlisted{% endif %}" type="submit"
+    data-wishlist-toggle data-product-id="{{ product.id }}" data-product-title="{{ product.title | escape }}" aria-pressed="{% if is_wishlisted %}true{% else %}false{% endif %}"
+    aria-label="{% if is_wishlisted %}Remove {{ product.title }} from{% else %}Add {{ product.title }} to{% endif %} wishlist"
+    title="{% if is_wishlisted %}Remove from wishlist{% else %}Add to wishlist{% endif %}">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
+    </svg>
+  </button>
+  {%- if wishlist_action == 'remove' -%}
+    <button class="product-card__wishlist-remove" type="submit" data-wishlist-remove>Remove</button>
+  {%- endif -%}
+</form>
+</div>

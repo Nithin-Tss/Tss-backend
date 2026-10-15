@@ -42,6 +42,16 @@
         {%- endif -%}
       </nav>
     {%- endif -%}
+    {%- if s.show_wishlist -%}
+      <div class="site-header__actions">
+        <a class="site-header__wishlist" href="{{ shop.url }}/wishlist/" aria-label="Wishlist" title="Wishlist">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z" />
+          </svg>
+          <span class="site-header__wishlist-count" data-wishlist-count aria-live="polite">{{ wishlist_count }}</span>
+        </a>
+      </div>
+    {%- endif -%}
   </div>
 </header>
 
@@ -55,6 +65,7 @@
     {"type": "range", "id": "logo_height", "label": "Logo image height", "min": 16, "max": 96, "step": 2, "unit": "px", "default": 36},
     {"type": "radio", "id": "layout", "label": "Logo position", "options": [{"value": "left", "label": "Left"}, {"value": "center", "label": "Centred"}], "default": "left"},
     {"type": "checkbox", "id": "show_nav", "label": "Show the navigation menu", "default": true},
+    {"type": "checkbox", "id": "show_wishlist", "label": "Show Wishlist", "default": true},
     {"type": "range", "id": "collections", "label": "Collections in the automatic menu", "min": 0, "max": 8, "step": 1, "default": 4, "info": "Used only when there are no menu links."},
     {"type": "checkbox", "id": "sticky", "label": "Keep the header at the top while scrolling", "default": true},
     {"type": "checkbox", "id": "border", "label": "Line under the header", "default": true},
