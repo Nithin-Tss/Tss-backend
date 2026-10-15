@@ -303,16 +303,53 @@ def _top_level_blocks_array(text):
     return None
 
 
-def add_wishlist_block(content):
+CART_BLOCK_SCHEMA = """{
+      "type": "cart",
+      "name": "Cart icon",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Cart"},
+        {"type": "checkbox", "id": "show_count", "label": "Show the number of items", "default": true},
+        {"type": "radio", "id": "opens", "label": "Clicking the icon opens", "options": [{"value": "drawer", "label": "Side drawer"}, {"value": "page", "label": "Cart page"}], "default": "drawer"},
+        {"type": "range", "id": "size", "label": "Icon size", "min": 18, "max": 40, "step": 2, "unit": "px", "default": 24},
+        {"type": "text", "id": "drawer_title", "label": "Drawer title", "default": "Cart"},
+        {"type": "text", "id": "checkout_label", "label": "Checkout button text", "default": "Check out"},
+        {"type": "url", "id": "checkout_url", "label": "Checkout button link", "default": "", "info": "Where \\"Check out\\" goes. Empty shows \\"Checkout is coming soon\\"."},
+        {"type": "text", "id": "empty_message", "label": "Empty cart message", "default": "Your cart is empty"},
+        {"type": "checkbox", "id": "show_discount", "label": "Show the discount row", "default": true},
+        {"type": "checkbox", "id": "show_login", "label": "Show \\"Have an account? Log in\\" in the empty cart", "default": false},
+        {"type": "url", "id": "login_url", "label": "Log in link", "default": "/account"}
+      ]
+    }"""
+CART_BLOCK_MARKUP = """    {%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}
+    {%- if cart_blocks.size > 0 -%}
+      <div class="site-header__actions">
+        {%- for block in cart_blocks -%}
+          {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+"""
+
+# The header blocks that call a snippet: the block type for the schema, the loop that renders it, and
+# the call that tells a header already renders it
+HEADER_ICON_BLOCKS = {
+    "wishlist": {"schema": WISHLIST_BLOCK_SCHEMA, "markup": WISHLIST_BLOCK_MARKUP, "call": "render 'wishlist'"},
+    "cart": {"schema": CART_BLOCK_SCHEMA, "markup": CART_BLOCK_MARKUP, "call": "render 'cart'"},
+}
+
+
+def add_header_block(content, kind):
     """
-    The header code with the "Wishlist icon" block type added, or None when nothing should (or can safely)
-    be added. Only inserts: every other character of the header stays as the owner wrote it.
+    The header code with the "Wishlist icon" or "Cart icon" block type (kind: "wishlist" or "cart") added, or
+    None when nothing should (or can safely) be added. Only inserts: every other character of the header
+    stays as the owner wrote it.
       - the block type is added to the schema's "blocks" list;
       - the loop that renders it is added before the header's closing </div></header>, unless the header
-        already renders the wishlist snippet.
+        already renders that snippet.
     None when the type is there already, when the places to insert are not found, or when the result is
     not valid Liquid and schema (the header is then left exactly as it is).
     """
+    spec = HEADER_ICON_BLOCKS[kind]
     markup, schema_text, start = split(content)
     if schema_text is None:
         return None
@@ -321,14 +358,14 @@ def add_wishlist_block(content):
     except json.JSONDecodeError:
         return None
     if not isinstance(existing, dict) or any(
-        isinstance(b, dict) and b.get("type") == "wishlist" for b in existing.get("blocks") or []
+        isinstance(b, dict) and b.get("type") == kind for b in existing.get("blocks") or []
     ):
         return None
     span = _top_level_blocks_array(schema_text)
     if span is None:
         return None
     nl = "\r\n" if "\r\n" in content else "\n"
-    block = WISHLIST_BLOCK_SCHEMA.replace("\n", nl)
+    block = spec["schema"].replace("\n", nl)
     open_at, close_at = span
     inner = schema_text[open_at + 1:close_at]
     if inner.strip():
@@ -338,7 +375,7 @@ def add_wishlist_block(content):
         schema_new = schema_text[:open_at + 1] + nl + "    " + block + nl + "  " + schema_text[close_at:]
     patched = content[:start] + schema_new + content[start + len(schema_text):]
 
-    if "render 'wishlist'" not in markup:
+    if spec["call"] not in markup:
         header_end = patched.rfind("</header>", 0, start)
         div_at = patched.rfind("</div>", 0, header_end) if header_end != -1 else -1
         if header_end == -1 or div_at == -1 or patched[div_at + len("</div>"):header_end].strip():
@@ -346,15 +383,25 @@ def add_wishlist_block(content):
         line_start = patched.rfind("\n", 0, div_at) + 1
         if patched[line_start:div_at].strip():
             return None
-        patched = patched[:line_start] + WISHLIST_BLOCK_MARKUP.replace("\n", nl) + patched[line_start:]
+        patched = patched[:line_start] + spec["markup"].replace("\n", nl) + patched[line_start:]
 
     try:
         schema = parse(patched, "sections/header.liquid")
     except SectionCodeError:
         return None
-    if not any(b.get("type") == "wishlist" for b in schema.get("blocks") or []):
+    if not any(b.get("type") == kind for b in schema.get("blocks") or []):
         return None
     return patched
+
+
+def add_wishlist_block(content):
+    """add_header_block() for the "Wishlist icon" block."""
+    return add_header_block(content, "wishlist")
+
+
+def add_cart_block(content):
+    """add_header_block() for the "Cart icon" block."""
+    return add_header_block(content, "cart")
 
 
 # ======================================================================= schema -> customizer options

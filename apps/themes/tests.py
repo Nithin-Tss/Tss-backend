@@ -15,11 +15,44 @@ from apps.core.tests.test_flow import StoreClientMixin
 from . import section_sync as sync
 
 
-def legacy_header():
-    """The starter header from before the heart became a block: a "Show Wishlist" checkbox and inline markup."""
+# The starter header's loop over the wishlist and cart icons, in block order
+HEADER_ICONS_LOOP = """    {%- if wishlist_blocks.size > 0 or cart_blocks.size > 0 -%}
+      <div class="site-header__actions">
+        {%- for block in section.blocks -%}
+          {%- if block.type == 'wishlist' -%}
+            {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+          {%- elsif block.type == 'cart' -%}
+            {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
+          {%- endif -%}
+        {%- endfor -%}
+      </div>
+    {%- endif -%}
+"""
+
+
+def wishlist_era_header():
+    """The starter header from before the cart icon: the heart as a block, and no cart (what revision 20 stores have)."""
+    from . import section_sync as sync
     from .services import starter_files
 
     header = starter_files()["sections/header.liquid"]
+    for new, old in (
+        ("""  The "Cart icon" block shows the cart with the number of items. It opens the side drawer or the cart
+  page: everything the cart does is in snippets/cart.liquid.
+""", ""),
+        ("{%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}\n", ""),
+        (HEADER_ICONS_LOOP, sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1]),
+        ("    },\n    " + sync.CART_BLOCK_SCHEMA + "\n  ],", "    }\n  ],"),
+        (', {"type": "cart", "settings": {}}]}', "]}"),
+    ):
+        assert new in header, new[:60]
+        header = header.replace(new, old, 1)
+    return header
+
+
+def legacy_header():
+    """The starter header from before the heart became a block: a "Show Wishlist" checkbox and inline markup."""
+    header = wishlist_era_header()
     heart = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78Z"
     for new, old in (
         ("""  The "Wishlist icon" block shows the heart with the saved count, on the right. It only links to
@@ -78,7 +111,7 @@ def edited_header():
     from . import section_sync as sync
     from .services import starter_files
 
-    header = starter_files()["sections/header.liquid"]
+    header = wishlist_era_header()
     block_markup = sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1]  # without the assign line
     for old, new in (
         ("{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}\n", ""),
@@ -529,7 +562,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertEqual(block["name"], "Wishlist icon")
         self.assertEqual(block["settings"]["show_count"]["type"], "checkbox")
         self.assertNotIn("show_wishlist", header["spec"]["settings"])  # no more checkbox: it is a block now
-        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist"])
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist", "cart"])
         styles = next(file["content"] for file in self.ok("get", "/api/v1/themes/files/")["files"]
                       if file["path"] == "snippets/styles.liquid")
         self.assertIn(".site-header__wishlist", styles)
@@ -608,7 +641,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         spec = self.section()["spec"]["blocks"]
         self.assertEqual(spec["wishlist"]["name"], "Wishlist icon")
         self.assertEqual(set(spec["wishlist"]["settings"]), {"label", "show_count"})
-        self.assertEqual(set(spec), {"link", "wishlist"})  # what "Add block" offers
+        self.assertEqual(set(spec), {"link", "wishlist", "cart"})  # what "Add block" offers
 
     def test_adding_hiding_reordering_and_removing_the_icon_in_the_customizer(self):
         header = self.section()
@@ -657,15 +690,14 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.save_values(values, header["version"])
         self.assertEqual(self.hearts(self.header_html(self.home())), 1)
 
-        # remove the block type from the code (the schema's "blocks" list and the markup that renders it)
-        code = self.code()
-        without = code.replace(sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1], "").replace(
-            "{%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}\n", "")
-        without = self.with_schema(without, lambda s: (s.update(blocks=[b for b in s["blocks"] if b["type"] != "wishlist"]),
-                                                       s["default"].update(blocks=[])))
+        # remove the block type from the code (the schema's "blocks" list and its default blocks)
+        without = self.with_schema(self.code(), lambda s: (
+            s.update(blocks=[b for b in s["blocks"] if b["type"] != "wishlist"]),
+            s["default"].update(blocks=[b for b in s["default"]["blocks"] if b["type"] != "wishlist"]),
+        ))
         saved = self.save_code(without)
         self.assertNotIn("wishlist", saved["sync"]["spec"]["blocks"])  # gone from "Add block"
-        self.assertEqual([b["type"] for b in self.section()["values"]["blocks"]], [])  # and from the sidebar
+        self.assertNotIn("wishlist", [b["type"] for b in self.section()["values"]["blocks"]])  # and from the sidebar
         self.assertEqual(self.hearts(self.header_html(self.home())), 0)
 
         # add it back in the code: it is offered again, and the owner can add it in the sidebar
@@ -712,11 +744,139 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         values["blocks"] = [self.wishlist_block()]
         self.save_values(values)
         good = self.code()
-        bad = good.replace("{%- for block in wishlist_blocks -%}", "{%- for block in wishlist_blocks -%}{%- if -%}", 1)
+        bad = good.replace("{%- if block.type == 'wishlist' -%}", "{%- if block.type == 'wishlist' -%}{%- if -%}", 1)
         error = self.save_code(bad, expect=400)
         self.assertIn("Line", str(error["content"]))
         self.assertEqual(self.code(), good)  # the previous version keeps working
         self.assertEqual(self.hearts(self.header_html(self.home())), 1)
+
+    def cart_block(self, **settings):
+        return {"type": "cart", "settings": settings}
+
+    def cart_icons(self, html):
+        return html.count('class="site-header__cart"')
+
+    def shopper_fragment(self, session, extra_headers=None):
+        """The cart's lines as the page's script asks for them (a shopper's browser, not the owner's)."""
+        from rest_framework.test import APIClient
+
+        return APIClient().get(f"/s/{self.store['storeSlug']}/cart/fragment", HTTP_X_CART_SESSION=session).json()
+
+    def test_cart_icon_is_in_the_add_block_list_with_its_options(self):
+        spec = self.section()["spec"]["blocks"]["cart"]
+        self.assertEqual(spec["name"], "Cart icon")
+        self.assertEqual(
+            set(spec["settings"]),
+            {"label", "show_count", "opens", "size", "drawer_title", "checkout_label", "checkout_url",
+             "empty_message", "show_discount", "show_login", "login_url"},
+        )
+        self.assertEqual(spec["settings"]["opens"]["options"], ["drawer", "page"])
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 1)  # a new store starts with the cart icon
+        self.assertIn("{% render 'cart', mode: 'icon'", self.code())  # the header only calls the snippet
+
+    def test_changing_the_cart_icon_in_the_customizer_updates_the_code_the_store_and_the_cart(self):
+        from rest_framework.test import APIClient
+
+        header = self.section()
+        values = header["values"]
+        cart = next(b for b in values["blocks"] if b["type"] == "cart")
+        cart["settings"].update(opens="page", size=30, drawer_title="Your bag", checkout_label="Pay now",
+                                show_count=False, empty_message="Nothing here yet")
+        _, preview = self.save_values(values, header["version"])
+        self.assertIn('data-cart-opens="page"', preview)
+        self.assertIn("width:30px;height:30px", preview)
+        self.assertNotIn('<span class="site-header__cart-count"', preview)  # "Show the number of items" is off
+        self.assertNotIn('<div class="cart-drawer"', preview)  # the icon opens the cart page: no drawer
+        written = next(b for b in self.schema_of(self.code())["default"]["blocks"] if b["type"] == "cart")
+        self.assertEqual(
+            (written["settings"]["opens"], written["settings"]["size"], written["settings"]["drawer_title"]),
+            ("page", 30, "Your bag"),
+        )
+        home = self.home()
+        self.assertIn('data-cart-opens="page"', self.header_html(home))
+
+        # the cart's own words come from the same block, so the cart page and the lines use them
+        shopper = APIClient()
+        page = shopper.get(f"/s/{self.store['storeSlug']}/cart").content.decode()
+        self.assertIn("Nothing here yet", page)
+
+    def test_removing_adding_reordering_and_hiding_the_cart_block_in_the_customizer(self):
+        header = self.section()
+        values = header["values"]
+        values["blocks"] = [b for b in values["blocks"] if b["type"] != "cart"]
+        _, preview = self.save_values(values, header["version"])
+        self.assertEqual(self.cart_icons(preview), 0)
+        self.assertNotIn("cart", self.default_block_types())
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 0)
+
+        values["blocks"].append(self.cart_block())
+        _, preview = self.save_values(values)
+        self.assertEqual(self.cart_icons(preview), 1)
+        self.assertEqual(self.default_block_types(), ["wishlist", "cart"])
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 1)
+
+        values["blocks"] = [self.cart_block(), self.wishlist_block()]  # reorder: the cart first
+        _, preview = self.save_values(values)
+        self.assertEqual(self.default_block_types(), ["cart", "wishlist"])
+        self.assertLess(preview.index('class="site-header__cart"'), preview.index('class="site-header__wishlist"'))
+        values["blocks"] = [self.wishlist_block(), self.cart_block()]  # and back
+        _, preview = self.save_values(values)
+        self.assertLess(preview.index('class="site-header__wishlist"'), preview.index('class="site-header__cart"'))
+        values["blocks"] = [self.cart_block(), self.wishlist_block()]
+        self.save_values(values)
+
+        values["blocks"][0]["hidden"] = True  # hide it: kept in the code, not shown
+        _, preview = self.save_values(values)
+        self.assertEqual(self.cart_icons(preview), 0)
+        self.assertTrue(self.schema_of(self.code())["default"]["blocks"][0].get("hidden"))
+        self.assertEqual(self.hearts(preview), 1)  # the wishlist icon does not depend on the cart icon
+
+    def test_removing_and_adding_the_cart_block_type_in_code_updates_add_block_the_sidebar_and_the_store(self):
+        from . import section_sync as sync
+
+        without = self.with_schema(self.code(), lambda s: (
+            s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart"]),
+            s["default"].update(blocks=[b for b in s["default"]["blocks"] if b["type"] != "cart"]),
+        ))
+        saved = self.save_code(without)
+        self.assertNotIn("cart", saved["sync"]["spec"]["blocks"])  # gone from "Add block"
+        self.assertNotIn("cart", [b["type"] for b in self.section()["values"]["blocks"]])  # and from the sidebar
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 0)
+
+        restored = sync.add_cart_block(self.code())
+        self.assertIsNotNone(restored)
+        saved = self.save_code(restored)
+        self.assertEqual(saved["sync"]["spec"]["blocks"]["cart"]["name"], "Cart icon")  # offered again
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 0)  # offered, not added
+        current = self.section()
+        values = current["values"]
+        values["blocks"] = values["blocks"] + [self.cart_block(label="My bag")]
+        _, preview = self.save_values(values, current["version"])
+        self.assertIn('aria-label="My bag"', preview)
+        self.assertIn('aria-label="My bag"', self.header_html(self.home()))
+
+    def test_the_cart_icon_and_the_wishlist_icon_do_not_depend_on_each_other_or_the_account_icon(self):
+        from . import section_sync as sync
+
+        patched = sync.add_cart_block(sync.add_wishlist_block(edited_header()))
+        self.save_code(patched)
+        header = self.section()
+        self.assertEqual(set(header["spec"]["blocks"]), {"link", "profile", "wishlist", "cart"})
+        values = header["values"]
+        values["settings"]["show_account"] = False
+        values["blocks"] = [{"type": "profile", "settings": {"image": "", "size": 36, "url": "/account"}}, self.cart_block()]
+        _, preview = self.save_values(values, header["version"])
+        self.assertEqual(self.cart_icons(preview), 1)
+        self.assertIn('class="site-header__profile"', preview)
+        self.assertNotIn("site-header__account", preview)
+
+    def test_broken_cart_markup_is_refused_with_its_line_and_the_header_keeps_working(self):
+        good = self.code()
+        bad = good.replace("{%- elsif block.type == 'cart' -%}", "{%- elsif block.type == 'cart' -%}{%- if -%}", 1)
+        error = self.save_code(bad, expect=400)
+        self.assertIn("Line", str(error["content"]))
+        self.assertEqual(self.code(), good)
+        self.assertEqual(self.cart_icons(self.header_html(self.home())), 1)
 
     def test_preview_marks_the_header_like_the_footer(self):
         """The preview's click handler selects [data-tss-section]; the customizer looks the id up as a synced section."""
@@ -744,7 +904,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         for name in ("Autumn", "Basics", "Coats"):
             self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
         values = self.section()["values"]
-        self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist"])  # only the heart: no menu links
+        self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist", "cart"])  # only the icons: no menu links
         values["settings"]["collections"] = 2
         _, preview = self.save_values(values)
         nav = self.header_html(self.home())
@@ -771,8 +931,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         store_theme.save()
 
         values = self.section()["values"]
-        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale", "Wishlist"])
-        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "link", "wishlist"])
+        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale", "Wishlist", "Cart"])
+        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "link", "wishlist", "cart"])
         self.assertEqual(values["blocks"][1]["settings"]["url"], "/collections/sale")
         settings = values["settings"]
         self.assertEqual((settings["sticky"], settings["border"], settings["background"], settings["text_color"]),
@@ -1169,6 +1329,554 @@ class HeaderWishlistBlockPatchTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.theme().theme.theme_data["wishlist_icon_offered"], 1)
 
 
+class CartTest(StoreClientMixin, APITestCase):
+    """The cart icon, the drawer's lines and the cart page, for shoppers with no account."""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+
+        self.token, self.store = self.sign_up("cartshop@example.com", "Cart Store")
+        self.slug = self.store["storeSlug"]
+        self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.mug = self.product("Clay mug", "MUG-1", 5)
+        self.gone = self.product("Gone mug", "MUG-0", 0)
+        self.shopper = APIClient()  # a visitor's browser, with its own cookies
+        self.session = self.page_session(self.shopper, self.slug)
+
+    def product(self, title, sku, quantity):
+        return self.ok("post", "/api/v1/catalog/products/", {
+            "title": title, "sku": sku, "status": "active", "price": "12", "location": self.location,
+            "quantity": quantity,
+        }, expect=201)
+
+    def page_session(self, client, slug, path=""):
+        """The cart id a page gives the shopper (in the page for the script, in a cookie for the next page)."""
+        import re
+
+        response = client.get(f"/s/{slug}/{path}")
+        match = re.search(r'data-cart-session="([0-9a-f]{32})"', response.content.decode())
+        self.assertIsNotNone(match, "the page has no cart id")
+        return match.group(1)
+
+    def call(self, method, path, body=None, session=None, client=None, slug=None):
+        client = client or self.shopper
+        kwargs = {"HTTP_X_CART_SESSION": self.session if session is None else session}
+        url = f"/s/{slug or self.slug}/cart/{path}"
+        if method == "get":
+            return client.get(url, **kwargs)
+        return client.post(url, json.dumps(body or {}), content_type="application/json", **kwargs)
+
+    def add(self, product, quantity=1, **kw):
+        return self.call("post", "add", {"product": product["id"], "quantity": quantity}, **kw)
+
+    def header(self, client=None, path=""):
+        html = (client or self.shopper).get(f"/s/{self.slug}/{path}").content.decode()
+        return html[html.index("<header"):html.index("</header>")]
+
+    def count_in(self, html):
+        import re
+
+        return int(re.search(r'data-cart-items="(\d+)"', html).group(1))
+
+    def test_adding_to_the_cart_raises_the_header_count_each_time(self):
+        self.assertEqual(self.count_in(self.header()), 0)
+        first = self.add(self.mug)
+        self.assertEqual((first.status_code, first.json()["count"]), (200, 1))
+        self.assertEqual(self.add(self.mug).json()["count"], 2)  # again: up again
+        header = self.header()  # the next page load shows it from the cookie, no script needed
+        self.assertEqual(self.count_in(header), 2)
+        self.assertIn('data-cart-count aria-live="polite">2</span>', header)
+
+    def test_the_lines_the_total_plus_minus_and_remove(self):
+        self.add(self.mug, 2)
+        data = self.call("get", "fragment").json()
+        self.assertEqual((data["count"], data["subtotal"]), (2, "24.00"))
+        html = data["html"]
+        self.assertIn("Clay mug", html)
+        self.assertIn('class="cart-qty__value">2</span>', html)
+        self.assertIn('data-quantity="1"', html)  # minus
+        self.assertIn('data-quantity="3"', html)  # plus
+        self.assertIn('data-quantity="0"', html)  # remove (the bin)
+        self.assertIn("Estimated total", html)
+        self.assertIn("Duties and taxes included. Shipping is calculated at checkout.", html)
+        self.assertIn("Discount", html)
+        self.assertIn("Check out", html)
+        line = __import__("re").search(r'data-line="([0-9a-f-]{36})"', html).group(1)
+
+        plus = self.call("post", "change", {"line": line, "quantity": 3}).json()
+        self.assertEqual((plus["count"], plus["subtotal"]), (3, "36.00"))
+        self.assertIn('class="cart-qty__value">3</span>', plus["html"])
+        minus = self.call("post", "change", {"line": line, "quantity": 1}).json()
+        self.assertEqual((minus["count"], minus["subtotal"]), (1, "12.00"))
+        removed = self.call("post", "change", {"line": line, "quantity": 0}).json()
+        self.assertEqual(removed["count"], 0)
+        self.assertIn("Your cart is empty", removed["html"])
+        self.assertEqual(self.count_in(self.header()), 0)
+
+    def test_the_empty_cart_page_and_the_full_cart_page(self):
+        page = self.shopper.get(f"/s/{self.slug}/cart").content.decode()
+        self.assertIn("Your cart is empty", page)
+        self.assertIn(f'href="/s/{self.slug}/collections/all">Continue shopping</a>', page)
+        self.assertNotIn("Have an account?", page)  # off unless the owner turns it on
+        # the icon is a link to the cart page, so it opens it with JavaScript off, and when the cart is empty
+        self.assertIn(f'class="site-header__cart" href="/s/{self.slug}/cart"', self.header())
+        self.assertEqual(self.shopper.get(f"/s/{self.slug}/cart/").status_code, 200)  # with or without the slash
+
+        self.add(self.mug, 2)
+        page = self.shopper.get(f"/s/{self.slug}/cart").content.decode()
+        self.assertIn("Clay mug", page)
+        self.assertIn("24.00", page)
+        self.assertIn("Estimated total", page)
+        self.assertNotIn("Your cart is empty", page)
+
+    def test_stock_limit_and_sold_out_products_are_refused(self):
+        self.assertEqual(self.add(self.mug, 5).json()["count"], 5)
+        refused = self.add(self.mug, 1)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("Only 5 of Clay mug left", refused.json()["error"])
+        self.assertEqual(self.call("get", "fragment").json()["count"], 5)  # nothing was added
+        line = __import__("re").search(r'data-line="([0-9a-f-]{36})"', self.call("get", "fragment").json()["html"]).group(1)
+        over = self.call("post", "change", {"line": line, "quantity": 6})
+        self.assertEqual(over.status_code, 400)
+        self.assertEqual(self.call("get", "fragment").json()["count"], 5)
+        gone = self.add(self.gone, 1)
+        self.assertEqual(gone.status_code, 400)
+        self.assertIn("sold out", gone.json()["error"])
+        self.assertEqual(self.add(self.mug, 0).status_code, 400)  # not a quantity
+        self.assertEqual(self.call("post", "add", {"product": self.mug["id"], "quantity": 1.5}).status_code, 400)
+        self.assertEqual(self.call("post", "add", {"product": self.mug["id"], "quantity": 1000}).status_code, 400)
+
+    def test_another_shopper_or_another_store_sees_nothing_of_this_cart(self):
+        from rest_framework.test import APIClient
+
+        self.add(self.mug, 2)
+        line = __import__("re").search(r'data-line="([0-9a-f-]{36})"', self.call("get", "fragment").json()["html"]).group(1)
+
+        stranger = APIClient()
+        other = self.page_session(stranger, self.slug)
+        self.assertNotEqual(other, self.session)
+        seen = self.call("get", "fragment", session=other, client=stranger).json()
+        self.assertEqual(seen["count"], 0)  # a different cart id: an empty cart
+        self.assertNotIn("Clay mug", seen["html"])
+        taken = self.call("post", "change", {"line": line, "quantity": 0}, session=other, client=stranger)
+        self.assertEqual(taken.status_code, 400)  # another shopper's line is not theirs to change
+        self.assertEqual(self.call("get", "fragment").json()["count"], 2)
+        self.assertEqual(self.call("get", "fragment", session="abc", client=stranger).json()["count"], 0)  # not an id we made
+
+        # another store: this cart id means nothing there, and its products cannot be put in this cart
+        token, second = self.sign_up("othercartshop@example.com", "Other Cart Store")
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        theirs = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Their mug", "sku": "T-1", "status": "active", "price": "5", "location": location, "quantity": 3,
+        }, expect=201)
+        other_slug = second["storeSlug"]
+        self.assertEqual(self.call("get", "fragment", slug=other_slug).json()["count"], 0)  # same id, other store
+        self.assertEqual(self.add(theirs, 1, slug=self.slug).status_code, 400)  # not a product of this store
+        self.assertEqual(self.add(self.mug, 1, slug=other_slug).status_code, 400)
+        self.assertEqual(self.call("get", "fragment").json()["count"], 2)
+
+    def test_liquid_gets_a_cart_with_the_item_count_for_headers_that_read_it(self):
+        """A header may say {% assign cart_count = cart.item_count | default: 0 %}: the count must be real, page after page."""
+        marker = '<i data-test-cart-count="{{ cart.item_count }}"></i></header>'
+        header = self.ok("get", "/api/v1/themes/files/")["files"]
+        code = next(f["content"] for f in header if f["path"] == "sections/header.liquid")
+        self.ok("post", "/api/v1/themes/files/", {"path": "sections/header.liquid", "content": code.replace("</header>", marker, 1)})
+        self.assertIn('data-test-cart-count="0"', self.shopper.get(f"/s/{self.slug}/").content.decode())
+        self.add(self.mug, 2)
+        for path in ("", "cart", f"products/{self.mug['id']}"):
+            self.assertIn('data-test-cart-count="2"', self.shopper.get(f"/s/{self.slug}/{path}").content.decode(), path)
+
+    def preview_html(self, product=None, page="product"):
+        """The customizer's preview of a page (what the owner sees while editing), as the admin asks for it."""
+        data = self.ok("get", "/api/v1/themes/settings/")
+        query = f"?page={page}" + (f"&product={product['id']}" if product else "")
+        return self.ok("post", f"/api/v1/themes/preview/{query}", data)["html"]
+
+    def preview_cart_id(self, html):
+        import re
+
+        found = re.findall(r'data-cart-session="([^"]*)"', html)
+        self.assertTrue(found, "the preview has no cart on it")
+        self.assertEqual(set(found), {found[0]})
+        return found[0]
+
+    def test_the_product_page_in_the_customizer_preview_has_a_working_cart(self):
+        """The preview has no shopper, yet Add to cart must work there like on the store: it has its own test cart."""
+        from rest_framework.test import APIClient
+
+        html = self.preview_html(self.mug)
+        cart_id = self.preview_cart_id(html)
+        self.assertRegex(cart_id, r"^[0-9a-f]{32}$")  # never empty: no "The cart is not available" message
+        self.assertIn("data-cart-add", html)
+        self.assertIn(f'name="product" value="{self.mug["id"]}"', html)
+        self.assertEqual(self.preview_cart_id(self.preview_html(self.mug)), cart_id)  # the same one every time
+        self.assertEqual(self.preview_cart_id(self.preview_html(self.gone)), cart_id)  # for every product
+        self.assertEqual(self.preview_cart_id(self.preview_html(page="index")), cart_id)  # and the other pages
+
+        # quantity 2 from the preview's product page: the right product and quantity are in the cart
+        browser = APIClient()
+        added = self.call("post", "add", {"product": self.mug["id"], "quantity": 2}, session=cart_id, client=browser)
+        self.assertEqual((added.status_code, added.json()["count"]), (200, 2))
+        lines = self.call("get", "fragment", session=cart_id, client=browser).json()
+        self.assertIn("Clay mug", lines["html"])
+        self.assertIn('class="cart-qty__value">2</span>', lines["html"])
+        self.assertEqual(lines["subtotal"], "24.00")
+        # the preview then shows it in its header
+        self.assertEqual(self.count_in(self.preview_html(self.mug)), 2)
+        # it is the owner's test cart: no shopper sees it, and the stock limit still applies
+        self.assertEqual(self.call("get", "fragment").json()["count"], 0)
+        self.assertEqual(self.call("post", "add", {"product": self.mug["id"], "quantity": 9}, session=cart_id, client=browser).status_code, 400)
+
+    def test_the_preview_cart_belongs_to_one_owner_and_one_store(self):
+        mine = self.preview_cart_id(self.preview_html(self.mug))
+        token, second = self.sign_up("othercartowner@example.com", "Another Store")
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        theirs = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Another mug", "sku": "AN-1", "status": "active", "price": "5", "location": location, "quantity": 3,
+        }, expect=201)
+        other = self.preview_cart_id(self.preview_html(theirs))
+        self.assertNotEqual(other, mine)  # another store and owner: another cart
+        self.assertNotEqual(other, self.session)
+
+    def test_every_products_page_has_the_same_working_add_to_cart_form(self):
+        import re
+
+        for product in (self.mug, self.gone):
+            page = self.shopper.get(f"/s/{self.slug}/products/{product['id']}").content.decode()
+            form = re.search(r'<form class="product__form"[^>]*>', page).group(0)
+            self.assertIn("data-cart-add", form)
+            self.assertRegex(form, r'data-cart-session="[0-9a-f]{32}"')  # a cart id on every product page
+            self.assertIn(f'name="product" value="{product["id"]}"', page)
+            self.assertIn('name="quantity"', page)  # the quantity field the script reads
+            self.assertIn('data-notice></p>', page)  # no message is shown: the script's fallback is only for a page with no cart id
+
+    def test_the_cart_is_not_available_message_is_only_for_a_page_with_no_cart_id(self):
+        from .services import starter_files
+
+        snippet = starter_files()["snippets/cart.liquid"]
+        self.assertEqual(snippet.count("The cart is not available on this page."), 1)  # the one fallback in the script
+
+    def test_a_cart_call_without_a_cart_id_is_refused_and_nothing_is_created(self):
+        from apps.commerce.models import Cart
+
+        before = Cart.objects.count()
+        refused = self.add(self.mug, 1, session="")
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(self.call("get", "fragment", session="").json()["count"], 0)
+        self.assertEqual(Cart.objects.count(), before)
+
+    def test_output_is_escaped_and_unsafe_links_never_reach_the_page(self):
+        from . import cart as cart_data
+
+        evil = self.ok("post", "/api/v1/catalog/products/", {
+            "title": '<script>alert(1)</script> "x"', "sku": "EVIL", "status": "active", "price": "1",
+            "location": self.location, "quantity": 2,
+        }, expect=201)
+        self.add(evil, 1)
+        html = self.call("get", "fragment").json()["html"]
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        for unsafe in ("javascript:alert(1)", "data:text/html,x", "//evil.example/x", " vbscript:x"):
+            self.assertEqual(cart_data._safe_url(unsafe), "", unsafe)
+        for safe in ("/checkout", "https://pay.example.com/x", "mailto:a@b.co", "#top"):
+            self.assertEqual(cart_data._safe_url(safe), safe, safe)
+
+        # the owner cannot save a javascript: link as the checkout button's address
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        values = header["values"]
+        cart = next(b for b in values["blocks"] if b["type"] == "cart")
+        cart["settings"]["checkout_url"] = "javascript:alert(1)"
+        r = self.client.patch("/api/v1/themes/settings/", {"sections": {"header": values}}, format="json")
+        self.assertEqual(r.status_code, 400, r.content[:300])
+
+    def test_checkout_button_follows_the_owner_setting(self):
+        self.add(self.mug, 1)
+        html = self.call("get", "fragment").json()["html"]
+        self.assertIn("data-cart-checkout-soon", html)  # no address set: "Checkout is coming soon"
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        values = header["values"]
+        cart = next(b for b in values["blocks"] if b["type"] == "cart")
+        cart["settings"].update(checkout_url="/checkout", checkout_label="Pay now", show_discount=False)
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+        html = self.call("get", "fragment").json()["html"]
+        self.assertIn(f'href="/s/{self.slug}/checkout">Pay now</a>', html)
+        self.assertNotIn("cart-summary__muted", html)  # the discount row is off
+
+    def test_the_cookie_is_only_given_to_pages_that_have_the_cart_and_is_scoped_to_the_store(self):
+        from rest_framework.test import APIClient
+
+        fresh = APIClient()
+        response = fresh.get(f"/s/{self.slug}/")
+        cookie = response.cookies[f"tss_cart_{self.slug}"]
+        self.assertEqual(cookie["path"], f"/s/{self.slug}/")
+        self.assertTrue(cookie["httponly"])
+        self.assertEqual(cookie["samesite"], "Lax")
+        self.assertEqual(len(cookie.value), 32)
+        again = fresh.get(f"/s/{self.slug}/")  # the cookie is sent back: it is not replaced
+        self.assertNotIn(f"tss_cart_{self.slug}", again.cookies)
+        self.assertIn(f'data-cart-session="{cookie.value}"', again.content.decode())
+
+        # no cart on the page (the owner removed the icon): no cookie is set
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        values = header["values"]
+        values["blocks"] = [b for b in values["blocks"] if b["type"] != "cart"]
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+        self.assertNotIn(f"tss_cart_{self.slug}", APIClient().get(f"/s/{self.slug}/").cookies)
+
+    def test_the_endpoints_answer_cors_for_the_sandboxed_page(self):
+        from rest_framework.test import APIClient
+
+        preflight = APIClient().options(f"/s/{self.slug}/cart/add", HTTP_ORIGIN="null",
+                                         HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+                                         HTTP_ACCESS_CONTROL_REQUEST_HEADERS="x-cart-session,content-type")
+        self.assertEqual(preflight.status_code, 204)
+        self.assertEqual(preflight["Access-Control-Allow-Origin"], "*")
+        self.assertIn("X-Cart-Session", preflight["Access-Control-Allow-Headers"])
+        reply = self.add(self.mug, 1)
+        self.assertEqual(reply["Access-Control-Allow-Origin"], "*")
+        self.assertEqual(reply["Cache-Control"], "no-store")
+        self.assertEqual(self.call("get", "fragment", slug="no-such-store").status_code, 404)
+
+    def test_the_cart_page_finds_the_cart_from_the_link_when_the_browser_kept_no_cookie(self):
+        """The script puts the cart id in the cart link; a browser without the cookie still sees its cart."""
+        import re
+
+        from rest_framework.test import APIClient
+
+        self.add(self.mug, 2)  # the shopper's page used self.session
+        page = self.shopper.get(f"/s/{self.slug}/products/{self.mug['id']}").content.decode()
+        self.assertIn(f'data-cart-session="{self.session}"', page)
+
+        lost = APIClient()  # no cookie: the browser did not keep it
+        response = lost.get(f"/s/{self.slug}/cart?cart={self.session}")
+        html = response.content.decode()
+        self.assertIn("Clay mug", html)  # the product is on the cart page
+        self.assertNotIn("Your cart is empty", html)
+        self.assertEqual(self.count_in(html[html.index("<header"):html.index("</header>")]), 2)  # and in the header
+        self.assertEqual(response.cookies[f"tss_cart_{self.slug}"].value, self.session)  # the cookie is given back
+        self.assertIn("Clay mug", lost.get(f"/s/{self.slug}/cart").content.decode())  # the next page needs no link
+
+        # a made-up or foreign id shows an empty cart and a fresh id, never someone else's cart
+        for bad in ("zzz", "A" * 32, "0" * 32):
+            empty = APIClient().get(f"/s/{self.slug}/cart?cart={bad}")
+            self.assertIn("Your cart is empty", empty.content.decode(), bad)
+        other_cart_other_store = APIClient().get(f"/s/{self.slug}/cart?cart={'1' * 32}")
+        self.assertNotIn("Clay mug", other_cart_other_store.content.decode())
+
+        # when the browser has a cookie, the cookie wins: a link cannot swap someone's cart for another
+        stranger = APIClient()
+        mine = self.page_session(stranger, self.slug)
+        page = stranger.get(f"/s/{self.slug}/cart?cart={self.session}").content.decode()
+        self.assertNotIn("Clay mug", page)
+        self.assertIn(f'data-cart-session="{mine}"', page)
+        self.assertEqual(re.search(r'data-cart-session="([0-9a-f]{32})"', page).group(1), mine)
+
+    def test_the_cart_link_carries_the_id_through_the_script_not_the_server_markup(self):
+        """The links are tagged by the script (the server's page has the plain /cart link)."""
+        header = self.header()
+        self.assertIn(f'href="/s/{self.slug}/cart"', header)
+        self.assertNotIn("?cart=", header)
+
+    def test_the_cart_script_tags_the_cart_links(self):
+        from .services import starter_files
+
+        snippet = starter_files()["snippets/cart.liquid"]
+        self.assertIn('document.querySelectorAll("a.site-header__cart")', snippet)
+        self.assertIn('"cart=" + id', snippet)
+
+    def test_the_product_page_adds_to_the_cart_instead_of_saying_coming_soon(self):
+        page = self.shopper.get(f"/s/{self.slug}/products/{self.mug['id']}").content.decode()
+        self.assertNotIn("Cart and checkout are coming soon", page)
+        self.assertIn("data-cart-add", page)
+        self.assertIn(f'name="product" value="{self.mug["id"]}"', page)
+        self.assertIn(f'data-cart-base="/s/{self.slug}/cart"', page)
+        self.assertIn(f'data-cart-session="{self.session}"', page)
+        # a sold-out product's button is disabled, and the server refuses it anyway
+        gone = self.shopper.get(f"/s/{self.slug}/products/{self.gone['id']}").content.decode()
+        self.assertRegex(gone, r"data-add[^>]*\sdisabled>\s*Sold out")
+
+
+class CartUpgradeTest(StoreClientMixin, APITestCase):
+    """Existing stores get the cart snippet and the header block safely, and keep what they have."""
+
+    SNIPPET = "snippets/cart.liquid"
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        self.token, self.store = self.sign_up("cartupgrade@example.com", "Cart Upgrade Store")
+        self.record = Store.objects.get(store_id=self.store["storeId"])
+        self.base = f"/s/{self.store['storeSlug']}"
+
+    def theme(self):
+        from .services import get_store_theme
+
+        return get_store_theme(self.record)
+
+    def stored(self, path):
+        from .models import Theme
+
+        return Theme.objects.get(slug=f"store-{self.store['storeId']}").files.get(file_path=path).content
+
+    def revert_to_revision_20(self, header=None, product=None, delete_snippet=True):
+        """The store as it was before the cart: the older starter files, no cart snippet."""
+        theme = self.theme().theme
+        for path, content in (("sections/header.liquid", header or wishlist_era_header()),
+                              ("sections/main-product.liquid", product or wishlist_era_main_product())):
+            theme.files.filter(file_path=path).update(content=content, file_size=len(content.encode("utf-8")))
+        if delete_snippet:
+            theme.files.filter(file_path=self.SNIPPET).delete()
+        data = {k: v for k, v in theme.theme_data.items() if k not in ("cart_icon_offered",)}
+        theme.theme_data = {**data, "starter_revision": 20}
+        theme.save()
+
+    def test_a_new_store_has_one_cart_file_and_it_is_in_the_file_tree(self):
+        files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
+        self.assertEqual([p for p in files if "cart" in p and p.startswith("snippets/")], [self.SNIPPET])
+        self.assertEqual([p for p in files if p.startswith("templates/") and "cart" in p], [])  # the page needs no template
+        self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
+        self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
+
+    def test_an_existing_store_gets_the_snippet_and_the_new_starter_files(self):
+        import hashlib
+
+        self.revert_to_revision_20()
+        self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
+        theme = self.theme().theme
+        self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
+        self.assertEqual(theme.theme_data["starter_revision"], 23)
+        self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
+        self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
+        self.assertIsNotNone(hashlib)
+
+    def old_cart_snippet(self):
+        """The cart snippet as the first revision shipped it (before the script kept a header's own badge up to date)."""
+        current = self.snippet_before_link_ids()
+        start = current.index("    // A header that draws its own cart icon")
+        end = current.index("    });\n", start) + len("    });\n")
+        return current[:start] + current[end:]
+
+    def snippet_before_link_ids(self):
+        """The snippet as revision 22 shipped it: the script kept a header's own badge, but links had no cart id."""
+        from .services import starter_files
+
+        current = starter_files()[self.SNIPPET]
+        start = current.index("\n  // The cart link carries the cart id")
+        end = current.index("  tagLinks();\n", start) + len("  tagLinks();\n")
+        older = current[:start] + current[end:]
+        click = '    if (target.closest("a.site-header__cart")) tagLinks();\n\n'
+        assert click in older
+        return older.replace(click, "", 1)
+
+    def test_the_snippet_from_the_previous_revision_is_registered_for_the_upgrade(self):
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        text = self.snippet_before_link_ids()
+        self.assertNotIn("tagLinks", text)
+        self.assertIn("A header that draws its own cart icon", text)  # still the revision-22 file, with the badge code
+        self.assertIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        # a store with that copy gets the new one, an edited copy stays as it is
+        theme = self.theme().theme
+        theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 22}
+        theme.save()
+        self.theme()
+        self.assertEqual(self.stored(self.SNIPPET), starter_files()[self.SNIPPET])
+
+    def test_an_untouched_older_cart_snippet_is_upgraded_and_an_edited_one_is_not(self):
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        old = self.old_cart_snippet()
+        self.assertIn(hashlib.sha256(old.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])  # a real older file
+        theme = self.theme().theme
+        theme.files.filter(file_path=self.SNIPPET).update(content=old, file_size=len(old.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 21}
+        theme.save()
+        self.theme()
+        self.assertEqual(self.stored(self.SNIPPET), starter_files()[self.SNIPPET])  # untouched: replaced
+
+        mine = old + "<!-- mine -->\n"
+        theme.files.filter(file_path=self.SNIPPET).update(content=mine, file_size=len(mine))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 21}
+        theme.save()
+        self.theme()
+        self.assertEqual(self.stored(self.SNIPPET), mine)  # edited: kept
+
+    def test_an_owner_edited_cart_snippet_is_not_overwritten(self):
+        self.revert_to_revision_20(delete_snippet=False)
+        mine = "{%- comment -%} my own cart {%- endcomment -%}\n"
+        theme = self.theme().theme
+        theme.files.filter(file_path=self.SNIPPET).update(content=mine, file_size=len(mine))
+        self.theme()
+        self.assertEqual(self.stored(self.SNIPPET), mine)
+
+    def test_an_existing_header_with_saved_values_gets_the_block_type_but_no_new_icon(self):
+        """Nothing appears on a live store by itself: the owner adds the cart icon (it is in Add block)."""
+        self.revert_to_revision_20()
+        store_theme = self.theme()
+        store_theme.custom_data = {"sections": {"header": {
+            "settings": {"logo_text": "Old shop"},
+            "blocks": [{"type": "link", "settings": {"label": "About", "url": "/pages/about"}}],
+        }}}
+        store_theme.save()
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]
+        self.assertIn("cart", header["spec"]["blocks"])  # offered
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["link"])  # not added
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertNotIn('class="site-header__cart"', html[html.index("<header"):html.index("</header>")])
+
+    def test_an_owner_edited_header_gets_the_cart_block_by_insertion_only(self):
+        from . import section_sync as sync
+
+        header = edited_header()
+        self.revert_to_revision_20(header=header)
+        store_theme = self.theme()
+        patched = self.stored("sections/header.liquid")
+        self.assertNotEqual(patched, header)
+        self.assertIn("owner note: keep this line", patched)  # the owner's edits stay
+        self.assertIn("site-header__account", patched)
+        self.assertIn("cart", [b["type"] for b in sync.parse(patched)["blocks"]])
+        self.assertIn("profile", [b["type"] for b in sync.parse(patched)["blocks"]])
+        # only insertions: taking them out gives the owner's header back, character for character
+        undone = patched.replace(sync.CART_BLOCK_MARKUP, "").replace(",\n    " + sync.CART_BLOCK_SCHEMA, "")
+        self.assertEqual(undone, header)
+        self.assertTrue(sync.history_of(store_theme.theme, "header"))  # the old code can be restored
+        self.assertIn("cart", self.ok("get", "/api/v1/themes/sections/")["header"]["spec"]["blocks"])
+        # once: an owner who removes it from the code does not get it back
+        removed = undone
+        self.ok("post", "/api/v1/themes/files/", {"path": "sections/header.liquid", "content": removed})
+        self.theme()
+        self.assertEqual(self.stored("sections/header.liquid"), removed)
+
+    def test_the_patcher_is_insert_only_idempotent_and_keeps_crlf(self):
+        from . import section_sync as sync
+
+        header = edited_header()
+        patched = sync.add_cart_block(header)
+        self.assertIsNotNone(patched)
+        sync.parse(patched, "sections/header.liquid")
+        self.assertIsNone(sync.add_cart_block(patched))  # done once
+        # a header that already has the wishlist icon gets both blocks side by side
+        both = sync.add_cart_block(sync.add_wishlist_block(header))
+        self.assertEqual({b["type"] for b in sync.parse(both)["blocks"]}, {"link", "profile", "wishlist", "cart"})
+        crlf = sync.add_cart_block(header.replace("\n", "\r\n"))
+        self.assertIsNotNone(crlf)
+        self.assertNotIn("\r\r\n", crlf)
+        self.assertIsNone(sync.add_cart_block(header.replace("</header>", "")))  # nowhere safe to insert
+        self.assertIsNone(sync.add_cart_block(header.replace('"blocks": [', '"things": [', 1)))
+
+    def test_a_header_that_cannot_be_patched_is_left_alone_and_not_retried(self):
+        broken = edited_header().replace("</header>", "")
+        self.revert_to_revision_20(header=broken)
+        self.theme()
+        self.assertEqual(self.stored("sections/header.liquid"), broken)
+        self.assertEqual(self.theme().theme.theme_data["cart_icon_offered"], 1)
+
+
 class StorefrontWishlistTest(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, self.store = self.sign_up("wishlist@example.com", "Wishlist Store")
@@ -1519,6 +2227,32 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
         self.assertNotIn("data-wishlist-toggle", product)
 
 
+def wishlist_era_main_product():
+    """The starter product section from before the cart: add to cart only said "coming soon"."""
+    from .services import starter_files
+
+    product = starter_files()["sections/main-product.liquid"]
+    for new, old in (
+        ("""      <form class="product__form" data-product-form data-cart-add data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}">
+        <input type="hidden" name="product" value="{{ product.id }}">
+""", """      <form class="product__form" data-product-form>
+"""),
+        ("""
+    // Add to cart: the form is handled by snippets/cart.liquid
+""", """
+    // The cart (commerce app) has no API yet, so the button only explains that.
+    root.querySelector("[data-product-form]").addEventListener("submit", function (event) {
+      event.preventDefault();
+      root.querySelector("[data-notice]").textContent = "Cart and checkout are coming soon.";
+    });
+"""),
+        ("{% render 'cart', mode: 'script' %}\n", ""),
+    ):
+        assert new in product, new[:60]
+        product = product.replace(new, old, 1)
+    return product
+
+
 def legacy_main_product():
     """The starter product section from before the heart became a block: the heart form was inline."""
     from .services import starter_files
@@ -1545,7 +2279,7 @@ def legacy_main_product():
         </button>
       </form>
 """
-    product = starter_files()["sections/main-product.liquid"]
+    product = wishlist_era_main_product()
     assert new in product
     return product.replace(new, old, 1)
 
@@ -1607,6 +2341,16 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         }
         store_theme.save()
 
+    def test_the_fixtures_for_older_stores_are_the_real_older_starter_files(self):
+        """The upgrade only replaces files whose hash is registered: these are the files stores had before the cart."""
+        import hashlib
+
+        from .services import STARTER_UPGRADES
+
+        for path, text in (("sections/header.liquid", wishlist_era_header()),
+                           ("sections/main-product.liquid", wishlist_era_main_product())):
+            self.assertIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[path], path)
+
     def test_new_store_has_the_snippet_and_it_is_in_the_file_tree(self):
         files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
         self.assertEqual([p for p in files if "wishlist" in p], [self.SNIPPET])
@@ -1641,7 +2385,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 20)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 23)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))

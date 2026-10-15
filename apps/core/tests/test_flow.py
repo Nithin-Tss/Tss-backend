@@ -331,9 +331,11 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         html = self.ok("post", "/api/v1/themes/preview/", body)["html"]
         self.assertIn('data-tss-section="story" data-tss-label="Our story"', html)
         self.assertIn('data-tss-section="hero" data-tss-label="Hero banner"', html)  # no heading: the section type
-        self.assertIn('data-tss-block="0"', html)
-        self.assertIn('data-tss-block="2"', html)  # indexes match the saved list, hidden blocks included
-        self.assertNotIn('data-tss-block="1"', html)
+        # (the header has its own blocks, with their own indexes: look at the story section only)
+        story = html[html.index('data-tss-section="story"'):html.index('data-tss-section="hero"')]
+        self.assertIn('data-tss-block="0"', story)
+        self.assertIn('data-tss-block="2"', story)  # indexes match the saved list, hidden blocks included
+        self.assertNotIn('data-tss-block="1"', story)
         self.assertIn('target="_self"', html)  # Edit mode off: links open inside the preview
         self.assertIn('m.type === "mode"', html)
 

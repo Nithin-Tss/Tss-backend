@@ -51,7 +51,8 @@
         </p>
       {%- endif -%}
 
-      <form class="product__form" data-product-form>
+      <form class="product__form" data-product-form data-cart-add data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}">
+        <input type="hidden" name="product" value="{{ product.id }}">
         {%- if product.variants.size > 1 -%}
           <label class="field">
             <span>Option</span>
@@ -148,10 +149,7 @@
       select.addEventListener("change", function () { showOption(select.selectedOptions[0]); });
     }
 
-    // The cart (commerce app) has no API yet, so the button only explains that.
-    root.querySelector("[data-product-form]").addEventListener("submit", function (event) {
-      event.preventDefault();
-      root.querySelector("[data-notice]").textContent = "Cart and checkout are coming soon.";
-    });
+    // Add to cart: the form is handled by snippets/cart.liquid
   })();
 </script>
+{% render 'cart', mode: 'script' %}

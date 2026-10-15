@@ -38,7 +38,12 @@ from apps.tenancy.models import Store, StoreMembership
 from .models import BlogPost, Menu, MenuItem, StorePage, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
-from .rendering import _catalog, published_pages, published_posts, render_page, render_synced_section_fast, shop_url
+from .rendering import (
+    _catalog, published_pages, published_posts, render_cart_html, render_page, render_synced_section_fast, shop_url,
+)
+from apps.catalog.models import Product, ProductVariant
+from apps.commerce import services as commerce_services
+from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
@@ -1381,13 +1386,15 @@ class ThemePreviewView(StoreThemeView):
                 return Response({"html": str(html), "fonts": ""})
         if section_id:
             try:
-                html = render_page(request.store, page, custom_data=clean, editor=True, only_section=section_id, **target)
+                html = render_page(request.store, page, custom_data=clean, editor=True, only_section=section_id,
+                                   cart_id=cart_data.preview_id(request.store, request.user), **target)
             except LiquidError as error:
                 html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
             return Response({"html": html, "fonts": google_fonts_link(_collect_fonts(resolve(clean)))})
 
         try:
-            html = render_page(request.store, page, custom_data=clean, editor=True, **target)
+            html = render_page(request.store, page, custom_data=clean, editor=True,
+                               cart_id=cart_data.preview_id(request.store, request.user), **target)
         except LiquidError as error:
             html = f"<pre style='padding:24px;color:#b42318'>Liquid error: {escape(str(error))}</pre>"
 
@@ -1654,6 +1661,14 @@ def _storefront(render):
 
         response["Cache-Control"] = "no-store"
 
+        # A page with the cart on it gives the shopper's browser their cart id (see cart.py)
+        pending = getattr(request, "_cart_session", None)
+        if pending and pending[1] and "data-cart-session=" in html:
+            response.set_cookie(
+                cart_data.cookie_name(store), pending[0], max_age=cart_data.CART_COOKIE_AGE,
+                path=f"{shop_url(store)}/", httponly=True, samesite="Lax", secure=not settings.DEBUG,
+            )
+
         return response
 
     return view
@@ -1791,6 +1806,137 @@ def storefront_wishlist(store, request, params):
         wishlist_page_ids=visible_ids,
         wishlist_products=ordered_products,
     )
+
+
+# ------------------------------------------------------------------ the cart (see cart.py and snippets/cart.liquid)
+
+# The storefront page runs in a sandbox (no cookies, no same-origin), so its script reaches these endpoints
+# as a foreign origin: they answer CORS themselves. Nothing here trusts the caller beyond the cart id it was
+# given, which is random: a request for another shopper's cart cannot be made without knowing that id.
+CART_API_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "X-Cart-Session, Content-Type, Accept",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Max-Age": "600",
+    "Cache-Control": "no-store",
+}
+CART_MAX_AT_ONCE = 99
+
+
+def _first_message(detail):
+    if isinstance(detail, dict):
+        return _first_message(next(iter(detail.values()), "Something went wrong."))
+    if isinstance(detail, (list, tuple)):
+        return _first_message(detail[0]) if detail else "Something went wrong."
+    return str(detail)
+
+
+def _cart_api(view):
+    """JSON endpoints of one store's cart: view(request, store, cart_id) -> JsonResponse; ValidationError -> 400."""
+
+    @csrf_exempt
+    def wrapper(request, store_slug):
+        if request.method == "OPTIONS":
+            response = HttpResponse(status=204)
+        elif request.method not in ("GET", "POST"):
+            response = JsonResponse({"error": "Method not allowed."}, status=405)
+        else:
+            store = Store.objects.filter(store_slug=store_slug, status="active").first()
+            if store is None:
+                response = JsonResponse({"error": "Store not found."}, status=404)
+            else:
+                cart_id = cart_data.clean_id(request.headers.get("X-Cart-Session", ""))
+                try:
+                    response = view(request, store, cart_id)
+                except ValidationError as error:
+                    response = JsonResponse({"error": _first_message(error.detail)}, status=400)
+                except LiquidError as error:
+                    response = JsonResponse({"error": f"Theme error: {error}"}, status=500)
+        for name, value in CART_API_HEADERS.items():
+            response[name] = value
+        return response
+
+    return wrapper
+
+
+def _json_body(request):
+    try:
+        body = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        raise ValidationError("That request could not be read.")
+    if not isinstance(body, dict):
+        raise ValidationError("That request could not be read.")
+    return body
+
+
+def _uuid_of(value, message):
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        raise ValidationError(message)
+
+
+def _whole(value, message, minimum):
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValidationError(message)
+    return value
+
+
+def _cart_reply(store, cart):
+    """The count, the total and the cart's lines as HTML: what the page's script puts back on the page."""
+    data = cart_data.view_data(cart, shop_url(store))
+    opts = cart_data.options(get_store_theme(store))
+    return JsonResponse({"count": data["count"], "subtotal": data["subtotal"], "html": render_cart_html(store, data, opts)})
+
+
+@_cart_api
+def storefront_cart_fragment(request, store, cart_id):
+    if request.method != "GET":
+        raise ValidationError("Use GET.")
+    return _cart_reply(store, cart_data.open_cart(store, cart_id))
+
+
+@_cart_api
+def storefront_cart_add(request, store, cart_id):
+    if request.method != "POST":
+        raise ValidationError("Use POST.")
+    if not cart_id:
+        raise ValidationError("Your cart is not available. Reload the page and try again.")
+    body = _json_body(request)
+    quantity = _whole(body.get("quantity", 1), "Choose a quantity of 1 or more.", 1)
+    if quantity > CART_MAX_AT_ONCE:
+        raise ValidationError(f"You can add up to {CART_MAX_AT_ONCE} at a time.")
+    product = Product.objects.filter(pk=_uuid_of(body.get("product"), "This product isn't available."), store=store).first()
+    if product is None:
+        raise ValidationError("This product isn't available.")
+    variant = None
+    if body.get("variant"):
+        variant = ProductVariant.objects.filter(pk=_uuid_of(body["variant"], "Choose an option."), product=product).first()
+        if variant is None:
+            raise ValidationError("Choose an option.")
+    cart = commerce_services.get_or_create_cart(store, session_id=cart_id)
+    commerce_services.add_item(cart, product, quantity, variant)  # published, in stock, price from the variant
+    return _cart_reply(store, cart)
+
+
+@_cart_api
+def storefront_cart_change(request, store, cart_id):
+    if request.method != "POST":
+        raise ValidationError("Use POST.")
+    body = _json_body(request)
+    quantity = _whole(body.get("quantity"), "Choose a quantity of 0 or more.", 0)
+    if quantity > CART_MAX_AT_ONCE:
+        raise ValidationError(f"You can have up to {CART_MAX_AT_ONCE} of one product.")
+    cart = cart_data.open_cart(store, cart_id)
+    if cart is None:
+        raise ValidationError("Your cart is empty.")
+    commerce_services.set_quantity(cart, _uuid_of(body.get("line"), "That item isn't in your cart."), quantity)
+    return _cart_reply(store, cart)
+
+
+@_storefront
+def storefront_cart(store, request, params):
+    return render_page(store, "index", request=request, cart_page=True)
 
 
 @csrf_exempt

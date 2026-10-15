@@ -28,6 +28,7 @@ from apps.catalog.services import published_collections, published_products
 from apps.orders.models import OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
+from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, StorePage, ThemeFile
@@ -125,6 +126,48 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .wishlist-page{padding:48px 0 64px}.wishlist-page__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 .wishlist-page__empty{padding:48px 24px;text-align:center;border:1px solid var(--line);border-radius:var(--radius)}
 .wishlist-page__empty p{color:var(--muted)}
+.site-header__cart{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:inherit;text-decoration:none;border-radius:50%}
+.site-header__cart svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.site-header__cart:hover{background:var(--soft)}
+.site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
+.site-header__cart-count[hidden]{display:none}
+.site-header__actions+.site-header__actions{margin-left:0}
+html.cart-open{overflow:hidden}
+.cart-drawer[hidden]{display:none}
+.cart-drawer{position:fixed;inset:0;z-index:1000}
+.cart-drawer__overlay{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.cart-drawer__panel{position:absolute;top:0;right:0;bottom:0;width:min(420px,100%);display:flex;flex-direction:column;background:var(--bg);color:var(--text);box-shadow:-8px 0 30px rgba(0,0,0,.18)}
+.cart-drawer__head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line)}
+.cart-drawer__head h2{margin:0;font-size:20px}
+.cart-drawer__close{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;background:none;color:inherit;cursor:pointer;border-radius:50%}
+.cart-drawer__close svg,.cart-line__remove svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.cart-drawer__body{flex:1;overflow-y:auto;padding:0 20px 20px}
+.cart-line{display:grid;grid-template-columns:72px 1fr auto;gap:14px;padding:16px 0;border-bottom:1px solid var(--line)}
+.cart-line__image{display:block;width:72px;height:90px;background:var(--soft);border-radius:8px;overflow:hidden}
+.cart-line__image img{width:100%;height:100%;object-fit:cover}
+.cart-line__info{display:flex;flex-direction:column;gap:6px;min-width:0}
+.cart-line__title{font-weight:600;text-decoration:none;color:inherit}
+.cart-line__price{color:var(--muted);font-size:14px}
+.cart-line__warning{color:#b42318;font-size:13px}
+.cart-line__controls{display:flex;align-items:center;gap:10px;margin-top:4px}
+.cart-qty{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px}
+.cart-qty button{width:32px;height:32px;border:0;background:none;color:inherit;font-size:18px;cursor:pointer}
+.cart-qty button:disabled{opacity:.35;cursor:not-allowed}
+.cart-qty__value{min-width:28px;text-align:center;font-size:14px}
+.cart-line__remove{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;background:none;color:var(--muted);cursor:pointer}
+.cart-line__total{font-weight:600;white-space:nowrap}
+.cart-summary{padding-top:18px}
+.cart-summary__row{display:flex;justify-content:space-between;padding:6px 0}
+.cart-summary__muted{color:var(--muted)}
+.cart-summary__total{font-weight:700;font-size:18px}
+.cart-summary__note{color:var(--muted);font-size:13px;margin:8px 0 14px}
+.cart-summary__notice{min-height:1.2em;margin:10px 0 0;color:var(--muted);font-size:14px}
+.cart-checkout{display:block;width:100%;text-align:center}
+.cart-empty{padding:56px 0;text-align:center}
+.cart-empty__title{margin:0 0 12px;font-size:24px}
+.cart-empty__login{color:var(--muted);margin:0 0 20px}
+.cart-page{padding:48px 0 64px}
+.cart-page .cart-lines,.cart-page .cart-summary{max-width:760px}
 @media (min-width:750px){.wishlist-page__grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 
 /* Rich text */
@@ -1399,9 +1442,21 @@ def page_content(store, base_url, handle, editor, template="page"):
     return _sample_page_drop(base_url) if editor else None
 
 
+def render_cart_html(store, data, opts):
+    """The cart's lines and totals as HTML (the drawer's body, and the cart page), from snippets/cart.liquid."""
+    store_theme = get_store_theme(store)
+    files = theme_files(store_theme)
+    base_url = shop_url(store)
+    currency = resolve(store_theme.custom_data)["settings"]["currency_symbol"]
+    env = _environment(files, base_url, currency)
+    return env.from_string("{% render 'cart', mode: 'lines', cart: cart, settings: opts %}").render(
+        shop={"name": store.store_name, "url": base_url}, cart=data, opts=opts,
+    )
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
-                wishlist_page_ids=None, wishlist_products=None, page_handle=None):
+                wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -1463,6 +1518,13 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         if wishlist_ids != stored_ids:
             request.session[f"wishlist:{store.pk}"] = wishlist_ids
 
+    # The shopper's cart id: the cookie's, or a new one that the view puts in a cookie (see cart.py)
+    # (cart_id: given by the customizer's preview, which has no shopper request)
+    cart_session, cart_new = (cart_id, False) if cart_id else cart_data.session_for_page(store, request)
+    if cart_new:
+        request._cart_session = (cart_session, True)
+    cart_count = cart_data.item_count(store, cart_session)
+
     if page == "collection":
         sort = sort if sort in SORTS else "newest"
         products = _products(store, base_url, collection=collection["obj"])
@@ -1517,6 +1579,10 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "return_url": request.get_full_path() if request else "",
         "wishlist_ids": wishlist_ids,
         "wishlist_count": len(wishlist_ids),
+        "cart_count": cart_count,
+        # Liquid's `cart` (item_count): headers read it, e.g. {% assign cart_count = cart.item_count | default: 0 %}
+        "cart": {"item_count": cart_count},
+        "cart_session": cart_session,
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         **layout_data(settings, base_url, nav),
@@ -1677,6 +1743,21 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "\n".join(html[scripts_start:]),
         )
 
+    if cart_page:
+        # The cart page is the cart snippet in 'page' mode (see snippets/cart.liquid): no template file
+        cart_opts = cart_data.options(store_theme, files)
+        cart_lines = cart_data.view_data(cart_data.open_cart(store, cart_session), base_url)
+        cart_content = env.from_string(
+            "{% render 'cart', mode: 'page', cart: cart, settings: cart_opts, session: cart_session %}"
+        ).render(**{**common, "cart": cart_lines, "cart_opts": cart_opts})
+        content = Markup("".join((
+            str(theme_css(settings, tokens)),
+            str(SECTION_CSS),
+            str(TYPE_CSS),
+            str(CUSTOM_CSS),
+            cart_content,
+        )))
+
     if wishlist_page_ids is not None:
         # The wishlist page is the wishlist snippet in 'page' mode (see snippets/wishlist.liquid): no template file
         products = wishlist_products or {}
@@ -1695,6 +1776,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     if product:
         title = product.seo_title or product.title
+    elif cart_page:
+        title = "Cart"
     elif wishlist_page_ids is not None:
         title = "Wishlist"
     elif collection_drop:

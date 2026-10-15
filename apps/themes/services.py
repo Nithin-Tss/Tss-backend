@@ -45,6 +45,8 @@ REQUIRED_FILES = {
     "templates/page.liquid",
     # Wishlist: one snippet with all its markup, the page and the script
     "snippets/wishlist.liquid",
+    # Cart: one snippet with the icon, the drawer, the cart page and the script
+    "snippets/cart.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -54,7 +56,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 20
+STARTER_REVISION = 23
 STARTER_UPGRADES = {
     "sections/hero.liquid": {
         "c713c5559e80c118413fad28450cbf01bbfbf5b145377320eb8b06ef73dc2c3d",
@@ -103,6 +105,8 @@ STARTER_UPGRADES = {
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
     "sections/main-product.liquid": {
+        "a7e5eb025dc28325a5b321a418da4f4fe0ec60105e4d9b683752a2c53f1b90ce",  # revision 21: before the cart snippet
+        "0e1504eb9340bb893a9b83c173943ff55430a9efde792269119e1441fdb17d35",  # revision 21: same, with CRLF line endings
         "18d5dd4556bc252eab73fafd20965a871816b44843a55adf743ae341493d1729",
         "3f5327f9d977c78b2e4e56eb89489be0ef544d06e258d91a2d8e3ca9d40f6211",
         "6c8de76dd784aabf1a7e13c29a4a30eed779f80e8b2824ace5b232109ffad098",  # revision 15: price shown inline, no 'price' snippet
@@ -114,8 +118,17 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
+        "4056175621541f0119feb436226b459a59cb3b63818cf25cd04c49c6a6b9c736",  # revision 21: before the cart snippet
+        "6dbee4862d37ededcdf93a750dda3f6ca60794cd16bdb1a0fa0a3995a274962d",  # revision 21: same, with CRLF line endings
         "0447235775798d7cf5839634cfea58c3437e0571c024a24c300ac2f866a85d8b",  # revision 19: before the wishlist snippet
         "5fb084f88335fd7971a07f17eb38a52fa5d81749e4ea625a1678b23f088b5a19",  # revision 19: same, with CRLF line endings
+    },
+    # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
+    "snippets/cart.liquid": {
+        "4c9f20d277bfcd838ff1dc79c9983d48fcd2979e5950c2a6b10556f905b87579",
+        "2c1428519b499c93128ff4616ba32bcc3d46c3ee1acb1951c8c272def021e091",  # same, with CRLF line endings
+        "15a7993c54d5ebf2dba728947c7588b6a2d051224ec312aaf438396f7a913b3a",  # revision 23: before the cart link carried the cart id
+        "c2f6ce7b1f7ace894ce3e08c7db7e2c04fb23e510cd2af90918140d223d994dd",  # same, with CRLF line endings
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
@@ -212,6 +225,7 @@ def get_store_theme(store):
         _add_synced_sections(current.theme, current.custom_data)
         _add_wishlist_blocks(current)
         _offer_wishlist_icon_block(current.theme)
+        _offer_cart_icon_block(current.theme)
         _keep_wishlist_hearts(current)
         _add_page_templates(current)
         return current
@@ -234,6 +248,7 @@ def get_store_theme(store):
     _add_synced_sections(installed.theme, installed.custom_data)
     _add_wishlist_blocks(installed)
     _offer_wishlist_icon_block(installed.theme)
+    _offer_cart_icon_block(installed.theme)
     _keep_wishlist_hearts(installed, new_store=current is None)
     _add_page_templates(installed)
     return installed
@@ -301,6 +316,28 @@ def _add_wishlist_blocks(store_theme):
             store_theme.save(update_fields=["custom_data", "updated_at"])
 
     theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _offer_cart_icon_block(theme):
+    """
+    Once per store: a header the owner edited, or one that came from an older starter, does not offer the
+    "Cart icon" block, so it is missing from "Add block". Same as the wishlist icon (see
+    _offer_wishlist_icon_block): the block type and its loop are inserted into the header, nothing else
+    changes, the replaced code is kept in the header's history, and a header the insert cannot be made
+    into safely is left exactly as it is. No cart icon is added to the page: the owner adds the block.
+    """
+    if (theme.theme_data or {}).get("cart_icon_offered"):
+        return
+    file = theme.files.filter(file_path="sections/header.liquid").first()
+    patched = sync.add_cart_block(file.content) if file else None
+    if patched is not None:
+        sync.record_version(theme, "header", file.content, "upgrade")
+        file.content = patched
+        file.file_size = len(patched.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        sync.invalidate(theme.pk, file.file_path)
+    theme.theme_data = {**(theme.theme_data or {}), "cart_icon_offered": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 
@@ -1065,6 +1102,8 @@ def _seed_header(s, store_name):
             blocks.append({"type": "link", "settings": {"label": label, "url": url}})
     # The header has always shown the wishlist heart: it is now a block the owner can remove
     blocks.append({"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True}})
+    # New headers start with the cart icon (its options are the block's defaults)
+    blocks.append({"type": "cart", "settings": {}})
     return {
         "settings": {
             "logo_text": s.get("header_logo_text", ""), "logo_image": s.get("header_logo_url", ""),

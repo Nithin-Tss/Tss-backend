@@ -8,10 +8,13 @@
   No menu links: Home, Shop all and the first collections are shown.
   The "Wishlist icon" block shows the heart with the saved count, on the right. It only links to
   the wishlist page: everything the wishlist does is in snippets/wishlist.liquid.
+  The "Cart icon" block shows the cart with the number of items. It opens the side drawer or the cart
+  page: everything the cart does is in snippets/cart.liquid.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
 {%- assign link_blocks = section.blocks | where: 'type', 'link' -%}
 {%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
+{%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}
 {%- capture header_style -%}
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
@@ -46,10 +49,14 @@
         {%- endif -%}
       </nav>
     {%- endif -%}
-    {%- if wishlist_blocks.size > 0 -%}
+    {%- if wishlist_blocks.size > 0 or cart_blocks.size > 0 -%}
       <div class="site-header__actions">
-        {%- for block in wishlist_blocks -%}
-          {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+        {%- for block in section.blocks -%}
+          {%- if block.type == 'wishlist' -%}
+            {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
+          {%- elsif block.type == 'cart' -%}
+            {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
+          {%- endif -%}
         {%- endfor -%}
       </div>
     {%- endif -%}
@@ -88,8 +95,25 @@
         {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Wishlist"},
         {"type": "checkbox", "id": "show_count", "label": "Show the number of saved products", "default": true}
       ]
+    },
+    {
+      "type": "cart",
+      "name": "Cart icon",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Cart"},
+        {"type": "checkbox", "id": "show_count", "label": "Show the number of items", "default": true},
+        {"type": "radio", "id": "opens", "label": "Clicking the icon opens", "options": [{"value": "drawer", "label": "Side drawer"}, {"value": "page", "label": "Cart page"}], "default": "drawer"},
+        {"type": "range", "id": "size", "label": "Icon size", "min": 18, "max": 40, "step": 2, "unit": "px", "default": 24},
+        {"type": "text", "id": "drawer_title", "label": "Drawer title", "default": "Cart"},
+        {"type": "text", "id": "checkout_label", "label": "Checkout button text", "default": "Check out"},
+        {"type": "url", "id": "checkout_url", "label": "Checkout button link", "default": "", "info": "Where \"Check out\" goes. Empty shows \"Checkout is coming soon\"."},
+        {"type": "text", "id": "empty_message", "label": "Empty cart message", "default": "Your cart is empty"},
+        {"type": "checkbox", "id": "show_discount", "label": "Show the discount row", "default": true},
+        {"type": "checkbox", "id": "show_login", "label": "Show \"Have an account? Log in\" in the empty cart", "default": false},
+        {"type": "url", "id": "login_url", "label": "Log in link", "default": "/account"}
+      ]
     }
   ],
-  "default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}]}
+  "default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}, {"type": "cart", "settings": {}}]}
 }
 {% endschema %}

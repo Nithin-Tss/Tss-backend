@@ -1,0 +1,256 @@
+{%- comment -%}
+  Everything about the cart lives here: the header icon with the number of items, the side drawer,
+  the cart page and the small script. Prices, totals and stock limits are worked out by the server:
+  this file only shows them. The cart is kept per store for the shopper (no account needed).
+  Usage:
+    {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
+    {% render 'cart', mode: 'lines', cart: cart, settings: settings %}   the drawer's and the page's lines
+    {% render 'cart', mode: 'page', cart: cart, settings: settings, session: cart_session %}
+    {% render 'cart', mode: 'script' %}                                  only the script (product page)
+  Options (settings): label, show_count, opens ("drawer" or "page"), size, drawer_title, checkout_label,
+  checkout_url, empty_message, show_discount, show_login, login_url.
+  The script is added by the icon, the page and the product page's add to cart form.
+{%- endcomment -%}
+{%- assign title = settings.drawer_title | default: 'Cart' -%}
+{%- if mode == 'icon' -%}
+  {%- assign opens = settings.opens | default: 'drawer' -%}
+  {%- assign items = count | default: 0 -%}
+  <a class="site-header__cart" href="{{ shop.url }}/cart" aria-label="{{ settings.label | default: 'Cart' }}" title="{{ settings.label | default: 'Cart' }}" data-cart-open data-cart-opens="{{ opens }}" data-cart-items="{{ items }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}"{{ attrs }}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"{% if settings.size %} style="width:{{ settings.size }}px;height:{{ settings.size }}px"{% endif %}>
+      <circle cx="9" cy="20" r="1.5" /><circle cx="18" cy="20" r="1.5" /><path d="M2 3h3l2.6 12.4a2 2 0 0 0 2 1.6h8.8a2 2 0 0 0 2-1.6L22 7H6" />
+    </svg>
+    {%- if settings.show_count != false -%}
+      <span class="site-header__cart-count" data-cart-count aria-live="polite"{% if items == 0 %} hidden{% endif %}>{{ items }}</span>
+    {%- endif -%}
+  </a>
+  {%- if opens == 'drawer' -%}
+    <div class="cart-drawer" data-cart-drawer data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}" hidden>
+      <div class="cart-drawer__overlay" data-cart-close></div>
+      <aside class="cart-drawer__panel" role="dialog" aria-modal="true" aria-label="{{ title }}">
+        <div class="cart-drawer__head">
+          <h2>{{ title }} <span data-cart-heading-count>({{ items }})</span></h2>
+          <button class="cart-drawer__close" type="button" data-cart-close aria-label="Close cart">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </div>
+        <div class="cart-drawer__body" data-cart-body></div>
+      </aside>
+    </div>
+  {%- endif -%}
+{%- elsif mode == 'lines' -%}
+  {%- if cart.lines.size > 0 -%}
+    <div class="cart-lines">
+      {%- for line in cart.lines -%}
+        <div class="cart-line" data-line="{{ line.id }}">
+          <a class="cart-line__image" href="{{ line.url }}">
+            {%- if line.image != blank -%}<img src="{{ line.image }}" alt="{{ line.title }}" loading="lazy">{%- else -%}<div class="placeholder"></div>{%- endif -%}
+          </a>
+          <div class="cart-line__info">
+            <a class="cart-line__title" href="{{ line.url }}">{{ line.title }}</a>
+            <span class="cart-line__price">{{ line.unit_price | money }}</span>
+            {%- if line.warning != blank -%}<span class="cart-line__warning" role="status">{{ line.warning }}</span>{%- endif -%}
+            <div class="cart-line__controls">
+              <div class="cart-qty">
+                <button type="button" data-cart-change="{{ line.id }}" data-quantity="{{ line.quantity | minus: 1 }}" aria-label="Decrease quantity of {{ line.title }}">&minus;</button>
+                <span class="cart-qty__value">{{ line.quantity }}</span>
+                <button type="button" data-cart-change="{{ line.id }}" data-quantity="{{ line.quantity | plus: 1 }}" aria-label="Increase quantity of {{ line.title }}"{% if line.at_max %} disabled{% endif %}>+</button>
+              </div>
+              <button class="cart-line__remove" type="button" data-cart-change="{{ line.id }}" data-quantity="0" aria-label="Remove {{ line.title }} from the cart">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6" /></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cart-line__total">{{ line.total | money }}</div>
+        </div>
+      {%- endfor -%}
+    </div>
+    <div class="cart-summary">
+      {%- if settings.show_discount != false -%}
+        <div class="cart-summary__row"><span>Discount</span><span class="cart-summary__muted">Added at checkout</span></div>
+      {%- endif -%}
+      <div class="cart-summary__row cart-summary__total"><span>Estimated total</span><span>{{ cart.subtotal | money }}</span></div>
+      <p class="cart-summary__note">Duties and taxes included. Shipping is calculated at checkout.</p>
+      {%- if settings.checkout_url != blank -%}
+        <a class="button cart-checkout" href="{{ settings.checkout_url | link }}">{{ settings.checkout_label | default: 'Check out' }}</a>
+      {%- else -%}
+        <button class="button cart-checkout" type="button" data-cart-checkout-soon>{{ settings.checkout_label | default: 'Check out' }}</button>
+      {%- endif -%}
+      <p class="cart-summary__notice" role="status" data-cart-notice></p>
+    </div>
+  {%- else -%}
+    <div class="cart-empty">
+      <h2 class="cart-empty__title">{{ settings.empty_message | default: 'Your cart is empty' }}</h2>
+      {%- if settings.show_login -%}
+        <p class="cart-empty__login">Have an account? <a href="{{ settings.login_url | link }}">Log in</a> to check out faster.</p>
+      {%- endif -%}
+      <a class="button" href="{{ shop.url }}/collections/all">Continue shopping</a>
+    </div>
+  {%- endif -%}
+{%- elsif mode == 'page' -%}
+  <section class="cart-page"><div class="page-width" data-cart-root data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}">
+    {%- if cart.lines.size > 0 -%}<h1>{{ title }}</h1>{%- endif -%}
+    <div data-cart-body>{% render 'cart', mode: 'lines', cart: cart, settings: settings %}</div>
+  </div></section>
+{%- endif -%}
+{%- if mode == 'icon' or mode == 'page' or mode == 'script' -%}
+<script>
+(function () {
+  if (window.tssCart) return;
+  window.tssCart = true;
+  var lastOpener = null;
+
+  // The cart link carries the cart id, so the cart page finds the cart even if the browser did not keep the cookie
+  function cartId() {
+    var holder = document.querySelector("[data-cart-session]");
+    return holder ? holder.getAttribute("data-cart-session") : "";
+  }
+  function tagLinks() {
+    var id = cartId();
+    if (!id) return;
+    document.querySelectorAll("a.site-header__cart").forEach(function (link) {
+      var href = link.getAttribute("href");
+      if (href && !/[?&]cart=/.test(href)) link.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "cart=" + id);
+    });
+  }
+  tagLinks();
+
+  function context(el) {
+    var holder = el && el.closest ? el.closest("[data-cart-base]") : null;
+    if (!holder) holder = document.querySelector("[data-cart-base]");
+    return holder ? { base: holder.getAttribute("data-cart-base"), session: holder.getAttribute("data-cart-session") || "" } : null;
+  }
+
+  // One call to the cart: the server answers with the count and the lines already worked out
+  function call(ctx, method, path, body) {
+    var headers = { Accept: "application/json", "X-Cart-Session": ctx.session };
+    if (body) headers["Content-Type"] = "application/json";
+    return fetch(ctx.base + path, { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+          if (!response.ok) throw new Error(data.error || "The cart could not be updated.");
+          return data;
+        });
+      });
+  }
+
+  function setCount(count) {
+    count = Math.max(0, Number(count) || 0);
+    document.querySelectorAll("[data-cart-count]").forEach(function (el) {
+      el.textContent = String(count);
+      el.hidden = count === 0;
+    });
+    document.querySelectorAll("[data-cart-open]").forEach(function (el) { el.setAttribute("data-cart-items", String(count)); });
+    // A header that draws its own cart icon (a link with a badge) is kept in step too
+    document.querySelectorAll(".site-header__cart").forEach(function (link) {
+      if (link.hasAttribute("data-cart-open")) return;
+      var badge = link.querySelector(".site-header__cart-count");
+      if (!badge && count > 0) {
+        badge = document.createElement("span");
+        badge.className = "site-header__cart-count";
+        link.appendChild(badge);
+      }
+      if (!badge) return;
+      (badge.querySelector("span") || badge).textContent = String(count);
+      badge.style.display = count === 0 ? "none" : "";
+    });
+    document.querySelectorAll("[data-cart-heading-count]").forEach(function (el) { el.textContent = "(" + count + ")"; });
+  }
+
+  function showLines(data) {
+    setCount(data.count);
+    if (typeof data.html !== "string") return;
+    document.querySelectorAll("[data-cart-body]").forEach(function (el) { el.innerHTML = data.html; });
+    var heading = document.querySelector(".cart-page h1");
+    if (heading && !document.querySelector(".cart-page .cart-line")) heading.remove();
+  }
+
+  function openDrawer(link) {
+    var drawer = document.querySelector("[data-cart-drawer]");
+    if (!drawer) return false;
+    lastOpener = link;
+    drawer.hidden = false;
+    document.documentElement.classList.add("cart-open");
+    var body = drawer.querySelector("[data-cart-body]");
+    call(context(drawer), "GET", "/fragment").then(showLines).catch(function (error) {
+      body.textContent = error.message;
+    });
+    var close = drawer.querySelector(".cart-drawer__close");
+    if (close) close.focus();
+    return true;
+  }
+
+  function closeDrawer() {
+    var drawer = document.querySelector("[data-cart-drawer]");
+    if (!drawer || drawer.hidden) return;
+    drawer.hidden = true;
+    document.documentElement.classList.remove("cart-open");
+    if (lastOpener) lastOpener.focus();
+  }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target.closest ? event.target : event.target.parentElement;
+    if (!target) return;
+
+    if (target.closest("a.site-header__cart")) tagLinks();
+
+    // The icon: the drawer when there is something in the cart, otherwise the cart page (its empty message)
+    var opener = target.closest("[data-cart-open]");
+    if (opener) {
+      var items = Number(opener.getAttribute("data-cart-items")) || 0;
+      if (opener.getAttribute("data-cart-opens") === "drawer" && items > 0 && openDrawer(opener)) event.preventDefault();
+      return;
+    }
+    if (target.closest("[data-cart-close]")) { closeDrawer(); return; }
+
+    var change = target.closest("[data-cart-change]");
+    if (change) {
+      event.preventDefault();
+      var ctx = context(change);
+      if (!ctx || change.disabled) return;
+      change.disabled = true;
+      call(ctx, "POST", "/change", { line: change.getAttribute("data-cart-change"), quantity: Number(change.getAttribute("data-quantity")) })
+        .then(showLines)
+        .catch(function (error) {
+          change.disabled = false;
+          var warning = change.closest(".cart-line");
+          var note = (warning || document).querySelector(".cart-line__warning");
+          if (!note && warning) { note = document.createElement("span"); note.className = "cart-line__warning"; note.setAttribute("role", "status"); warning.querySelector(".cart-line__info").appendChild(note); }
+          if (note) note.textContent = error.message;
+        });
+      return;
+    }
+
+    if (target.closest("[data-cart-checkout-soon]")) {
+      var notice = document.querySelector("[data-cart-notice]");
+      if (notice) notice.textContent = "Checkout is coming soon.";
+    }
+  });
+
+  document.addEventListener("keydown", function (event) { if (event.key === "Escape") closeDrawer(); });
+
+  // Add to cart (the product page): the count goes up at once, no reload
+  document.addEventListener("submit", function (event) {
+    var form = event.target.closest ? event.target.closest("form[data-cart-add]") : null;
+    if (!form) return;
+    event.preventDefault();
+    var ctx = context(form);
+    var notice = form.querySelector("[data-notice]");
+    var button = form.querySelector("[data-add]");
+    var variant = form.querySelector('[name="variant"]');
+    var quantity = form.querySelector('[name="quantity"]');
+    if (!ctx || !ctx.session) { if (notice) notice.textContent = "The cart is not available on this page."; return; }
+    if (button) button.disabled = true;
+    call(ctx, "POST", "/add", {
+      product: form.querySelector('[name="product"]').value,
+      variant: variant ? variant.value : null,
+      quantity: quantity ? Number(quantity.value) || 1 : 1
+    }).then(function (data) {
+      showLines(data);
+      if (notice) notice.textContent = "Added to cart.";
+    }).catch(function (error) {
+      if (notice) notice.textContent = error.message;
+    }).then(function () { if (button) button.disabled = false; });
+  });
+})();
+</script>
+{%- endif -%}

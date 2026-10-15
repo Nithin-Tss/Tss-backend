@@ -2,7 +2,8 @@
 from django.urls import path
 
 from .views import (
-    storefront_article, storefront_blog, storefront_collection, storefront_home, storefront_page,
+    storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change,
+    storefront_cart_fragment, storefront_collection, storefront_home, storefront_page,
     storefront_product,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
@@ -10,6 +11,11 @@ from .views import (
 
 urlpatterns = [
     path("_img/<uuid:image_id>", theme_image, name="theme-image"),
+    path("<slug:store_slug>/cart", storefront_cart, name="storefront-cart-page-noslash"),
+    path("<slug:store_slug>/cart/", storefront_cart, name="storefront-cart-page"),
+    path("<slug:store_slug>/cart/fragment", storefront_cart_fragment, name="storefront-cart-fragment"),
+    path("<slug:store_slug>/cart/add", storefront_cart_add, name="storefront-cart-add"),
+    path("<slug:store_slug>/cart/change", storefront_cart_change, name="storefront-cart-change"),
     path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
     path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),
