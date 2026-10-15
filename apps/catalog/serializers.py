@@ -285,18 +285,53 @@ class CollectionSerializer(serializers.ModelSerializer):
         return obj.product_collections.count()
 
     def get_sales_channels_count(self, obj):
-        if hasattr(obj, "sales_channels_count_annotated"):
-            return obj.sales_channels_count_annotated
-        return obj.collection_sales_channels.count()
+        channels = self.get_sales_channels(obj)
+        return len(channels)
 
     def get_sales_channels(self, obj):
-        channels = [
-            csc.sales_channel
-            for csc in obj.collection_sales_channels.select_related("sales_channel").all()
-        ]
+        from apps.catalog.models import SalesChannel
+
+        if hasattr(obj, "_prefetched_objects_cache") and "product_collections" in obj._prefetched_objects_cache:
+            channels_dict = {}
+            for pc in obj.product_collections.all():
+                product = getattr(pc, "product", None)
+                if (
+                    product
+                    and hasattr(product, "_prefetched_objects_cache")
+                    and "product_sales_channels" in product._prefetched_objects_cache
+                ):
+                    for psc in product.product_sales_channels.all():
+                        ch = getattr(psc, "sales_channel", None)
+                        if ch:
+                            key = (ch.name, ch.type)
+                            if key not in channels_dict:
+                                channels_dict[key] = ch
+            if channels_dict:
+                return [
+                    {"id": str(c.id), "name": c.name, "type": c.type}
+                    for c in sorted(channels_dict.values(), key=lambda c: c.created_at)
+                ]
+            if hasattr(obj, "sales_channels_count_annotated") and obj.sales_channels_count_annotated == 0:
+                return []
+
+        channels = (
+            SalesChannel.objects.filter(
+                product_sales_channels__product__product_collections__collection=obj
+            )
+            .distinct()
+            .order_by("created_at")
+        )
+        seen = set()
+        unique_channels = []
+        for c in channels:
+            key = (c.name, c.type)
+            if key not in seen:
+                seen.add(key)
+                unique_channels.append(c)
+
         return [
             {"id": str(c.id), "name": c.name, "type": c.type}
-            for c in channels
+            for c in unique_channels
         ]
 
     def to_representation(self, obj):

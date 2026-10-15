@@ -34,17 +34,40 @@ THEME_TEMPLATES = ("default", "featured", "minimal")
 
 # Every store sells through these unless it adds its own
 ONLINE = "online"
-DEFAULT_CHANNELS = (("Online Store", ONLINE), ("Point of Sale", "pos"))
+POS = "pos"
+SHOP = "shop"
+DEFAULT_CHANNELS = (("Online Store", ONLINE), ("Point of Sale", POS), ("Shop", SHOP))
 
 
 def sales_channels_for(store):
     """The store's sales channels, creating the default ones the first time."""
-    channels = SalesChannel.objects.filter(store=store)
-    if not channels.exists():
+    channels = list(SalesChannel.objects.filter(store=store).order_by("created_at"))
+    if not channels:
         SalesChannel.objects.bulk_create(
             [SalesChannel(store=store, name=name, type=kind) for name, kind in DEFAULT_CHANNELS]
         )
-    return SalesChannel.objects.filter(store=store).order_by("created_at")
+        return SalesChannel.objects.filter(store=store).order_by("created_at")
+
+    # If any default channels are missing, create them
+    existing_types = {c.type for c in channels}
+    missing = [
+        SalesChannel(store=store, name=name, type=kind)
+        for name, kind in DEFAULT_CHANNELS
+        if kind not in existing_types
+    ]
+    if missing:
+        SalesChannel.objects.bulk_create(missing)
+        channels = list(SalesChannel.objects.filter(store=store).order_by("created_at"))
+
+    # Return only unique channels by (name, type)
+    seen = set()
+    unique = []
+    for c in channels:
+        key = (c.name, c.type)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
 
 
 class ProductInUse(Exception):

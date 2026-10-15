@@ -361,9 +361,15 @@ class CollectionViewSet(StoreScopedViewSet):
             .get_queryset()
             .annotate(
                 products_count_annotated=Count("product_collections", distinct=True),
-                sales_channels_count_annotated=Count("collection_sales_channels", distinct=True),
+                sales_channels_count_annotated=Count(
+                    "product_collections__product__product_sales_channels__sales_channel",
+                    distinct=True,
+                ),
             )
-            .prefetch_related("collection_sales_channels__sales_channel", "rules", "product_collections")
+            .prefetch_related(
+                "rules",
+                "product_collections__product__product_sales_channels__sales_channel",
+            )
         )
 
     def perform_destroy(self, instance):
