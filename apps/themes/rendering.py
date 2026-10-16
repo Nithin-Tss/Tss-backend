@@ -51,6 +51,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .tss-wrap{padding-top:var(--tss-pt,0);padding-bottom:var(--tss-pb,0);background:var(--tss-bg,transparent);color:var(--tss-color,inherit);border-radius:var(--tss-radius,0);overflow:clip}
 .tss-wrap .section{padding-top:0;padding-bottom:0}
 .tss-wrap .page-width{padding-left:var(--tss-px,20px);padding-right:var(--tss-px,20px)}
+.page-width{max-width:max(var(--page,1200px),1600px)}
 .tss-w-narrow .page-width{max-width:800px}.tss-w-full .page-width{max-width:none}
 .tss-align-left{text-align:left}.tss-align-center{text-align:center}.tss-align-right{text-align:right}
 .tss-div-top,.tss-div-both{border-top:1px solid var(--line,rgba(0,0,0,.12))}
