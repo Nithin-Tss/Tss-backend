@@ -4,10 +4,14 @@ Inventory API tests.
     python manage.py test apps.inventory --settings=config.test_settings
 """
 import uuid
+import copy
+from unittest import mock
 
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
+from apps.inventory.models import Transfer
+from apps.inventory.views import TransferViewSet
 
 ITEMS = "/api/v1/inventory/items/"
 
@@ -120,3 +124,21 @@ class InventoryTests(StoreClientMixin, APITestCase):
 
         by_location = {r["location"]: r["available"] for r in self.ok("get", ITEMS)}
         self.assertEqual(by_location, {self.warehouse: 3, shop: 2})
+
+    def test_two_requests_that_both_read_the_old_status_move_stock_once(self):
+        self.set_stock(20)
+        shop = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]
+        made = self.ok("post", "/api/v1/inventory/transfers/", {
+            "source_location": self.warehouse, "destination_location": shop,
+            "items": [{"variant": self.variant, "quantity": 10}],
+        }, expect=201)
+        url = f"/api/v1/inventory/transfers/{made['id']}/complete/"
+        stale = Transfer.objects.get(pk=made["id"])  # each request gets its own copy of this old row; no request sees the other's change in memory
+        #: status "pending"
+
+        with mock.patch.object(TransferViewSet, "get_object", lambda view: copy.copy(stale)):
+            self.ok("post", url)
+            self.ok("post", url, expect=400)  # still sees the old status, but the locked row says completed
+
+        by_location = {r["location"]: r["available"] for r in self.ok("get", ITEMS)}
+        self.assertEqual(by_location, {self.warehouse: 10, shop: 10})

@@ -58,8 +58,10 @@ class PurchaseOrderViewSet(StoreScopedViewSet):
             instance.items.all().delete()
             instance.delete()
 
+    @transaction.atomic
     def _move(self, allowed, new_status):
-        po = self.get_object()
+        # Lock the row so two requests at the same moment can't both pass the status check.
+        po = PurchaseOrder.objects.select_for_update().get(pk=self.get_object().pk)
         if po.status not in allowed:
             raise ValidationError(f"A {po.status} purchase order can't become {new_status}.")
         po.status = new_status

@@ -173,8 +173,10 @@ class TransferViewSet(StoreScopedViewSet):
             [TransferItem(transfer=transfer, **item) for item in items]
         )
 
+    @transaction.atomic
     def _pending(self):
-        transfer = self.get_object()
+        # Lock the row so two requests at the same moment can't both pass the status check.
+        transfer = Transfer.objects.select_for_update().get(pk=self.get_object().pk)
         if transfer.status != PENDING:
             raise ValidationError(f"This transfer is already {transfer.status}.")
         return transfer
