@@ -1076,6 +1076,15 @@ def _add_synced_sections(theme, custom_data=None):
                             file.file_size = len(upgraded.encode("utf-8"))
                             file.save(update_fields=["content", "file_size", "updated_at"])
                             sync.invalidate(locked.pk, config["path"])
+                    if name == "footer":
+                        file = locked.files.get(file_path=config["path"])
+                        upgraded = _add_footer_logo_block(file.content)
+                        if upgraded is not None:
+                            sync.record_version(locked, name, file.content, "upgrade")
+                            file.content = upgraded
+                            file.file_size = len(upgraded.encode("utf-8"))
+                            file.save(update_fields=["content", "file_size", "updated_at"])
+                            sync.invalidate(locked.pk, config["path"])
                     if name == "header":
                         _upgrade_header_wishlist_styles(locked, files.get("snippets/styles.liquid"))
                     continue
@@ -1142,6 +1151,37 @@ def _add_header_wishlist_styles(content):
         "  }",
     ))
     return content.replace(anchor, anchor + newline + styles, 1)
+
+
+def _add_footer_logo_block(content):
+    """Add (or bring up to date) the Logo block of a standard synced footer; None when nothing changes."""
+    if '"id": "position"' in content and '"type": "logo"' in content:
+        return None
+    nl = "\r\n" if "\r\n" in content else "\n"
+    starter = starter_files()["sections/footer.liquid"].replace("\r\n", "\n")
+
+    def part(text, start, end):
+        return text[text.index(start):text.index(end)]
+
+    markup = part(starter, "          {%- when 'logo' -%}", "          {%- when 'text' -%}").replace("\n", nl)
+    block = part(starter, '    {\n      "type": "logo"', '    {\n      "type": "text"').replace("\n", nl)
+    css = part(starter, "  .site-footer__logo {", "  .site-footer__nav strong").replace("\n", nl)
+    if '"type": "logo"' in content:  # an earlier version of the block: swap in the current one
+        try:
+            content = content.replace(part(content, "          {%- when 'logo' -%}", "          {%- when 'text' -%}"), markup, 1)
+            content = content.replace(part(content, '    {' + nl + '      "type": "logo"', '    {' + nl + '      "type": "text"'), block, 1)
+            old_css = part(content, "  .site-footer__logo {", "  .site-footer__nav strong")
+        except ValueError:
+            return None
+        return content.replace(old_css, css, 1)
+    markup_anchor = "        {%- case block.type -%}" + nl + "          {%- when 'text' -%}"
+    schema_anchor = '  "blocks": [' + nl + "    {" + nl + '      "type": "text",'
+    if content.count(markup_anchor) != 1 or content.count(schema_anchor) != 1:
+        return None
+    content = content.replace(markup_anchor, "        {%- case block.type -%}" + nl + markup + "          {%- when 'text' -%}", 1)
+    content = content.replace(schema_anchor, '  "blocks": [' + nl + block + "    {" + nl + '      "type": "text",', 1)
+    content = content.replace("<style>" + nl, "<style>" + nl + css, 1)
+    return re.sub(r'"max_blocks": 8\b', '"max_blocks": 9', content, count=1)
 
 
 def _add_header_wishlist_setting(content):

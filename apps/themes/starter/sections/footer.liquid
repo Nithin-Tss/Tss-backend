@@ -11,6 +11,18 @@
       {%- for block in section.blocks -%}
         {%- assign b = block.settings -%}
         {%- case block.type -%}
+          {%- when 'logo' -%}
+            <div class="site-footer__logo-row" data-position="{{ b.position | default: 'inline' }}"{{ block.attrs }}>
+              <a class="site-footer__logo" href="{{ shop.url }}/">
+                {%- if b.image != blank -%}
+                  <img src="{{ b.image }}" alt="{{ shop.name }}" style="height: {{ b.height }}px; width: auto;">
+                {%- elsif b.text != blank -%}
+                  {{ b.text }}
+                {%- else -%}
+                  {{ shop.name }}
+                {%- endif -%}
+              </a>
+            </div>
           {%- when 'text' -%}
             <div class="site-footer__about"{{ block.attrs }}>
               {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
@@ -56,6 +68,12 @@
   </div>
 </footer>
 <style>
+  .site-footer__logo { display: inline-flex; align-items: center; font-family: var(--tss-heading-font); font-size: 20px; font-weight: 700; color: var(--text); }
+  .site-footer a.site-footer__logo:hover { text-decoration: none; }
+  .site-footer__logo-row[data-position="left"], .site-footer__logo-row[data-position="center"], .site-footer__logo-row[data-position="right"] { flex: 0 0 100%; display: flex; }
+  .site-footer__logo-row[data-position="left"] { justify-content: flex-start; }
+  .site-footer__logo-row[data-position="center"] { justify-content: center; }
+  .site-footer__logo-row[data-position="right"] { justify-content: flex-end; }
   .site-footer__nav strong, .site-footer__newsletter strong { color: var(--text); }
   .site-footer__newsletter { display: grid; gap: 8px; max-width: 360px; }
   .site-footer__newsletter p { margin: 0; min-height: 1em; }
@@ -67,13 +85,28 @@
 {% schema %}
 {
   "name": "Footer",
-  "max_blocks": 8,
+  "max_blocks": 9,
   "settings": [
     {"type": "text", "id": "copyright", "label": "Copyright line", "default": "", "info": "Empty shows the year and the store name."},
     {"type": "color", "id": "background", "label": "Background colour", "default": ""},
     {"type": "color", "id": "text_color", "label": "Text colour", "default": ""}
   ],
   "blocks": [
+    {
+      "type": "logo",
+      "name": "Logo",
+      "settings": [
+        {"type": "image", "id": "image", "label": "Logo image", "default": "", "info": "Optional. Shown instead of the logo text."},
+        {"type": "range", "id": "height", "label": "Logo image height", "min": 16, "max": 120, "step": 2, "unit": "px", "default": 36},
+        {"type": "text", "id": "text", "label": "Logo text", "default": "", "info": "Empty uses the store name."},
+        {"type": "select", "id": "position", "label": "Placement", "default": "inline", "options": [
+          {"value": "inline", "label": "Inline with other blocks"},
+          {"value": "left", "label": "Own row, left"},
+          {"value": "center", "label": "Own row, centre"},
+          {"value": "right", "label": "Own row, right"}
+        ], "info": "Drag the block to change where it sits among the others."}
+      ]
+    },
     {
       "type": "text",
       "name": "Text",

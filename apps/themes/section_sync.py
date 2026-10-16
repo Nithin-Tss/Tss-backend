@@ -99,7 +99,7 @@ SYNCED_FILES = {
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 6: show the guest wishlist item count beside existing header hearts
-ORIGINALS_REVISION = 6
+ORIGINALS_REVISION = 8
 
 
 def is_original_snippet(name, content):
