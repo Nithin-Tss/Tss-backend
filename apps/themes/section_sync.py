@@ -154,7 +154,7 @@ def split(content):
     return content[: match.start()] + blank + content[match.end():], match.group(1), match.start(1)
 
 
-SETTING_TYPES = {"text", "textarea", "richtext", "url", "image", "checkbox", "select", "radio", "color", "range", "number", "menu"}
+SETTING_TYPES = {"text", "textarea", "richtext", "url", "image", "image_picker", "checkbox", "select", "radio", "color", "range", "number", "menu"}
 UI_ONLY_TYPES = {"header", "paragraph"}
 
 
@@ -411,8 +411,8 @@ def _field(s):
     base = {"label": label, "group": "content"}
     if s.get("info"):
         base["help"] = s["info"]
-    if kind in ("text", "textarea", "richtext", "url", "image", "menu"):
-        return {**base, "type": kind, "default": str(s.get("default", "")), "max": MAX_TEXT}
+    if kind in ("text", "textarea", "richtext", "url", "image", "image_picker", "menu"):
+        return {**base, "type": "image" if kind == "image_picker" else kind, "default": str(s.get("default", "")), "max": MAX_TEXT}
     if kind == "checkbox":
         return {**base, "type": "checkbox", "default": bool(s.get("default", False))}
     if kind in ("select", "radio"):
@@ -469,7 +469,7 @@ def _clean(spec, value, strict, where):
     value = value[:MAX_TEXT]
     if kind == "color_optional":
         return value.upper() if _COLOR.match(value) else ("" if value == "" else spec["default"])
-    if kind in ("url", "image") and value.strip() and not _SAFE_URL.match(value.strip()):
+    if kind in ("url", "image", "image_picker") and value.strip() and not _SAFE_URL.match(value.strip()):
         # javascript:, data: and other schemes are never stored or rendered
         if strict:
             raise ValueError(f"{where}: links must start with https://, http://, mailto:, tel:, / or #.")

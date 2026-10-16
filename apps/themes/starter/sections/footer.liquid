@@ -60,6 +60,15 @@
     </div>
   {%- endif -%}
   <div class="page-width site-footer__legal">
+    {%- assign footer_icon = s.icon -%}
+    {%- if footer_icon == blank or footer_icon == nil -%}
+      {%- assign footer_icon = s.footer_icon -%}
+    {%- endif -%}
+    {%- if footer_icon != blank and footer_icon != nil -%}
+      <div class="site-footer__icon">
+        <img src="{{ footer_icon }}" alt="{{ shop.name | escape }}" loading="lazy">
+      </div>
+    {%- endif -%}
     {%- if s.copyright != blank -%}
       {{ s.copyright }}
     {%- else -%}
@@ -80,6 +89,8 @@
   .site-footer__signup { display: flex; gap: 8px; }
   .site-footer__signup input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--bg); color: var(--text); }
   .site-footer__signup .button { min-height: 40px; padding: 0 16px; }
+  .site-footer__icon { margin-bottom: 12px; }
+  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle; }
 </style>
 
 {% schema %}
@@ -87,6 +98,7 @@
   "name": "Footer",
   "max_blocks": 9,
   "settings": [
+    {"type": "image", "id": "icon", "label": "Footer icon", "default": ""},
     {"type": "text", "id": "copyright", "label": "Copyright line", "default": "", "info": "Empty shows the year and the store name."},
     {"type": "color", "id": "background", "label": "Background colour", "default": ""},
     {"type": "color", "id": "text_color", "label": "Text colour", "default": ""}
