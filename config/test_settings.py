@@ -26,3 +26,7 @@ SECURE_SSL_REDIRECT = False
 import tempfile  # noqa: E402
 
 MEDIA_ROOT = tempfile.mkdtemp(prefix="tss-test-media-")
+
+# Per-process cache, never the shared Redis from .env: parallel test workers
+# call cache.clear() in setUp, which would wipe each other's throttle counters.
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}

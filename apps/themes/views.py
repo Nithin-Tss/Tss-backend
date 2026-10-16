@@ -7,6 +7,7 @@ from urllib.parse import urlencode, urlsplit
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.core import signing
+from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db import connection
 from django.db.models import F
@@ -373,11 +374,22 @@ class ThemeImageView(StoreThemeView):
         return Response({"url": url}, status=status.HTTP_201_CREATED)
 
 
+THEME_IMAGE_CACHE_SECONDS = 60 * 60
+THEME_IMAGE_CACHE_MAX_BYTES = 2 * 1024 * 1024  # bigger pictures are read from the database each time
+
+
 @require_GET
 def theme_image(request, image_id):
-    """Public: a customizer picture, straight from the database."""
-    image = get_object_or_404(ThemeImage, pk=image_id)
-    response = HttpResponse(bytes(image.data), content_type=image.content_type)
+    """Public: a customizer picture. Bytes are cached in Redis (a picture never changes once uploaded)."""
+    key = f"theme-image:{image_id}"
+    cached = cache.get(key)
+    if cached is None:
+        image = get_object_or_404(ThemeImage, pk=image_id)
+        cached = (bytes(image.data), image.content_type)
+        if len(cached[0]) <= THEME_IMAGE_CACHE_MAX_BYTES:
+            cache.set(key, cached, THEME_IMAGE_CACHE_SECONDS)
+    data, content_type = cached
+    response = HttpResponse(data, content_type=content_type)
     response["Cache-Control"] = "public, max-age=31536000, immutable"
     response["Cross-Origin-Resource-Policy"] = "cross-origin"
     return response

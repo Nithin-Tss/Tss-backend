@@ -20,7 +20,8 @@ from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env", override=True)
+# DJANGO_ENV_FILE=.env.test points the tests at a local database instead of the remote one.
+load_dotenv(BASE_DIR / os.getenv("DJANGO_ENV_FILE", ".env"), override=True)
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
@@ -150,6 +151,23 @@ DATABASES = {
         },
     }
 }
+
+
+# Cache (Redis)
+# Set REDIS_URL (e.g. redis://127.0.0.1:6379/1) to share one cache between all gunicorn workers.
+# Without it Django falls back to a per-process in-memory cache, so nothing breaks if Redis is missing.
+# Also backs the DRF throttles above (sign-in / email limits), which need a shared cache to be accurate.
+if os.getenv('REDIS_URL'):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.getenv('REDIS_URL'),
+            'KEY_PREFIX': 'tss',
+            'TIMEOUT': int(os.getenv('CACHE_DEFAULT_TIMEOUT', '300')),
+        }
+    }
+else:
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 
 
 # Password validation
