@@ -1,0 +1,21 @@
+{
+  "name": "Minimal",
+  "description": "Quiet, spacious and image-led, with outline buttons. Lets your products do the talking.",
+  "categories": ["Beauty", "Home & Living", "Health & Wellness"],
+  "swatches": ["#111111", "#FFFFFF", "#F2F2F0"],
+  "settings": {
+    "accent_color": "#111111", "background_color": "#FFFFFF", "text_color": "#222222",
+    "heading_font": "dm-sans", "body_font": "dm-sans", "base_font_size": 15,
+    "button_style": "outline", "button_bg": "", "button_text": "", "button_radius": "square", "button_hover": "darken"
+  },
+  "templates": {
+    "index": {
+      "order": ["featured", "about", "carousel"],
+      "sections": {
+        "featured": {"type": "product-grid", "settings": {"heading": "Shop all", "columns": 3, "limit": 9}},
+        "about": {"type": "rich-text", "settings": {"heading": "Simple, honest products", "text": "A short note about what you make and why.", "text_alignment": "center"}},
+        "carousel": {"type": "product-carousel", "settings": {"heading": "New in"}}
+      }
+    }
+  }
+}

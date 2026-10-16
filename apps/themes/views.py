@@ -39,6 +39,7 @@ from apps.tenancy.models import Store, StoreMembership
 
 from .models import BlogPost, Menu, MenuItem, StorePage, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
+from . import presets
 from . import section_sync as sync
 from .rendering import (
     _catalog, parse_collection_filters, published_pages, published_posts, render_cart_html, render_page,
@@ -304,6 +305,36 @@ class ThemeSettingsView(StoreThemeView):
             resolve(store_theme.custom_data),
             status=status.HTTP_200_OK,
         )
+
+
+class ThemePresetsView(StoreThemeView):
+    """
+    GET  /api/v1/themes/presets/   the ready-made themes and which one the store is using
+    POST /api/v1/themes/presets/   {slug}  use one: its look and home layout replace the store's
+    """
+
+    def get(self, request):
+        store_theme = self.store_theme()
+        return Response({
+            "applied": presets.applied_slug(store_theme),
+            "undo": presets.previous_name(store_theme),
+            "presets": [presets.public(p) for p in presets.list_presets()],
+        })
+
+    def post(self, request):
+        slug = request.data.get("slug") if isinstance(request.data, dict) else None
+        preset = presets.apply_preset(
+            self.store_theme(), slug, client=str(request.data.get("client") or "")[:64],
+        )
+        return Response({"applied": preset["slug"]})
+
+
+class ThemePresetsUndoView(StoreThemeView):
+    """POST /api/v1/themes/presets/undo/   go back to how the store was before the last theme was used"""
+
+    def post(self, request):
+        client = str(request.data.get("client") or "")[:64] if isinstance(request.data, dict) else ""
+        return Response({"applied": presets.undo_preset(self.store_theme(), client=client)})
 
 
 class ThemeCustomizerView(StoreThemeView):

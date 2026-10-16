@@ -1,0 +1,22 @@
+{
+  "name": "Fresh",
+  "description": "Light, friendly and green, with rounded buttons. Suits food, wellness and everyday goods.",
+  "categories": ["Food & Beverage", "Health & Wellness", "Home & Living"],
+  "swatches": ["#2F7D4F", "#F4FAF6", "#16301F"],
+  "settings": {
+    "accent_color": "#2F7D4F", "background_color": "#F4FAF6", "text_color": "#16301F",
+    "heading_font": "nunito", "body_font": "nunito", "base_font_size": 16,
+    "button_style": "filled", "button_bg": "", "button_text": "", "button_radius": "rounded", "button_hover": "lift"
+  },
+  "templates": {
+    "index": {
+      "order": ["hero", "carousel", "featured", "about"],
+      "sections": {
+        "hero": {"type": "hero", "settings": {"heading": "Good things, delivered", "subheading": "Fresh, honest and made close to home.", "height": "medium", "overlay_opacity": 20}},
+        "carousel": {"type": "product-carousel", "settings": {"heading": "Popular this week"}},
+        "featured": {"type": "product-grid", "settings": {"heading": "Everything we make", "columns": 4, "limit": 8}},
+        "about": {"type": "rich-text", "settings": {"heading": "From our kitchen to yours", "text": "Share your story, your ingredients and your promise."}}
+      }
+    }
+  }
+}

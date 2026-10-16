@@ -4223,3 +4223,98 @@ class HomeTemplateSyncTest(StoreClientMixin, APITestCase):
         # Saving such a file is an ordinary save
         self.save_code('<section class="mine">{{ sections }}</section>\n')
         self.assertIn('<section class="mine">', self.home())
+
+
+class ThemePresetsTest(StoreClientMixin, APITestCase):
+    """Ready-made themes: listing, applying, and keeping the store's own content."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("presets@example.com", "Presets Store")
+
+    def test_every_preset_file_is_valid(self):
+        from .presets import list_presets
+        from .schemas import validate_custom_data
+
+        presets = list_presets()
+        self.assertGreaterEqual(len(presets), 4)
+        for preset in presets:
+            with self.subTest(preset["slug"]):
+                validate_custom_data({"settings": preset["settings"], "templates": preset["templates"]})
+
+    def test_lists_presets_and_the_one_in_use(self):
+        data = self.ok("get", "/api/v1/themes/presets/")
+        self.assertEqual(data["applied"], "classic")
+        self.assertIn("boutique", {p["slug"] for p in data["presets"]})
+
+    def test_apply_changes_look_and_layout_but_keeps_store_content(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"currency_symbol": "$", "announcement": "Sale"}})
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(settings["settings"]["heading_font"], "oswald")
+        self.assertEqual(settings["settings"]["button_radius"], "square")
+        self.assertEqual(settings["settings"]["currency_symbol"], "$")
+        self.assertEqual(settings["settings"]["announcement"], "Sale")
+        self.assertEqual(settings["templates"]["index"]["order"], ["slideshow", "carousel", "featured", "hero"])
+        self.assertEqual(self.ok("get", "/api/v1/themes/presets/")["applied"], "bold")
+
+        # Switching again resets the look the previous theme set
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
+        settings = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual(settings["heading_font"], "system")
+        self.assertEqual(settings["button_bg"], "")
+
+    def test_unknown_preset_is_refused(self):
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "nope"}, expect=404)
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "../x"}, expect=404)
+        self.ok("post", "/api/v1/themes/presets/", {}, expect=404)
+
+    def test_preset_files_are_allowed_paths(self):
+        from .presets import check_files, list_presets, preset_files
+
+        for preset in list_presets():
+            check_files(preset_files(preset["slug"]))
+
+    def code(self, path):
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        return next((f["content"] for f in files if f["path"] == path), None)
+
+    def test_a_preset_can_replace_code_and_switching_away_restores_it(self):
+        starter = self.code("snippets/styles.liquid")
+        self.assertNotIn("Bold theme", starter)
+
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+        self.assertIn("Bold theme", self.code("snippets/styles.liquid"))
+
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
+        self.assertEqual(self.code("snippets/styles.liquid"), starter)
+
+    def test_switching_away_keeps_code_the_store_edited(self):
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+        mine = self.code("snippets/styles.liquid") + "\n<!-- mine -->"
+        self.ok("post", "/api/v1/themes/files/", {"path": "snippets/styles.liquid", "content": mine})
+
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
+        self.assertEqual(self.code("snippets/styles.liquid"), mine)
+
+    def test_undo_brings_back_the_look_layout_and_code(self):
+        starter = self.code("snippets/styles.liquid")
+        before = self.ok("get", "/api/v1/themes/settings/")
+        self.assertIsNone(self.ok("get", "/api/v1/themes/presets/")["undo"])
+
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+        self.assertEqual(self.ok("get", "/api/v1/themes/presets/")["undo"], "Classic")
+
+        self.ok("post", "/api/v1/themes/presets/undo/", {})
+        self.assertEqual(self.ok("get", "/api/v1/themes/settings/"), before)
+        self.assertEqual(self.code("snippets/styles.liquid"), starter)
+        data = self.ok("get", "/api/v1/themes/presets/")
+        self.assertEqual(data["applied"], "classic")
+        self.assertIsNone(data["undo"])
+        self.ok("post", "/api/v1/themes/presets/undo/", {}, expect=404)
+
+    def test_header_values_survive_a_preset_with_code(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": {"settings": {"logo_text": "Mine"}}}})
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+        self.assertEqual(self.ok("get", "/api/v1/themes/sections/")["header"]["values"], header)

@@ -12,6 +12,8 @@ from .views import (
     ThemeSectionsView,
     ThemeFilesView,
     ThemeImageView,
+    ThemePresetsUndoView,
+    ThemePresetsView,
     ThemePreviewView,
     ThemeRenameView,
     PageTemplatesView,
@@ -56,6 +58,18 @@ urlpatterns = [
         name="theme_customizer",
     ),
  
+    path(
+        "presets/",
+        ThemePresetsView.as_view(),
+        name="theme_presets",
+    ),
+
+    path(
+        "presets/undo/",
+        ThemePresetsUndoView.as_view(),
+        name="theme_presets_undo",
+    ),
+
     path(
         "schema/",
         ThemeSchemaView.as_view(),
