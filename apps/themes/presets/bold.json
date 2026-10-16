@@ -1,24 +1,113 @@
 {
   "name": "Bold",
-  "description": "High contrast with big condensed headings and square buttons. Suits streetwear, sports and electronics.",
-  "categories": ["Sports", "Electronics", "Fashion"],
-  "swatches": ["#F5C400", "#0F0F0F", "#FFFFFF"],
+  "description": "Loud and high contrast: a black header, huge uppercase type, hard-edged buttons and framed product cards.",
+  "categories": [
+    "Sports",
+    "Electronics",
+    "Fashion"
+  ],
+  "swatches": [
+    "#F5C400",
+    "#0F0F0F",
+    "#FFFFFF"
+  ],
   "settings": {
-    "accent_color": "#0F0F0F", "background_color": "#FFFFFF", "text_color": "#0F0F0F",
-    "heading_font": "oswald", "body_font": "inter", "base_font_size": 16,
-    "button_style": "filled", "button_bg": "#F5C400", "button_text": "#0F0F0F", "button_radius": "square", "button_hover": "grow"
+    "accent_color": "#0F0F0F",
+    "background_color": "#FFFFFF",
+    "text_color": "#0F0F0F",
+    "heading_font": "oswald",
+    "body_font": "inter",
+    "base_font_size": 16,
+    "button_style": "filled",
+    "button_bg": "#F5C400",
+    "button_text": "#0F0F0F",
+    "button_radius": "square",
+    "button_hover": "grow",
+    "header_layout": "left",
+    "header_sticky": true,
+    "header_border": false,
+    "header_bg": "#0F0F0F",
+    "header_text": "#FFFFFF",
+    "footer_bg": "#0F0F0F",
+    "footer_text_color": "#CFCFCF",
+    "announcement_bg": "#F5C400",
+    "announcement_text": "#0F0F0F"
   },
   "templates": {
     "index": {
-      "order": ["slideshow", "carousel", "featured", "hero"],
+      "order": [
+        "slideshow",
+        "carousel",
+        "featured",
+        "hero"
+      ],
       "sections": {
-        "slideshow": {"type": "slideshow", "settings": {"height": "large", "interval": 4}, "blocks": [
-          {"type": "slide", "settings": {"heading": "NEW DROP", "text": "Limited stock. Once it's gone, it's gone.", "button_label": "Shop the drop", "button_link": "/collections/all", "text_alignment": "left"}},
-          {"type": "slide", "settings": {"heading": "BEST SELLERS", "text": "Gear that earns its spot.", "button_label": "Shop now", "button_link": "/collections/all", "text_alignment": "left"}}
-        ]},
-        "carousel": {"type": "product-carousel", "settings": {"heading": "Trending now", "autoplay": true}},
-        "featured": {"type": "product-grid", "settings": {"heading": "All gear", "columns": 4, "limit": 8}},
-        "hero": {"type": "hero", "settings": {"heading": "Built different", "subheading": "Free shipping on every order this week.", "height": "medium", "overlay_opacity": 50, "text_alignment": "left"}}
+        "slideshow": {
+          "type": "slideshow",
+          "settings": {
+            "height": "large",
+            "interval": 4
+          },
+          "blocks": [
+            {
+              "type": "slide",
+              "settings": {
+                "heading": "New drop",
+                "text": "Limited stock. Once it is gone, it is gone.",
+                "button_label": "Shop the drop",
+                "button_link": "/collections/all",
+                "text_alignment": "left",
+                "padding_left": 84,
+                "padding_right": 84
+              }
+            },
+            {
+              "type": "slide",
+              "settings": {
+                "heading": "Best sellers",
+                "text": "Gear that earns its spot.",
+                "button_label": "Shop now",
+                "button_link": "/collections/all",
+                "text_alignment": "left",
+                "padding_left": 84,
+                "padding_right": 84
+              }
+            }
+          ]
+        },
+        "carousel": {
+          "type": "product-carousel",
+          "settings": {
+            "heading": "Trending now",
+            "source": "newest",
+            "layout": "carousel",
+            "limit": 10,
+            "autoplay": true,
+            "card_border": true
+          }
+        },
+        "featured": {
+          "type": "product-grid",
+          "settings": {
+            "heading": "All gear",
+            "source": "newest",
+            "columns": 4,
+            "limit": 8,
+            "card_border": true,
+            "gap": 20,
+            "card_hover": "lift"
+          }
+        },
+        "hero": {
+          "type": "hero",
+          "settings": {
+            "heading": "Built different",
+            "subheading": "Free shipping on every order this week.",
+            "height": "medium",
+            "overlay_opacity": 55,
+            "text_alignment": "left"
+          }
+        }
       }
     }
   }

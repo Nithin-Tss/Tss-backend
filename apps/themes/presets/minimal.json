@@ -1,20 +1,67 @@
 {
   "name": "Minimal",
-  "description": "Quiet, spacious and image-led, with outline buttons. Lets your products do the talking.",
-  "categories": ["Beauty", "Home & Living", "Health & Wellness"],
-  "swatches": ["#111111", "#FFFFFF", "#F2F2F0"],
+  "description": "Quiet and spacious: small spaced-out type, no borders, a short statement and a clean three-column grid.",
+  "categories": [
+    "Beauty",
+    "Home & Living",
+    "Health & Wellness"
+  ],
+  "swatches": [
+    "#111111",
+    "#FFFFFF",
+    "#F2F2F0"
+  ],
   "settings": {
-    "accent_color": "#111111", "background_color": "#FFFFFF", "text_color": "#222222",
-    "heading_font": "dm-sans", "body_font": "dm-sans", "base_font_size": 15,
-    "button_style": "outline", "button_bg": "", "button_text": "", "button_radius": "square", "button_hover": "darken"
+    "accent_color": "#111111",
+    "background_color": "#FFFFFF",
+    "text_color": "#222222",
+    "heading_font": "dm-sans",
+    "body_font": "dm-sans",
+    "base_font_size": 15,
+    "button_style": "outline",
+    "button_radius": "square",
+    "button_hover": "darken",
+    "header_layout": "left",
+    "header_sticky": true,
+    "header_border": false
   },
   "templates": {
     "index": {
-      "order": ["featured", "about", "carousel"],
+      "order": [
+        "about",
+        "featured",
+        "carousel"
+      ],
       "sections": {
-        "featured": {"type": "product-grid", "settings": {"heading": "Shop all", "columns": 3, "limit": 9}},
-        "about": {"type": "rich-text", "settings": {"heading": "Simple, honest products", "text": "A short note about what you make and why.", "text_alignment": "center"}},
-        "carousel": {"type": "product-carousel", "settings": {"heading": "New in"}}
+        "about": {
+          "type": "rich-text",
+          "settings": {
+            "heading": "Simple, honest products",
+            "text": "<p>A short note about what you make and why it matters to you.</p>",
+            "text_alignment": "center"
+          }
+        },
+        "featured": {
+          "type": "product-grid",
+          "settings": {
+            "heading": "Shop all",
+            "source": "newest",
+            "columns": 3,
+            "limit": 9,
+            "gap": 40,
+            "card_hover": "none"
+          }
+        },
+        "carousel": {
+          "type": "product-carousel",
+          "settings": {
+            "heading": "New in",
+            "source": "newest",
+            "layout": "carousel",
+            "limit": 10,
+            "card_hover": "none"
+          }
+        }
       }
     }
   }

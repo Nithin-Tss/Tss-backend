@@ -1,21 +1,79 @@
 {
   "name": "Boutique",
-  "description": "Warm and editorial, with serif headings and soft rounded buttons. Suits fashion, beauty and gifts.",
-  "categories": ["Fashion", "Beauty", "Home & Living"],
-  "swatches": ["#7A3E2E", "#FBF6F0", "#2B2220"],
+  "description": "Editorial and calm: a centred logo, a split hero, portrait product cards and plenty of space. Serif headings.",
+  "categories": [
+    "Fashion",
+    "Beauty",
+    "Home & Living"
+  ],
+  "swatches": [
+    "#7A3E2E",
+    "#FBF6F0",
+    "#2B2220"
+  ],
   "settings": {
-    "accent_color": "#7A3E2E", "background_color": "#FBF6F0", "text_color": "#2B2220",
-    "heading_font": "playfair", "body_font": "lato", "base_font_size": 17,
-    "button_style": "filled", "button_bg": "", "button_text": "", "button_radius": "slight", "button_hover": "lift"
+    "accent_color": "#7A3E2E",
+    "background_color": "#FBF6F0",
+    "text_color": "#2B2220",
+    "heading_font": "playfair",
+    "body_font": "lato",
+    "base_font_size": 17,
+    "button_style": "filled",
+    "button_radius": "square",
+    "button_hover": "lift",
+    "header_layout": "center",
+    "header_sticky": false,
+    "header_border": true
   },
   "templates": {
     "index": {
-      "order": ["hero", "featured", "about", "carousel"],
+      "order": [
+        "hero",
+        "featured",
+        "about",
+        "carousel"
+      ],
       "sections": {
-        "hero": {"type": "hero", "settings": {"heading": "Crafted for you", "subheading": "Considered pieces, made to be loved for years.", "height": "large", "overlay_opacity": 25}},
-        "featured": {"type": "product-grid", "settings": {"heading": "The edit", "columns": 3, "limit": 6}},
-        "about": {"type": "rich-text", "settings": {"heading": "Our story", "text": "Tell customers where your pieces come from and why you make them."}},
-        "carousel": {"type": "product-carousel", "settings": {"heading": "You may also love"}}
+        "hero": {
+          "type": "hero",
+          "settings": {
+            "label_text": "The new collection",
+            "heading": "Crafted for you",
+            "subheading": "Considered pieces, made to be loved for years.",
+            "button_label": "Discover",
+            "height": "medium",
+            "text_alignment": "left"
+          }
+        },
+        "featured": {
+          "type": "product-grid",
+          "settings": {
+            "heading": "The edit",
+            "source": "newest",
+            "columns": 3,
+            "limit": 6,
+            "image_ratio": "portrait",
+            "gap": 32,
+            "card_hover": "zoom"
+          }
+        },
+        "about": {
+          "type": "rich-text",
+          "settings": {
+            "heading": "Our story",
+            "text": "<p>Tell customers where your pieces come from and why you make them.</p>"
+          }
+        },
+        "carousel": {
+          "type": "product-carousel",
+          "settings": {
+            "heading": "You may also love",
+            "source": "newest",
+            "layout": "carousel",
+            "limit": 10,
+            "image_ratio": "portrait"
+          }
+        }
       }
     }
   }

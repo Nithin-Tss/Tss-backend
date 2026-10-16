@@ -51,10 +51,20 @@ from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
+    MAX_THEMES,
+    create_theme,
     delete_path,
+    delete_theme,
+    duplicate_theme,
+    publish_theme,
+    rename_theme,
+    starter_files,
+    store_themes,
     generate_css_variables,
     get_store_theme,
     rename_path,
+    reset_editing_theme,
+    set_editing_theme,
     restore_section,
     save_file,
     save_section_values,
@@ -76,6 +86,19 @@ class StoreThemeView(APIView):
 
     def store_theme(self):
         return get_store_theme(self.request.store)
+
+    # The admin edits the theme named by X-Theme-Id (a draft or the published one); without it, the
+    # published theme. The public storefront never goes through here.
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        self._editing = set_editing_theme(request.headers.get("X-Theme-Id"))
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        token = getattr(self, "_editing", None)
+        if token is not None:
+            reset_editing_theme(token)
+            self._editing = None
+        return super().finalize_response(request, response, *args, **kwargs)
 
 
 class ThemeFilesView(StoreThemeView):
@@ -307,34 +330,78 @@ class ThemeSettingsView(StoreThemeView):
         )
 
 
-class ThemePresetsView(StoreThemeView):
+class ThemeLibraryView(APIView):
     """
-    GET  /api/v1/themes/presets/   the ready-made themes and which one the store is using
-    POST /api/v1/themes/presets/   {slug}  use one: its look and home layout replace the store's
+    The store's themes: one published, the rest drafts. These calls never open a theme for editing,
+    so they don't send X-Theme-Id and they don't touch any theme's files.
+
+    GET  /api/v1/themes/library/
+         {"themes": [{id, name, preset, published, updated_at}], "presets": [ready-made themes]}
+    POST /api/v1/themes/library/   {"source": "<preset slug>" | "blank" | "<theme id>", "name"}
+         add a theme: the store's first is published, later ones are drafts
     """
 
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
+
     def get(self, request):
-        store_theme = self.store_theme()
         return Response({
-            "applied": presets.applied_slug(store_theme),
-            "undo": presets.previous_name(store_theme),
+            "themes": [_library_item(t) for t in store_themes(request.store)],
             "presets": [presets.public(p) for p in presets.list_presets()],
+            "max": MAX_THEMES,
         })
 
     def post(self, request):
-        slug = request.data.get("slug") if isinstance(request.data, dict) else None
-        preset = presets.apply_preset(
-            self.store_theme(), slug, client=str(request.data.get("client") or "")[:64],
-        )
-        return Response({"applied": preset["slug"]})
+        data = request.data if isinstance(request.data, dict) else {}
+        source = data.get("source") or "blank"
+        store = request.store
+        if source == "blank":
+            created = create_theme(store, data.get("name"), starter_files(), {})
+        elif isinstance(source, str) and re.fullmatch(r"[0-9a-fA-F-]{32,36}", source):
+            created = duplicate_theme(store, source, data.get("name"))
+        else:
+            preset = presets.get_preset(source)
+            files, custom_data, theme_data = presets.build(source)
+            created = create_theme(store, data.get("name") or preset["name"], files, custom_data, theme_data)
+        return Response(_library_item(created), status=status.HTTP_201_CREATED)
 
 
-class ThemePresetsUndoView(StoreThemeView):
-    """POST /api/v1/themes/presets/undo/   go back to how the store was before the last theme was used"""
+class ThemeLibraryItemView(APIView):
+    """
+    PATCH  /api/v1/themes/library/<id>/   {"name"}  rename
+    DELETE /api/v1/themes/library/<id>/            delete a draft (the published theme can't be deleted)
+    """
 
-    def post(self, request):
-        client = str(request.data.get("client") or "")[:64] if isinstance(request.data, dict) else ""
-        return Response({"applied": presets.undo_preset(self.store_theme(), client=client)})
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "themes"
+
+    def patch(self, request, theme_id):
+        name = request.data.get("name") if isinstance(request.data, dict) else None
+        return Response(_library_item(rename_theme(request.store, theme_id, name)))
+
+    def delete(self, request, theme_id):
+        delete_theme(request.store, theme_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ThemePublishView(ThemeLibraryItemView):
+    """POST /api/v1/themes/library/<id>/publish/   make it the live theme; the one that was live becomes a draft"""
+
+    http_method_names = ["post", "options"]
+
+    def post(self, request, theme_id):
+        return Response(_library_item(publish_theme(request.store, theme_id)))
+
+
+def _library_item(store_theme):
+    theme = store_theme.theme
+    return {
+        "id": str(theme.id),
+        "name": theme.name,
+        "preset": (theme.theme_data or {}).get("preset"),
+        "published": store_theme.is_active,
+        "updated_at": theme.updated_at.isoformat(),
+    }
 
 
 class ThemeCustomizerView(StoreThemeView):

@@ -1,25 +1,96 @@
 {
   "name": "Classic",
-  "description": "Clean and balanced. A slideshow, featured products and a trending carousel. The theme every store starts with.",
-  "categories": ["Fashion", "Home & Living", "Electronics"],
-  "swatches": ["#161C2C", "#FFFFFF", "#E5E9EF"],
+  "description": "Familiar and balanced: a slideshow, product grid and carousel under a simple left-aligned header.",
+  "categories": [
+    "Fashion",
+    "Home & Living",
+    "Electronics"
+  ],
+  "swatches": [
+    "#161C2C",
+    "#FFFFFF",
+    "#E5E9EF"
+  ],
   "settings": {
-    "accent_color": "#161C2C", "background_color": "#FFFFFF", "text_color": "#161C2C",
-    "heading_font": "system", "body_font": "system", "base_font_size": 16,
-    "button_style": "filled", "button_bg": "", "button_text": "", "button_radius": "pill", "button_hover": "darken"
+    "accent_color": "#161C2C",
+    "background_color": "#FFFFFF",
+    "text_color": "#161C2C",
+    "heading_font": "system",
+    "body_font": "system",
+    "base_font_size": 16,
+    "button_style": "filled",
+    "button_radius": "pill",
+    "button_hover": "darken",
+    "header_layout": "left",
+    "header_sticky": true,
+    "header_border": true
   },
   "templates": {
     "index": {
-      "order": ["slideshow", "featured", "carousel", "hero", "about"],
+      "order": [
+        "slideshow",
+        "featured",
+        "carousel",
+        "hero",
+        "about"
+      ],
       "sections": {
-        "slideshow": {"type": "slideshow", "settings": {"height": "medium"}, "blocks": [
-          {"type": "slide", "settings": {"heading": "New arrivals", "text": "Fresh picks for this season.", "button_label": "Shop new", "button_link": "/collections/all"}},
-          {"type": "slide", "settings": {"heading": "Best sellers", "text": "The products everyone loves.", "button_label": "Explore", "button_link": "/collections/all"}}
-        ]},
-        "featured": {"type": "product-grid", "settings": {"heading": "Featured products", "columns": 4, "limit": 8}},
-        "carousel": {"type": "product-carousel", "settings": {"heading": "Trending now"}},
-        "hero": {"type": "hero", "settings": {"heading": "Made with care", "subheading": "Quality you can feel, prices you will love.", "height": "small"}},
-        "about": {"type": "rich-text", "settings": {}}
+        "slideshow": {
+          "type": "slideshow",
+          "settings": {
+            "height": "medium"
+          },
+          "blocks": [
+            {
+              "type": "slide",
+              "settings": {
+                "heading": "New arrivals",
+                "text": "Fresh picks for this season.",
+                "button_label": "Shop new",
+                "button_link": "/collections/all"
+              }
+            },
+            {
+              "type": "slide",
+              "settings": {
+                "heading": "Best sellers",
+                "text": "The products everyone loves.",
+                "button_label": "Explore",
+                "button_link": "/collections/all"
+              }
+            }
+          ]
+        },
+        "featured": {
+          "type": "product-grid",
+          "settings": {
+            "heading": "Featured products",
+            "source": "newest",
+            "columns": 4,
+            "limit": 8
+          }
+        },
+        "carousel": {
+          "type": "product-carousel",
+          "settings": {
+            "heading": "Trending now",
+            "source": "newest",
+            "layout": "carousel",
+            "limit": 10
+          }
+        },
+        "hero": {
+          "type": "hero",
+          "settings": {
+            "heading": "Made with care",
+            "subheading": "Quality you can feel, prices you will love.",
+            "height": "small"
+          }
+        },
+        "about": {
+          "type": "rich-text",
+          "settings": {}
+        }
       }
     }
   }

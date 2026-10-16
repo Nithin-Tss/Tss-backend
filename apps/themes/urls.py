@@ -12,8 +12,9 @@ from .views import (
     ThemeSectionsView,
     ThemeFilesView,
     ThemeImageView,
-    ThemePresetsUndoView,
-    ThemePresetsView,
+    ThemeLibraryItemView,
+    ThemeLibraryView,
+    ThemePublishView,
     ThemePreviewView,
     ThemeRenameView,
     PageTemplatesView,
@@ -59,15 +60,21 @@ urlpatterns = [
     ),
  
     path(
-        "presets/",
-        ThemePresetsView.as_view(),
-        name="theme_presets",
+        "library/",
+        ThemeLibraryView.as_view(),
+        name="theme_library",
     ),
 
     path(
-        "presets/undo/",
-        ThemePresetsUndoView.as_view(),
-        name="theme_presets_undo",
+        "library/<uuid:theme_id>/",
+        ThemeLibraryItemView.as_view(),
+        name="theme_library_item",
+    ),
+
+    path(
+        "library/<uuid:theme_id>/publish/",
+        ThemePublishView.as_view(),
+        name="theme_library_publish",
     ),
 
     path(

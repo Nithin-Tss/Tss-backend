@@ -1,21 +1,79 @@
 {
   "name": "Fresh",
-  "description": "Light, friendly and green, with rounded buttons. Suits food, wellness and everyday goods.",
-  "categories": ["Food & Beverage", "Health & Wellness", "Home & Living"],
-  "swatches": ["#2F7D4F", "#F4FAF6", "#16301F"],
+  "description": "Friendly and rounded: a floating pill header, a framed hero, soft shadowed cards and a leafy palette.",
+  "categories": [
+    "Food & Beverage",
+    "Health & Wellness",
+    "Home & Living"
+  ],
+  "swatches": [
+    "#2F7D4F",
+    "#F4FAF6",
+    "#16301F"
+  ],
   "settings": {
-    "accent_color": "#2F7D4F", "background_color": "#F4FAF6", "text_color": "#16301F",
-    "heading_font": "nunito", "body_font": "nunito", "base_font_size": 16,
-    "button_style": "filled", "button_bg": "", "button_text": "", "button_radius": "rounded", "button_hover": "lift"
+    "accent_color": "#2F7D4F",
+    "background_color": "#F4FAF6",
+    "text_color": "#16301F",
+    "heading_font": "nunito",
+    "body_font": "nunito",
+    "base_font_size": 16,
+    "button_style": "filled",
+    "button_radius": "pill",
+    "button_hover": "lift",
+    "header_layout": "left",
+    "header_sticky": true,
+    "header_border": false,
+    "header_bg": "#FFFFFF"
   },
   "templates": {
     "index": {
-      "order": ["hero", "carousel", "featured", "about"],
+      "order": [
+        "hero",
+        "carousel",
+        "featured",
+        "about"
+      ],
       "sections": {
-        "hero": {"type": "hero", "settings": {"heading": "Good things, delivered", "subheading": "Fresh, honest and made close to home.", "height": "medium", "overlay_opacity": 20}},
-        "carousel": {"type": "product-carousel", "settings": {"heading": "Popular this week"}},
-        "featured": {"type": "product-grid", "settings": {"heading": "Everything we make", "columns": 4, "limit": 8}},
-        "about": {"type": "rich-text", "settings": {"heading": "From our kitchen to yours", "text": "Share your story, your ingredients and your promise."}}
+        "hero": {
+          "type": "hero",
+          "settings": {
+            "label_text": "Fresh this week",
+            "heading": "Good things, delivered",
+            "subheading": "Fresh, honest and made close to home.",
+            "button_label": "Shop now",
+            "height": "medium",
+            "overlay_opacity": 20,
+            "text_alignment": "left"
+          }
+        },
+        "carousel": {
+          "type": "product-carousel",
+          "settings": {
+            "heading": "Popular this week",
+            "source": "newest",
+            "layout": "carousel",
+            "limit": 10
+          }
+        },
+        "featured": {
+          "type": "product-grid",
+          "settings": {
+            "heading": "Everything we make",
+            "source": "newest",
+            "columns": 4,
+            "limit": 8,
+            "gap": 24,
+            "card_hover": "lift"
+          }
+        },
+        "about": {
+          "type": "rich-text",
+          "settings": {
+            "heading": "From our kitchen to yours",
+            "text": "<p>Share your story, your ingredients and your promise.</p>"
+          }
+        }
       }
     }
   }

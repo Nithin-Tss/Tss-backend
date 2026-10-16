@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }}{% if page_title != shop.name %} · {{ shop.name }}{% endif %}</title>
+  {% render 'styles', settings: settings %}
+  {%- comment -%} Bold design styles {%- endcomment -%}
+  {% render 'theme-styles' %}
+</head>
+<body class="template-{{ template }} theme-bold">
+  {%- comment -%} Announcement bar: Theme settings > Announcement bar {%- endcomment -%}
+  {% if settings.announcement != blank and settings.announcement_show != false %}
+    {%- capture announcement_style -%}
+      {% if settings.announcement_bg != blank %}background:{{ settings.announcement_bg }};{% endif %}
+      {% if settings.announcement_text != blank %}color:{{ settings.announcement_text }};{% endif %}
+    {%- endcapture -%}
+    {% if settings.announcement_link != blank %}
+      <a class="announcement announcement--link" href="{{ settings.announcement_link | link }}" style="{{ announcement_style | strip }}">{{ settings.announcement }}</a>
+    {% else %}
+      <div class="announcement" style="{{ announcement_style | strip }}">{{ settings.announcement }}</div>
+    {% endif %}
+  {% endif %}
+
+  {%- comment -%} Header and navigation: Theme settings > Header and navigation {%- endcomment -%}
+  {% render 'header', shop: shop, settings: settings, links: header_links, collections: collections %}
+
+  <main id="main">
+    {{ content_for_layout }}
+  </main>
+
+  {%- comment -%} Footer: Theme settings > Footer {%- endcomment -%}
+  {% render 'footer', shop: shop, settings: settings, links: footer_links, social: footer_social %}
+</body>
+</html>

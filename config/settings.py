@@ -248,6 +248,7 @@ CORS_ALLOW_HEADERS = [
     'authorization',
     'content-type',
     'x-store-id',
+    'x-theme-id',
 ]
 # The public storefront (/s/<store>/...) runs sandboxed (origin "null") and its cart endpoints answer
 # CORS themselves (apps/themes/views.py CART_API_HEADERS). Leave them out of django-cors-headers, which

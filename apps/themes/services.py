@@ -5,16 +5,22 @@ Every store edits its own copy of a theme: the first time a store's theme
 is used, the starter theme (apps/themes/starter/) - or the shared theme the
 store had installed - is copied into a private Theme row whose slug is
 "store-<store id>". Code edits from the editor change only that copy.
+A store can keep several such themes (its library): exactly one is published (the
+StoreTheme with is_active) and shows on the storefront; the others are drafts that can be
+edited and previewed, and become live only when published. See set_editing_theme.
 Section settings (hero text, slides, ...) live in StoreTheme.custom_data.
 """
 import copy
 import hashlib
 import json
 import re
+import secrets
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from types import SimpleNamespace
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from liquid import Environment
 from liquid.exceptions import LiquidError
@@ -228,15 +234,38 @@ def private_slug(store):
     return f"store-{store.store_id}"
 
 
-def _install(store, files, custom_data):
+def is_private(store, theme):
+    """True for a theme that is this store's own copy (as opposed to a shared theme)."""
+    return (theme.theme_data or {}).get("store_id") == str(store.store_id)
+
+
+MAX_THEMES = 20
+
+# The theme the store's admin is editing (a draft, or the published one), set per request by the
+# theme API from the X-Theme-Id header. The public storefront never sets it: it shows the published theme.
+_editing_theme = ContextVar("editing_theme", default=None)
+
+
+def set_editing_theme(theme_id):
+    return _editing_theme.set(str(theme_id) if theme_id else None)
+
+
+def reset_editing_theme(token):
+    _editing_theme.reset(token)
+
+
+def _install(store, files, custom_data, name=None, publish=True, theme_data=None):
+    """A new private copy of a theme for the store. Published, or kept as a draft next to the live theme."""
+    base = private_slug(store)
+    slug = base if not Theme.objects.filter(slug=base).exists() else f"{base}-{secrets.token_hex(4)}"
     theme, created = Theme.objects.get_or_create(
-        slug=private_slug(store),
+        slug=slug,
         defaults={
-            "name": f"{store.store_name} theme",
+            "name": (name or f"{store.store_name} theme")[:100],
             "description": "This store's own copy of its theme.",
             "category": "store",
             "version": STARTER_VERSION,
-            "theme_data": {"store_id": str(store.store_id)},
+            "theme_data": {"store_id": str(store.store_id), **(theme_data or {})},
         },
     )
 
@@ -245,14 +274,15 @@ def _install(store, files, custom_data):
             [_new_file(theme, path, content) for path, content in files.items()]
         )
 
-    StoreTheme.objects.filter(store=store, is_active=True).update(is_active=False)
+    if publish:
+        StoreTheme.objects.filter(store=store, is_active=True).update(is_active=False)
 
     return StoreTheme.objects.create(
         store=store,
         theme=theme,
         installed_version=theme.version,
         custom_data=custom_data,
-        is_active=True,
+        is_active=publish,
     )
 
 
@@ -275,25 +305,45 @@ def _add_missing_starter_files(theme):
     )
 
 
+def _prepare(store_theme, new_store=False):
+    """Bring a private theme up to date with the starter (see the helpers it calls)."""
+    _add_missing_starter_files(store_theme.theme)
+    _upgrade_untouched_starter_files(store_theme.theme)
+    _add_synced_sections(store_theme.theme, store_theme.custom_data)
+    _add_wishlist_blocks(store_theme)
+    _offer_wishlist_icon_block(store_theme.theme)
+    _offer_cart_icon_block(store_theme.theme)
+    _keep_wishlist_hearts(store_theme, new_store=new_store)
+    _add_page_templates(store_theme)
+    sync_card_cart_icon(store_theme)
+    _upgrade_footer_icon(store_theme.theme)
+
+
 def get_store_theme(store):
-    """The store's active theme, installing a private copy on first use."""
+    """
+    The theme being used: the one the admin is editing (a draft or the published one, see
+    set_editing_theme), otherwise the published theme. Installs a private copy of the starter
+    on first use.
+    """
+    wanted = _editing_theme.get()
+    if wanted:
+        try:
+            found = StoreTheme.objects.select_related("theme").filter(store=store, theme_id=wanted).first()
+        except (ValueError, ValidationError):  # not a uuid
+            found = None
+        if found is None or not is_private(store, found.theme):
+            raise exceptions.NotFound("That theme doesn't exist.")
+        _prepare(found)
+        return found
+
     current = (
         StoreTheme.objects.select_related("theme")
         .filter(store=store, is_active=True)
         .first()
     )
 
-    if current and current.theme.slug == private_slug(store):
-        _add_missing_starter_files(current.theme)
-        _upgrade_untouched_starter_files(current.theme)
-        _add_synced_sections(current.theme, current.custom_data)
-        _add_wishlist_blocks(current)
-        _offer_wishlist_icon_block(current.theme)
-        _offer_cart_icon_block(current.theme)
-        _keep_wishlist_hearts(current)
-        _add_page_templates(current)
-        sync_card_cart_icon(current)
-        _upgrade_footer_icon(current.theme)
+    if current and is_private(store, current.theme):
+        _prepare(current)
         return current
 
     if current:
@@ -309,17 +359,88 @@ def get_store_theme(store):
         # Another request installed it at the same moment.
         installed = StoreTheme.objects.select_related("theme").get(store=store, is_active=True)
 
-    _add_missing_starter_files(installed.theme)
-    _upgrade_untouched_starter_files(installed.theme)
-    _add_synced_sections(installed.theme, installed.custom_data)
-    _add_wishlist_blocks(installed)
-    _offer_wishlist_icon_block(installed.theme)
-    _offer_cart_icon_block(installed.theme)
-    _keep_wishlist_hearts(installed, new_store=current is None)
-    _add_page_templates(installed)
-    sync_card_cart_icon(installed)
-    _upgrade_footer_icon(installed.theme)
+    _prepare(installed, new_store=current is None)
     return installed
+
+
+# ------------------------------------------------- the store's themes: one published, the rest drafts
+
+def store_themes(store):
+    """The store's own themes, the published one first -> [StoreTheme]."""
+    rows = [t for t in StoreTheme.objects.select_related("theme").filter(store=store) if is_private(store, t.theme)]
+    return sorted(rows, key=lambda t: (not t.is_active, -t.theme.created_at.timestamp()))
+
+
+def _theme_of(store, theme_id):
+    try:
+        row = StoreTheme.objects.select_related("theme").filter(store=store, theme_id=theme_id).first()
+    except (ValueError, ValidationError):
+        row = None
+    if row is None or not is_private(store, row.theme):
+        raise exceptions.NotFound("That theme doesn't exist.")
+    return row
+
+
+def _clean_name(name):
+    name = " ".join(str(name or "").split())
+    if not name:
+        raise exceptions.ValidationError({"name": "Give the theme a name."})
+    if len(name) > 60:
+        raise exceptions.ValidationError({"name": "Use 60 characters or fewer."})
+    return name
+
+
+@transaction.atomic
+def create_theme(store, name, files, custom_data, theme_data=None):
+    """
+    Add a theme to the store's library. The store's first theme is published (nothing is live yet);
+    every later one is a draft: the published theme is not touched.
+    """
+    name = _clean_name(name)
+    if len(store_themes(store)) >= MAX_THEMES:
+        raise exceptions.ValidationError({"detail": f"A store can have at most {MAX_THEMES} themes. Delete one first."})
+    first = not StoreTheme.objects.filter(store=store, is_active=True).exists()
+    created = _install(store, files, custom_data, name=name, publish=first, theme_data=theme_data)
+    _prepare(created, new_store=True)
+    return created
+
+
+def duplicate_theme(store, theme_id, name):
+    source = _theme_of(store, theme_id)
+    _prepare(source)
+    files = {f.file_path: f.content for f in source.theme.files.all()}
+    data = {k: v for k, v in (source.theme.theme_data or {}).items() if k == "preset"}
+    return create_theme(store, name, files, copy.deepcopy(source.custom_data), theme_data=data)
+
+
+@transaction.atomic
+def publish_theme(store, theme_id):
+    """Make a draft the store's live theme. The one that was live becomes a draft; nothing in it changes."""
+    target = _theme_of(store, theme_id)
+    if target.is_active:
+        return target
+    StoreTheme.objects.filter(store=store, is_active=True).update(is_active=False)
+    target.is_active = True
+    target.save(update_fields=["is_active", "updated_at"])
+    return target
+
+
+def rename_theme(store, theme_id, name):
+    row = _theme_of(store, theme_id)
+    row.theme.name = _clean_name(name)
+    row.theme.save(update_fields=["name", "updated_at"])
+    return row
+
+
+@transaction.atomic
+def delete_theme(store, theme_id):
+    row = _theme_of(store, theme_id)
+    if row.is_active:
+        raise exceptions.ValidationError({"detail": "This theme is published. Publish another theme first, then delete this one."})
+    theme = row.theme
+    row.delete()
+    ThemeFile.objects.filter(theme=theme).delete()
+    theme.delete()
 
 
 def _upgrade_untouched_starter_files(theme):

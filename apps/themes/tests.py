@@ -4225,96 +4225,197 @@ class HomeTemplateSyncTest(StoreClientMixin, APITestCase):
         self.assertIn('<section class="mine">', self.home())
 
 
-class ThemePresetsTest(StoreClientMixin, APITestCase):
-    """Ready-made themes: listing, applying, and keeping the store's own content."""
+class ThemeLibraryTest(StoreClientMixin, APITestCase):
+    """A store's themes: ready-made designs, one published and the rest drafts."""
 
     def setUp(self):
-        self.token, self.store = self.sign_up("presets@example.com", "Presets Store")
+        self.token, self.store = self.sign_up("library@example.com", "Library Store")
 
-    def test_every_preset_file_is_valid(self):
-        from .presets import list_presets
-        from .schemas import validate_custom_data
+    # ---------------------------------------------------------------- helpers
 
-        presets = list_presets()
-        self.assertGreaterEqual(len(presets), 4)
-        for preset in presets:
-            with self.subTest(preset["slug"]):
-                validate_custom_data({"settings": preset["settings"], "templates": preset["templates"]})
+    def library(self):
+        return self.ok("get", "/api/v1/themes/library/")
 
-    def test_lists_presets_and_the_one_in_use(self):
-        data = self.ok("get", "/api/v1/themes/presets/")
-        self.assertEqual(data["applied"], "classic")
-        self.assertIn("boutique", {p["slug"] for p in data["presets"]})
+    def add(self, source="blank", name=None, expect=201):
+        body = {"source": source}
+        if name:
+            body["name"] = name
+        return self.ok("post", "/api/v1/themes/library/", body, expect=expect)
 
-    def test_apply_changes_look_and_layout_but_keeps_store_content(self):
-        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"currency_symbol": "$", "announcement": "Sale"}})
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
+    def editing(self, theme_id, method, url, data=None):
+        """A theme API call that edits the given theme (X-Theme-Id), like the customizer and code editor."""
+        kwargs = {"HTTP_X_THEME_ID": theme_id}
+        r = getattr(self.client, method)(url, data, format="json", **kwargs) if data is not None \
+            else getattr(self.client, method)(url, **kwargs)
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        return r.json()
 
-        settings = self.ok("get", "/api/v1/themes/settings/")
-        self.assertEqual(settings["settings"]["heading_font"], "oswald")
-        self.assertEqual(settings["settings"]["button_radius"], "square")
-        self.assertEqual(settings["settings"]["currency_symbol"], "$")
-        self.assertEqual(settings["settings"]["announcement"], "Sale")
-        self.assertEqual(settings["templates"]["index"]["order"], ["slideshow", "carousel", "featured", "hero"])
-        self.assertEqual(self.ok("get", "/api/v1/themes/presets/")["applied"], "bold")
-
-        # Switching again resets the look the previous theme set
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
-        settings = self.ok("get", "/api/v1/themes/settings/")["settings"]
-        self.assertEqual(settings["heading_font"], "system")
-        self.assertEqual(settings["button_bg"], "")
-
-    def test_unknown_preset_is_refused(self):
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "nope"}, expect=404)
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "../x"}, expect=404)
-        self.ok("post", "/api/v1/themes/presets/", {}, expect=404)
-
-    def test_preset_files_are_allowed_paths(self):
-        from .presets import check_files, list_presets, preset_files
-
-        for preset in list_presets():
-            check_files(preset_files(preset["slug"]))
-
-    def code(self, path):
-        files = self.ok("get", "/api/v1/themes/files/")["files"]
+    def code(self, theme_id, path):
+        files = self.editing(theme_id, "get", "/api/v1/themes/files/")["files"]
         return next((f["content"] for f in files if f["path"] == path), None)
 
-    def test_a_preset_can_replace_code_and_switching_away_restores_it(self):
-        starter = self.code("snippets/styles.liquid")
-        self.assertNotIn("Bold theme", starter)
+    def home(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
 
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
-        self.assertIn("Bold theme", self.code("snippets/styles.liquid"))
+    # ---------------------------------------------------------------- presets
 
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
-        self.assertEqual(self.code("snippets/styles.liquid"), starter)
+    def test_every_preset_is_valid_and_different(self):
+        from .presets import build, check_files, list_presets, preset_files
 
-    def test_switching_away_keeps_code_the_store_edited(self):
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
-        mine = self.code("snippets/styles.liquid") + "\n<!-- mine -->"
-        self.ok("post", "/api/v1/themes/files/", {"path": "snippets/styles.liquid", "content": mine})
+        presets = list_presets()
+        self.assertGreaterEqual(len(presets), 5)
+        styles = set()
+        for preset in presets:
+            with self.subTest(preset["slug"]):
+                check_files(preset_files(preset["slug"]))
+                files, custom_data, theme_data = build(preset["slug"])
+                self.assertEqual(theme_data, {"preset": preset["slug"]})
+                self.assertIn("templates/index.liquid", files)
+                styles.add(files["layout/theme.liquid"] + files.get("snippets/theme-styles.liquid", ""))
+        self.assertEqual(len(styles), len(presets))  # every design has its own Liquid files (Classic is the starter's)
 
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "classic"})
-        self.assertEqual(self.code("snippets/styles.liquid"), mine)
+    def test_library_lists_presets_and_no_themes_before_the_first_is_added(self):
+        data = self.library()
+        self.assertEqual(data["themes"], [])
+        self.assertGreaterEqual(len(data["presets"]), 5)
+        self.assertEqual(self.library()["themes"], [])  # looking installs nothing
 
-    def test_undo_brings_back_the_look_layout_and_code(self):
-        starter = self.code("snippets/styles.liquid")
-        before = self.ok("get", "/api/v1/themes/settings/")
-        self.assertIsNone(self.ok("get", "/api/v1/themes/presets/")["undo"])
+    # ---------------------------------------------------------------- published and drafts
 
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
-        self.assertEqual(self.ok("get", "/api/v1/themes/presets/")["undo"], "Classic")
+    def test_the_first_theme_is_published_and_later_ones_are_drafts(self):
+        first = self.add("bold")
+        self.assertTrue(first["published"])
+        self.assertEqual(first["name"], "Bold")
+        self.assertEqual(first["preset"], "bold")
 
-        self.ok("post", "/api/v1/themes/presets/undo/", {})
-        self.assertEqual(self.ok("get", "/api/v1/themes/settings/"), before)
-        self.assertEqual(self.code("snippets/styles.liquid"), starter)
-        data = self.ok("get", "/api/v1/themes/presets/")
-        self.assertEqual(data["applied"], "classic")
-        self.assertIsNone(data["undo"])
-        self.ok("post", "/api/v1/themes/presets/undo/", {}, expect=404)
+        second = self.add("boutique", name="Summer look")
+        self.assertFalse(second["published"])
+        self.assertEqual(second["name"], "Summer look")
 
-    def test_header_values_survive_a_preset_with_code(self):
-        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": {"settings": {"logo_text": "Mine"}}}})
-        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
-        self.ok("post", "/api/v1/themes/presets/", {"slug": "bold"})
-        self.assertEqual(self.ok("get", "/api/v1/themes/sections/")["header"]["values"], header)
+        themes = self.library()["themes"]
+        self.assertEqual([t["published"] for t in themes], [True, False])
+        self.assertEqual(sum(t["published"] for t in themes), 1)
+
+    def test_adding_a_theme_does_not_touch_the_live_one(self):
+        live = self.add("bold")
+        before_home = self.home()  # the first render fills in the header and footer values
+        before_code = self.code(live["id"], "snippets/styles.liquid")
+        before_settings = self.editing(live["id"], "get", "/api/v1/themes/settings/")
+
+        draft = self.add("fresh")
+        self.add("blank", name="Mine")
+
+        self.assertEqual(self.code(live["id"], "snippets/styles.liquid"), before_code)
+        self.assertEqual(self.editing(live["id"], "get", "/api/v1/themes/settings/"), before_settings)
+        self.assertEqual(self.home(), before_home)
+        self.assertIsNotNone(self.code(draft["id"], "snippets/theme-styles.liquid"))
+
+    def test_each_design_has_its_own_look_and_layout(self):
+        bold = self.add("bold")
+        boutique = self.add("boutique")
+        self.assertIn("Bold design", self.code(bold["id"], "snippets/theme-styles.liquid"))
+        self.assertIn("theme-styles", self.code(bold["id"], "layout/theme.liquid"))
+        self.assertIn("Boutique design", self.code(boutique["id"], "snippets/theme-styles.liquid"))
+        self.assertIn("split-hero", self.code(boutique["id"], "sections/hero.liquid"))
+        self.assertNotIn("split-hero", self.code(bold["id"], "sections/hero.liquid"))
+        self.assertIn("bold-bar", self.code(bold["id"], "sections/product-grid.liquid"))
+        self.assertNotIn("bold-bar", self.code(boutique["id"], "sections/product-grid.liquid"))
+        fresh = self.add("fresh")
+        self.assertIn("fresh-hero", self.code(fresh["id"], "sections/hero.liquid"))
+        orders = {}
+        for item in (bold, boutique):
+            settings = self.editing(item["id"], "get", "/api/v1/themes/settings/")
+            orders[item["preset"]] = settings["templates"]["index"]["order"]
+        self.assertNotEqual(orders["bold"], orders["boutique"])
+
+    def test_editing_a_draft_leaves_the_published_theme_alone(self):
+        live = self.add("classic")
+        draft = self.add("minimal")
+        before_home = self.home()
+        live_settings = self.editing(live["id"], "get", "/api/v1/themes/settings/")
+        live_styles = self.code(live["id"], "snippets/styles.liquid")
+
+        self.editing(draft["id"], "patch", "/api/v1/themes/settings/", {"settings": {"accent_color": "#FF0000"}})
+        mine = self.code(draft["id"], "snippets/styles.liquid") + "\n<!-- mine -->"
+        self.editing(draft["id"], "post", "/api/v1/themes/files/", {"path": "snippets/styles.liquid", "content": mine})
+
+        self.assertEqual(self.editing(draft["id"], "get", "/api/v1/themes/settings/")["settings"]["accent_color"], "#FF0000")
+        self.assertEqual(self.editing(live["id"], "get", "/api/v1/themes/settings/"), live_settings)
+        self.assertEqual(self.code(live["id"], "snippets/styles.liquid"), live_styles)
+        # Without X-Theme-Id the admin edits the published theme
+        self.assertEqual(self.ok("get", "/api/v1/themes/settings/"), live_settings)
+        self.assertEqual(self.home(), before_home)
+
+    def test_the_draft_can_be_previewed(self):
+        self.add("classic")
+        draft = self.add("fresh", name="Draft fresh")
+        data = self.editing(draft["id"], "get", "/api/v1/themes/settings/")
+        r = self.client.post("/api/v1/themes/preview/", data, format="json", HTTP_X_THEME_ID=draft["id"])
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        self.assertIn("theme-fresh", r.json()["html"])
+        self.assertNotIn("theme-fresh", self.home())
+
+    def test_publishing_swaps_the_live_theme_and_the_old_one_becomes_a_draft(self):
+        live = self.add("classic")
+        draft = self.add("fresh")
+        self.assertNotIn("theme-fresh", self.home())
+
+        self.ok("post", f"/api/v1/themes/library/{draft['id']}/publish/", {})
+        published = {t["id"]: t["published"] for t in self.library()["themes"]}
+        self.assertEqual(published, {live["id"]: False, draft["id"]: True})
+        self.assertIn("theme-fresh", self.home())
+        # The old theme is untouched and still there to edit or publish again
+        self.assertIsNotNone(self.code(live["id"], "snippets/styles.liquid"))
+        self.ok("post", f"/api/v1/themes/library/{live['id']}/publish/", {})
+        self.assertNotIn("theme-fresh", self.home())
+
+    # ---------------------------------------------------------------- manage
+
+    def test_rename_and_delete(self):
+        live = self.add("classic")
+        draft = self.add("bold")
+
+        self.ok("patch", f"/api/v1/themes/library/{draft['id']}/", {"name": "  Black   Friday "})
+        self.assertIn("Black Friday", [t["name"] for t in self.library()["themes"]])
+        self.ok("patch", f"/api/v1/themes/library/{draft['id']}/", {"name": " "}, expect=400)
+
+        self.ok("delete", f"/api/v1/themes/library/{live['id']}/", expect=400)  # published
+        self.ok("delete", f"/api/v1/themes/library/{draft['id']}/", expect=204)
+        self.assertEqual([t["id"] for t in self.library()["themes"]], [live["id"]])
+
+    def test_duplicate_a_theme(self):
+        live = self.add("bold")
+        self.editing(live["id"], "patch", "/api/v1/themes/settings/", {"settings": {"accent_color": "#123456"}})
+        copy = self.add(live["id"], name="Bold copy")
+        self.assertFalse(copy["published"])
+        self.assertEqual(copy["preset"], "bold")
+        self.assertEqual(self.editing(copy["id"], "get", "/api/v1/themes/settings/")["settings"]["accent_color"], "#123456")
+
+    def test_unknown_and_foreign_themes_are_refused(self):
+        self.add("classic")
+        self.add("nope", expect=404)
+        self.add("../x", expect=404)
+        self.add("bold", name=" ", expect=400)
+        missing = "00000000-0000-0000-0000-000000000000"
+        self.ok("post", f"/api/v1/themes/library/{missing}/publish/", {}, expect=404)
+        r = self.client.get("/api/v1/themes/settings/", HTTP_X_THEME_ID=missing)
+        self.assertEqual(r.status_code, 404)  # never falls back to the live theme
+        r = self.client.get("/api/v1/themes/settings/", HTTP_X_THEME_ID="not-a-uuid")
+        self.assertEqual(r.status_code, 404)
+
+        # Another store's theme can't be opened with this store's login
+        other_token, other_store = self.sign_up("other-lib@example.com", "Other Store")
+        theirs = self.ok("post", "/api/v1/themes/library/", {"source": "bold"}, expect=201)
+        mine_token = self.token
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {mine_token}", HTTP_X_STORE_ID=self.store["storeId"])
+        r = self.client.get("/api/v1/themes/settings/", HTTP_X_THEME_ID=theirs["id"])
+        self.assertEqual(r.status_code, 404)
+
+    def test_a_store_has_a_limit_on_themes(self):
+        from .services import MAX_THEMES
+
+        for _ in range(MAX_THEMES):
+            self.add("blank", name="t")
+        self.add("blank", name="one too many", expect=400)

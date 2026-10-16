@@ -1,0 +1,96 @@
+{%- comment -%}
+  Bold's product grid: a heavy header bar with the item count and a button-style "View all", over
+  framed cards. Same settings as the starter's section; "Display as" still switches to a carousel.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- assign first_count = s["limit"] -%}
+<section id="section-{{ section.id }}"
+  class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
+  data-autoplay="{{ s.autoplay }}"
+  style="--cols: {{ s.columns }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
+  <div class="page-width">
+    <div class="bold-bar">
+      <div class="bold-bar__title">
+        {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+        {%- if s.subheading != blank -%}<p class="product-list__sub">{{ s.subheading }}</p>{%- endif -%}
+      </div>
+      <div class="bold-bar__meta">
+        {%- if section.products.size > 0 -%}<span class="bold-bar__count">{{ section.products.size }} items</span>{%- endif -%}
+        {%- if s.view_all_label != blank -%}
+          <a class="button button--outline" href="{{ s.view_all_link | link }}">{{ s.view_all_label }} &rarr;</a>
+        {%- endif -%}
+        {%- if s.layout == 'carousel' and s.show_arrows and section.products.size > 1 -%}
+          <div class="carousel__controls">
+            <button class="carousel__btn" type="button" data-dir="-1" aria-label="Scroll left">&#8249;</button>
+            <button class="carousel__btn" type="button" data-dir="1" aria-label="Scroll right">&#8250;</button>
+          </div>
+        {%- endif -%}
+      </div>
+    </div>
+
+    {%- if section.products.size == 0 -%}
+      <div class="empty-state">No products yet.</div>
+    {%- else -%}
+      <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
+        {%- if s.layout == 'carousel' %} tabindex="0" aria-label="{{ s.heading | default: 'Products' }}"{% endif %}>
+        {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+        {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+        {%- for product in section.products -%}
+          {%- comment -%} "Load more": cards after the first `limit` wait, hidden, for the button {%- endcomment -%}
+          {%- if s.load_more and forloop.index > first_count -%}<div data-more style="display:none">{%- endif -%}
+          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {%- if s.load_more and forloop.index > first_count -%}</div>{%- endif -%}
+        {%- endfor -%}
+      </div>
+      {%- if s.load_more and s.layout != 'carousel' and section.products.size > first_count -%}
+        <div class="product-list__more">
+          <button class="button button--outline" type="button" data-load-more>Load more</button>
+        </div>
+      {%- endif -%}
+    {%- endif -%}
+  </div>
+</section>
+{%- if s.load_more and s.layout != 'carousel' -%}
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var button = root.querySelector("[data-load-more]");
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var waiting = root.querySelectorAll("[data-more]");
+      for (var i = 0; i < waiting.length && i < {{ first_count }}; i++) {
+        waiting[i].style.display = "contents";
+        waiting[i].removeAttribute("data-more");
+      }
+      if (waiting.length <= {{ first_count }}) button.parentNode.remove();
+    });
+  })();
+</script>
+{%- endif -%}
+{%- if s.layout == 'carousel' -%}
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var track = root.querySelector(".carousel__track");
+    if (!track) return;
+
+    function step(dir) {
+      var card = track.firstElementChild;
+      var width = card ? card.getBoundingClientRect().width + parseFloat(getComputedStyle(track).columnGap || 0) : track.clientWidth;
+      var atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
+      if (dir > 0 && atEnd) track.scrollTo({ left: 0, behavior: "smooth" });
+      else track.scrollBy({ left: dir * width, behavior: "smooth" });
+    }
+
+    root.querySelectorAll(".carousel__btn").forEach(function (btn) {
+      btn.addEventListener("click", function () { step(Number(btn.dataset.dir)); });
+    });
+
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (root.dataset.autoplay === "true" && !reduce) {
+      var timer = setInterval(function () { step(1); }, 4000);
+      root.addEventListener("mouseenter", function () { clearInterval(timer); });
+    }
+  })();
+</script>
+{%- endif -%}

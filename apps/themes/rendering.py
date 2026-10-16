@@ -32,7 +32,7 @@ from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, Menu, StorePage, ThemeFile
-from .services import get_store_theme, synced_section, theme_files
+from .services import _editing_theme, get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
@@ -1276,10 +1276,13 @@ def render_synced_section_fast(store, name, custom_data):
     Returns None when it can't be done this way (the caller renders it the full way).
     """
     path = sync.SYNCED_SECTIONS[name]["path"]
-    row = (
-        ThemeFile.objects.filter(file_path=path, theme__store_assignments__store=store, theme__store_assignments__is_active=True)
-        .values("theme_id", "content").first()
-    )
+    files = ThemeFile.objects.filter(file_path=path, theme__store_assignments__store=store)
+    editing = _editing_theme.get()
+    if editing:
+        files = files.filter(theme_id=editing)  # the draft being edited
+    else:
+        files = files.filter(theme__store_assignments__is_active=True)
+    row = files.values("theme_id", "content").first()
     if row is None:
         return None
     data = resolve(custom_data)
