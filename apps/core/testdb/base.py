@@ -14,7 +14,7 @@ from django.db.backends.sqlite3 import base
 SCHEMAS = (
     "identity", "tenancy", "customers", "catalog", "inventory", "purchasing",
     "commerce", "payments", "orders", "delivery", "wishlist", "discounts",
-    "gift_cards", "fulfillment", "themes",
+    "gift_cards", "fulfillment", "themes", "media",
 )
 
 _QUALIFIED = re.compile(r'"(%s)"\."([^"]+)"' % "|".join(SCHEMAS))
