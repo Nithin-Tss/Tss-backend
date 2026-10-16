@@ -92,6 +92,8 @@ AUTH_USER_MODEL = "identity.User"
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'apps.core.middleware.SecurityHeadersMiddleware',
+    'apps.core.middleware.RequestValidationMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -234,6 +236,16 @@ CORS_ALLOW_HEADERS = [
 # would otherwise answer their preflight first, without the cart headers, and the browser would
 # report "Failed to fetch" on Add to cart.
 CORS_URLS_REGEX = r'^/(?!s/).*$'
+
+
+# Request validation (apps/core/middleware.py): applies to /api/ only.
+# Largest request body accepted, from Content-Length (theme/product uploads included).
+API_MAX_REQUEST_BYTES = int(os.getenv('API_MAX_REQUEST_BYTES', 25 * 1024 * 1024))
+API_ALLOWED_CONTENT_TYPES = {
+    'application/json',
+    'multipart/form-data',
+    'application/x-www-form-urlencoded',
+}
 
 
 # API: every endpoint needs a signed-in user unless the view says otherwise.
