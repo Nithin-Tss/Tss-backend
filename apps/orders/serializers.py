@@ -110,4 +110,6 @@ class DraftOrderSerializer(StoreScopedSerializerMixin, serializers.ModelSerializ
 
     def get_customer_name(self, draft):
         c = draft.customer
-        return " ".join(filter(None, [c.first_name, c.last_name])) or (c.email if c else "")
+        if c is None:
+            return ""
+        return " ".join(filter(None, [c.first_name, c.last_name])) or c.email
