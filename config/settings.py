@@ -44,7 +44,7 @@ def env_list(name, default=''):
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Off unless .env says DJANGO_DEBUG=True, so a missing .env never exposes debug pages.
-DEBUG = env_bool('DJANGO_DEBUG', default=env_bool('DEBUG', default=False))
+DEBUG = env_bool('DJANGO_DEBUG', default=False)
 
 # Login tokens (JWT) are signed with SECRET_KEY: with the built-in fallback
 # anyone could forge them, so it is only allowed while developing.
