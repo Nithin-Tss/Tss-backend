@@ -3,19 +3,27 @@
   class="section product-list card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
   style="--cols: {{ s.columns }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
   <div class="page-width">
+    <!-- Back to Home Link -->
+    <a href="{{ shop.url }}/" class="collection-back-link">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><polyline points="15 18 9 12 15 6"></polyline></svg>Back to Home
+    </a>
+
     {%- if s.show_image and collection.image != blank -%}
       <div class="collection-hero">
         <img src="{{ collection.image }}" alt="{{ collection.name }}">
       </div>
     {%- endif -%}
-    <h1 class="section-heading">{{ collection.name }}</h1>
+    <h1 class="section-heading collection-heading">{{ collection.name }}</h1>
     {%- if s.show_description and collection.description != blank -%}
       <div class="collection-description">{{ collection.description }}</div>
     {%- endif -%}
     <style>
+      .collection-back-link { display: inline-flex; align-items: center; margin-bottom: 20px; font-size: 14px; font-weight: 600; color: #881337; text-decoration: none; }
+      .collection-back-link:hover { text-decoration: underline; }
+      .collection-heading { text-align: center; margin-bottom: 24px; font-size: clamp(28px, 4vw, 42px); font-weight: 700; color: #881337; }
       .collection-hero { margin-bottom: 24px; border-radius: var(--radius, 14px); overflow: hidden; aspect-ratio: 3 / 1; background: var(--line); }
       .collection-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .collection-description { max-width: 720px; margin: -12px 0 28px; color: var(--muted); line-height: 1.6; }
+      .collection-description { max-width: 720px; margin: -12px auto 28px; text-align: center; color: var(--muted); line-height: 1.6; }
       .collection-description > :first-child { margin-top: 0; }
       .collection-description > :last-child { margin-bottom: 0; }
       @media (max-width: 749px) { .collection-hero { aspect-ratio: 2 / 1; } }
@@ -26,83 +34,144 @@
     {%- else -%}
       {%- assign f = collection.filters -%}
       {%- assign can_sort = false -%}
-      {%- if s.show_sort and collection.total_count > 1 -%}{%- assign can_sort = true -%}{%- endif -%}
+      {%- if s.show_sort != false and collection.total_count > 0 -%}{%- assign can_sort = true -%}{%- endif -%}
       {%- assign can_filter = false -%}
-      {%- if s.show_filters != false and collection.total_count > 1 -%}{%- assign can_filter = true -%}{%- endif -%}
+      {%- if s.show_filters != false and collection.total_count > 0 -%}{%- assign can_filter = true -%}{%- endif -%}
 
       <form action="{{ collection.url }}" method="get" class="collection-filters">
-        {%- if can_filter -%}
-          <div class="collection-filters__bar">
-            <label class="collection-filters__check"><input type="checkbox" name="available" value="1"{% if f.available %} checked{% endif %} onchange="this.form.submit()"> In stock only</label>
-
-            <details class="collection-filters__group">
-              <summary>Price{% if f.min_price != blank or f.max_price != blank %} &bull;{% endif %}</summary>
-              <div class="collection-filters__panel">
-                <label>From <input type="number" name="min_price" min="0" step="any" value="{{ f.min_price }}" placeholder="{{ f.price_floor }}"></label>
-                <label>To <input type="number" name="max_price" min="0" step="any" value="{{ f.max_price }}" placeholder="{{ f.price_ceiling }}"></label>
-                <button class="button button--outline" type="submit">Apply</button>
-              </div>
-            </details>
-
-            {%- if f.vendors.size > 1 -%}
+        <div class="collection-toolbar-row">
+          {%- if can_filter -%}
+            <div class="collection-filters__bar">
+              <!-- Availability Dropdown -->
               <details class="collection-filters__group">
-                <summary>Vendor</summary>
+                <summary>Availability <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
                 <div class="collection-filters__panel">
-                  {%- for v in f.vendors -%}
-                    <label><input type="checkbox" name="vendor" value="{{ v.name }}"{% if v.selected %} checked{% endif %} onchange="this.form.submit()"> {{ v.name }} ({{ v.count }})</label>
+                  <label class="collection-filters__check">
+                    <input type="checkbox" name="stock_status" value="in_stock"{% if f.in_stock %} checked{% endif %} onchange="this.form.submit()"> In Stock ({{ f.in_stock_count }})
+                  </label>
+                  <label class="collection-filters__check">
+                    <input type="checkbox" name="stock_status" value="out_of_stock"{% if f.out_of_stock %} checked{% endif %} onchange="this.form.submit()"> Out of Stock ({{ f.out_of_stock_count }})
+                  </label>
+                </div>
+              </details>
+
+              <!-- Price Dropdown -->
+              <details class="collection-filters__group">
+                <summary>Price{% if f.min_price != blank or f.max_price != blank %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+                <div class="collection-filters__panel">
+                  <label>From <input type="number" name="min_price" min="0" step="any" value="{{ f.min_price }}" placeholder="{{ f.price_floor }}"></label>
+                  <label>To <input type="number" name="max_price" min="0" step="any" value="{{ f.max_price }}" placeholder="{{ f.price_ceiling }}"></label>
+                  <button class="button button--outline" type="submit">Apply</button>
+                </div>
+              </details>
+
+              <!-- Category Dropdown -->
+              {%- if f.categories.size > 0 -%}
+                <details class="collection-filters__group">
+                  <summary>Category{% if f.category.size > 0 %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+                  <div class="collection-filters__panel">
+                    {%- for cat in f.categories -%}
+                      <label class="collection-filters__check">
+                        <input type="checkbox" name="category" value="{{ cat.id }}"{% if cat.selected %} checked{% endif %} onchange="this.form.submit()"> {{ cat.name }} ({{ cat.count }})
+                      </label>
+                    {%- endfor -%}
+                  </div>
+                </details>
+              {%- endif -%}
+
+              <!-- Rating Dropdown -->
+              <details class="collection-filters__group">
+                <summary>Rating{% if f.min_rating != blank %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+                <div class="collection-filters__panel">
+                  {%- for r in f.ratings -%}
+                    <label class="collection-filters__check">
+                      <input type="radio" name="min_rating" value="{{ r.min_rating }}"{% if r.selected %} checked{% endif %} onchange="this.form.submit()">
+                      <span>{{ r.label }} ({{ r.count }})</span>
+                    </label>
                   {%- endfor -%}
                 </div>
               </details>
-            {%- endif -%}
 
-            {%- if f.tags.size > 0 -%}
-              <details class="collection-filters__group">
-                <summary>Tag</summary>
-                <div class="collection-filters__panel">
-                  {%- for t in f.tags -%}
-                    <label><input type="checkbox" name="tag" value="{{ t.name }}"{% if t.selected %} checked{% endif %} onchange="this.form.submit()"> {{ t.name }} ({{ t.count }})</label>
-                  {%- endfor -%}
-                </div>
-              </details>
-            {%- endif -%}
+              {%- if f.vendors.size > 1 -%}
+                <details class="collection-filters__group">
+                  <summary>Vendor <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+                  <div class="collection-filters__panel">
+                    {%- for v in f.vendors -%}
+                      <label><input type="checkbox" name="vendor" value="{{ v.name }}"{% if v.selected %} checked{% endif %} onchange="this.form.submit()"> {{ v.name }} ({{ v.count }})</label>
+                    {%- endfor -%}
+                  </div>
+                </details>
+              {%- endif -%}
 
-            {%- if f.active -%}
-              <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}">Clear all</a>
-            {%- endif -%}
-          </div>
-        {%- endif -%}
+              {%- if f.tags.size > 0 -%}
+                <details class="collection-filters__group">
+                  <summary>Tag <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+                  <div class="collection-filters__panel">
+                    {%- for t in f.tags -%}
+                      <label><input type="checkbox" name="tag" value="{{ t.name }}"{% if t.selected %} checked{% endif %} onchange="this.form.submit()"> {{ t.name }} ({{ t.count }})</label>
+                    {%- endfor -%}
+                  </div>
+                </details>
+              {%- endif -%}
 
-        {%- if s.show_count or can_sort -%}
-          <div class="collection-toolbar">
+              {%- if f.active -%}
+                <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}">Clear all</a>
+              {%- endif -%}
+            </div>
+          {%- endif -%}
+
+          <div class="collection-toolbar-right">
             {%- if s.show_count -%}
-              <p class="product-list__sub" style="margin:0">{{ collection.products_count }} product{% if collection.products_count != 1 %}s{% endif %}</p>
-            {%- else -%}
-              <span></span>
+              <span class="collection-items-count">{{ collection.products_count }} item{% if collection.products_count != 1 %}s{% endif %}</span>
             {%- endif -%}
             {%- if can_sort -%}
-              <div class="field" style="grid-auto-flow:column;align-items:center">
-                <label for="sort-{{ section.id }}">Sort by</label>
-                <select id="sort-{{ section.id }}" name="sort" onchange="this.form.submit()">
-                  <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Newest</option>
-                  <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price, low to high</option>
-                  <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price, high to low</option>
+              <div class="collection-sort-wrap">
+                <label for="sort-{{ section.id }}" style="font-size:14px;display:none">Sort</label>
+                <select id="sort-{{ section.id }}" name="sort" class="collection-sort-select" onchange="this.form.submit()">
+                  <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Sort: Featured</option>
+                  <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price: Low to High</option>
+                  <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price: High to Low</option>
                 </select>
-                <noscript><button class="button button--outline" type="submit">Apply</button></noscript>
               </div>
             {%- endif -%}
+            <div class="collection-grid-toggle">
+              <button type="button" class="collection-grid-btn" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '2')" title="2 columns" aria-label="2 columns">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="18" rx="1.5"></rect><rect x="14" y="3" width="7" height="18" rx="1.5"></rect></svg>
+              </button>
+              <button type="button" class="collection-grid-btn is-active" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '{{ s.columns | default: 4 }}')" title="Default columns" aria-label="Default columns">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9.5" y="2" width="5" height="5" rx="1"></rect><rect x="17" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9.5" width="5" height="5" rx="1"></rect><rect x="9.5" y="9.5" width="5" height="5" rx="1"></rect><rect x="17" y="9.5" width="5" height="5" rx="1"></rect><rect x="2" y="17" width="5" height="5" rx="1"></rect><rect x="9.5" y="17" width="5" height="5" rx="1"></rect><rect x="17" y="17" width="5" height="5" rx="1"></rect></svg>
+              </button>
+            </div>
           </div>
-        {%- endif -%}
-        {%- if can_filter and can_sort == false -%}<input type="hidden" name="sort" value="{{ collection.sort }}">{%- endif -%}
+        </div>
       </form>
+
       <style>
-        .collection-filters__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+        .collection-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--line, #e5e7eb); }
+        .collection-filters__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
         .collection-filters__group { position: relative; }
-        .collection-filters__group summary { cursor: pointer; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; list-style: none; }
+        .collection-filters__group summary { cursor: pointer; padding: 7px 14px; border: 1px solid var(--line, #e2e8f0); border-radius: 999px; list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; background: var(--bg, #fff); user-select: none; }
+        .collection-filters__group summary::-webkit-details-marker { display: none; }
         .collection-filters__group[open] summary { border-color: currentColor; }
-        .collection-filters__panel { position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; min-width: 200px; max-height: 280px; overflow: auto; display: grid; gap: 8px; padding: 14px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
-        .collection-filters__panel input[type=number] { width: 100%; padding: 6px 8px; }
-        .collection-filters__panel label, .collection-filters__check { display: flex; align-items: center; gap: 8px; }
-        .collection-filters__clear { text-decoration: underline; color: var(--muted); }
+        .tss-chevron { transition: transform .15s ease; }
+        .collection-filters__group[open] .tss-chevron { transform: rotate(180deg); }
+        .collection-filters__panel { position: absolute; z-index: 50; top: calc(100% + 6px); left: 0; min-width: 210px; max-height: 280px; overflow: auto; display: grid; gap: 10px; padding: 14px; background: var(--bg, #fff); border: 1px solid var(--line, #e2e8f0); border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,.1); }
+        .collection-filters__panel input[type=number] { width: 100%; padding: 6px 8px; border: 1px solid var(--line, #cbd5e1); border-radius: 6px; font-size: 14px; }
+        .collection-filters__check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; }
+        .collection-filters__check input { accent-color: #2563eb; width: 15px; height: 15px; cursor: pointer; }
+        .collection-filters__clear { text-decoration: underline; color: var(--muted, #64748b); font-size: 13px; margin-left: 4px; }
+
+        .collection-toolbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+        .collection-items-count { font-size: 14px; color: var(--muted, #64748b); font-weight: 500; white-space: nowrap; }
+        .collection-sort-select { padding: 6px 12px; border: 1px solid var(--line, #e2e8f0); border-radius: 8px; font-size: 14px; background: var(--bg, #fff); cursor: pointer; color: inherit; }
+        .collection-grid-toggle { display: inline-flex; align-items: center; border: 1px solid var(--line, #e2e8f0); border-radius: 6px; overflow: hidden; background: var(--bg, #fff); }
+        .collection-grid-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; background: transparent; cursor: pointer; color: var(--muted, #64748b); transition: background .15s, color .15s; }
+        .collection-grid-btn:hover, .collection-grid-btn.is-active { background: var(--soft, #f1f5f9); color: var(--text, #0f172a); }
+
+        @media (max-width: 749px) {
+          .collection-toolbar-row { flex-direction: column; align-items: stretch; }
+          .collection-toolbar-right { justify-content: space-between; width: 100%; }
+        }
       </style>
 
       {%- if collection.products_count == 0 -%}

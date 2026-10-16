@@ -682,9 +682,9 @@ def _environment(files, base_url, currency, overrides=None):
 
 
 def _catalog(store):
-    """Published products with what the product cards can show (tags, rating)."""
+    """Published products with what the product cards can show (tags, rating, category)."""
     shown = Q(reviews__status__in=SHOWN_REVIEWS)
-    return published_products(store).prefetch_related("product_tags__tag").annotate(
+    return published_products(store).select_related("category").prefetch_related("product_tags__tag").annotate(
         avg_rating=Avg("reviews__rating", filter=shown),
         review_count=Count("reviews", filter=shown, distinct=True),
     )
@@ -723,10 +723,25 @@ def _number(value):
 
 
 def parse_collection_filters(params):
-    """?available=1&min_price=&max_price=&vendor=&tag= (vendor and tag may repeat) -> filter dict."""
+    """?available=1&stock_status=in_stock|out_of_stock&category=&min_rating=&min_price=&max_price=&vendor=&tag= -> filter dict."""
     many = params.getlist if hasattr(params, "getlist") else lambda k: [params[k]] if params.get(k) else []
+
+    stock_status = set(many("stock_status"))
+    if params.get("in_stock") == "1" or params.get("available") == "1":
+        stock_status.add("in_stock")
+    if params.get("out_of_stock") == "1":
+        stock_status.add("out_of_stock")
+
+    rating_vals = [_number(r) for r in many("rating") + many("min_rating") if _number(r) is not None]
+    min_rating = min(rating_vals) if rating_vals else None
+
     return {
-        "available": params.get("available") == "1",
+        "stock_status": sorted(stock_status),
+        "in_stock": "in_stock" in stock_status,
+        "out_of_stock": "out_of_stock" in stock_status,
+        "available": "in_stock" in stock_status and "out_of_stock" not in stock_status,
+        "category": [c for c in many("category") if c],
+        "min_rating": min_rating,
         "min_price": _number(params.get("min_price", "")),
         "max_price": _number(params.get("max_price", "")),
         "vendor": [v for v in many("vendor") if v],
@@ -736,26 +751,59 @@ def parse_collection_filters(params):
 
 def _matches_filters(product, f, skip=None):
     """Whether a product passes the filters, ignoring the group named in `skip` (for facet counts)."""
-    if skip != "available" and f["available"] and product["is_sold_out"]:
-        return False
+    # 1. Stock Status: In stock / Out of stock
+    # If both selected or neither selected: do not restrict products by stock status
+    if skip not in ("available", "stock_status"):
+        in_stock = f.get("in_stock")
+        out_of_stock = f.get("out_of_stock")
+        if in_stock and not out_of_stock:
+            if product["is_sold_out"]:
+                return False
+        elif out_of_stock and not in_stock:
+            if not product["is_sold_out"]:
+                return False
+
+    # 2. Category filtering
+    if skip != "category" and f.get("category"):
+        cat_id = product.get("category_id")
+        cat_name = product.get("category_name")
+        if not (cat_id in f["category"] or (cat_name and cat_name in f["category"])):
+            return False
+
+    # 3. Customer Rating filtering
+    if skip != "rating" and f.get("min_rating") is not None:
+        rating = product.get("rating")
+        if rating is None or rating < f["min_rating"]:
+            return False
+
+    # 4. Price range filtering
     if skip != "price":
         price = product["price"]
         if f["min_price"] is not None and (price is None or price < f["min_price"]):
             return False
         if f["max_price"] is not None and (price is None or price > f["max_price"]):
             return False
+
+    # 5. Vendor
     if skip != "vendor" and f["vendor"] and product["vendor"] not in f["vendor"]:
         return False
+
+    # 6. Tag
     if skip != "tag" and f["tag"] and not set(f["tag"]) & set(product["tags"]):
         return False
+
     return True
 
 
 def _filter_query(f, sort):
     """The query string (no page) that keeps the current filters and sort in links."""
     pairs = [("sort", sort)]
-    if f["available"]:
-        pairs.append(("available", "1"))
+    for s in f.get("stock_status", []):
+        pairs.append(("stock_status", s))
+    for c in f.get("category", []):
+        pairs.append(("category", c))
+    if f.get("min_rating") is not None:
+        pairs.append(("min_rating", f["min_rating"]))
     if f["min_price"] is not None:
         pairs.append(("min_price", f["min_price"]))
     if f["max_price"] is not None:
@@ -783,6 +831,9 @@ def product_drop(product, base_url):
     selling_on = any(v.continue_selling for v in variants)
     sold_out = available_total <= 0 and not selling_on
 
+    category_id = str(product.category_id) if getattr(product, "category_id", None) else ""
+    category_name = product.category.name if getattr(product, "category", None) else ""
+
     return {
         "id": str(product.id),
         "title": product.title,
@@ -796,6 +847,8 @@ def product_drop(product, base_url):
         "images": images,
         "featured_image": images[0] if images else None,
         "tags": [pt.tag.name for pt in product.product_tags.all()],
+        "category_id": category_id,
+        "category_name": category_name,
         # Stock for the templates: a number and a true/false. Quantity 0 (or no stock record) is sold out.
         "available_total": available_total,
         "is_sold_out": sold_out,
@@ -1647,11 +1700,79 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             if _matches_filters(p, filters, skip="tag"):
                 for tag in set(p["tags"]):
                     tags[tag] = tags.get(tag, 0) + 1
+
+        # Categories facet: count available products matching other filters
+        cat_counts = {}
+        for p in all_products:
+            if _matches_filters(p, filters, skip="category") and p.get("category_id"):
+                cat_counts[p["category_id"]] = cat_counts.get(p["category_id"], 0) + 1
+
+        from apps.catalog.models import Category
+        store_cats = Category.objects.filter(store=store).order_by("name")
+        categories_facet = []
+        seen_cids = set()
+        for cat in store_cats:
+            cid = str(cat.id)
+            seen_cids.add(cid)
+            categories_facet.append({
+                "id": cid,
+                "name": cat.name,
+                "count": cat_counts.get(cid, 0),
+                "selected": cid in filters["category"] or cat.name in filters["category"],
+            })
+        for p in all_products:
+            cid = p.get("category_id")
+            cname = p.get("category_name")
+            if cid and cid not in seen_cids:
+                seen_cids.add(cid)
+                categories_facet.append({
+                    "id": cid,
+                    "name": cname,
+                    "count": cat_counts.get(cid, 0),
+                    "selected": cid in filters["category"] or cname in filters["category"],
+                })
+
+        # Ratings facet: count products meeting each star threshold under other filters
+        ratings_facet = []
+        for thresh in (5, 4, 3, 2):
+            rcount = sum(
+                1 for p in all_products
+                if _matches_filters(p, filters, skip="rating")
+                and p.get("rating") is not None
+                and p["rating"] >= thresh
+            )
+            ratings_facet.append({
+                "min_rating": thresh,
+                "stars": thresh,
+                "label": f"{thresh} & Up" if thresh < 5 else "5 Stars",
+                "count": rcount,
+                "selected": filters.get("min_rating") == thresh,
+            })
+
+        # Stock status counts
+        in_stock_count = sum(
+            1 for p in all_products
+            if _matches_filters(p, filters, skip="stock_status") and not p["is_sold_out"]
+        )
+        out_of_stock_count = sum(
+            1 for p in all_products
+            if _matches_filters(p, filters, skip="stock_status") and p["is_sold_out"]
+        )
+
         priced = [p["price"] for p in all_products if p["price"] is not None]
         filter_query = _filter_query(filters, sort)
         pages = max(1, -(-len(products) // PAGE_SIZE))
         page_number = min(max(1, page_number), pages)
         obj = collection["obj"]
+
+        filters_active = bool(
+            filters["in_stock"] or filters["out_of_stock"]
+            or filters["category"]
+            or filters["min_rating"] is not None
+            or filters["min_price"] is not None or filters["max_price"] is not None
+            or filters["vendor"] or filters["tag"]
+        )
+
         collection_drop = {
             "name": collection["name"],
             "url": collection_url(base_url, obj) if obj else f"{base_url}/collections/all",
@@ -1663,11 +1784,17 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "products_count": len(products),
             "total_count": len(all_products),
             "filters": {
-                "active": bool(
-                    filters["available"] or filters["vendor"] or filters["tag"]
-                    or filters["min_price"] is not None or filters["max_price"] is not None
-                ),
-                "available": filters["available"],
+                "active": filters_active,
+                "available": filters["in_stock"] and not filters["out_of_stock"],
+                "in_stock": filters["in_stock"],
+                "out_of_stock": filters["out_of_stock"],
+                "in_stock_count": in_stock_count,
+                "out_of_stock_count": out_of_stock_count,
+                "category": filters["category"],
+                "categories": categories_facet,
+                "selected_category": filters["category"][0] if filters["category"] else "",
+                "min_rating": filters["min_rating"] if filters["min_rating"] is not None else "",
+                "ratings": ratings_facet,
                 "min_price": filters["min_price"] if filters["min_price"] is not None else "",
                 "max_price": filters["max_price"] if filters["max_price"] is not None else "",
                 "price_floor": min(priced) if priced else None,
