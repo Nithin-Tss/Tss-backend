@@ -69,9 +69,9 @@ from .services import (
 
 
 
-# Product photos: JPG, PNG or WEBP up to 5MB, checked by their first bytes, not the file name
+# Product photos: JPG, PNG or WEBP up to 1MB, checked by their first bytes, not the file name
 
-MAX_IMAGE_SIZE = 5 * 1024 * 1024
+MAX_IMAGE_SIZE = 1 * 1024 * 1024
 
 MAX_BULK_ROWS = 500
 
@@ -254,7 +254,7 @@ class ProductViewSet(StoreScopedViewSet):
 
         if file.size > MAX_IMAGE_SIZE:
 
-            raise ValidationError({"image": "Image is too large. Maximum size is 5MB."})
+            raise ValidationError({"image": "Image is too large. Maximum size is 1MB per image."})
 
 
 

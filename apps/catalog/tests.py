@@ -367,7 +367,11 @@ class ProductFormSchemaTests(APITestCase):
         self.assertEqual(self.upload(self.PNG).status_code, 201)
         # A text file renamed to .png is still rejected
         self.assertEqual(self.upload(b"not really an image", "fake.png").status_code, 400)
-        self.assertEqual(self.upload(self.PNG + b"\x00" * (5 * 1024 * 1024), "big.png").status_code, 400)
+        # 500KB is fine; 2MB is over the 1MB limit and the error says so
+        self.assertEqual(self.upload(self.PNG + b"\x00" * (500 * 1024), "ok.png").status_code, 201)
+        too_big = self.upload(self.PNG + b"\x00" * (2 * 1024 * 1024), "big.png")
+        self.assertEqual(too_big.status_code, 400)
+        self.assertIn("Maximum size is 1MB per image", str(too_big.json()))
 
     def test_cannot_use_other_stores_records(self):
         location = self.client.post("/api/v1/inventory/locations/", {"name": "Mine"}, format="json").json()

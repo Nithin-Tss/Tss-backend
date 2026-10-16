@@ -348,7 +348,7 @@ class ThemeCustomizerView(StoreThemeView):
 class ThemeImageView(StoreThemeView):
     """
     POST /api/v1/themes/images/  (multipart, field "image") -> {"url": ...}
-    Banner, slide and image-block pictures: JPG, PNG or WEBP up to 5MB,
+    Banner, slide and image-block pictures: JPG, PNG or WEBP up to 1MB,
     checked by their first bytes (same rules as product photos).
     """
 
@@ -359,7 +359,7 @@ class ThemeImageView(StoreThemeView):
         if file is None:
             raise ValidationError({"image": "Choose an image to upload."})
         if file.size > MAX_IMAGE_SIZE:
-            raise ValidationError({"image": "Image is too large. Maximum size is 5MB."})
+            raise ValidationError({"image": "Image is too large. Maximum size is 1MB per image."})
 
         ext = image_extension(file.read(12))
         if ext is None:
