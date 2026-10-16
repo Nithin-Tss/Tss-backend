@@ -293,6 +293,7 @@ def get_store_theme(store):
         _keep_wishlist_hearts(current)
         _add_page_templates(current)
         sync_card_cart_icon(current)
+        _upgrade_footer_icon(current.theme)
         return current
 
     if current:
@@ -317,6 +318,7 @@ def get_store_theme(store):
     _keep_wishlist_hearts(installed, new_store=current is None)
     _add_page_templates(installed)
     sync_card_cart_icon(installed)
+    _upgrade_footer_icon(installed.theme)
     return installed
 
 
@@ -1085,6 +1087,13 @@ def _add_synced_sections(theme, custom_data=None):
                             file.file_size = len(upgraded.encode("utf-8"))
                             file.save(update_fields=["content", "file_size", "updated_at"])
                             sync.invalidate(locked.pk, config["path"])
+                        upgraded_icon = _add_footer_icon_setting(file.content)
+                        if upgraded_icon is not None:
+                            sync.record_version(locked, name, file.content, "upgrade")
+                            file.content = upgraded_icon
+                            file.file_size = len(upgraded_icon.encode("utf-8"))
+                            file.save(update_fields=["content", "file_size", "updated_at"])
+                            sync.invalidate(locked.pk, config["path"])
                     if name == "header":
                         _upgrade_header_wishlist_styles(locked, files.get("snippets/styles.liquid"))
                     continue
@@ -1182,6 +1191,66 @@ def _add_footer_logo_block(content):
     content = content.replace(schema_anchor, '  "blocks": [' + nl + block + "    {" + nl + '      "type": "text",', 1)
     content = content.replace("<style>" + nl, "<style>" + nl + css, 1)
     return re.sub(r'"max_blocks": 8\b', '"max_blocks": 9', content, count=1)
+
+
+def _add_footer_icon_setting(content):
+    """Add footer icon setting, markup, and styling to existing footer.liquid files."""
+    if '"id": "icon"' in content or '"id": "footer_icon"' in content:
+        return None
+    _, schema_text, schema_start = sync.split(content)
+    if schema_text is None:
+        return None
+    newline = "\r\n" if "\r\n" in content else "\n"
+    schema_anchor = re.compile(r'("settings":\s*\[\s*)', re.MULTILINE)
+    match = schema_anchor.search(schema_text)
+    if not match:
+        return None
+    icon_setting = '{"type": "image", "id": "icon", "label": "Footer icon", "default": ""},'
+    schema_new = schema_text[:match.end()] + newline + "    " + icon_setting + schema_text[match.end():]
+    patched = content[:schema_start] + schema_new + content[schema_start + len(schema_text):]
+
+    if "site-footer__icon" not in patched:
+        legal_anchor = '<div class="page-width site-footer__legal">'
+        if legal_anchor in patched:
+            icon_markup = (
+                newline + "    {%- assign footer_icon = s.icon -%}"
+                + newline + "    {%- if footer_icon == blank or footer_icon == nil -%}"
+                + newline + "      {%- assign footer_icon = s.footer_icon -%}"
+                + newline + "    {%- endif -%}"
+                + newline + "    {%- if footer_icon != blank and footer_icon != nil -%}"
+                + newline + "      <div class=\"site-footer__icon\">"
+                + newline + "        <img src=\"{{ footer_icon }}\" alt=\"{{ shop.name | escape }}\" loading=\"lazy\">"
+                + newline + "      </div>"
+                + newline + "    {%- endif -%}"
+            )
+            patched = patched.replace(legal_anchor, legal_anchor + icon_markup, 1)
+
+    if ".site-footer__icon" not in patched:
+        style_anchor = "</style>"
+        if style_anchor in patched:
+            icon_style = (
+                "  .site-footer__icon { margin-bottom: 12px; }" + newline
+                + "  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle; }" + newline
+            )
+            patched = patched.replace(style_anchor, icon_style + style_anchor, 1)
+
+    try:
+        sync.parse(patched, "sections/footer.liquid")
+    except sync.SectionCodeError:
+        return None
+    return patched
+
+
+def _upgrade_footer_icon(theme):
+    file = theme.files.filter(file_path="sections/footer.liquid").first()
+    if file:
+        upgraded = _add_footer_icon_setting(file.content)
+        if upgraded is not None:
+            sync.record_version(theme, "footer", file.content, "upgrade")
+            file.content = upgraded
+            file.file_size = len(upgraded.encode("utf-8"))
+            file.save(update_fields=["content", "file_size", "updated_at"])
+            sync.invalidate(theme.pk, "sections/footer.liquid")
 
 
 def _add_header_wishlist_setting(content):
