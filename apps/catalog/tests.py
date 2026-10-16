@@ -465,7 +465,7 @@ class AllProductsStorefrontTests(APITestCase):
             html = self.page(f"collections/all{query}")
             return sorted(("Cheap", "Dear", "Middle"), key=lambda t: html.index(f">{t}<"))
 
-        self.assertIn('<h1 class="section-heading">All products</h1>', self.page("collections/all"))
+        self.assertIn('<h1 class="section-heading collection-heading">All products</h1>', self.page("collections/all"))
         self.assertEqual(order(), ["Middle", "Dear", "Cheap"])  # newest first
         self.assertEqual(order("?sort=price-asc"), ["Cheap", "Middle", "Dear"])
         self.assertEqual(order("?sort=price-desc"), ["Dear", "Middle", "Cheap"])
