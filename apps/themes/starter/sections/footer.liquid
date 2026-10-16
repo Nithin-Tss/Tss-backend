@@ -5,6 +5,11 @@
   {{ block.attrs }} lets the customizer's Edit mode select a block; it is empty on the store.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
+{%- assign footer_icon = s.icon -%}
+{%- if footer_icon == blank or footer_icon == nil -%}
+  {%- assign footer_icon = s.footer_icon -%}
+{%- endif -%}
+{%- assign icon_rendered = false -%}
 <footer class="site-footer" style="{% if s.background != blank %}background:{{ s.background }};{% endif %}{% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}">
   {%- if section.blocks.size > 0 -%}
     <div class="page-width site-footer__top">
@@ -29,12 +34,20 @@
               {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
             </div>
           {%- when 'links' -%}
-            <nav class="site-footer__nav" aria-label="{{ b.heading | default: 'Footer' }}"{{ block.attrs }}>
-              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
-              {%- for link in b.menu -%}
-                <a href="{{ link.url }}">{{ link.label }}</a>
-              {%- endfor -%}
-            </nav>
+            <div class="site-footer__links-wrapper">
+              {%- if icon_rendered == false and footer_icon != blank and footer_icon != nil -%}
+                {%- assign icon_rendered = true -%}
+                <div class="site-footer__icon">
+                  <img src="{{ footer_icon }}" alt="{{ shop.name | escape }}" loading="lazy">
+                </div>
+              {%- endif -%}
+              <nav class="site-footer__nav" aria-label="{{ b.heading | default: 'Footer' }}"{{ block.attrs }}>
+                {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+                {%- for link in b.menu -%}
+                  <a href="{{ link.url }}">{{ link.label }}</a>
+                {%- endfor -%}
+              </nav>
+            </div>
           {%- when 'social' -%}
             <div class="site-footer__social"{{ block.attrs }}>
               {%- if b.instagram != blank -%}<a href="{{ b.instagram }}" target="_blank" rel="noopener">Instagram</a>{%- endif -%}
@@ -57,18 +70,21 @@
             </form>
         {%- endcase -%}
       {%- endfor -%}
+      {%- if icon_rendered == false and footer_icon != blank and footer_icon != nil -%}
+        {%- assign icon_rendered = true -%}
+        <div class="site-footer__icon">
+          <img src="{{ footer_icon }}" alt="{{ shop.name | escape }}" loading="lazy">
+        </div>
+      {%- endif -%}
     </div>
-  {%- endif -%}
-  <div class="page-width site-footer__legal">
-    {%- assign footer_icon = s.icon -%}
-    {%- if footer_icon == blank or footer_icon == nil -%}
-      {%- assign footer_icon = s.footer_icon -%}
-    {%- endif -%}
-    {%- if footer_icon != blank and footer_icon != nil -%}
+  {%- elsif footer_icon != blank and footer_icon != nil -%}
+    <div class="page-width site-footer__top">
       <div class="site-footer__icon">
         <img src="{{ footer_icon }}" alt="{{ shop.name | escape }}" loading="lazy">
       </div>
-    {%- endif -%}
+    </div>
+  {%- endif -%}
+  <div class="page-width site-footer__legal">
     {%- if s.copyright != blank -%}
       {{ s.copyright }}
     {%- else -%}
@@ -83,14 +99,15 @@
   .site-footer__logo-row[data-position="left"] { justify-content: flex-start; }
   .site-footer__logo-row[data-position="center"] { justify-content: center; }
   .site-footer__logo-row[data-position="right"] { justify-content: flex-end; }
+  .site-footer__links-wrapper { display: flex; align-items: flex-start; gap: 20px; }
   .site-footer__nav strong, .site-footer__newsletter strong { color: var(--text); }
   .site-footer__newsletter { display: grid; gap: 8px; max-width: 360px; }
   .site-footer__newsletter p { margin: 0; min-height: 1em; }
   .site-footer__signup { display: flex; gap: 8px; }
   .site-footer__signup input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--bg); color: var(--text); }
   .site-footer__signup .button { min-height: 40px; padding: 0 16px; }
-  .site-footer__icon { margin-bottom: 12px; }
-  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle; }
+  .site-footer__icon { flex-shrink: 0; }
+  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: block; }
 </style>
 
 {% schema %}

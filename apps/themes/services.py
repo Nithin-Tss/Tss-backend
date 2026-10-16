@@ -1210,27 +1210,28 @@ def _add_footer_icon_setting(content):
     patched = content[:schema_start] + schema_new + content[schema_start + len(schema_text):]
 
     if "site-footer__icon" not in patched:
-        legal_anchor = '<div class="page-width site-footer__legal">'
-        if legal_anchor in patched:
+        links_anchor = "{%- when 'links' -%}"
+        if links_anchor in patched:
             icon_markup = (
-                newline + "    {%- assign footer_icon = s.icon -%}"
-                + newline + "    {%- if footer_icon == blank or footer_icon == nil -%}"
-                + newline + "      {%- assign footer_icon = s.footer_icon -%}"
-                + newline + "    {%- endif -%}"
-                + newline + "    {%- if footer_icon != blank and footer_icon != nil -%}"
-                + newline + "      <div class=\"site-footer__icon\">"
-                + newline + "        <img src=\"{{ footer_icon }}\" alt=\"{{ shop.name | escape }}\" loading=\"lazy\">"
-                + newline + "      </div>"
-                + newline + "    {%- endif -%}"
+                links_anchor + newline
+                + "            <div class=\"site-footer__links-wrapper\">" + newline
+                + "              {%- if icon_rendered == false and footer_icon != blank and footer_icon != nil -%}" + newline
+                + "                {%- assign icon_rendered = true -%}" + newline
+                + "                <div class=\"site-footer__icon\">" + newline
+                + "                  <img src=\"{{ footer_icon }}\" alt=\"{{ shop.name | escape }}\" loading=\"lazy\">" + newline
+                + "                </div>" + newline
+                + "              {%- endif -%}"
             )
-            patched = patched.replace(legal_anchor, legal_anchor + icon_markup, 1)
+            patched = patched.replace(links_anchor, icon_markup, 1)
+            patched = patched.replace("</nav>", "</nav>" + newline + "            </div>", 1)
 
-    if ".site-footer__icon" not in patched:
+    if ".site-footer__links-wrapper" not in patched:
         style_anchor = "</style>"
         if style_anchor in patched:
             icon_style = (
-                "  .site-footer__icon { margin-bottom: 12px; }" + newline
-                + "  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: inline-block; vertical-align: middle; }" + newline
+                "  .site-footer__links-wrapper { display: flex; align-items: flex-start; gap: 20px; }" + newline
+                + "  .site-footer__icon { flex-shrink: 0; }" + newline
+                + "  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: block; }" + newline
             )
             patched = patched.replace(style_anchor, icon_style + style_anchor, 1)
 
