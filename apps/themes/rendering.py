@@ -1775,6 +1775,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
 
             if section["type"] == "promotions":
+                # The cart icon and wishlist heart blocks are read below, they are not promotion cards
+                section["blocks"] = [b for b in section["blocks"] if b["type"] == "promotion"]
                 promotions_path = "/collections/promotions"
                 for block in section["blocks"]:
                     if str(block["settings"].get("button_label") or "").strip().casefold() == "shop offers":

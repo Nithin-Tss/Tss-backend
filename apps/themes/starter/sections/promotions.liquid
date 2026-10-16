@@ -43,8 +43,10 @@
         <div class="empty-state promotions__products">No products yet.</div>
       {%- else -%}
         <div class="product-list__grid promotions__products" style="--cols: {{ s.product_columns }}; --cols-mobile: {{ s.product_columns_mobile }}">
+          {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+          {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
           {%- for product in section.products -%}
-            {% render 'product-card', product: product, wishlist_ids: wishlist_ids, return_url: return_url %}
+            {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url %}
           {%- endfor -%}
         </div>
       {%- endif -%}

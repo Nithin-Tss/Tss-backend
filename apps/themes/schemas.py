@@ -1480,7 +1480,7 @@ SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 
 # The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Nothing adds it: the
 # owner picks "Cart icon" in "Add block" (one per section), hides it with the block's eye or deletes it, and the
 # cards show the icon on hover while the block is there and visible.
-for _type in ("product-grid", "product-carousel", "main-collection"):
+for _type in ("product-grid", "product-carousel", "main-collection", "promotions"):
     SECTIONS[_type]["blocks"] = {
         "cart_icon": {
             "name": "Cart icon",
