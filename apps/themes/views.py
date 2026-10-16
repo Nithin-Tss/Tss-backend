@@ -40,7 +40,8 @@ from .models import BlogPost, Menu, MenuItem, StorePage, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import section_sync as sync
 from .rendering import (
-    _catalog, published_pages, published_posts, render_cart_html, render_page, render_synced_section_fast, shop_url,
+    _catalog, parse_collection_filters, published_pages, published_posts, render_cart_html, render_page,
+    render_synced_section_fast, shop_url,
 )
 from apps.catalog.models import Product, ProductVariant
 from apps.commerce import services as commerce_services
@@ -1307,7 +1308,17 @@ def _preview_target(request):
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
     if page == "collection":
-        return page, {"collection": {"name": "All products", "obj": None}}, None
+        # ?collection=<handle or id>: that collection; otherwise all products
+        value = (request.query_params.get("collection") or "").strip()
+        chosen = None
+        if value:
+            try:
+                chosen = published_collections(request.store).filter(pk=uuid.UUID(value)).first()
+            except ValueError:
+                chosen = published_collections(request.store).filter(handle=value).first()
+        if chosen is None:
+            return page, {"collection": {"name": "All products", "obj": None}}, None
+        return page, {"collection": {"name": chosen.name, "obj": chosen}}, None
     if page == "product":
         products = published_products(request.store)
         try:
@@ -1674,12 +1685,16 @@ def storefront_product(
 
 
 def _listing(params):
-    """?sort=newest|price-asc|price-desc&page=N"""
+    """?sort=newest|price-asc|price-desc&page=N, plus the filters (see parse_collection_filters)"""
     try:
         page_number = int(params.get("page", 1))
     except ValueError:
         page_number = 1
-    return {"sort": params.get("sort", "newest"), "page_number": page_number}
+    return {
+        "sort": params.get("sort", "newest"),
+        "page_number": page_number,
+        "filters": parse_collection_filters(params),
+    }
 
 
 @_storefront

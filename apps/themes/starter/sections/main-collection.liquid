@@ -21,32 +21,93 @@
       @media (max-width: 749px) { .collection-hero { aspect-ratio: 2 / 1; } }
     </style>
 
-    {%- if collection.products_count == 0 -%}
+    {%- if collection.total_count == 0 -%}
       <div class="empty-state">{{ s.empty_text | default: 'No products yet.' }}</div>
     {%- else -%}
+      {%- assign f = collection.filters -%}
       {%- assign can_sort = false -%}
-      {%- if s.show_sort and collection.products_count > 1 -%}{%- assign can_sort = true -%}{%- endif -%}
-      {%- if s.show_count or can_sort -%}
-        <div class="collection-toolbar">
-          {%- if s.show_count -%}
-            <p class="product-list__sub" style="margin:0">{{ collection.products_count }} product{% if collection.products_count != 1 %}s{% endif %}</p>
-          {%- else -%}
-            <span></span>
-          {%- endif -%}
-          {%- if can_sort -%}
-            <form action="{{ collection.url }}" method="get" class="field" style="grid-auto-flow:column;align-items:center">
-              <label for="sort-{{ section.id }}">Sort by</label>
-              <select id="sort-{{ section.id }}" name="sort" onchange="this.form.submit()">
-                <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Newest</option>
-                <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price, low to high</option>
-                <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price, high to low</option>
-              </select>
-              <noscript><button class="button button--outline" type="submit">Sort</button></noscript>
-            </form>
-          {%- endif -%}
-        </div>
-      {%- endif -%}
+      {%- if s.show_sort and collection.total_count > 1 -%}{%- assign can_sort = true -%}{%- endif -%}
+      {%- assign can_filter = false -%}
+      {%- if s.show_filters != false and collection.total_count > 1 -%}{%- assign can_filter = true -%}{%- endif -%}
 
+      <form action="{{ collection.url }}" method="get" class="collection-filters">
+        {%- if can_filter -%}
+          <div class="collection-filters__bar">
+            <label class="collection-filters__check"><input type="checkbox" name="available" value="1"{% if f.available %} checked{% endif %} onchange="this.form.submit()"> In stock only</label>
+
+            <details class="collection-filters__group">
+              <summary>Price{% if f.min_price != blank or f.max_price != blank %} &bull;{% endif %}</summary>
+              <div class="collection-filters__panel">
+                <label>From <input type="number" name="min_price" min="0" step="any" value="{{ f.min_price }}" placeholder="{{ f.price_floor }}"></label>
+                <label>To <input type="number" name="max_price" min="0" step="any" value="{{ f.max_price }}" placeholder="{{ f.price_ceiling }}"></label>
+                <button class="button button--outline" type="submit">Apply</button>
+              </div>
+            </details>
+
+            {%- if f.vendors.size > 1 -%}
+              <details class="collection-filters__group">
+                <summary>Vendor</summary>
+                <div class="collection-filters__panel">
+                  {%- for v in f.vendors -%}
+                    <label><input type="checkbox" name="vendor" value="{{ v.name }}"{% if v.selected %} checked{% endif %} onchange="this.form.submit()"> {{ v.name }} ({{ v.count }})</label>
+                  {%- endfor -%}
+                </div>
+              </details>
+            {%- endif -%}
+
+            {%- if f.tags.size > 0 -%}
+              <details class="collection-filters__group">
+                <summary>Tag</summary>
+                <div class="collection-filters__panel">
+                  {%- for t in f.tags -%}
+                    <label><input type="checkbox" name="tag" value="{{ t.name }}"{% if t.selected %} checked{% endif %} onchange="this.form.submit()"> {{ t.name }} ({{ t.count }})</label>
+                  {%- endfor -%}
+                </div>
+              </details>
+            {%- endif -%}
+
+            {%- if f.active -%}
+              <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}">Clear all</a>
+            {%- endif -%}
+          </div>
+        {%- endif -%}
+
+        {%- if s.show_count or can_sort -%}
+          <div class="collection-toolbar">
+            {%- if s.show_count -%}
+              <p class="product-list__sub" style="margin:0">{{ collection.products_count }} product{% if collection.products_count != 1 %}s{% endif %}</p>
+            {%- else -%}
+              <span></span>
+            {%- endif -%}
+            {%- if can_sort -%}
+              <div class="field" style="grid-auto-flow:column;align-items:center">
+                <label for="sort-{{ section.id }}">Sort by</label>
+                <select id="sort-{{ section.id }}" name="sort" onchange="this.form.submit()">
+                  <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Newest</option>
+                  <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price, low to high</option>
+                  <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price, high to low</option>
+                </select>
+                <noscript><button class="button button--outline" type="submit">Apply</button></noscript>
+              </div>
+            {%- endif -%}
+          </div>
+        {%- endif -%}
+        {%- if can_filter and can_sort == false -%}<input type="hidden" name="sort" value="{{ collection.sort }}">{%- endif -%}
+      </form>
+      <style>
+        .collection-filters__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+        .collection-filters__group { position: relative; }
+        .collection-filters__group summary { cursor: pointer; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; list-style: none; }
+        .collection-filters__group[open] summary { border-color: currentColor; }
+        .collection-filters__panel { position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; min-width: 200px; max-height: 280px; overflow: auto; display: grid; gap: 8px; padding: 14px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+        .collection-filters__panel input[type=number] { width: 100%; padding: 6px 8px; }
+        .collection-filters__panel label, .collection-filters__check { display: flex; align-items: center; gap: 8px; }
+        .collection-filters__clear { text-decoration: underline; color: var(--muted); }
+      </style>
+
+      {%- if collection.products_count == 0 -%}
+        <div class="empty-state">No products match these filters. <a href="{{ collection.url }}">Clear filters</a></div>
+      {%- endif -%}
       <div class="product-list__grid">
         {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
         {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
@@ -58,11 +119,11 @@
       {%- if collection.pages > 1 -%}
         <nav class="pagination" aria-label="Pages">
           {%- if collection.page > 1 -%}
-            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&amp;page={{ collection.page | minus: 1 }}">Previous</a>
+            <a class="button button--outline" href="{{ collection.url }}?{{ f.query | escape }}&amp;page={{ collection.page | minus: 1 }}">Previous</a>
           {%- endif -%}
           <span>Page {{ collection.page }} of {{ collection.pages }}</span>
           {%- if collection.page < collection.pages -%}
-            <a class="button button--outline" href="{{ collection.url }}?sort={{ collection.sort }}&amp;page={{ collection.page | plus: 1 }}">Next</a>
+            <a class="button button--outline" href="{{ collection.url }}?{{ f.query | escape }}&amp;page={{ collection.page | plus: 1 }}">Next</a>
           {%- endif -%}
         </nav>
       {%- endif -%}

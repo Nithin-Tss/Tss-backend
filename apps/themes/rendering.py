@@ -11,8 +11,8 @@ import re
 import uuid
 from collections.abc import Sequence
 from datetime import timedelta
-from decimal import Decimal
-from urllib.parse import quote
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote, urlencode
 
 from liquid import DictLoader, Environment
 from liquid.exceptions import LiquidError
@@ -703,6 +703,56 @@ SORTS = {
     "price-asc": lambda d: (d["price"] is None, d["price"] or 0),
     "price-desc": lambda d: (d["price"] is None, -(d["price"] or 0)),
 }
+
+
+def _number(value):
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def parse_collection_filters(params):
+    """?available=1&min_price=&max_price=&vendor=&tag= (vendor and tag may repeat) -> filter dict."""
+    many = params.getlist if hasattr(params, "getlist") else lambda k: [params[k]] if params.get(k) else []
+    return {
+        "available": params.get("available") == "1",
+        "min_price": _number(params.get("min_price", "")),
+        "max_price": _number(params.get("max_price", "")),
+        "vendor": [v for v in many("vendor") if v],
+        "tag": [t for t in many("tag") if t],
+    }
+
+
+def _matches_filters(product, f, skip=None):
+    """Whether a product passes the filters, ignoring the group named in `skip` (for facet counts)."""
+    if skip != "available" and f["available"] and product["is_sold_out"]:
+        return False
+    if skip != "price":
+        price = product["price"]
+        if f["min_price"] is not None and (price is None or price < f["min_price"]):
+            return False
+        if f["max_price"] is not None and (price is None or price > f["max_price"]):
+            return False
+    if skip != "vendor" and f["vendor"] and product["vendor"] not in f["vendor"]:
+        return False
+    if skip != "tag" and f["tag"] and not set(f["tag"]) & set(product["tags"]):
+        return False
+    return True
+
+
+def _filter_query(f, sort):
+    """The query string (no page) that keeps the current filters and sort in links."""
+    pairs = [("sort", sort)]
+    if f["available"]:
+        pairs.append(("available", "1"))
+    if f["min_price"] is not None:
+        pairs.append(("min_price", f["min_price"]))
+    if f["max_price"] is not None:
+        pairs.append(("max_price", f["max_price"]))
+    pairs += [("vendor", v) for v in f["vendor"]] + [("tag", t) for t in f["tag"]]
+    return urlencode(pairs)
 
 
 # "Only a few left" at this quantity or lower
@@ -1493,7 +1543,8 @@ def render_cart_html(store, data, opts):
 
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
-                wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None):
+                wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
+                filters=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -1570,9 +1621,22 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
 
     if page == "collection":
         sort = sort if sort in SORTS else "newest"
-        products = _products(store, base_url, collection=collection["obj"])
+        all_products = _products(store, base_url, collection=collection["obj"])
+        filters = filters or parse_collection_filters({})
+        products = [p for p in all_products if _matches_filters(p, filters)]
         if SORTS[sort]:
             products.sort(key=SORTS[sort])
+        # Facets list every value in the collection; counts follow the other active filters
+        vendors, tags = {}, {}
+        for p in all_products:
+            if _matches_filters(p, filters, skip="vendor") and p["vendor"]:
+                vendors[p["vendor"]] = vendors.get(p["vendor"], 0) + 1
+        for p in all_products:
+            if _matches_filters(p, filters, skip="tag"):
+                for tag in set(p["tags"]):
+                    tags[tag] = tags.get(tag, 0) + 1
+        priced = [p["price"] for p in all_products if p["price"] is not None]
+        filter_query = _filter_query(filters, sort)
         pages = max(1, -(-len(products) // PAGE_SIZE))
         page_number = min(max(1, page_number), pages)
         obj = collection["obj"]
@@ -1585,6 +1649,21 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "image": obj.image_url if obj else "",
             "products": products[(page_number - 1) * PAGE_SIZE:page_number * PAGE_SIZE],
             "products_count": len(products),
+            "total_count": len(all_products),
+            "filters": {
+                "active": bool(
+                    filters["available"] or filters["vendor"] or filters["tag"]
+                    or filters["min_price"] is not None or filters["max_price"] is not None
+                ),
+                "available": filters["available"],
+                "min_price": filters["min_price"] if filters["min_price"] is not None else "",
+                "max_price": filters["max_price"] if filters["max_price"] is not None else "",
+                "price_floor": min(priced) if priced else None,
+                "price_ceiling": max(priced) if priced else None,
+                "vendors": [{"name": n, "count": c, "selected": n in filters["vendor"]} for n, c in sorted(vendors.items())],
+                "tags": [{"name": n, "count": c, "selected": n in filters["tag"]} for n, c in sorted(tags.items())],
+                "query": filter_query,
+            },
             "sort": sort,
             "page": page_number,
             "pages": pages,

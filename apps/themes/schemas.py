@@ -1075,6 +1075,10 @@ SECTIONS["main-collection"]["settings"] = {
     "show_description": _opt("content", "checkbox", "Show the collection description", True),
     "show_count": _opt("content", "checkbox", "Show the number of products", True),
     "show_sort": _opt("content", "checkbox", "Show the \"Sort by\" menu", True),
+    "show_filters": _opt(
+        "content", "checkbox", "Show filters", True,
+        help="Availability, price, vendor and tag filters built from the collection's products.",
+    ),
     "empty_text": _opt("content", "text", "Text when there are no products", "No products yet.", max=200),
     "columns": _opt("layout", "range", "Products per row (desktop)", 4, min=2, max=6),
     "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
