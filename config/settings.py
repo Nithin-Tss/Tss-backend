@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     'apps.gift_cards',
     'apps.fulfillment',
     'apps.themes',
+    'apps.media',
     
 ]
 
