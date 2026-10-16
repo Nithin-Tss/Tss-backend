@@ -142,6 +142,8 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
 .site-header__cart-count[hidden]{display:none}
 .site-header__actions+.site-header__actions{margin-left:0}
+/* The cart icon is 24px inside a 40px tap target: pull it out so it lines up with the page edge, like the logo does on the left */
+.site-header__actions:last-child{margin-right:-8px}
 html.cart-open{overflow:hidden}
 .cart-drawer[hidden]{display:none}
 .cart-drawer{position:fixed;inset:0;z-index:1000}
