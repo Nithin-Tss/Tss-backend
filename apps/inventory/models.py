@@ -109,6 +109,13 @@ class InventoryItem(models.Model):
         return f"{self.variant} - {self.location}"
 
 
+class AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Stock history can't be edited.")
+
+    def delete(self):
+        raise ValidationError("Stock history can't be deleted.")
+
 
 class InventoryHistory(models.Model):
     """One row per stock change, written by inventory.services.adjust_inventory. Never edited or deleted."""
@@ -153,7 +160,7 @@ class InventoryHistory(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
-    objects = models.Manager()
+    objects = AppendOnlyQuerySet.as_manager()
 
     class Meta:
         db_table = '"inventory"."inventory_history"'
@@ -164,6 +171,13 @@ class InventoryHistory(models.Model):
             models.Index(fields=["store", "reference_id"], name="invhist_reference_idx"),
         ]
 
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Stock history can't be edited.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Stock history can't be deleted.")
 
     def __str__(self):
         return f"{self.variant} {self.change:+d} ({self.reason})"
