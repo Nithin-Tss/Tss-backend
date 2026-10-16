@@ -2,10 +2,6 @@ import uuid
 
 
 
-from django.conf import settings
-
-from django.core.files.storage import default_storage
-
 from django.db import transaction
 
 from rest_framework import mixins, status
@@ -268,9 +264,15 @@ class ProductViewSet(StoreScopedViewSet):
 
 
 
-        name = default_storage.save(f"products/{request.store.store_id}/{uuid.uuid4().hex}.{ext}", file)
+        # Stored in the database (the server's disk is wiped on deploy). Served by the
+        # public /s/_img/<id> route, the same one customizer pictures use.
+        from apps.themes.models import ThemeImage
 
-        url = request.build_absolute_uri(settings.MEDIA_URL + name)
+        ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
+        image = ThemeImage.objects.create(
+            store_id=request.store.store_id, content_type=ctype, data=file.read(), size=file.size,
+        )
+        url = request.build_absolute_uri(f"/s/_img/{image.id}")
 
         return Response({"url": url}, status=status.HTTP_201_CREATED)
 

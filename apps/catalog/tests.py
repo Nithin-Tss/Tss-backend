@@ -1,5 +1,5 @@
 from django.core.cache import cache
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from apps.inventory.models import InventoryItem
 
@@ -271,6 +271,21 @@ class ProductFormSchemaTests(APITestCase):
         return self.client.post(
             f"{URL}images/", {"image": SimpleUploadedFile(name, content)}, format="multipart"
         )
+
+    def test_uploaded_photo_lives_in_the_database_and_is_served(self):
+        from urllib.parse import urlsplit
+
+        from apps.themes.models import ThemeImage
+
+        url = self.upload(self.PNG).json()["url"]
+        stored = ThemeImage.objects.get()
+        self.assertEqual((str(stored.store_id), stored.content_type), (self.store_id, "image/png"))
+        self.assertEqual(bytes(stored.data), self.PNG)
+
+        public = APIClient()  # shoppers aren't signed in
+        r = public.get(urlsplit(url).path)
+        self.assertEqual((r.status_code, r["Content-Type"]), (200, "image/png"))
+        self.assertEqual(r.content, self.PNG)
 
     def test_full_form_saves_everything(self):
         urls = [self.upload(self.PNG).json()["url"] for _ in range(2)]
