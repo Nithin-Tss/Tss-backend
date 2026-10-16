@@ -311,7 +311,8 @@ class FooterSyncTest(SyncedSectionMixin, APITestCase):
         self.save_values(values)
         good = self.code()
 
-        broken = good.replace('"max_blocks": 8,', '"max_blocks": 8')
+        broken = good.replace('"max_blocks": 9,', '"max_blocks": 9')
+        self.assertNotEqual(broken, good)
         error = self.save_code(broken, expect=400)
         self.assertIn("schema is not valid JSON", error["content"][0] if isinstance(error["content"], list) else error["content"])
         line = int(error["line"][0] if isinstance(error["line"], list) else error["line"])
