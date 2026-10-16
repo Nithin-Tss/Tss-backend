@@ -121,7 +121,9 @@ class AuthFlowTest(APITestCase):
 
         forged = jwt.encode(
             jwt.decode(tokens["access"], options={"verify_signature": False}),
-            "django-insecure-secret-key", algorithm="HS256",
+            # any key but the real one: never a fixed string, which would be the real key on a
+            # machine with no .env (the app only refuses that default key when DEBUG is off)
+            "not-" + settings.SECRET_KEY, algorithm="HS256",
         )
         self.assertEqual(self.me(forged).status_code, 401)                            # wrong key
 
