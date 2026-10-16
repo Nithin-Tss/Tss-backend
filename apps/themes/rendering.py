@@ -97,6 +97,12 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
   .product-list__track{grid-auto-columns:calc((100% - (var(--cols,4) - 1) * var(--gap,24px)) / var(--cols,4))}
 }
 .product-card__media--portrait{aspect-ratio:3/4}.product-card__media--landscape{aspect-ratio:4/3}.product-card__media--square{aspect-ratio:1}
+/* Compact, uniform product cards */
+.product-card-shell{width:100%;max-width:220px;margin-inline:auto;height:100%}
+.product-card{height:100%;gap:6px;font-size:14px}
+.product-card__media{width:100%}
+.product-card__media img{width:100%;height:100%;object-fit:cover}
+.product-card__title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.6em}
 .card-hover--none .product-card:hover .product-card__media img{transform:none}
 .card-hover--lift .product-card{transition:transform .2s ease,box-shadow .2s ease}
 .card-hover--lift .product-card:hover{transform:translateY(-4px)}.card-hover--lift .product-card:hover .product-card__media img{transform:none}
