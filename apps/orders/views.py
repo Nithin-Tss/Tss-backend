@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import ProtectedError
 from rest_framework import mixins, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -33,7 +34,7 @@ class OrderViewSet(
     permission_resource = "orders"
     queryset = (
         Order.objects.select_related("customer", "sales_channel")
-        .prefetch_related("items")
+        .prefetch_related("items", "payments__transactions")
         .order_by("-created_at")
     )
     serializer_class = OrderSerializer
@@ -79,24 +80,42 @@ class DraftOrderViewSet(StoreScopedViewSet):
     )
     serializer_class = DraftOrderSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        for param in ("status", "customer"):
+            if self.request.query_params.get(param):
+                qs = qs.filter(**{param: self.request.query_params[param]})
+        return qs
+
     def _save_details(self, draft, details):
         draft.details.all().delete()
         total = Decimal("0.00")
 
         for d in details:
             product, variant = d.get("product"), d.get("variant")
-            if variant is not None and product is not None and variant.product_id != product.pk:
+            if product is not None and product.store_id != draft.store_id:
+                raise ValidationError({"details": "A product doesn't belong to this store."})
+            if variant is not None and product is None:
+                raise ValidationError({"details": "A product is required when a variant is selected."})
+            if variant is not None and variant.product_id != product.pk:
                 raise ValidationError({"details": "A variant doesn't match its product."})
+            if variant is not None and variant.product.store_id != draft.store_id:
+                raise ValidationError({"details": "A variant doesn't belong to this store."})
             if product is not None and variant is None:
                 variant = product.variants.order_by("created_at").first()
-            if product is None and not d.get("title"):
+            if product is None and not d.get("title", "").strip():
                 raise ValidationError({"details": "Custom items need a title."})
 
             unit_price = d.get("unit_price")
             if unit_price is None:
                 unit_price = variant.price if variant else Decimal("0.00")
             discount = d.get("discount_amount") or Decimal("0.00")
-            line_total = max(unit_price * d["quantity"] - discount, Decimal("0.00"))
+            line_subtotal = unit_price * d["quantity"]
+            if unit_price < 0 or discount < 0 or discount > line_subtotal:
+                raise ValidationError(
+                    {"details": "Prices and discounts must be non-negative, and discounts can't exceed the item subtotal."}
+                )
+            line_total = line_subtotal - discount
 
             DraftOrderDetail.objects.create(
                 draft_order=draft,
@@ -115,7 +134,7 @@ class DraftOrderViewSet(StoreScopedViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        details = serializer.validated_data.pop("details")
+        details = serializer.validated_data.pop("details", [])
         draft = serializer.save(
             store=self.request.store,
             created_by_user=self.request.user,
@@ -127,26 +146,45 @@ class DraftOrderViewSet(StoreScopedViewSet):
 
     @transaction.atomic
     def perform_update(self, serializer):
-        if serializer.instance.status != OPEN_DRAFT:
+        draft = DraftOrder.objects.select_for_update().get(
+            pk=serializer.instance.pk, store=self.request.store
+        )
+        if draft.status != OPEN_DRAFT:
             raise ValidationError("Completed drafts can't be changed.")
         details = serializer.validated_data.pop("details", None)
+        serializer.instance = draft
         draft = serializer.save()
         if details is not None:
             self._save_details(draft, details)
 
+    @transaction.atomic
     def perform_destroy(self, instance):
-        if instance.status != OPEN_DRAFT:
+        draft = DraftOrder.objects.select_for_update().get(
+            pk=instance.pk, store=self.request.store
+        )
+        if draft.status != OPEN_DRAFT:
             raise ValidationError("Completed drafts can't be deleted.")
-        with transaction.atomic():
-            instance.details.all().delete()
-            instance.delete()
+        try:
+            draft.details.all().delete()
+            draft.delete()
+        except ProtectedError:
+            raise ValidationError("This draft is still referenced by other records and can't be deleted.")
 
     @action(detail=True, methods=["post"])
     def complete(self, request, pk=None):
         with transaction.atomic():
-            draft = DraftOrder.objects.select_for_update().get(pk=self.get_object().pk)
+            draft = DraftOrder.objects.select_for_update().get(
+                pk=self.get_object().pk, store=request.store
+            )
+            if draft.order_id is not None:
+                return Response(
+                    OrderSerializer(draft.order).data,
+                    status=status.HTTP_200_OK,
+                )
             if draft.status != OPEN_DRAFT:
                 raise ValidationError("This draft is already completed.")
+            if draft.customer.store_id != request.store.pk:
+                raise ValidationError({"customer": "Customer does not belong to this store."})
 
             lines = [
                 {
