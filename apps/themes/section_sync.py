@@ -66,7 +66,16 @@ SYNCED_SECTIONS = {
     "footer": {
         "path": "sections/footer.liquid", "label": "Footer", "snippet": "footer",
         "originals": {
-            # current starter (a590775)
+            # updated starter with image upload field in text and links blocks
+            "f37dffa266ec5f3a173bf9eec4b7a87547bd9389118ffa9597aeeacf4d32ff3d",  # LF
+            "eeca0f463889779efd6e6417edb464edccc3f6b4d4de769e647e8ff68ab920db",  # CRLF
+            # updated starter with image upload field in text block
+            "b22f6d3725a01d9d0e0fb229936a95a4f456613aec36223f929788559a77c4e8",  # LF
+            "9ddfdfc0d6f973540533157d57d1441dee69d6cd9ad0a781ad6c9a28884f2109",  # CRLF
+            # updated starter footer logo inside text block
+            "2cf6e868a81bd9a8b9fc552fd4cf0b5dcb82eb0c7e7cc1f2830963ccb0452a3e",  # LF
+            "c248612c2a55133a064e6dae7d5ad77bc02ec9cf37cfadb7024408eaf199293a",  # CRLF
+            # previous starter (a590775)
             "dfef84bf0c7a8ad1f4be1895742e3df4b586303f40cdec1f6f667ee3ee34d426",  # LF
             "6ae26729a6ebc257f8ceeef600fdaad077c1458664a1f5b15039931491237e5a",  # CRLF
             # first starter (2df94aa)
