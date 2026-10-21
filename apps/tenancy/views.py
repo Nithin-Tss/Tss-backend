@@ -1,12 +1,12 @@
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import Store
 from .serializers import StoreSerializer
-from .services import ACTIVE, CLOSED, OWNER, close_store, create_store, reopen_store
+from .services import ACTIVE, CLOSED, OWNER, close_store, create_store, delete_store, reopen_store
 
 
 class StoreViewSet(
@@ -24,6 +24,8 @@ class StoreViewSet(
     PATCH  /api/v1/stores/<id>/         change its settings (that store's owner, or a platform admin)
     DELETE /api/v1/stores/<id>/         close it (that store's owner, or a platform admin)
     POST   /api/v1/stores/<id>/reopen/  reopen a closed store (platform admin only)
+    POST   /api/v1/stores/<id>/permanent-delete/  delete a store for good (platform admin only; body
+           {"confirmSlug": "<store slug>"}; refused while the store still has products, orders, ...)
 
     A platform admin (User.is_owner) can manage every store; a store's owner only
     their own. Everyone else gets a 404 for stores they don't belong to.
@@ -38,7 +40,7 @@ class StoreViewSet(
         # A platform admin sees every store that isn't closed (and, to reopen one, the closed ones)
         if self.request.user.is_owner:
             stores = Store.objects.order_by("created_at")
-            return stores if self.action == "reopen" else stores.exclude(status=CLOSED)
+            return stores if self.action in ("reopen", "permanent_delete") else stores.exclude(status=CLOSED)
         # Only the caller's own stores: anyone else's id is a 404
         return Store.objects.filter(
             memberships__user=self.request.user,
@@ -77,3 +79,14 @@ class StoreViewSet(
         if store.status == CLOSED:
             reopen_store(store)
         return Response(self.get_serializer(store).data)
+
+    @action(detail=True, methods=["post"], url_path="permanent-delete")
+    def permanent_delete(self, request, pk=None):
+        # Irreversible, so unlike closing it is not open to a store's owner
+        if not request.user.is_owner:
+            raise PermissionDenied("Only the administrator can delete a store permanently.")
+        store = self.get_object()
+        if request.data.get("confirmSlug") != store.store_slug:
+            raise ValidationError({"confirmSlug": "Type the store's slug to confirm."})
+        delete_store(store)
+        return Response(status=204)
