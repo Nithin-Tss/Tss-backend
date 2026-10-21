@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -44,6 +45,11 @@ class CustomerAddressManagementTest(StoreClientMixin, APITestCase):
             "password": "StrongPassword123!",
         }, format="json")
         self.bob_token = login_res_bob.json()["access"]
+
+        # Shoppers are matched to customer records by email, so theirs must be verified
+        User.objects.filter(email__in=["alice@example.com", "bob@example.com"]).update(
+            email_verified_at=timezone.now()
+        )
 
     def auth_alice(self):
         self.client.credentials(
@@ -308,6 +314,7 @@ class CustomerAddressManagementTest(StoreClientMixin, APITestCase):
         addr_id = self._alice_address()
 
         owner2_token, _ = self.sign_up("owner2@example.com", "Second Store")
+        User.objects.filter(email="owner2@example.com").update(email_verified_at=timezone.now())
         # Owner 2 is not a member of store 1, so they get shopper access only
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {owner2_token}",
@@ -337,3 +344,68 @@ class CustomerAddressManagementTest(StoreClientMixin, APITestCase):
         self.assertNotIn(addr_id, [a["id"] for a in listing.json()])
         detail = self.client.get(f"/api/v1/customers/addresses/{addr_id}/")
         self.assertEqual(detail.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class CustomerAddressStoreAccessTest(CustomerAddressManagementTest):
+    """Shoppers can only use open stores, and are never silently placed in another one."""
+
+    def _post_address(self):
+        return self.client.post("/api/v1/customers/addresses/", {
+            "address_type": "shipping", "first_name": "Alice", "last_name": "Smith",
+            "address_line_1": "1 Store One Way", "city": "Perth", "state": "WA",
+            "postal_code": "6000", "country": "Australia",
+        }, format="json")
+
+    def test_unknown_store_is_not_found_and_creates_no_customer(self):
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self.alice_token}",
+            HTTP_X_STORE_ID="00000000-0000-0000-0000-000000000000",
+        )
+        self.assertEqual(self._post_address().status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Customer.objects.filter(email="alice@example.com").exists())
+
+    def test_closed_store_is_not_found_for_shoppers(self):
+        Store.objects.filter(pk=self.store_id).update(status="closed")
+        self.auth_alice()
+        self.assertEqual(self._post_address().status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Customer.objects.filter(email="alice@example.com").exists())
+
+    def test_missing_header_does_not_fall_back_to_an_arbitrary_store(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.alice_token}")
+        self.assertEqual(self._post_address().status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Customer.objects.filter(email="alice@example.com").exists())
+
+    def test_get_user_customer_is_created_once(self):
+        self.auth_alice()
+        self._post_address()
+        self.client.get("/api/v1/customers/addresses/me/")
+        self.assertEqual(Customer.objects.filter(email="alice@example.com").count(), 1)
+
+
+class CustomerAddressEmailAndFilterTest(CustomerAddressManagementTest):
+    def test_unverified_email_cannot_reach_an_existing_customers_addresses(self):
+        victim = Customer.objects.create(
+            store_id=self.store_id, email="alice@example.com",
+            first_name="Alice", last_name="Smith", email_subscription_status="not_subscribed",
+        )
+        CustomerAddress.objects.create(
+            customer=victim, address_type="shipping", first_name="Alice", last_name="Smith",
+            address_line_1="1 Private Rd", city="Perth", state="WA", postal_code="6000",
+            country="Australia", is_default=True,
+        )
+        User.objects.filter(email="alice@example.com").update(email_verified_at=None)
+
+        self.auth_alice()
+        response = self.client.get("/api/v1/customers/addresses/me/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        # No store header: an unverified email is not used to pick a store either
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.alice_token}")
+        response = self.client.get("/api/v1/customers/addresses/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_malformed_customer_filter_is_a_400_for_shoppers_and_admins(self):
+        for auth in (self.auth_alice, self.auth_owner):
+            auth()
+            response = self.client.get("/api/v1/customers/addresses/?customer=abc")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
