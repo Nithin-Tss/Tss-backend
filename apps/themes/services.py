@@ -443,6 +443,22 @@ def delete_theme(store, theme_id):
     theme.delete()
 
 
+@transaction.atomic
+def remove_store_themes(store):
+    """
+    For a store being permanently deleted (tenancy.services.delete_store): its theme assignments go,
+    and each theme they used goes too only when it is this store's own copy (is_private) and no other
+    store's assignment still uses it. Shared themes, and other stores' assignments, files and
+    customizations, are never touched.
+    """
+    themes = {row.theme_id: row.theme for row in StoreTheme.objects.select_related("theme").filter(store=store)}
+    StoreTheme.objects.filter(store=store).delete()
+    for theme in themes.values():
+        if is_private(store, theme) and not StoreTheme.objects.filter(theme=theme).exists():
+            ThemeFile.objects.filter(theme=theme).delete()
+            theme.delete()
+
+
 def _upgrade_untouched_starter_files(theme):
     """Bring never-edited starter files up to date (see STARTER_UPGRADES). Runs once per revision."""
     theme_data = theme.theme_data or {}
