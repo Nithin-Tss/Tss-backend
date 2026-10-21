@@ -29,6 +29,37 @@ class CustomerViewSet(StoreScopedViewSet):
     serializer_class = CustomerSerializer
 
     def get_queryset(self):
+        store = getattr(self.request, "store", None)
+        if store:
+            from django.contrib.auth import get_user_model
+            from django.utils import timezone
+
+            User = get_user_model()
+            existing_emails = {
+                e.lower()
+                for e in Customer.objects.filter(store=store).values_list("email", flat=True)
+                if e
+            }
+            users = User.objects.exclude(email="").exclude(email__isnull=True)
+            to_create = []
+            now = timezone.now()
+            for u in users:
+                if u.email and u.email.lower() not in existing_emails:
+                    to_create.append(
+                        Customer(
+                            store=store,
+                            email=u.email.lower(),
+                            first_name=u.first_name or "",
+                            last_name=u.last_name or "",
+                            email_subscription_status="subscribed",
+                            country="Australia",
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+            if to_create:
+                Customer.objects.bulk_create(to_create, ignore_conflicts=True)
+
         qs = super().get_queryset()
         search = self.request.query_params.get("search", "").strip()
         if search:

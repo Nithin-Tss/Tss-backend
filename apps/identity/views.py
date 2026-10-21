@@ -88,6 +88,8 @@ class SignupView(PublicAuthView):
         start_session(request, user)
         send_verification_email(user)
 
+        self._sync_customer(user, request)
+
         return Response(
             {
                 "message": "Account created.",
@@ -95,6 +97,51 @@ class SignupView(PublicAuthView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+    def _sync_customer(self, user, request):
+        import uuid
+        from apps.customers.models import Customer
+        from apps.tenancy.models import Store
+
+        raw_store_id = (
+            request.headers.get("X-Store-Id")
+            or (request.data.get("storeId") if hasattr(request, "data") else None)
+            or (request.data.get("store") if hasattr(request, "data") else None)
+        )
+        target_stores = []
+        if raw_store_id:
+            try:
+                store_uuid = uuid.UUID(str(raw_store_id).strip())
+                store = Store.objects.filter(pk=store_uuid).first()
+                if store:
+                    target_stores.append(store)
+            except (ValueError, TypeError):
+                pass
+
+        if not target_stores:
+            target_stores = list(Store.objects.filter(status="active"))
+
+        for store in target_stores:
+            customer, created = Customer.objects.get_or_create(
+                store=store,
+                email=user.email,
+                defaults={
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "email_subscription_status": "subscribed",
+                    "country": "Australia",
+                },
+            )
+            if not created:
+                updated_fields = []
+                if not customer.first_name and user.first_name:
+                    customer.first_name = user.first_name
+                    updated_fields.append("first_name")
+                if not customer.last_name and user.last_name:
+                    customer.last_name = user.last_name
+                    updated_fields.append("last_name")
+                if updated_fields:
+                    customer.save(update_fields=updated_fields)
 
 
 class LoginView(PublicAuthView):
