@@ -261,3 +261,186 @@ class OrdersApiTests(StoreClientMixin, APITestCase):
 
         self.assertFalse(DraftOrder.objects.exists())
         self.assertFalse(DraftOrderDetail.objects.exists())
+
+
+class StockValidationCases:
+    """
+    Overselling protection, run through both ways of placing an order. A subclass says how
+    with attempt(lines): lines are (product, variant, quantity); returns (status_code, body).
+    """
+
+    def setUp(self):
+        self.token, store = self.sign_up("stockorders@example.com", "Stock Orders Store")
+        self.store_id = store["storeId"]
+        self.customer = self.ok(
+            "post", "/api/v1/customers/", {"first_name": "Alex", "email": "alex@example.com"}, expect=201,
+        )
+        self.product, self.variant = self.make_product("Shirt")
+        self.warehouse = self.make_location("Warehouse")
+        self.shop = self.make_location("Shop")
+
+    def make_product(self, title):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": title, "status": "active", "price": "25", "sku": f"SKU-{title.upper()}",
+        }, expect=201)
+        return product["id"], product["variants"][0]["id"]
+
+    def make_location(self, name):
+        return self.ok("post", "/api/v1/inventory/locations/", {"name": name}, expect=201)["id"]
+
+    def set_stock(self, available, variant=None, location=None):
+        self.ok("post", "/api/v1/inventory/items/set/", {
+            "variant": variant or self.variant, "location": location or self.warehouse, "available": available,
+        })
+
+    def levels(self, variant=None):
+        return self.stock(variant or self.variant)
+
+    def line(self, quantity, product=None, variant=None):
+        return (product or self.product, variant or self.variant, quantity)
+
+    def place(self, *lines):
+        status_code, body = self.attempt(lines or [self.line(1)])
+        self.assertEqual(status_code, 201, body)
+        return body
+
+    def test_quantity_below_stock_commits_it(self):
+        self.set_stock(10)
+        self.place(self.line(4))
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (6, 4))
+
+    def test_quantity_equal_to_stock_leaves_zero(self):
+        self.set_stock(5)
+        self.place(self.line(5))
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (0, 5))
+
+    def test_quantity_above_stock_is_rejected_and_nothing_changes(self):
+        self.set_stock(3)
+        status_code, body = self.attempt([self.line(4)])
+        self.assertEqual(status_code, 400, body)
+        self.assertIn("Only 3 left", str(body))
+        self.assertFalse(Order.objects.exists())
+        self.assertFalse(OrderItem.objects.exists())
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (3, 0))
+
+    def test_stock_in_two_locations_is_added_up(self):
+        self.set_stock(3)
+        self.set_stock(2, location=self.shop)
+        self.place(self.line(5))
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (0, 5))
+
+    def test_more_than_the_total_over_two_locations_is_rejected(self):
+        self.set_stock(3)
+        self.set_stock(2, location=self.shop)
+        status_code, body = self.attempt([self.line(6)])
+        self.assertEqual(status_code, 400, body)
+        self.assertIn("Only 5 left", str(body))
+        self.assertFalse(Order.objects.exists())
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (5, 0))
+
+    def test_continue_selling_allows_an_order_past_stock(self):
+        from apps.catalog.models import ProductVariant
+
+        self.set_stock(0)
+        ProductVariant.objects.filter(pk=self.variant).update(continue_selling=True)
+        self.place(self.line(2))
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (-2, 2))
+
+        self.set_stock(1)  # low, not empty
+        self.place(self.line(3))
+        self.assertEqual(Order.objects.count(), 2)
+
+    def test_untracked_variant_is_never_blocked(self):
+        from apps.inventory.models import InventoryItem
+
+        self.place(self.line(100))  # no stock rows at all: current behaviour is to allow it
+        self.assertEqual(Order.objects.count(), 1)
+        self.assertFalse(InventoryItem.objects.exists())
+
+    def test_second_line_out_of_stock_saves_nothing(self):
+        from apps.inventory.models import InventoryHistory
+
+        other_product, other_variant = self.make_product("Hat")
+        self.set_stock(5)
+        self.set_stock(1, variant=other_variant)
+        status_code, body = self.attempt([
+            self.line(2), self.line(3, product=other_product, variant=other_variant),
+        ])
+        self.assertEqual(status_code, 400, body)
+        self.assertFalse(Order.objects.exists())
+        self.assertFalse(OrderItem.objects.exists())
+        self.assertFalse(InventoryHistory.objects.filter(reason="order_placed").exists())
+        first = self.levels()
+        self.assertEqual((first["available"], first["committed"]), (5, 0))
+        second = self.levels(other_variant)
+        self.assertEqual((second["available"], second["committed"]), (1, 0))
+
+    def test_cancelling_puts_the_stock_back_and_allows_ordering_again(self):
+        self.set_stock(5)
+        order = self.place(self.line(5))
+        status_code, _ = self.attempt([self.line(1)])
+        self.assertEqual(status_code, 400)  # sold out
+
+        self.ok("post", f"/api/v1/orders/{order['id']}/cancel/")
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (5, 0))
+
+        self.place(self.line(5))
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (0, 5))
+
+    def test_another_stores_variant_cannot_be_ordered(self):
+        rival_token, rival = self.sign_up("rivalorders@example.com", "Rival Orders Store")
+        rival_product, rival_variant = self.make_product("Rival shirt")
+        rival_location = self.make_location("Rival warehouse")
+        self.set_stock(5, variant=rival_variant, location=rival_location)
+
+        self.use(self.token, self.store_id)
+        status_code, body = self.attempt([self.line(1, product=rival_product, variant=rival_variant)])
+        self.assertEqual(status_code, 400, body)
+        self.assertFalse(Order.objects.exists())
+
+        self.use(rival_token, rival["storeId"])  # the rival's stock is untouched
+        self.assertEqual(self.levels(rival_variant), {"available": 5, "committed": 0, "on_hand": 5})
+
+
+class OrderStockTests(StockValidationCases, StoreClientMixin, APITestCase):
+    """POST /api/v1/orders/"""
+
+    def attempt(self, lines):
+        r = self.client.post("/api/v1/orders/", {
+            "items": [{"product": p, "variant": v, "quantity": q} for p, v, q in lines],
+        }, format="json")
+        return r.status_code, r.json()
+
+
+class DraftCompleteStockTests(StockValidationCases, StoreClientMixin, APITestCase):
+    """POST /api/v1/orders/drafts/ then /complete/ (stock is only checked on complete)"""
+
+    def attempt(self, lines):
+        r = self.client.post("/api/v1/orders/drafts/", {
+            "customer": self.customer["id"],
+            "details": [
+                {"product": p, "variant": v, "quantity": q, "unit_price": "25"} for p, v, q in lines
+            ],
+        }, format="json")
+        if r.status_code != 201:
+            return r.status_code, r.json()
+        self.draft = r.json()["id"]
+        r = self.client.post(f"/api/v1/orders/drafts/{self.draft}/complete/", format="json")
+        return r.status_code, r.json()
+
+    def test_a_draft_can_be_saved_without_enough_stock_but_not_completed(self):
+        self.set_stock(1)
+        status_code, _ = self.attempt([self.line(5)])
+        self.assertEqual(status_code, 400)
+        draft = DraftOrder.objects.get(pk=self.draft)
+        self.assertEqual(draft.status, "open")  # saved fine; only completing is checked
+        self.assertIsNone(draft.order_id)
+        self.assertFalse(Order.objects.exists())

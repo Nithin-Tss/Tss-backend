@@ -9,6 +9,7 @@ from unittest import mock
 
 from rest_framework.test import APITestCase
 
+from apps.catalog.models import ProductVariant
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.inventory.models import Transfer
 from apps.inventory.views import TransferViewSet
@@ -113,7 +114,10 @@ class InventoryTests(StoreClientMixin, APITestCase):
             self.assertEqual((body["quantity"], body["status"], body["inStock"]), (quantity, status, in_stock))
             self.assertEqual(
                 body["variants"],
-                [{"variantId": self.variant, "inStock": in_stock, "quantity": quantity, "status": status}],
+                [{
+                    "variantId": self.variant, "tracked": True, "inStock": in_stock,
+                    "quantity": quantity, "status": status, "continueSelling": False,
+                }],
             )
 
     def test_availability_sums_locations_and_filters_by_location(self):
@@ -153,6 +157,57 @@ class InventoryTests(StoreClientMixin, APITestCase):
         self.availability(variant=self.variant, location="nope", expect=400)
         body = self.availability(variant=str(uuid.uuid4()), expect=404)
         self.assertEqual(body["detail"], "No inventory found.")
+
+    def test_availability_untracked_variant_is_in_stock(self):
+        # no stock rows at all: orders never block it, so it is not "not found"
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["tracked"], body["inStock"], body["quantity"], body["status"]),
+                         (False, True, None, "IN_STOCK"))
+        self.assertEqual(body["variants"][0]["tracked"], False)
+        self.assertEqual(body["variants"][0]["quantity"], None)
+
+    def test_availability_continue_selling_keeps_real_quantity(self):
+        ProductVariant.objects.filter(pk=self.variant).update(continue_selling=True)
+        self.set_stock(0)
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["status"], body["inStock"]), (0, "OUT_OF_STOCK", True))
+        self.assertEqual(
+            (body["variants"][0]["tracked"], body["variants"][0]["continueSelling"]), (True, True),
+        )
+
+        self.set_stock(3)
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["status"], body["inStock"]), (3, "LOW_STOCK", True))
+
+    def test_availability_quantity_is_clamped_when_sold_past_zero(self):
+        ProductVariant.objects.filter(pk=self.variant).update(continue_selling=True)
+        self.set_stock(0)
+        self.ok("post", f"{ITEMS}adjust/", {"variant": self.variant, "location": self.warehouse, "delta": -2})
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["inStock"]), (0, True))
+
+    def test_availability_location_filter_on_a_tracked_variant_without_a_row_there(self):
+        shop = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]
+        self.set_stock(8)
+        body = self.availability(variant=self.variant, location=shop)
+        self.assertEqual((body["tracked"], body["quantity"], body["status"], body["inStock"]),
+                         (True, 0, "OUT_OF_STOCK", False))
+
+    def test_availability_by_product_covers_every_variant(self):
+        extra = ProductVariant.objects.create(product_id=self.product, sku="TEE-2", price="500").pk
+        self.set_stock(0)  # TEE-1 tracked and sold out, TEE-2 not tracked
+        body = self.availability(product=self.product)
+        by_id = {v["variantId"]: v for v in body["variants"]}
+        self.assertEqual(set(by_id), {self.variant, str(extra)})
+        self.assertEqual((by_id[self.variant]["inStock"], by_id[self.variant]["status"]), (False, "OUT_OF_STOCK"))
+        self.assertEqual((by_id[str(extra)]["tracked"], by_id[str(extra)]["inStock"]), (False, True))
+        self.assertTrue(body["inStock"])  # any variant that can be sold
+        self.assertEqual((body["quantity"], body["status"]), (0, "IN_STOCK"))
+
+        self.set_stock(0, location=self.warehouse)
+        ProductVariant.objects.filter(pk=extra).delete()
+        body = self.availability(product=self.product)
+        self.assertEqual((body["inStock"], body["status"]), (False, "OUT_OF_STOCK"))
 
     def test_availability_is_hidden_from_other_stores(self):
         self.set_stock(5)

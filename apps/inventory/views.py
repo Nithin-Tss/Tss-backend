@@ -7,6 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from apps.catalog.models import ProductVariant
 from apps.core.numbering import next_number
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
@@ -137,29 +138,51 @@ class InventoryItemViewSet(
                 except ValueError:
                     raise ValidationError({param: "Must be a valid UUID."})
 
-        rows = (
-            self.get_queryset()
+        # Only this store's variants; the same rules as orders (inventory.services.commit)
+        catalog = ProductVariant.objects.filter(product__store=request.store).order_by("created_at")
+        if params.get("variant"):
+            catalog = catalog.filter(pk=params["variant"])
+        if params.get("product"):
+            catalog = catalog.filter(product=params["product"])
+        catalog = list(catalog)
+        if not catalog:
+            return Response({"detail": "No inventory found."}, status=404)
+
+        # No stock rows at all = not tracked: orders never block it
+        tracked = set(
+            InventoryItem.objects.filter(variant__in=catalog).values_list("variant_id", flat=True)
+        )
+        sums = {
+            row["variant_id"]: row["quantity"]
+            for row in self.get_queryset()
             .order_by()
             .values("variant_id")
             .annotate(quantity=Sum("available"))
-        )
+        }
         variants = []
-        for row in rows:
-            quantity = max(row["quantity"] or 0, 0)
+        for variant in catalog:
+            if variant.pk not in tracked:
+                quantity, status, in_stock = None, "IN_STOCK", True
+            else:
+                quantity = max(sums.get(variant.pk) or 0, 0)
+                status = stock_status(quantity)
+                in_stock = quantity > 0 or variant.continue_selling
             variants.append({
-                "variantId": str(row["variant_id"]),
-                "inStock": quantity > 0,
+                "variantId": str(variant.pk),
+                "tracked": variant.pk in tracked,
+                "inStock": in_stock,
                 "quantity": quantity,
-                "status": stock_status(quantity),
+                "status": status,
+                "continueSelling": variant.continue_selling,
             })
-        if not variants:
-            return Response({"detail": "No inventory found."}, status=404)
 
-        total = sum(v["quantity"] for v in variants)
+        counted = [v["quantity"] for v in variants if v["quantity"] is not None]
+        total = sum(counted) if counted else None
         return Response({
-            "inStock": total > 0,
+            "tracked": bool(counted),
+            "inStock": any(v["inStock"] for v in variants),
             "quantity": total,
-            "status": stock_status(total),
+            "status": "IN_STOCK" if len(counted) < len(variants) or total is None else stock_status(total),
             "variants": variants,
         })
 
