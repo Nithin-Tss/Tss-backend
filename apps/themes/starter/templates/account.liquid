@@ -1,0 +1,8 @@
+{%- comment -%}
+  Customer Account Dashboard template. Displays order history, customer profile, and saved addresses.
+{%- endcomment -%}
+<section class="section customer-account-section">
+  <div class="page-width">
+    {% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success %}
+  </div>
+</section>

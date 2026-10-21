@@ -53,6 +53,12 @@ REQUIRED_FILES = {
     "snippets/wishlist.liquid",
     # Cart: one snippet with the icon, the drawer, the cart page and the script
     "snippets/cart.liquid",
+    # Customer account & auth
+    "templates/login.liquid",
+    "templates/register.liquid",
+    "templates/account.liquid",
+    "snippets/customer-auth.liquid",
+    "snippets/customer-account.liquid",
     # Promotions is available in the customizer for existing private starter themes too
     "sections/promotions.liquid",
 }
@@ -228,7 +234,8 @@ STARTER_UPGRADES = {
 def starter_files():
     return {
         path.relative_to(STARTER_DIR).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted(STARTER_DIR.rglob("*.liquid"))
+        for path in sorted(STARTER_DIR.rglob("*"))
+        if path.is_file() and path.suffix in (".liquid", ".css", ".js", ".json")
     }
 
 
@@ -975,20 +982,22 @@ def clean_path(path):
         raise exceptions.ValidationError({"path": "Path may not contain '..'."})
 
     name = parts[-1]
-    if name != KEEP and not name.lower().endswith(".liquid"):
-        raise exceptions.ValidationError({"path": "Only Liquid files (.liquid) are allowed."})
+    allowed_exts = (".liquid", ".css", ".js", ".json")
+    if name != KEEP and not any(name.lower().endswith(ext) for ext in allowed_exts):
+        raise exceptions.ValidationError({"path": "Only Liquid (.liquid), CSS (.css), JavaScript (.js) and JSON (.json) files are allowed."})
 
     return path
 
 
 def _new_file(theme, path, content):
     directory, _, name = path.rpartition("/")
+    ext = name.rpartition(".")[2].lower() if "." in name else "liquid"
     return ThemeFile(
         theme=theme,
         file_path=path,
         file_name=name,
         directory=(directory.split("/")[0] if directory else "")[:100],
-        file_type="keep" if name == KEEP else "liquid",
+        file_type="keep" if name == KEEP else ext,
         content=content,
         is_required=path in REQUIRED_FILES,
         file_size=len(content.encode("utf-8")),

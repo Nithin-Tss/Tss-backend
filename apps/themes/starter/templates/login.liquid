@@ -1,0 +1,8 @@
+{%- comment -%}
+  Login template. Add custom markup around the customer authentication component if desired.
+{%- endcomment -%}
+<section class="section customer-auth-section">
+  <div class="page-width">
+    {% render 'customer-auth', mode: 'login', customer: customer, return_url: return_url, error: error, success: success %}
+  </div>
+</section>

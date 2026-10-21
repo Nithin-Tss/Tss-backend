@@ -37,4 +37,14 @@ body .hero h2.hero__title { font-size: clamp(40px, 7vw, 88px); text-transform: u
 .bold-bar .section-heading { margin: 0; border-left: 10px solid var(--pop); }
 .bold-bar__meta { display: flex; align-items: center; gap: 16px; }
 .bold-bar__count { font-weight: 800; text-transform: uppercase; letter-spacing: .1em; font-size: 13px; background: var(--text); color: var(--bg); padding: 4px 10px; }
+/* Bold Customer Auth & Account */
+body .customer-auth, body .customer-card, body .customer-account, body .account-card, body .order-item, body .address-item { border: 3px solid var(--text); border-radius: 0; box-shadow: 6px 6px 0 var(--text); background: var(--bg); }
+body .customer-card__title, body .customer-account__title, body .account-card__title { text-transform: uppercase; font-weight: 800; letter-spacing: .02em; }
+body .form-input, body .field input, body .field select { border: 3px solid var(--text); border-radius: 0; box-shadow: none; font-weight: 600; }
+body .form-input:focus { border-color: var(--text); box-shadow: 3px 3px 0 var(--pop); }
+body .badge { border-radius: 0; border: 2px solid var(--text); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+body .badge--paid, body .badge--fulfilled { background: var(--pop); color: #000; }
+body .badge--default { background: var(--text); color: var(--bg); }
+body .alert--error { border: 3px solid #b91c1c; border-radius: 0; box-shadow: 4px 4px 0 #b91c1c; font-weight: 700; }
+body .alert--success { border: 3px solid #15803d; border-radius: 0; box-shadow: 4px 4px 0 #15803d; font-weight: 700; }
 </style>
