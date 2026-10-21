@@ -61,6 +61,8 @@ CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 # Application definition
 
 INSTALLED_APPS = [
+    # Must precede django.contrib.auth so its createsuperuser override (root-admin check) wins.
+    'apps.identity',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -70,7 +72,6 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'apps.core',
-    'apps.identity',
     'apps.tenancy',
     'apps.customers',
     'apps.catalog',
