@@ -108,11 +108,17 @@ def reopen_store(store):
 
 def _purge(obj, seen):
     """Delete obj, first deleting whatever still protects it (PROTECT/RESTRICT), depth first."""
-    from django.db.models import ProtectedError, RestrictedError
+    from django.db.models import Model, ProtectedError, RestrictedError
+
+    from apps.inventory.models import InventoryHistory
 
     while True:
         try:
-            obj.delete()
+            if isinstance(obj, InventoryHistory):
+                # Append-only: its own delete() refuses. Purging the whole store is the one sanctioned exception.
+                Model.delete(obj)
+            else:
+                obj.delete()
             return
         except (ProtectedError, RestrictedError) as error:
             blockers = error.protected_objects if isinstance(error, ProtectedError) else error.restricted_objects
