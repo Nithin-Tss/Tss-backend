@@ -367,3 +367,31 @@ class UserModelAndAdminTest(APITestCase):
         self.assertEqual(r.status_code, 302, r.content[:1500])
         user.refresh_from_db()
         self.assertTrue(user.check_password("Fresh-pass-456"))
+
+
+@override_settings(PASSWORD_HASHERS=REAL_HASHERS)
+class ProfileChangeTest(APITestCase):
+    def setUp(self):
+        cache.clear()
+        r = self.client.post("/api/v1/auth/signup/", SIGNUP, format="json")
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {r.json()['access']}"}
+
+    def patch(self, **data):
+        return self.client.patch("/api/v1/auth/me/", data, format="json", **self.auth)
+
+    def test_changing_email_needs_the_current_password(self):
+        self.assertEqual(self.patch(email="new@example.com").status_code, 400)
+        self.assertEqual(self.patch(email="new@example.com", currentPassword="wrong").status_code, 400)
+        self.assertEqual(User.objects.get(email="asha.rao@example.com").email_verified_at, None)
+
+        r = self.patch(email="New@Example.com", currentPassword="Sturdy-pass-123")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["user"]["email"], "new@example.com")
+
+    def test_other_profile_changes_and_an_unchanged_email_need_no_password(self):
+        self.assertEqual(self.patch(firstName="Asha", email="ASHA.rao@example.com").status_code, 200)
+        self.assertEqual(self.patch(firstName="Ashu").status_code, 200)
+
+    def test_mobile_number_must_be_ascii_digits(self):
+        self.assertEqual(self.patch(mobileNumber="٩٨٧٦٥٤٣٢١٠").status_code, 400)
+        self.assertEqual(self.patch(mobileNumber="9876543211").status_code, 200)

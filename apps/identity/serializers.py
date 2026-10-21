@@ -103,7 +103,7 @@ class ProfileSerializer(serializers.Serializer):
     def validate_mobileNumber(self, value):
         value = value.strip()
 
-        if not value.isdigit() or len(value) != 10:
+        if not (value.isascii() and value.isdigit()) or len(value) != 10:
             raise serializers.ValidationError(
                 "Please enter a valid 10-digit mobile number."
             )

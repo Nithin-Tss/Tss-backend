@@ -1,3 +1,4 @@
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -409,3 +410,13 @@ class CustomerAddressEmailAndFilterTest(CustomerAddressManagementTest):
             auth()
             response = self.client.get("/api/v1/customers/addresses/?customer=abc")
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class CustomerEmailUniquenessTest(CustomerAddressManagementTest):
+    def test_one_customer_per_store_and_email_ignoring_case(self):
+        Customer.objects.create(store_id=self.store_id, email="dup@example.com", email_subscription_status="not_subscribed")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Customer.objects.create(store_id=self.store_id, email="DUP@example.com", email_subscription_status="not_subscribed")
+        # several customers without an email are fine
+        for _ in range(2):
+            Customer.objects.create(store_id=self.store_id, email=None, email_subscription_status="not_subscribed")

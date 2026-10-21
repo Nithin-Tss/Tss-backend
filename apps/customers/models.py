@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.db.models.functions import Lower
 
 from apps.tenancy.models import Store
 
@@ -64,6 +65,14 @@ class Customer(models.Model):
 
     class Meta:
         db_table = '"customers"."customers"'
+        constraints = [
+            # One customer per email in a store, whatever the letter case
+            models.UniqueConstraint(
+                Lower("email"), "store",
+                condition=models.Q(email__isnull=False) & ~models.Q(email=""),
+                name="customers_unique_store_email",
+            ),
+        ]
         verbose_name = "Customer"
         verbose_name_plural = "Customers"
 
