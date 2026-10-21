@@ -1,9 +1,16 @@
 from django.core.cache import cache
+from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
 from apps.inventory.models import InventoryItem
 
-from .models import Product, ProductVariant
+from apps.identity.models import User
+from apps.tenancy.models import Store
+
+from .models import (
+    Brand, Category, Collection, CollectionSalesChannel, Product, ProductCollection,
+    ProductSalesChannel, ProductVariant, SalesChannel,
+)
 from .services import ProductInUse, delete_product, save_product
 
 URL = "/api/v1/catalog/products/"
@@ -683,3 +690,160 @@ class BackToAdminBarTests(APITestCase):
         other = Store.objects.get(pk=other_id)
         self.client.get(f"/s/{other.store_slug}/?admin_bar={token}")
         self.assertNotIn("tss-admin-bar", self.client.get(f"/s/{other.store_slug}/").content.decode())
+
+
+class CatalogAdminStoreGuardTests(TestCase):
+    """Django Admin: platform admins only, and no record crosses from one store to another."""
+
+    def setUp(self):
+        self.a = Store.objects.create(store_name="Alpha Shop", store_slug="alpha", status="active")
+        self.b = Store.objects.create(store_name="Beta Shop", store_slug="beta", status="active")
+        self.root = User.objects.create_superuser(email="root@example.com", password="Root-pass-123",
+                                                  first_name="R", last_name="T")
+        self.client.force_login(self.root)
+
+    def collection_form(self, name, handle, **extra):
+        return {"name": name, "description": "", "image_url": "", "handle": handle,
+                "type": "manual", "status": "active", "match": "all", "excluded_products": "[]",
+                "conditions": "[]", "theme_template": "Default collection", "seo_title": "",
+                "seo_description": "", **extra}
+
+    def errors(self, response):
+        return response.context["adminform"].form.errors
+
+    def test_only_platform_admins_enter_admin(self):
+        self.client.logout()
+        User.objects.create_user(email="plain@example.com", password="Plain-pass-123", first_name="P", last_name="L")
+        self.assertTrue(self.client.login(username="plain@example.com", password="Plain-pass-123"))
+        self.assertEqual(self.client.get("/admin/").status_code, 302)
+        self.assertEqual(self.client.get("/admin/catalog/collection/").status_code, 302)
+
+        self.client.logout()
+        signup(APIClient(), "owner@example.com")  # signs up and opens a store, as its owner
+        owner = User.objects.get(email="owner@example.com")
+        self.assertFalse(owner.is_staff)
+        self.client.force_login(owner)
+        self.assertEqual(self.client.get("/admin/").status_code, 302)
+        self.assertEqual(self.client.get("/admin/catalog/collection/").status_code, 302)
+        r = self.client.post("/admin/catalog/collection/add/", self.collection_form("x", "x", store=self.a.pk))
+        self.assertEqual(r.status_code, 302)
+        self.assertFalse(Collection.objects.filter(name="x").exists())
+
+    def test_superadmin_sees_collections_of_every_store_with_store_name_and_filter(self):
+        Collection.objects.create(store=self.a, name="promotions")
+        Collection.objects.create(store=self.b, name="promotions")
+        r = self.client.get("/admin/catalog/collection/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["cl"].result_count, 2)
+        self.assertContains(r, "Alpha Shop")
+        self.assertContains(r, "Beta Shop")
+        self.assertContains(r, f"?store__store_id__exact={self.a.pk}")
+        r = self.client.get(f"/admin/catalog/collection/?store__store_id__exact={self.b.pk}")
+        self.assertEqual(r.context["cl"].result_count, 1)
+        self.assertEqual(r.context["cl"].result_list[0].store_id, self.b.pk)
+
+    def test_same_collection_name_in_two_stores(self):
+        for store in (self.a, self.b):
+            r = self.client.post("/admin/catalog/collection/add/",
+                                 self.collection_form("promotions", "promotions", store=store.pk))
+            self.assertEqual(r.status_code, 302)
+        self.assertEqual(set(Collection.objects.filter(name="promotions").values_list("store__store_name", flat=True)),
+                         {"Alpha Shop", "Beta Shop"})
+
+    def test_collection_store_cannot_be_changed(self):
+        c = Collection.objects.create(store=self.a, name="promotions")
+        url = f"/admin/catalog/collection/{c.pk}/change/"
+        r = self.client.get(url)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, 'name="store"')
+        self.assertContains(r, "Alpha Shop")
+        r = self.client.post(url, self.collection_form("Renamed", c.handle, store=self.b.pk))  # crafted POST
+        self.assertEqual(r.status_code, 302)
+        c.refresh_from_db()
+        self.assertEqual((c.name, c.store_id), ("Renamed", self.a.pk))
+
+    def product_form(self, store, **extra):
+        return {"store": store.pk, "title": "Shirt", "status": "active", **extra}
+
+    def test_product_cannot_use_another_stores_category_or_brand(self):
+        cat_b = Category.objects.create(store=self.b, name="Tops")
+        brand_b = Brand.objects.create(store=self.b, name="Acme")
+        r = self.client.post("/admin/catalog/product/add/", self.product_form(self.a, category=cat_b.pk))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("category", self.errors(r))
+        r = self.client.post("/admin/catalog/product/add/", self.product_form(self.a, brand=brand_b.pk))
+        self.assertIn("brand", self.errors(r))
+        self.assertFalse(Product.objects.exists())
+
+        # The same store is fine
+        r = self.client.post("/admin/catalog/product/add/",
+                             self.product_form(self.b, category=cat_b.pk, brand=brand_b.pk))
+        self.assertEqual(r.status_code, 302)
+
+        # An existing product can't be pointed at store B's category, or moved to store B
+        p = Product.objects.create(store=self.a, title="Hat", status="active")
+        url = f"/admin/catalog/product/{p.pk}/change/"
+        r = self.client.post(url, {"title": "Hat", "status": "active", "category": cat_b.pk})
+        self.assertIn("category", self.errors(r))
+        r = self.client.post(url, {"title": "Hat", "status": "active", "store": self.b.pk})
+        self.assertEqual(r.status_code, 302)
+        p.refresh_from_db()
+        self.assertEqual((p.store_id, p.category_id), (self.a.pk, None))
+
+    def test_category_parent_must_be_same_store(self):
+        parent_b = Category.objects.create(store=self.b, name="Clothes")
+        r = self.client.post("/admin/catalog/category/add/",
+                             {"store": self.a.pk, "name": "Tops", "parent": parent_b.pk})
+        self.assertIn("parent", self.errors(r))
+
+    def test_product_collection_must_be_one_store(self):
+        p = Product.objects.create(store=self.a, title="Hat", status="active")
+        c_b = Collection.objects.create(store=self.b, name="promotions")
+        c_a = Collection.objects.create(store=self.a, name="promotions")
+        r = self.client.post("/admin/catalog/productcollection/add/", {"product": p.pk, "collection": c_b.pk})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("collection", self.errors(r))
+        self.assertFalse(ProductCollection.objects.exists())
+        r = self.client.post("/admin/catalog/productcollection/add/", {"product": p.pk, "collection": c_a.pk})
+        self.assertEqual(r.status_code, 302)
+        link = ProductCollection.objects.get()
+        r = self.client.post(f"/admin/catalog/productcollection/{link.pk}/change/",
+                             {"product": p.pk, "collection": c_b.pk})
+        self.assertIn("collection", self.errors(r))
+        link.refresh_from_db()
+        self.assertEqual(link.collection_id, c_a.pk)
+
+    def test_sales_channel_links_must_be_one_store(self):
+        p = Product.objects.create(store=self.a, title="Hat", status="active")
+        c = Collection.objects.create(store=self.a, name="promotions")
+        ch_b = SalesChannel.objects.create(store=self.b, name="Online", type="online")
+        ch_a = SalesChannel.objects.create(store=self.a, name="Online", type="online")
+        r = self.client.post("/admin/catalog/productsaleschannel/add/", {"product": p.pk, "sales_channel": ch_b.pk})
+        self.assertIn("sales_channel", self.errors(r))
+        r = self.client.post("/admin/catalog/collectionsaleschannel/add/",
+                             {"collection": c.pk, "sales_channel": ch_b.pk})
+        self.assertIn("sales_channel", self.errors(r))
+        self.assertFalse(ProductSalesChannel.objects.exists() or CollectionSalesChannel.objects.exists())
+        r = self.client.post("/admin/catalog/productsaleschannel/add/", {"product": p.pk, "sales_channel": ch_a.pk})
+        self.assertEqual(r.status_code, 302)
+        r = self.client.post("/admin/catalog/collectionsaleschannel/add/",
+                             {"collection": c.pk, "sales_channel": ch_a.pk})
+        self.assertEqual(r.status_code, 302)
+
+    def test_sales_channel_store_cannot_be_changed(self):
+        ch = SalesChannel.objects.create(store=self.a, name="Online", type="online")
+        r = self.client.post(f"/admin/catalog/saleschannel/{ch.pk}/change/",
+                             {"name": "Online", "type": "online", "store": self.b.pk})
+        self.assertEqual(r.status_code, 302)
+        ch.refresh_from_db()
+        self.assertEqual(ch.store_id, self.a.pk)
+
+    def test_variant_cannot_move_to_another_stores_product(self):
+        p_a = Product.objects.create(store=self.a, title="Hat", status="active")
+        p_b = Product.objects.create(store=self.b, title="Cap", status="active")
+        v = ProductVariant.objects.create(product=p_a, price="5")
+        r = self.client.post(f"/admin/catalog/productvariant/{v.pk}/change/",
+                             {"product": p_b.pk, "price": "6", "sku": ""})
+        self.assertEqual(r.status_code, 302)
+        v.refresh_from_db()
+        self.assertEqual((v.product_id, str(v.price)), (p_a.pk, "6.00"))
