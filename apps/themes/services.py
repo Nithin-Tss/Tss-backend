@@ -1331,46 +1331,117 @@ def _add_footer_logo_block(content):
 
 
 def _add_footer_icon_setting(content):
-    """Add footer icon setting, markup, and styling to existing footer.liquid files."""
-    if '"id": "icon"' in content or '"id": "footer_icon"' in content:
-        return None
-    _, schema_text, schema_start = sync.split(content)
-    if schema_text is None:
-        return None
+    """Ensure footer image upload field is in Text block settings, not section settings, and rendered above description."""
     newline = "\r\n" if "\r\n" in content else "\n"
-    schema_anchor = re.compile(r'("settings":\s*\[\s*)', re.MULTILINE)
-    match = schema_anchor.search(schema_text)
-    if not match:
-        return None
-    icon_setting = '{"type": "image", "id": "icon", "label": "Footer icon", "default": ""},'
-    schema_new = schema_text[:match.end()] + newline + "    " + icon_setting + schema_text[match.end():]
-    patched = content[:schema_start] + schema_new + content[schema_start + len(schema_text):]
+    patched = content
 
-    if "site-footer__icon" not in patched:
-        links_anchor = "{%- when 'links' -%}"
-        if links_anchor in patched:
-            icon_markup = (
-                links_anchor + newline
-                + "            <div class=\"site-footer__links-wrapper\">" + newline
-                + "              {%- if icon_rendered == false and footer_icon != blank and footer_icon != nil -%}" + newline
-                + "                {%- assign icon_rendered = true -%}" + newline
-                + "                <div class=\"site-footer__icon\">" + newline
-                + "                  <img src=\"{{ footer_icon }}\" alt=\"{{ shop.name | escape }}\" loading=\"lazy\">" + newline
-                + "                </div>" + newline
-                + "              {%- endif -%}"
-            )
-            patched = patched.replace(links_anchor, icon_markup, 1)
-            patched = patched.replace("</nav>", "</nav>" + newline + "            </div>", 1)
+    # 1. Remove icon from section settings if present
+    patched = re.sub(
+        r'\{\s*"type":\s*"image",\s*"id":\s*"(?:icon|footer_icon)",\s*"label":\s*"[^"]*",\s*"default":\s*"[^"]*"\s*\},?\s*',
+        '',
+        patched
+    )
 
-    if ".site-footer__links-wrapper" not in patched:
+    # 2. Add image field to text and links block settings if not already present
+    if '"type": "text"' in patched and '"id": "image"' not in patched.split('"type": "text"')[-1].split('"type":')[0]:
+        text_block_anchor = re.compile(r'(\{\s*"type":\s*"text",\s*"name":\s*"Text",\s*"settings":\s*\[\s*)')
+        match = text_block_anchor.search(patched)
+        if match:
+            image_setting = '{"type": "image", "id": "image", "label": "Image", "default": ""},'
+            patched = patched[:match.end()] + newline + "        " + image_setting + patched[match.end():]
+
+    if '"type": "links"' in patched and '"id": "image"' not in patched.split('"type": "links"')[-1].split('"type":')[0]:
+        links_block_anchor = re.compile(r'(\{\s*"type":\s*"links",\s*"name":\s*"Links",\s*"settings":\s*\[\s*)')
+        match = links_block_anchor.search(patched)
+        if match:
+            image_setting = '{"type": "image", "id": "image", "label": "Image", "default": ""},'
+            patched = patched[:match.end()] + newline + "        " + image_setting + patched[match.end():]
+
+    # 3. Remove old links-wrapper and any icon check in links
+    if "site-footer__links-wrapper" in patched:
+        patched = re.sub(
+            r'<div class="site-footer__links-wrapper">\s*(?:\{%- if icon_rendered == false .*?\{%- endif -%\}\s*)?(<nav class="site-footer__nav"[^>]*>.*?</nav>)\s*</div>',
+            r'\1',
+            patched,
+            flags=re.DOTALL
+        )
+
+    # 4. Remove old icon markup right above copyright in legal
+    patched = re.sub(
+        r'<div class="page-width site-footer__legal">\s*(?:\{%- assign footer_icon = s\.icon -%\}\s*\{%- if footer_icon == blank or footer_icon == nil -%\}\s*\{%- assign footer_icon = s\.footer_icon -%\}\s*\{%- endif -%\}\s*)?\{%- if footer_icon != blank and footer_icon != nil -%\}\s*<div class="site-footer__icon">\s*<img src="\{\{ footer_icon \}\}"[^>]*>\s*</div>\s*\{%- endif -%}',
+        '<div class="page-width site-footer__legal">',
+        patched,
+        flags=re.DOTALL
+    )
+
+    # 5. Remove old fallback icon markup at the end of section.blocks loop or before loop
+    patched = re.sub(
+        r'(\{%- endfor -%\})\s*\{%- if icon_rendered == false and footer_icon != blank and footer_icon != nil -%\}\s*\{%- assign icon_rendered = true -%\}\s*<div class="site-footer__icon">\s*<img src="\{\{ footer_icon \}\}"[^>]*>\s*</div>\s*\{%- endif -%}',
+        r'\1',
+        patched,
+        flags=re.DOTALL
+    )
+    patched = re.sub(
+        r'\{%- assign has_text_block = false -%\}\s*\{%- for block in section\.blocks -%\}\s*\{%- if block\.type == \'text\' -%\}\{%- assign has_text_block = true -%\}\{%- endif -%\}\s*\{%- endfor -%\}\s*\{%- if has_text_block == false and footer_icon != blank and footer_icon != nil -%\}\s*\{%- assign icon_rendered = true -%\}\s*<div class="site-footer__about">\s*<div class="site-footer__icon">\s*<img src="\{\{ footer_icon \}\}"[^>]*>\s*</div>\s*</div>\s*\{%- endif -%}',
+        '',
+        patched,
+        flags=re.DOTALL
+    )
+    patched = re.sub(
+        r'\{%- elsif footer_icon != blank and footer_icon != nil -%\}\s*<div class="page-width site-footer__top">\s*(?:<div class="site-footer__about">\s*)?<div class="site-footer__icon">\s*<img src="\{\{ footer_icon \}\}"[^>]*>\s*</div>\s*(?:</div>\s*)?</div>',
+        '',
+        patched,
+        flags=re.DOTALL
+    )
+
+    # 6. Ensure icon is rendered inside when 'text' directly above heading and text
+    text_block_pattern = r'(\{%- when \'text\' -%\}\s*<div class="site-footer__about"\{\{ block\.attrs \}\}>)(?:.*?)(?:\{%- if b\.heading != blank -%\})'
+    replacement_markup = (
+        r'\1' + newline
+        + "              {%- assign block_image = b.image | default: b.icon | default: s.icon -%}" + newline
+        + "              {%- if block_image != blank and block_image != nil -%}" + newline
+        + "                <div class=\"site-footer__icon\">" + newline
+        + "                  <img src=\"{{ block_image }}\" alt=\"{{ b.heading | default: shop.name | escape }}\" loading=\"lazy\">" + newline
+        + "                </div>" + newline
+        + "              {%- endif -%}" + newline
+        + "              {%- if b.heading != blank -%}"
+    )
+    if "block_image" not in patched:
+        patched = re.sub(text_block_pattern, replacement_markup, patched, count=1, flags=re.DOTALL)
+
+    # 6b. Ensure icon is rendered inside when 'links' directly above heading and links
+    links_block_pattern = r'(\{%- when \'links\' -%\}\s*<nav class="site-footer__nav" aria-label="\{\{ b\.heading \| default: \'Footer\' \}\}"\{\{ block\.attrs \}\}>)(?:.*?)(?:\{%- if b\.heading != blank -%\})'
+    replacement_links_markup = (
+        r'\1' + newline
+        + "              {%- assign link_image = b.image | default: b.icon -%}" + newline
+        + "              {%- if link_image != blank and link_image != nil -%}" + newline
+        + "                <div class=\"site-footer__icon\">" + newline
+        + "                  <img src=\"{{ link_image }}\" alt=\"{{ b.heading | default: shop.name | escape }}\" loading=\"lazy\">" + newline
+        + "                </div>" + newline
+        + "              {%- endif -%}" + newline
+        + "              {%- if b.heading != blank -%}"
+    )
+    if "link_image" not in patched:
+        patched = re.sub(links_block_pattern, replacement_links_markup, patched, count=1, flags=re.DOTALL)
+
+    # 7. Styles
+    patched = patched.replace("  .site-footer__links-wrapper { display: flex; align-items: flex-start; gap: 20px; }" + newline, "")
+    patched = patched.replace("  .site-footer__links-wrapper { display: flex; align-items: flex-start; gap: 20px; }\n", "")
+    if ".site-footer__about .site-footer__icon" not in patched:
         style_anchor = "</style>"
         if style_anchor in patched:
-            icon_style = (
-                "  .site-footer__links-wrapper { display: flex; align-items: flex-start; gap: 20px; }" + newline
+            new_styles = (
+                "  .site-footer__about .site-footer__icon { margin-bottom: 16px; }" + newline
+                + "  .site-footer__about .site-footer__icon + p { margin-top: 0; }" + newline
                 + "  .site-footer__icon { flex-shrink: 0; }" + newline
-                + "  .site-footer__icon img { max-height: 40px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: block; }" + newline
+                + "  .site-footer__icon img { max-height: 48px; max-width: 140px; width: auto; height: auto; object-fit: contain; display: block; }" + newline
             )
-            patched = patched.replace(style_anchor, icon_style + style_anchor, 1)
+            patched = re.sub(r'  \.site-footer__icon \{[^\}]*\}\s*', '', patched)
+            patched = re.sub(r'  \.site-footer__icon img \{[^\}]*\}\s*', '', patched)
+            patched = patched.replace(style_anchor, new_styles + style_anchor, 1)
+
+    if patched == content:
+        return None
 
     try:
         sync.parse(patched, "sections/footer.liquid")

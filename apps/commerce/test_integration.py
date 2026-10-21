@@ -3,6 +3,7 @@ End-to-end commerce flows: the public storefront API and the staff API working
 against the same store, with real sign-up, store membership and permissions.
 """
 from datetime import timedelta
+from io import StringIO
 from decimal import Decimal
 
 from django.core.cache import cache
@@ -314,3 +315,96 @@ class AbandonedCheckoutTests(CommerceIntegrationBase):
         self.place(cid)
         Checkout.objects.filter(pk=cid).update(updated_at=timezone.now() - timedelta(days=2))
         self.assertEqual(services.mark_abandoned(self.store, timedelta(hours=2)), 0)
+
+
+class PricingAndPaymentTests(CommerceIntegrationBase):
+    def configure(self, **settings):
+        r = self.staff.patch(f"/api/v1/stores/{self.store.pk}/", settings, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_staff_set_tax_and_shipping_and_shopper_checkout_uses_them(self):
+        saved = self.configure(taxRate="18", shippingFlatRate="50", freeShippingThreshold="2000")
+        self.assertEqual((saved["taxRate"], saved["shippingFlatRate"]), ("18.00", "50.00"))
+
+        cid = self.checkout(quantity=2, email="a@b.com", shipping_address=ADDRESS)
+        detail = self.shopper.get(f"{self.base}/checkout/{cid}/").data
+        self.assertEqual(
+            (detail["subtotal"], detail["tax_amount"], detail["shipping_amount"], detail["total_amount"]),
+            ("998.00", "179.64", "50.00", "1227.64"),
+        )
+
+        order = self.place(cid)
+        self.assertEqual((order.data["tax_amount"], order.data["shipping_amount"], order.data["total"]),
+                         ("179.64", "50.00", "1227.64"))
+
+    def test_free_shipping_threshold_waives_shipping(self):
+        self.configure(taxRate="10", shippingFlatRate="50", freeShippingThreshold="900")
+        cid = self.checkout(quantity=2, email="a@b.com", shipping_address=ADDRESS)
+        detail = self.shopper.get(f"{self.base}/checkout/{cid}/").data
+        self.assertEqual((detail["shipping_amount"], detail["tax_amount"]), ("0.00", "99.80"))
+
+    def test_invalid_store_pricing_is_rejected(self):
+        for bad in ({"taxRate": "101"}, {"taxRate": "-1"}, {"shippingFlatRate": "-5"}):
+            r = self.staff.patch(f"/api/v1/stores/{self.store.pk}/", bad, format="json")
+            self.assertEqual(r.status_code, 400, bad)
+
+    def test_cod_order_leaves_pending_payment_staff_can_see(self):
+        cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
+        order = self.place(cid)
+        self.assertEqual(order.status_code, 201)
+
+        payments = self.staff.get(f"/api/v1/payments/?order={order.data['id']}").json()
+        self.assertEqual(len(payments), 1)
+        self.assertEqual((payments[0]["status"], payments[0]["provider"]), ("pending", "cod"))
+        self.assertEqual(Decimal(payments[0]["amount"]), Decimal(order.data["total"]))
+
+        # Repeating the call returns the same order and no second payment
+        again = self.place(cid)
+        self.assertEqual(again.data["id"], order.data["id"])
+        self.assertEqual(len(self.staff.get(f"/api/v1/payments/?order={order.data['id']}").json()), 1)
+
+    def test_unknown_payment_method_is_rejected_and_nothing_is_ordered(self):
+        cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
+        r = self.shopper.post(f"{self.base}/checkout/{cid}/complete/", {"payment_method": "bitcoin"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_guest_order_creates_one_customer_reused_next_time(self):
+        self.place(self.checkout(email="Guest@Example.com", shipping_address=ADDRESS))
+        other = APIClient()
+        other.credentials(HTTP_X_CART_SESSION="sess-2")
+        self.place(self.checkout(quantity=1, client=other, email="guest@example.com", shipping_address=ADDRESS), client=other)
+        orders = list(Order.objects.all())
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0].customer_id, orders[1].customer_id)
+
+    def test_price_change_shows_in_cart_and_checkout(self):
+        self.add(quantity=1)
+        self.variant.price = Decimal("599.00")
+        self.variant.save()
+        cart = self.shopper.get(f"{self.base}/cart/").data
+        self.assertEqual(cart["items"][0]["unit_price"], "599.00")
+        r = self.shopper.post(f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": ADDRESS}, format="json")
+        self.assertEqual(r.data["subtotal"], "599.00")
+        self.assertEqual(r.data["email"], "a@b.com")  # response reflects the saved details
+
+
+class SweepCartsTests(CommerceIntegrationBase):
+    def test_command_abandons_idle_checkouts_and_expires_idle_carts(self):
+        from django.core.management import call_command
+
+        cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
+        idle = APIClient()
+        idle.credentials(HTTP_X_CART_SESSION="sess-idle")
+        idle.get(f"{self.base}/cart/")
+
+        Checkout.objects.update(updated_at=timezone.now() - timedelta(hours=3))
+        Cart.objects.filter(session_id="sess-idle").update(updated_at=timezone.now() - timedelta(days=45))
+        call_command("sweep_carts", stdout=StringIO())
+
+        self.assertEqual([c["id"] for c in self.staff.get("/api/v1/checkouts/?abandoned=true").json()], [cid])
+        self.assertEqual(self.staff.get("/api/v1/carts/?status=expired").json()[0]["session_id"], "sess-idle")
+        # the cart with a checkout in progress is kept open so the shopper can still buy
+        self.assertEqual(self.place(cid).status_code, 201)

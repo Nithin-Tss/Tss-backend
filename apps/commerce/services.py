@@ -3,7 +3,7 @@ Carts and checkouts. A shopper fills a cart, then starts a checkout, which
 freezes the cart's lines and prices. Turning a checkout into an order is the
 orders app's job (orders.services.create_order).
 """
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -12,16 +12,19 @@ from rest_framework.exceptions import ValidationError
 from apps.catalog.services import published_products
 from apps.discounts import services as discounts
 from apps.discounts.models import OrderDiscount
+from apps.customers.models import Customer
 from apps.inventory.services import sellable
 from apps.orders import services as orders
 from apps.orders.models import Order
+from apps.payments import services as payments
 
 from .models import Cart, CartItem, Checkout, CheckoutItem
 
-CART_OPEN, CART_CHECKED_OUT, CART_MERGED = "open", "checked_out", "merged"
+CART_OPEN, CART_CHECKED_OUT, CART_MERGED, CART_EXPIRED = "open", "checked_out", "merged", "expired"
 CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "abandoned"
 
 ZERO = Decimal("0.00")
+PAYMENT_METHODS = ("cod",)
 
 
 def _money(value):
@@ -30,6 +33,26 @@ def _money(value):
 
 def active_items(cart):
     return cart.items.filter(is_deleted=False).select_related("product", "variant")
+
+
+@transaction.atomic
+def refresh_prices(cart):
+    """
+    Bring open-cart lines up to the catalogue's current prices, so a shopper
+    never starts a checkout on a stale price. Returns the lines that changed.
+    """
+    if cart.status != CART_OPEN:
+        return []
+    changed = []
+    for item in active_items(cart):
+        if item.variant is None:
+            continue
+        current = _money(item.variant.price)
+        if current != item.unit_price:
+            item.unit_price = current
+            item.save(update_fields=["unit_price", "updated_at"])
+            changed.append(item)
+    return changed
 
 
 def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
@@ -191,6 +214,7 @@ def cart_subtotal(cart):
 def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None):
     """Freeze the cart's lines into a checkout. Reuses the cart's open checkout."""
     cart = _open_cart(cart)
+    refresh_prices(cart)
     items = list(active_items(cart))
 
     if not items:
@@ -237,11 +261,10 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
     checkout.subtotal = subtotal
     checkout.total_amount = subtotal
     checkout.abandoned_at = None
-    update_checkout(
+    return update_checkout(
         checkout, email=email, shipping_address=shipping_address,
         billing_address=billing_address, discount_code=discount_code,
     )
-    return checkout
 
 
 def _price_discount(checkout, new_code):
@@ -268,6 +291,18 @@ def _price_discount(checkout, new_code):
     checkout.metadata = metadata
 
 
+def _tax_and_shipping(store, subtotal, discount_amount):
+    """Tax on the discounted subtotal; flat shipping unless the free-shipping threshold is met."""
+    taxable = max(subtotal - discount_amount, ZERO)
+    tax = (taxable * Decimal(store.tax_rate or 0) / Decimal(100)).quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+    shipping = _money(store.shipping_flat_rate)
+    threshold = store.free_shipping_threshold
+    if subtotal <= ZERO or (threshold is not None and subtotal >= threshold):
+        shipping = ZERO
+    return tax, shipping
+
+
 @transaction.atomic
 def update_checkout(checkout, email=None, shipping_address=None, billing_address=None, discount_code=None):
     """Contact, addresses and discount code; totals are recomputed from the lines.
@@ -288,6 +323,9 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
 
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
+    checkout.tax_amount, checkout.shipping_amount = _tax_and_shipping(
+        checkout.store, checkout.subtotal, checkout.discount_amount
+    )
     checkout.total_amount = max(
         checkout.subtotal - checkout.discount_amount + checkout.tax_amount + checkout.shipping_amount, ZERO
     )
@@ -313,13 +351,32 @@ def complete_checkout(checkout):
     return checkout
 
 
+def _guest_customer(checkout):
+    """
+    Guest checkout still leaves the store a customer record, matched by email.
+    This only attributes the order; it never exposes the customer's existing
+    cart or data to the session (email isn't verified).
+    """
+    customer = Customer.objects.filter(store=checkout.store, email__iexact=checkout.email).first()
+    if customer is None:
+        customer = Customer.objects.create(
+            store=checkout.store, email=checkout.email, email_subscription_status="not_subscribed"
+        )
+    return customer
+
+
 @transaction.atomic
-def place_order(checkout):
+def place_order(checkout, payment_method="cod"):
     """
     Turn an open checkout into an order: commits stock, records the discount,
     closes the checkout and its cart. Safe to repeat: a completed checkout
     returns the order it already produced.
+
+    payment_method: only "cod" (cash on delivery) for now; it leaves a pending
+    payment for the order total, to be captured when the money arrives.
     """
+    if payment_method not in PAYMENT_METHODS:
+        raise ValidationError({"payment_method": f"Choose one of: {', '.join(PAYMENT_METHODS)}."})
     checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
 
     if checkout.status == CHECKOUT_COMPLETED:
@@ -343,13 +400,15 @@ def place_order(checkout):
     for item in items:
         _check_stock(item.product, item.variant, item.quantity)
 
+    customer = checkout.customer or _guest_customer(checkout)
+
     order = orders.create_order(
         checkout.store,
         [
             {"product": i.product, "variant": i.variant, "quantity": i.quantity, "unit_price": i.unit_price}
             for i in items
         ],
-        customer=checkout.customer,
+        customer=customer,
         currency=checkout.currency,
         discount_amount=checkout.discount_amount,
         tax_amount=checkout.tax_amount,
@@ -367,8 +426,13 @@ def place_order(checkout):
             is_deleted=False,
         )
 
-    checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk)}
-    checkout.save(update_fields=["metadata", "updated_at"])
+    payments.record_pending_payment(
+        checkout.store, order, checkout, order.total, provider=payment_method, customer=customer
+    )
+
+    checkout.customer = customer
+    checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk), "payment_method": payment_method}
+    checkout.save(update_fields=["customer", "metadata", "updated_at"])
     complete_checkout(checkout)
     return order
 
@@ -383,3 +447,17 @@ def mark_abandoned(store, idle_for):
         abandoned_at__isnull=True,
         updated_at__lt=now - idle_for,
     ).update(abandoned_at=now, recovery_status="pending")
+
+
+def expire_carts(store, idle_for):
+    """
+    Close open carts untouched for `idle_for` (a timedelta) that have no open
+    checkout in progress. Their lines stay for reporting. Returns how many.
+    """
+    cutoff = timezone.now() - idle_for
+    in_checkout = Checkout.objects.filter(status=CHECKOUT_OPEN, is_deleted=False).values("cart_id")
+    return (
+        Cart.objects.filter(store=store, status=CART_OPEN, is_deleted=False, updated_at__lt=cutoff)
+        .exclude(pk__in=in_checkout)
+        .update(status=CART_EXPIRED, updated_at=timezone.now())
+    )

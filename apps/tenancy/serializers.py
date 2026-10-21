@@ -36,6 +36,11 @@ class StoreSerializer(serializers.ModelSerializer):
     orderSuffix = serializers.CharField(source="order_suffix", required=False, allow_blank=True, max_length=10)
     autoFulfill = serializers.ChoiceField(source="auto_fulfill", choices=AUTO_FULFILL, required=False)
     autoArchive = serializers.BooleanField(source="auto_archive", required=False)
+    taxRate = serializers.DecimalField(source="tax_rate", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False)
+    shippingFlatRate = serializers.DecimalField(source="shipping_flat_rate", max_digits=10, decimal_places=2, min_value=0, required=False)
+    freeShippingThreshold = serializers.DecimalField(
+        source="free_shipping_threshold", max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True
+    )
     role = serializers.SerializerMethodField()
     roles = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
@@ -46,6 +51,7 @@ class StoreSerializer(serializers.ModelSerializer):
             "storeId", "storeName", "storeSlug", "status", "createdAt", "fieldLabels",
             "contactEmail", "phone", "address", "currency", "backupRegion", "unitSystem",
             "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
+            "taxRate", "shippingFlatRate", "freeShippingThreshold",
             "role", "roles", "permissions",
         ]
         read_only_fields = ["status"]

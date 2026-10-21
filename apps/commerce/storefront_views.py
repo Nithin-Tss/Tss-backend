@@ -2,12 +2,12 @@
 Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 `session_id` the storefront sends (X-Cart-Session header).
 
-/api/v1/storefront/<store_slug>/cart/                 GET the cart, DELETE to empty it
+/api/v1/storefront/<store_slug>/cart/                 GET the cart (prices refreshed), DELETE to empty it
 /api/v1/storefront/<store_slug>/cart/items/           POST {product, variant?, quantity}
 /api/v1/storefront/<store_slug>/cart/items/<id>/      PATCH {quantity} (0 removes)
 /api/v1/storefront/<store_slug>/checkout/             POST {email?, shipping_address?, billing_address?, discount_code?}
 /api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code": "" removes the code)
-/api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST: place the order (repeat-safe)
+/api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST {payment_method?: "cod"}: place the order (repeat-safe)
 /api/v1/storefront/<store_slug>/orders/               GET orders placed from this session's carts
 /api/v1/storefront/<store_slug>/orders/<id>/          GET
 /api/v1/storefront/<store_slug>/orders/<id>/cancel/   POST: cancel, stock goes back
@@ -63,6 +63,10 @@ class QuantitySerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=0)
 
 
+class CompleteSerializer(serializers.Serializer):
+    payment_method = serializers.ChoiceField(choices=services.PAYMENT_METHODS, default="cod")
+
+
 class CheckoutInputSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
     shipping_address = serializers.JSONField(required=False)
@@ -72,7 +76,9 @@ class CheckoutInputSerializer(serializers.Serializer):
 
 class CartView(StorefrontView):
     def get(self, request, store_slug):
-        return Response(CartSerializer(self.cart(request)).data)
+        cart = self.cart(request)
+        services.refresh_prices(cart)
+        return Response(CartSerializer(cart).data)
 
     def delete(self, request, store_slug):
         return Response(CartSerializer(services.clear_cart(self.cart(request))).data)
@@ -141,7 +147,9 @@ class CheckoutCompleteView(CheckoutDetailView):
     http_method_names = ["post", "options"]
 
     def post(self, request, store_slug, checkout_id):
-        order = services.place_order(self._checkout(request, checkout_id))
+        data = CompleteSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        order = services.place_order(self._checkout(request, checkout_id), **data.validated_data)
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
