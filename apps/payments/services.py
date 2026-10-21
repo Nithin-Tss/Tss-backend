@@ -13,6 +13,7 @@ from rest_framework.exceptions import ValidationError
 
 from .models import Payment, PaymentTransaction
 
+PENDING = "pending"
 CAPTURED, PARTIALLY_REFUNDED, REFUNDED = "captured", "partially_refunded", "refunded"
 CAPTURE, REFUND, SUCCESS = "capture", "refund", "success"
 PROVIDERS = ("manual",)
@@ -46,6 +47,23 @@ def record_payment(store, order, amount, provider="manual", currency=None, refer
         provider_transaction_id=reference,
     )
     return payment
+
+
+@transaction.atomic
+def record_pending_payment(store, order, checkout, amount, provider="cod", customer=None):
+    """A payment promised but not yet received (e.g. cash on delivery)."""
+    return Payment.objects.create(
+        store=store,
+        order=order,
+        checkout=checkout,
+        customer=customer or order.customer,
+        currency=order.currency_code,
+        amount=amount,
+        status=PENDING,
+        provider=provider,
+        metadata={},
+        is_deleted=False,
+    )
 
 
 @transaction.atomic

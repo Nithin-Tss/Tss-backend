@@ -262,3 +262,61 @@ class CartMergeTests(CommerceTestBase):
         cart = services.claim_session_cart(self.store, "nobody", self.customer)
         self.assertEqual(cart.customer_id, self.customer.pk)
         self.assertEqual(Cart.objects.count(), 1)
+
+
+class CartHardeningTests(CommerceTestBase):
+    def _checkout(self, session="s1"):
+        cart = services.get_or_create_cart(self.store, session_id=session)
+        services.add_item(cart, self.product, 2)
+        return services.start_checkout(cart, email="a@b.com", shipping_address={"city": "X"})
+
+    def test_price_change_is_picked_up(self):
+        cart = services.get_or_create_cart(self.store, session_id="s1")
+        services.add_item(cart, self.product, 1)
+        self.variant.price = Decimal("599.00")
+        self.variant.save()
+        self.assertEqual(len(services.refresh_prices(cart)), 1)
+        self.assertEqual(services.cart_subtotal(cart), Decimal("599.00"))
+
+    def test_checkout_adds_tax_and_flat_shipping(self):
+        self.store.tax_rate, self.store.shipping_flat_rate = Decimal("18.00"), Decimal("50.00")
+        self.store.save()
+        checkout = self._checkout()
+        self.assertEqual(checkout.subtotal, Decimal("998.00"))
+        self.assertEqual(checkout.tax_amount, Decimal("179.64"))
+        self.assertEqual(checkout.shipping_amount, Decimal("50.00"))
+        self.assertEqual(checkout.total_amount, Decimal("1227.64"))
+
+    def test_free_shipping_threshold_and_tax_after_discount(self):
+        self.store.shipping_flat_rate, self.store.free_shipping_threshold = Decimal("50.00"), Decimal("900.00")
+        self.store.save()
+        self.assertEqual(self._checkout().shipping_amount, Decimal("0.00"))
+
+    def test_placing_order_records_pending_cod_payment_and_guest_customer(self):
+        order = services.place_order(self._checkout())
+        payment = order.payments.get()
+        self.assertEqual((payment.status, payment.provider, payment.amount), ("pending", "cod", order.total))
+        self.assertEqual(order.customer.email, "a@b.com")
+        # repeat-safe: no second payment or customer
+        services.place_order(services.Checkout.objects.get(pk=payment.checkout_id))
+        self.assertEqual(order.payments.count(), 1)
+        self.assertEqual(Customer.objects.filter(store=self.store).count(), 1)
+
+    def test_unknown_payment_method_rejected(self):
+        with self.assertRaises(ValidationError):
+            services.place_order(self._checkout(), payment_method="bitcoin")
+
+    def test_expire_skips_carts_in_checkout(self):
+        idle = services.get_or_create_cart(self.store, session_id="idle")
+        self._checkout("busy")
+        Cart.objects.update(updated_at=timezone.now() - timedelta(days=60))
+        self.assertEqual(services.expire_carts(self.store, timedelta(days=30)), 1)
+        idle.refresh_from_db()
+        self.assertEqual(idle.status, "expired")
+
+    def test_sweep_command(self):
+        from django.core.management import call_command
+        self._checkout()
+        services.Checkout.objects.update(updated_at=timezone.now() - timedelta(hours=3))
+        call_command("sweep_carts")
+        self.assertTrue(services.Checkout.objects.get().abandoned_at)

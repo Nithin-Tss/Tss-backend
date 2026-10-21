@@ -36,6 +36,12 @@ class Store(models.Model):
     auto_fulfill = models.CharField(max_length=20, default="gift_cards")
     auto_archive = models.BooleanField(default=True)
 
+    # Checkout pricing: tax is a percentage of (subtotal - discount); shipping is
+    # a flat fee, waived once the subtotal reaches free_shipping_threshold.
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    shipping_flat_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    free_shipping_threshold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
