@@ -28,12 +28,25 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient, APITestCase
 
-from apps.catalog.models import Product
+from django.utils import timezone
+
+from apps.catalog.models import Category, Collection, Product, ProductVariant
+from apps.commerce.models import Cart, Checkout
 from apps.commerce.tests import CommerceTestBase
-from apps.customers.models import Customer
+from apps.core.viewsets import StoreScopedGenericViewSet
+from apps.customers.models import Customer, CustomerAddress
+from apps.delivery.models import DeliveryGateway, Shipment
+from apps.discounts.models import Discount
+from apps.fulfillment.models import Fulfillment
+from apps.gift_cards.models import GiftCard
 from apps.identity.email_links import VERIFY_EMAIL_SALT
 from apps.identity.models import User
-from apps.orders.models import Order
+from apps.inventory.models import InventoryItem, Location, Transfer
+from apps.orders.models import DraftOrder, Order, OrderItem
+from apps.payments.models import Payment
+from apps.purchasing.models import PurchaseOrder
+from apps.tenancy.models import Store
+from apps.wishlist.models import Wishlist, WishlistItem
 
 from .test_flow import StoreClientMixin
 
@@ -392,6 +405,194 @@ class StoreHeaderTest(StoreClientMixin, APITestCase):
         sid = self.store_b["storeId"]
         self.ok("delete", f"/api/v1/stores/{sid}/", expect=204)  # B's owner closes it
         self.ok("post", f"/api/v1/stores/{sid}/reopen/", {}, expect=403)  # ...but cannot undo it alone
+
+
+class CrossStoreRecordTest(StoreClientMixin, APITestCase):
+    """
+    Option A: one shared database. Store B's owner, signed in to store B, guesses store A's ids
+    in URLs and request bodies; nothing of store A may be read, changed, deleted or linked to.
+    """
+
+    def setUp(self):
+        self.token_a, store_a = self.sign_up("a@example.com", "Store A")
+        self.a = self.make_records(Store.objects.get(pk=store_a["storeId"]), "a@example.com")
+        self.token_b, store_b = self.sign_up("b@example.com", "Store B")  # the client stays in store B
+        self.store_b_id = store_b["storeId"]
+        self.b = self.make_records(Store.objects.get(pk=self.store_b_id), "b@example.com")
+
+    def make_records(self, store, owner_email):
+        """One record of every store-owned kind, keyed by model."""
+        zero = {"discount_amount": 0, "tax_amount": 0, "shipping_amount": 0}
+        product = Product.objects.create(store=store, title=f"{store.store_name} hat", status="active")
+        variant = ProductVariant.objects.create(product=product, sku=f"{store.store_slug}-1", price=5)
+        customer = Customer.objects.create(store=store, first_name="Cust", email_subscription_status="not_subscribed")
+        location = Location.objects.create(store=store, name="Depot")
+        order = Order.objects.create(store=store, order_number=f"{store.store_slug}-1", currency_code="INR",
+                                     subtotal=5, total=5, status="open", fulfillment_status="unfulfilled", **zero)
+        order_item = OrderItem.objects.create(order=order, product=product, variant=variant, product_name="Hat",
+                                              quantity=1, unit_price=5, total=5, is_deleted=False,
+                                              discount_amount=0, tax_amount=0)
+        fulfillment = Fulfillment.objects.create(order=order, status="pending")
+        gateway = DeliveryGateway.objects.create(store=store, name="Courier", code="courier",
+                                                 is_active=True, is_deleted=False)
+        cart = Cart.objects.create(store=store, currency="INR", status="open", is_deleted=False)
+        wishlist = Wishlist.objects.create(store=store, customer=customer, name="Mine")
+        records = [
+            product, variant, customer, location, order, order_item, fulfillment, gateway, cart, wishlist,
+            Category.objects.create(store=store, name="Tops"),
+            Collection.objects.create(store=store, name="promotions"),
+            CustomerAddress.objects.create(customer=customer, address_type="shipping", address_line_1="1 Main St",
+                                           city="Chennai", state="TN", postal_code="600001", country="IN"),
+            InventoryItem.objects.create(variant=variant, location=location, unavailable=0, committed=0,
+                                         available=3, on_hand=3, incoming=0),
+            Transfer.objects.create(store=store, transfer_number=f"{store.store_slug}-T1", status="draft",
+                                    source_location=location,
+                                    destination_location=Location.objects.create(store=store, name="Shop")),
+            DraftOrder.objects.create(store=store, draft_number=f"{store.store_slug}-D1", customer=customer,
+                                      status="open", total=0, currency_code="INR",
+                                      created_by_user=User.objects.get(email=owner_email)),
+            Payment.objects.create(store=store, order=order, currency="INR", amount=5, status="pending",
+                                   provider="manual", is_deleted=False),
+            Discount.objects.create(store=store, name="Ten", discount_type="percentage", value=10,
+                                    starts_at=timezone.now(), is_active=True, is_deleted=False),
+            GiftCard.objects.create(store=store, code=f"{store.store_slug}-GIFT", initial_balance=10,
+                                    current_balance=10, currency_code="INR", status="active", is_deleted=False),
+            PurchaseOrder.objects.create(store=store, po_number=f"{store.store_slug}-PO1", supplier_name="Acme",
+                                         status="draft"),
+            Shipment.objects.create(store=store, fulfillment=fulfillment, delivery_gateway=gateway, status="pending"),
+            Checkout.objects.create(store=store, cart=cart, currency="INR", subtotal=0, total_amount=0,
+                                    status="open", is_deleted=False, **zero),
+            WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant),
+        ]
+        return {type(r): r for r in records}
+
+    def snapshot(self):
+        """Every store A record as stored now, to prove nothing was changed or deleted."""
+        return {model: list(model.objects.filter(pk=r.pk).values()) for model, r in self.a.items()}
+
+    def store_routes(self):
+        for route, cls, _, _ in api_routes():
+            if cls is not None and issubclass(cls, StoreScopedGenericViewSet):
+                yield route, cls
+
+    def test_another_stores_ids_in_urls_find_nothing(self):
+        before = self.snapshot()
+        tried, untested = set(), set()
+        for route, cls in self.store_routes():
+            if "(?P<pk>" not in route:
+                continue
+            model = cls.queryset.model
+            if model not in self.a:
+                untested.add(f"{route} ({model.__name__})")
+                continue
+            url = "/" + re.sub(r"\(\?P<pk>[^)]*\)", str(self.a[model].pk), route).replace("^", "").replace("$", "")
+            for method in ("get", "put", "patch", "post", "delete"):
+                # a body valid enough that input checks pass and the lookup by id is what answers
+                body = {"title": "Hijacked", "name": "Hijacked", "amount": "1", "quantity": 1, "delta": 1,
+                        "status": "in_transit", "location": str(self.b[Location].pk), "items": []}
+                r = getattr(self.client, method)(url, body, format="json")
+                self.assertIn(r.status_code, (404, 405), f"{method.upper()} {url}: {r.status_code} {r.content[:300]}")
+            tried.add(model)
+        self.assertEqual(untested, set())  # every detail route was exercised with a real store A id
+        self.assertGreaterEqual(len(tried), 15)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_lists_never_show_another_stores_records(self):
+        ids_a = {str(r.pk) for r in self.a.values()}
+        for route, cls, url, _ in api_routes():
+            if cls is None or not issubclass(cls, StoreScopedGenericViewSet) or "(?P<" in route:
+                continue
+            if resolve(url).func.actions.get("get") != "list":
+                continue
+            r = self.client.get(url)
+            self.assertEqual(r.status_code, 200, url)
+            leaked = {i for i in ids_a if i in r.content.decode()}
+            self.assertEqual(leaked, set(), url)
+
+    def test_filters_with_another_stores_ids_find_nothing(self):
+        a = self.a
+        for url in (
+            f"/api/v1/catalog/variants/?product={a[Product].pk}",
+            f"/api/v1/inventory/items/?variant={a[ProductVariant].pk}",
+            f"/api/v1/inventory/items/?location={a[Location].pk}",
+            f"/api/v1/payments/?order={a[Order].pk}",
+            f"/api/v1/fulfillments/?order={a[Order].pk}",
+            f"/api/v1/delivery/shipments/?order={a[Order].pk}",
+            f"/api/v1/wishlists/?customer={a[Customer].pk}",
+            f"/api/v1/customers/addresses/?customer={a[Customer].pk}",
+        ):
+            r = self.client.get(url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertEqual(r.json(), [], url)
+        r = self.client.get(f"/api/v1/inventory/items/availability/?variant={a[ProductVariant].pk}")
+        self.assertEqual(r.status_code, 404)
+
+    def test_another_stores_ids_in_request_bodies_are_refused(self):
+        a, b = self.a, self.b
+        attempts = (
+            ("/api/v1/catalog/products/", {"title": "X", "sku": "X-1", "price": "1", "category_id": a[Category].pk}),
+            ("/api/v1/catalog/variants/", {"product": a[Product].pk, "sku": "X-2", "price": "1"}),
+            ("/api/v1/catalog/categories/", {"name": "X", "parent": a[Category].pk}),
+            ("/api/v1/orders/", {"customer": a[Customer].pk, "items": [{"product": b[Product].pk, "quantity": 1}]}),
+            ("/api/v1/orders/", {"items": [{"product": a[Product].pk, "quantity": 1}]}),
+            ("/api/v1/orders/", {"items": [{"product": b[Product].pk, "variant": a[ProductVariant].pk, "quantity": 1}]}),
+            ("/api/v1/orders/drafts/", {"customer": a[Customer].pk}),
+            ("/api/v1/inventory/items/adjust/", {"variant": a[ProductVariant].pk, "location": b[Location].pk, "delta": 1}),
+            ("/api/v1/inventory/items/set/", {"variant": b[ProductVariant].pk, "location": a[Location].pk, "available": 9}),
+            ("/api/v1/inventory/transfers/", {"source_location": a[Location].pk, "destination_location": b[Location].pk,
+                                              "items": [{"variant": b[ProductVariant].pk, "quantity": 1}]}),
+            ("/api/v1/discounts/", {"name": "X", "discount_type": "percentage", "value": "5", "products": [a[Product].pk]}),
+            ("/api/v1/gift-cards/", {"initial_balance": "10", "customer": a[Customer].pk}),
+            ("/api/v1/wishlists/", {"customer": a[Customer].pk, "name": "X"}),
+            ("/api/v1/wishlists/items/", {"wishlist": a[Wishlist].pk, "product": b[Product].pk}),
+            ("/api/v1/wishlists/items/", {"wishlist": b[Wishlist].pk, "product": a[Product].pk}),
+            ("/api/v1/purchase-orders/", {"supplier_name": "X", "items": [{"variant": a[ProductVariant].pk, "quantity": 1}]}),
+            ("/api/v1/fulfillments/", {"order": a[Order].pk}),
+            ("/api/v1/delivery/shipments/", {"fulfillment": a[Fulfillment].pk, "delivery_gateway": b[DeliveryGateway].pk}),
+            ("/api/v1/customers/addresses/", {"customer": a[Customer].pk, "address_type": "shipping",
+                                              "address_line_1": "1 Main St", "city": "Chennai", "state": "TN",
+                                              "postal_code": "600001", "country": "IN"}),
+        )
+        before = self.snapshot()
+        counts = {model: model.objects.count() for model in self.a}
+        for url, body in attempts:
+            r = self.client.post(url, json.loads(json.dumps(body, default=str)), format="json")
+            self.assertEqual(r.status_code, 400, f"POST {url} {body}: {r.status_code} {r.content[:300]}")
+        self.assertEqual({model: model.objects.count() for model in self.a}, counts)  # nothing was created
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(InventoryItem.objects.get(pk=a[InventoryItem].pk).available, 3)
+
+    def test_the_same_requests_with_own_ids_work(self):
+        b = self.b
+        self.ok("post", "/api/v1/catalog/variants/", {"product": str(b[Product].pk), "sku": "B-2", "price": "1"}, expect=201)
+        self.ok("post", "/api/v1/wishlists/items/", {"wishlist": str(b[Wishlist].pk), "product": str(b[Product].pk)},
+                expect=201)
+        self.ok("post", "/api/v1/gift-cards/", {"initial_balance": "10", "customer": str(b[Customer].pk)}, expect=201)
+        self.ok("get", f"/api/v1/orders/{b[Order].pk}/")
+
+    def test_staff_reach_only_the_stores_they_belong_to(self):
+        self.use(self.token_a, str(self.a[Order].store_id))
+        role = next(r for r in self.ok("get", "/api/v1/roles/") if r.get("key") == "administrator")
+        staff_token, _ = self.sign_up("staff@example.com", "Staff own store")
+        self.use(self.token_a, str(self.a[Order].store_id))
+        self.ok("post", "/api/v1/members/", {"email": "staff@example.com", "roleIds": [role["id"]]}, expect=201)
+
+        self.use(staff_token, str(self.a[Order].store_id))
+        self.assertEqual(self.ok("get", f"/api/v1/orders/{self.a[Order].pk}/")["id"], str(self.a[Order].pk))
+        self.use(staff_token, self.store_b_id)
+        self.ok("get", "/api/v1/orders/", expect=403)
+        self.ok("get", f"/api/v1/orders/{self.b[Order].pk}/", expect=403)
+
+    def test_platform_admin_reaches_every_store(self):
+        User.objects.create_superuser(email="root@example.com", password="Root-pass-123", first_name="R", last_name="T")
+        r = self.client.post("/api/v1/auth/login/", {"email": "root@example.com", "password": "Root-pass-123"},
+                             format="json")
+        token = r.json()["access"]
+        for records in (self.a, self.b):
+            self.use(token, str(records[Order].store_id))
+            self.assertEqual(self.ok("get", f"/api/v1/orders/{records[Order].pk}/")["id"], str(records[Order].pk))
+            listed = {p["id"] for p in self.ok("get", "/api/v1/catalog/products/")}
+            self.assertEqual(listed, {str(records[Product].pk)})  # still one store at a time
 
 
 # ========================================================================= route audit
