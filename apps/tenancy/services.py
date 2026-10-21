@@ -104,3 +104,26 @@ def reopen_store(store):
     store.status = ACTIVE
     store.save(update_fields=["status", "updated_at"])
     store.memberships.filter(status=STORE_CLOSED).update(status=ACTIVE)
+
+
+@transaction.atomic
+def delete_store(store):
+    """
+    Permanently delete a store (close_store is the reversible "delete"). Its theme assignments, and its
+    own themes nobody else uses, are removed first (themes.services.remove_store_themes). Everything
+    else that references the store with PROTECT (members, products, orders, ...) still protects it:
+    then nothing at all is deleted, and the error names what is in the way.
+    """
+    from django.db.models import ProtectedError
+    from rest_framework.exceptions import ValidationError
+
+    from apps.themes.services import remove_store_themes
+
+    try:
+        remove_store_themes(store)
+        store.delete()
+    except ProtectedError as error:
+        blockers = sorted({str(obj._meta.verbose_name_plural) for obj in error.protected_objects})
+        raise ValidationError(
+            {"detail": f"This store can't be deleted permanently while it still has: {', '.join(blockers)}."}
+        )

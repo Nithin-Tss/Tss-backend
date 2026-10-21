@@ -4,11 +4,17 @@ Multi-store tests.
     python manage.py test apps.tenancy --settings=config.test_settings
 """
 from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.utils.text import slugify
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
+from apps.themes.models import StoreTheme, Theme, ThemeFile
+from apps.themes.services import get_store_theme
 
 from .models import Store, StoreMembership
+from .services import close_store, create_store, delete_store, reopen_store
 
 
 class MultiStoreTest(StoreClientMixin, APITestCase):
@@ -164,3 +170,105 @@ class MultiStoreTest(StoreClientMixin, APITestCase):
         self.ok("patch", url, {"currency": "USD"}, expect=404)
         self.ok("delete", url, expect=404)
         self.ok("post", url + "reopen/", expect=403)
+
+
+class DeleteStoreThemesTest(TestCase):
+    """Permanent store deletion (services.delete_store) and what happens to themes."""
+
+    def bare_store(self, name):
+        # No members or other data, so only the theme rows are in the way of deleting it
+        return Store.objects.create(store_name=name, store_slug=slugify(name), status="active")
+
+    def shared_theme(self):
+        theme = Theme.objects.create(name="Shared X", slug="shared-x", theme_data={})
+        ThemeFile.objects.create(theme=theme, file_path="layout/theme.liquid", file_type="liquid",
+                                 content="{{ sections }}", is_required=True, file_size=14)
+        return theme
+
+    def assign(self, store, theme, custom_data=None):
+        return StoreTheme.objects.create(store=store, theme=theme, installed_version="1.0.0",
+                                         custom_data=custom_data or {}, is_active=True)
+
+    def test_private_theme_and_its_files_go_with_the_store(self):
+        store_a = self.bare_store("Store A")
+        theme = get_store_theme(store_a).theme  # Store A's own copy
+        self.assertTrue(ThemeFile.objects.filter(theme=theme).exists())
+
+        delete_store(store_a)
+
+        self.assertFalse(Store.objects.filter(pk=store_a.pk).exists())
+        self.assertFalse(StoreTheme.objects.filter(theme=theme).exists())
+        self.assertFalse(Theme.objects.filter(pk=theme.pk).exists())
+        self.assertFalse(ThemeFile.objects.filter(theme=theme).exists())
+
+    def test_shared_theme_stays_for_the_other_store(self):
+        store_a, store_b = self.bare_store("Store A"), self.bare_store("Store B")
+        theme_x = self.shared_theme()
+        self.assign(store_a, theme_x)
+        b_row = self.assign(store_b, theme_x, {"settings": {"colors": "B's own"}})
+
+        delete_store(store_a)
+
+        self.assertFalse(StoreTheme.objects.filter(store_id=store_a.pk).exists())
+        self.assertTrue(Theme.objects.filter(pk=theme_x.pk).exists())
+        self.assertEqual(ThemeFile.objects.filter(theme=theme_x).count(), 1)
+        b_row.refresh_from_db()
+        self.assertEqual((b_row.theme_id, b_row.is_active, b_row.custom_data),
+                         (theme_x.pk, True, {"settings": {"colors": "B's own"}}))
+
+    def test_private_theme_still_used_by_another_store_is_kept(self):
+        store_a, store_b = self.bare_store("Store A"), self.bare_store("Store B")
+        theme_y = get_store_theme(store_a).theme
+        files = ThemeFile.objects.filter(theme=theme_y).count()
+        self.assign(store_b, theme_y)
+
+        delete_store(store_a)
+
+        self.assertTrue(Theme.objects.filter(pk=theme_y.pk).exists())
+        self.assertEqual(ThemeFile.objects.filter(theme=theme_y).count(), files)
+        self.assertTrue(StoreTheme.objects.filter(store=store_b, theme=theme_y).exists())
+
+    def test_other_stores_own_themes_are_untouched(self):
+        store_a, store_b = self.bare_store("Store A"), self.bare_store("Store B")
+        get_store_theme(store_a)
+        b_row = get_store_theme(store_b)
+        b_row.custom_data = {"settings": {"heading_font": "lora"}}
+        b_row.save(update_fields=["custom_data"])
+        b_files = ThemeFile.objects.filter(theme=b_row.theme).count()
+
+        delete_store(store_a)
+
+        b_row.refresh_from_db()
+        self.assertEqual(b_row.custom_data, {"settings": {"heading_font": "lora"}})
+        self.assertTrue(Theme.objects.filter(pk=b_row.theme_id).exists())
+        self.assertEqual(ThemeFile.objects.filter(theme=b_row.theme).count(), b_files)
+
+    def test_close_and_reopen_keep_the_theme(self):
+        owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
+        store = create_store(owner, "Closable")
+        row = get_store_theme(store)
+
+        close_store(store)
+        self.assertTrue(StoreTheme.objects.filter(pk=row.pk, theme=row.theme).exists())
+        reopen_store(store)
+
+        store.refresh_from_db()
+        self.assertEqual(store.status, "active")
+        self.assertEqual(get_store_theme(store).pk, row.pk)
+        self.assertTrue(ThemeFile.objects.filter(theme=row.theme).exists())
+
+    def test_a_protected_store_is_refused_and_nothing_is_deleted(self):
+        owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
+        store = create_store(owner, "Has members")  # its owner membership protects it
+        row = get_store_theme(store)
+        files = ThemeFile.objects.filter(theme=row.theme).count()
+
+        with self.assertRaises(ValidationError) as refused:
+            delete_store(store)
+
+        self.assertIn("Store Memberships", str(refused.exception.detail["detail"]))
+        # Rolled back as one unit: the theme cleanup that ran first is undone too
+        self.assertTrue(Store.objects.filter(pk=store.pk).exists())
+        self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
+        self.assertTrue(Theme.objects.filter(pk=row.theme_id).exists())
+        self.assertEqual(ThemeFile.objects.filter(theme=row.theme).count(), files)
