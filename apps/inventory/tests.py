@@ -99,6 +99,67 @@ class InventoryTests(StoreClientMixin, APITestCase):
             "variant": self.variant, "location": self.warehouse, "available": 1,
         }, expect=400)
 
+    def availability(self, expect=200, **params):
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        return self.ok("get", f"{ITEMS}availability/?{query}", expect=expect)
+
+    def test_availability_status_boundaries(self):
+        for quantity, status, in_stock in (
+            (0, "OUT_OF_STOCK", False), (1, "LOW_STOCK", True), (5, "LOW_STOCK", True),
+            (6, "IN_STOCK", True), (50, "IN_STOCK", True),
+        ):
+            self.set_stock(quantity)
+            body = self.availability(variant=self.variant)
+            self.assertEqual((body["quantity"], body["status"], body["inStock"]), (quantity, status, in_stock))
+            self.assertEqual(
+                body["variants"],
+                [{"variantId": self.variant, "inStock": in_stock, "quantity": quantity, "status": status}],
+            )
+
+    def test_availability_sums_locations_and_filters_by_location(self):
+        shop = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]
+        self.set_stock(2)
+        self.set_stock(3, location=shop)
+
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["status"]), (5, "LOW_STOCK"))
+        self.assertEqual(len(body["variants"]), 1)
+
+        body = self.availability(variant=self.variant, location=shop)
+        self.assertEqual((body["quantity"], body["status"]), (3, "LOW_STOCK"))
+
+    def test_availability_by_product_lists_each_variant(self):
+        self.set_stock(4)
+        body = self.availability(product=self.product)
+        self.assertEqual(body["quantity"], 4)
+        self.assertEqual([v["variantId"] for v in body["variants"]], [self.variant])
+
+    def test_availability_reflects_adjustments(self):
+        self.set_stock(10)
+        self.assertEqual(self.availability(variant=self.variant)["status"], "IN_STOCK")
+        self.ok("post", f"{ITEMS}adjust/", {"variant": self.variant, "location": self.warehouse, "delta": -7})
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["status"]), (3, "LOW_STOCK"))
+        self.ok("post", f"{ITEMS}adjust/", {"variant": self.variant, "location": self.warehouse, "delta": -3})
+        body = self.availability(variant=self.variant)
+        self.assertEqual((body["quantity"], body["status"], body["inStock"]), (0, "OUT_OF_STOCK", False))
+
+    def test_availability_bad_requests(self):
+        self.set_stock(5)
+        self.availability(expect=400)  # neither variant nor product
+        self.availability(location=self.warehouse, expect=400)
+        self.availability(variant="not-a-uuid", expect=400)
+        self.availability(product="nope", expect=400)
+        self.availability(variant=self.variant, location="nope", expect=400)
+        body = self.availability(variant=str(uuid.uuid4()), expect=404)
+        self.assertEqual(body["detail"], "No inventory found.")
+
+    def test_availability_is_hidden_from_other_stores(self):
+        self.set_stock(5)
+        self.sign_up("rival@example.com", "Rival Store")
+        self.availability(variant=self.variant, expect=404)
+        self.availability(product=self.product, expect=404)
+
     def test_transfer_moves_stock_and_checks_availability(self):
         self.set_stock(5)
         shop = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]

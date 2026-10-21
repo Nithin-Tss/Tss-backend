@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import transaction
 from django.db.models import Sum
 from rest_framework import mixins
@@ -20,6 +22,15 @@ from .serializers import (
 )
 
 PENDING, COMPLETED, CANCELLED = "pending", "completed", "cancelled"
+LOW_STOCK_THRESHOLD = 5
+
+
+def stock_status(quantity):
+    if quantity <= 0:
+        return "OUT_OF_STOCK"
+    if quantity <= LOW_STOCK_THRESHOLD:
+        return "LOW_STOCK"
+    return "IN_STOCK"
 
 
 class LocationViewSet(StoreScopedViewSet):
@@ -41,6 +52,7 @@ class InventoryItemViewSet(
     POST /api/v1/inventory/items/adjust/  {variant, location, delta, reason, note}
     POST /api/v1/inventory/items/unavailable/  {variant, location, quantity, reason, release, note}
     GET  /api/v1/inventory/items/history/?product=&variant=&location=&limit=
+    GET  /api/v1/inventory/items/availability/?variant=|product=&location=   stock status summary
     GET  /api/v1/inventory/items/<id>/breakdown/   what makes up Unavailable and Committed
     Stock is never edited directly, only through these actions (services.adjust_inventory).
     """
@@ -111,6 +123,45 @@ class InventoryItemViewSet(
         except ValueError:
             limit = 100
         return Response(InventoryHistorySerializer(rows[:limit], many=True).data)
+
+    @action(detail=False, methods=["get"])
+    def availability(self, request):
+        """Read-only stock summary for a variant or product, optionally at one location."""
+        params = request.query_params
+        if not (params.get("variant") or params.get("product")):
+            raise ValidationError("Provide variant or product.")
+        for param in ("variant", "product", "location"):
+            if params.get(param):
+                try:
+                    uuid.UUID(params[param])
+                except ValueError:
+                    raise ValidationError({param: "Must be a valid UUID."})
+
+        rows = (
+            self.get_queryset()
+            .order_by()
+            .values("variant_id")
+            .annotate(quantity=Sum("available"))
+        )
+        variants = []
+        for row in rows:
+            quantity = max(row["quantity"] or 0, 0)
+            variants.append({
+                "variantId": str(row["variant_id"]),
+                "inStock": quantity > 0,
+                "quantity": quantity,
+                "status": stock_status(quantity),
+            })
+        if not variants:
+            return Response({"detail": "No inventory found."}, status=404)
+
+        total = sum(v["quantity"] for v in variants)
+        return Response({
+            "inStock": total > 0,
+            "quantity": total,
+            "status": stock_status(total),
+            "variants": variants,
+        })
 
     @action(detail=True, methods=["get"])
     def breakdown(self, request, pk=None):
