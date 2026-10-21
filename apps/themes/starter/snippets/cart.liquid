@@ -76,6 +76,7 @@
         <button class="button cart-checkout" type="button" data-cart-checkout-soon>{{ settings.checkout_label | default: 'Check out' }}</button>
       {%- endif -%}
       <p class="cart-summary__notice" role="status" data-cart-notice></p>
+      <button class="cart-clear" type="button" data-cart-clear>Clear cart</button>
     </div>
   {%- else -%}
     <div class="cart-empty">
@@ -234,6 +235,22 @@
           var note = (warning || document).querySelector(".cart-line__warning");
           if (!note && warning) { note = document.createElement("span"); note.className = "cart-line__warning"; note.setAttribute("role", "status"); warning.querySelector(".cart-line__info").appendChild(note); }
           if (note) note.textContent = error.message;
+        });
+      return;
+    }
+
+    var clear = target.closest("[data-cart-clear]");
+    if (clear) {
+      event.preventDefault();
+      var clearCtx = context(clear);
+      if (!clearCtx || clear.disabled) return;
+      clear.disabled = true;
+      call(clearCtx, "POST", "/clear")
+        .then(showLines)
+        .catch(function (error) {
+          clear.disabled = false;
+          var notice = document.querySelector("[data-cart-notice]");
+          if (notice) notice.textContent = error.message;
         });
       return;
     }

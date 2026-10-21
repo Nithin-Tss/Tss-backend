@@ -2031,9 +2031,24 @@ def storefront_cart_change(request, store, cart_id):
     if quantity > CART_MAX_AT_ONCE:
         raise ValidationError(f"You can have up to {CART_MAX_AT_ONCE} of one product.")
     cart = cart_data.open_cart(store, cart_id)
-    if cart is None:
-        raise ValidationError("Your cart is empty.")
-    commerce_services.set_quantity(cart, _uuid_of(body.get("line"), "That item isn't in your cart."), quantity)
+    line = _uuid_of(body.get("line"), "That item isn't in your cart.")
+    if cart is None or not cart.items.filter(pk=line, is_deleted=False).exists():
+        # Already gone (removed in another tab, or the cart was emptied): removing it again is not an error, and
+        # the reply refreshes the page's stale lines
+        if quantity == 0:
+            return _cart_reply(store, cart)
+        raise ValidationError("That item isn't in your cart. It may have been removed.")
+    commerce_services.set_quantity(cart, line, quantity)
+    return _cart_reply(store, cart)
+
+
+@_cart_api
+def storefront_cart_clear(request, store, cart_id):
+    if request.method != "POST":
+        raise ValidationError("Use POST.")
+    cart = cart_data.open_cart(store, cart_id)
+    if cart is not None:
+        commerce_services.clear_cart(cart)
     return _cart_reply(store, cart)
 
 

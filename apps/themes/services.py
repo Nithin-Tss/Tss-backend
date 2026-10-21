@@ -64,7 +64,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 37
+STARTER_REVISION = 38
 STARTER_UPGRADES = {
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
@@ -180,6 +180,8 @@ STARTER_UPGRADES = {
     },
     # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
     "snippets/cart.liquid": {
+        "4c5704af71070bde93c5088802de1e571978e92fe093bd0a1dae721291dab8b0",  # revision 37: before "Clear cart"
+        "b21d8cbf1318bf5b02f7cae3833e7d847ebbe41a22c58d0080d08378c6f3a835",  # revision 37: before "Clear cart" (CRLF)
         "477a7af3604ffac5bcd7b20d6536ba4d9cc9b399fe024ddfce348c5326da043f",  # revision 25: before the cart icon on product cards
         "727965e2164a84285cb071a2fffe9265c80be8e817428e6e18aa04203d135d9b",  # revision 25: before the cart icon on product cards (CRLF)
         "4c9f20d277bfcd838ff1dc79c9983d48fcd2979e5950c2a6b10556f905b87579",

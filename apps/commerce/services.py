@@ -193,7 +193,9 @@ def set_quantity(cart, item_id, quantity):
         item.deleted_at = timezone.now()
         item.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
     else:
-        _check_stock(item.product, item.variant, quantity)
+        # Only asking for more needs stock: a shopper can always lower a line, even if stock fell below it since
+        if quantity > item.quantity:
+            _check_stock(item.product, item.variant, quantity)
         item.quantity = quantity
         item.save(update_fields=["quantity", "updated_at"])
     return item

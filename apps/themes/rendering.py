@@ -181,6 +181,7 @@ html.cart-open{overflow:hidden}
 .cart-summary__total{font-weight:700;font-size:18px}
 .cart-summary__note{color:var(--muted);font-size:13px;margin:8px 0 14px}
 .cart-summary__notice{min-height:1.2em;margin:10px 0 0;color:var(--muted);font-size:14px}
+.cart-clear{display:block;margin:8px auto 0;border:0;background:none;color:var(--muted);font-size:14px;text-decoration:underline;cursor:pointer}
 .cart-checkout{display:block;width:100%;text-align:center}
 .cart-empty{padding:56px 0;text-align:center}
 .cart-empty__title{margin:0 0 12px;font-size:24px}

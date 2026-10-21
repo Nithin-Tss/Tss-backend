@@ -7,6 +7,7 @@ The header and the footer run the same checks through SyncedSectionMixin.
 import hashlib
 import json
 import time
+import uuid
 
 from rest_framework.test import APITestCase
 
@@ -1912,6 +1913,86 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertIn("Your cart is empty", removed["html"])
         self.assertEqual(self.count_in(self.header()), 0)
 
+    def test_removing_a_line_that_is_already_gone_refreshes_instead_of_failing(self):
+        self.add(self.mug, 1)
+        html = self.call("get", "fragment").json()["html"]
+        line = __import__("re").search(r'data-line="([0-9a-f-]{36})"', html).group(1)
+        self.call("post", "change", {"line": line, "quantity": 0})  # removed in another tab
+        again = self.call("post", "change", {"line": line, "quantity": 0})
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["count"], 0)
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 2}).status_code, 400)
+
+    def line_id(self):
+        return __import__("re").search(r'data-line="([0-9a-f-]{36})"', self.call("get", "fragment").json()["html"]).group(1)
+
+    def set_stock(self, product, available):
+        from apps.inventory.models import InventoryItem
+
+        InventoryItem.objects.filter(variant_id=product["variants"][0]["id"]).update(available=available)
+
+    def test_change_refuses_bad_quantities_and_lines(self):
+        self.add(self.mug, 2)
+        line = self.line_id()
+        for bad in (-1, 1.5, "2", None, True, 100):
+            r = self.call("post", "change", {"line": line, "quantity": bad})
+            self.assertEqual(r.status_code, 400, bad)
+        self.assertEqual(self.call("post", "change", {"line": line}).status_code, 400)  # no quantity
+        self.assertEqual(self.call("post", "change", {"line": "nope", "quantity": 1}).status_code, 400)
+        self.assertEqual(self.call("post", "change", {"line": str(uuid.uuid4()), "quantity": 1}).status_code, 400)
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 1}, session="abc").status_code, 400)  # no cart
+        self.assertEqual(self.call("get", "change").status_code, 400)
+        self.assertEqual(self.call("get", "fragment").json()["count"], 2)  # none of it changed the cart
+
+    def test_change_cannot_go_over_the_stock_but_can_always_go_down_or_remove(self):
+        self.add(self.mug, 4)  # 5 in stock
+        line = self.line_id()
+        over = self.call("post", "change", {"line": line, "quantity": 6})
+        self.assertEqual(over.status_code, 400)
+        self.assertIn("Only 5", over.json()["error"])
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 5}).json()["count"], 5)
+        # stock falls below what is in the cart (sold elsewhere): the shopper must still be able to reduce it
+        self.set_stock(self.mug, 2)
+        down = self.call("post", "change", {"line": line, "quantity": 3})
+        self.assertEqual((down.status_code, down.json()["count"]), (200, 3))
+        self.assertIn("Only 2 left", down.json()["html"])  # still more than is in stock: the line says so
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 4}).status_code, 400)  # not up
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 2}).json()["count"], 2)
+        # sold out altogether: it can still be removed
+        self.set_stock(self.mug, 0)
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 1}).json()["count"], 1)
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 0}).json()["count"], 0)
+
+    def test_change_to_the_same_quantity_and_other_lines_stay_put(self):
+        other = self.product("Clay bowl", "BOWL-1", 5)
+        self.add(self.mug, 2)
+        self.add(other, 1)
+        html = self.call("get", "fragment").json()["html"]
+        lines = __import__("re").findall(r'data-line="([0-9a-f-]{36})"', html)
+        self.assertEqual(len(lines), 2)
+        same = self.call("post", "change", {"line": lines[0], "quantity": 2}).json()
+        self.assertEqual((same["count"], same["subtotal"]), (3, "36.00"))
+        gone = self.call("post", "change", {"line": lines[0], "quantity": 0}).json()
+        self.assertEqual((gone["count"], gone["subtotal"]), (1, "12.00"))
+        self.assertIn("Clay bowl", gone["html"])
+        self.assertNotIn("Clay mug", gone["html"])
+
+    def test_clear_empties_the_cart(self):
+        other = self.product("Clay bowl", "BOWL-2", 5)
+        self.add(self.mug, 2)
+        self.add(other, 1)
+        self.assertIn("data-cart-clear", self.call("get", "fragment").json()["html"])  # the page offers it
+        cleared = self.call("post", "clear").json()
+        self.assertEqual((cleared["count"], cleared["subtotal"]), (0, "0.00"))
+        self.assertIn("Your cart is empty", cleared["html"])
+        self.assertNotIn("data-cart-clear", cleared["html"])
+        self.assertEqual(self.count_in(self.header()), 0)
+        again = self.call("post", "clear")  # nothing to clear, or no cart at all: fine
+        self.assertEqual((again.status_code, again.json()["count"]), (200, 0))
+        self.assertEqual(self.call("post", "clear", session="abc").status_code, 200)
+        self.assertEqual(self.call("get", "clear").status_code, 400)
+        self.assertEqual(self.add(self.mug, 1).json()["count"], 1)  # the cart works again afterwards
+
     def test_the_empty_cart_page_and_the_full_cart_page(self):
         page = self.shopper.get(f"/s/{self.slug}/cart").content.decode()
         self.assertIn("Your cart is empty", page)
@@ -1958,8 +2039,13 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertEqual(seen["count"], 0)  # a different cart id: an empty cart
         self.assertNotIn("Clay mug", seen["html"])
         taken = self.call("post", "change", {"line": line, "quantity": 0}, session=other, client=stranger)
-        self.assertEqual(taken.status_code, 400)  # another shopper's line is not theirs to change
-        self.assertEqual(self.call("get", "fragment").json()["count"], 2)
+        # another shopper's line is not theirs to change: removing it is a harmless no-op (their cart has no such
+        # line), and anything else is refused
+        self.assertEqual(taken.status_code, 200)
+        self.assertEqual(taken.json()["count"], 0)
+        self.assertEqual(self.call("post", "change", {"line": line, "quantity": 5}, session=other, client=stranger).status_code, 400)
+        self.assertEqual(self.call("post", "clear", session=other, client=stranger).json()["count"], 0)
+        self.assertEqual(self.call("get", "fragment").json()["count"], 2)  # the owner's cart is untouched
         self.assertEqual(self.call("get", "fragment", session="abc", client=stranger).json()["count"], 0)  # not an id we made
 
         # another store: this cart id means nothing there, and its products cannot be put in this cart
@@ -2250,7 +2336,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 37)
+        self.assertEqual(theme.theme_data["starter_revision"], 38)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2262,11 +2348,40 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         end = current.index("    });\n", start) + len("    });\n")
         return current[:start] + current[end:]
 
+    def snippet_before_clear_cart(self):
+        """The snippet as revision 37 shipped it: no "Clear cart" button and no handler for it."""
+        from .services import starter_files
+
+        current = starter_files()[self.SNIPPET]
+        button = '\n      <button class="cart-clear" type="button" data-cart-clear>Clear cart</button>'
+        self.assertIn(button, current)
+        older = current.replace(button, "", 1)
+        start = older.index('    var clear = target.closest("[data-cart-clear]");')
+        end = older.index('    if (target.closest("[data-cart-checkout-soon]")) {')
+        return older[:start] + older[end:]
+
+    def test_the_snippet_from_before_clear_cart_is_registered_for_the_upgrade(self):
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        text = self.snippet_before_clear_cart()
+        self.assertNotIn("data-cart-clear", text)
+        for variant in (text, text.replace("\n", "\r\n")):  # an LF copy and a CRLF copy
+            self.assertIn(hashlib.sha256(variant.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        theme = self.theme().theme
+        theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 37}
+        theme.save()
+        self.theme()
+        self.assertEqual(self.stored(self.SNIPPET), starter_files()[self.SNIPPET])
+        self.assertIn("data-cart-clear", self.stored(self.SNIPPET))
+
     def snippet_before_link_ids(self):
         """The snippet as revision 22 shipped it: the script kept a header's own badge, but links had no cart id."""
         from .services import starter_files
 
-        current = starter_files()[self.SNIPPET]
+        current = self.snippet_before_clear_cart()
         start = current.index("\n  // The cart link carries the cart id")
         end = current.index("  tagLinks();\n", start) + len("  tagLinks();\n")
         older = current[:start] + current[end:]
@@ -2983,7 +3098,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 37)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 38)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))

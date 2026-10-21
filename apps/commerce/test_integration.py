@@ -239,6 +239,13 @@ class CartAndCheckoutEditingTests(CommerceIntegrationBase):
         gone = self.shopper.patch(f"{self.base}/cart/items/{item_id}/", {"quantity": 1}, format="json")
         self.assertEqual(gone.status_code, 400)
 
+    def test_delete_removes_line(self):
+        item_id = self.add(quantity=2).data["items"][0]["id"]
+        r = self.shopper.delete(f"{self.base}/cart/items/{item_id}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["items"], [])
+        self.assertEqual(self.shopper.delete(f"{self.base}/cart/items/{item_id}/").status_code, 400)
+
     def test_invalid_input_is_rejected(self):
         self.assertEqual(self.add(quantity=0).status_code, 400)
         bad = self.shopper.post(f"{self.base}/cart/items/", {"product": "not-a-uuid"}, format="json")

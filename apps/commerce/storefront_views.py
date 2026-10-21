@@ -4,7 +4,7 @@ Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 
 /api/v1/storefront/<store_slug>/cart/                 GET the cart (prices refreshed), DELETE to empty it
 /api/v1/storefront/<store_slug>/cart/items/           POST {product, variant?, quantity}
-/api/v1/storefront/<store_slug>/cart/items/<id>/      PATCH {quantity} (0 removes)
+/api/v1/storefront/<store_slug>/cart/items/<id>/      PATCH {quantity} (0 removes), DELETE removes
 /api/v1/storefront/<store_slug>/checkout/             POST {email?, shipping_address?, billing_address?, discount_code?}
 /api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code": "" removes the code)
 /api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST {payment_method?: "cod"}: place the order (repeat-safe)
@@ -111,6 +111,11 @@ class CartItemView(StorefrontView):
         data.is_valid(raise_exception=True)
         cart = self.cart(request)
         services.set_quantity(cart, item_id, data.validated_data["quantity"])
+        return Response(CartSerializer(cart).data)
+
+    def delete(self, request, store_slug, item_id):
+        cart = self.cart(request)
+        services.set_quantity(cart, item_id, 0)
         return Response(CartSerializer(cart).data)
 
 
