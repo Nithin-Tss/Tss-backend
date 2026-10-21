@@ -106,6 +106,37 @@ def reopen_store(store):
     store.memberships.filter(status=STORE_CLOSED).update(status=ACTIVE)
 
 
+def _purge(obj, seen):
+    """Delete obj, first deleting whatever still protects it (PROTECT/RESTRICT), depth first."""
+    from django.db.models import ProtectedError, RestrictedError
+
+    while True:
+        try:
+            obj.delete()
+            return
+        except (ProtectedError, RestrictedError) as error:
+            blockers = error.protected_objects if isinstance(error, ProtectedError) else error.restricted_objects
+            fresh = [b for b in blockers if (b._meta.label, b.pk) not in seen]
+            if not fresh:
+                raise
+            for blocker in fresh:
+                seen.add((blocker._meta.label, blocker.pk))
+                _purge(blocker, seen)
+
+
+@transaction.atomic
+def purge_store(store):
+    """
+    Permanently delete a store together with everything that belongs to it (members, products, orders,
+    themes, ...). Used by Django admin, where deleting a store must not leave its data behind. One
+    transaction: if anything fails, nothing is deleted.
+    """
+    from apps.themes.services import remove_store_themes
+
+    remove_store_themes(store)
+    _purge(store, {(store._meta.label, store.pk)})
+
+
 @transaction.atomic
 def delete_store(store):
     """

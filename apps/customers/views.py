@@ -40,7 +40,13 @@ class CustomerViewSet(StoreScopedViewSet):
                 for e in Customer.objects.filter(store=store).values_list("email", flat=True)
                 if e
             }
-            users = User.objects.exclude(email="").exclude(email__isnull=True)
+            # Only this store's own members, never users of other stores
+            users = (
+                User.objects.filter(store_memberships__store=store)
+                .exclude(email="")
+                .exclude(email__isnull=True)
+                .distinct()
+            )
             to_create = []
             now = timezone.now()
             for u in users:

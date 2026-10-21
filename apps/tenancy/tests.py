@@ -272,3 +272,20 @@ class DeleteStoreThemesTest(TestCase):
         self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
         self.assertTrue(Theme.objects.filter(pk=row.theme_id).exists())
         self.assertEqual(ThemeFile.objects.filter(theme=row.theme).count(), files)
+
+
+class PurgeStoreTest(TestCase):
+    def test_purge_removes_store_with_members_and_leaves_other_stores(self):
+        from .services import purge_store
+
+        owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
+        store = create_store(owner, "Doomed")
+        other = create_store(owner, "Survivor")
+        get_store_theme(store)
+
+        purge_store(store)
+
+        self.assertFalse(Store.objects.filter(pk=store.pk).exists())
+        self.assertFalse(StoreTheme.objects.filter(store_id=store.pk).exists())
+        self.assertTrue(Store.objects.filter(pk=other.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=owner.pk).exists())

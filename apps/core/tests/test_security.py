@@ -435,7 +435,7 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
         fulfillment = Fulfillment.objects.create(order=order, status="pending")
         gateway = DeliveryGateway.objects.create(store=store, name="Courier", code="courier",
                                                  is_active=True, is_deleted=False)
-        cart = Cart.objects.create(store=store, currency="INR", status="open", is_deleted=False)
+        cart = Cart.objects.create(store=store, customer=customer, currency="INR", status="open", is_deleted=False)
         wishlist = Wishlist.objects.create(store=store, customer=customer, name="Mine")
         records = [
             product, variant, customer, location, order, order_item, fulfillment, gateway, cart, wishlist,

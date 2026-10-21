@@ -350,6 +350,12 @@ class CustomerAddressManagementTest(StoreClientMixin, APITestCase):
 class CustomerAddressStoreAccessTest(CustomerAddressManagementTest):
     """Shoppers can only use open stores, and are never silently placed in another one."""
 
+    def setUp(self):
+        super().setUp()
+        # Sign-up inside setUp already enrols shoppers in the store via the leftover X-Store-Id
+        # header; these tests need to start with no customer records so they can assert on creation.
+        Customer.objects.filter(email__in=["alice@example.com", "bob@example.com"]).delete()
+
     def _post_address(self):
         return self.client.post("/api/v1/customers/addresses/", {
             "address_type": "shipping", "first_name": "Alice", "last_name": "Smith",
@@ -385,7 +391,9 @@ class CustomerAddressStoreAccessTest(CustomerAddressManagementTest):
 
 class CustomerAddressEmailAndFilterTest(CustomerAddressManagementTest):
     def test_unverified_email_cannot_reach_an_existing_customers_addresses(self):
-        victim = Customer.objects.create(
+        # Sign-up in setUp already enrols alice; start clean so the pre-existing record is the victim
+        Customer.objects.filter(email="alice@example.com").delete()
+        victim =Customer.objects.create(
             store_id=self.store_id, email="alice@example.com",
             first_name="Alice", last_name="Smith", email_subscription_status="not_subscribed",
         )

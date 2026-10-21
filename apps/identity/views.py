@@ -118,9 +118,7 @@ class SignupView(PublicAuthView):
             except (ValueError, TypeError):
                 pass
 
-        if not target_stores:
-            target_stores = list(Store.objects.filter(status="active"))
-
+        # No store named: the user is not a customer of any store yet (never copy them into every store)
         for store in target_stores:
             customer, created = Customer.objects.get_or_create(
                 store=store,
