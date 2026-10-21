@@ -289,3 +289,51 @@ class PurgeStoreTest(TestCase):
         self.assertFalse(StoreTheme.objects.filter(store_id=store.pk).exists())
         self.assertTrue(Store.objects.filter(pk=other.pk).exists())
         self.assertTrue(get_user_model().objects.filter(pk=owner.pk).exists())
+
+
+class StoreAdminOwnerTest(TestCase):
+    """Stores with the same name are told apart by their slug and owner email in Django Admin."""
+
+    URL = "/admin/tenancy/store/"
+
+    def setUp(self):
+        User = get_user_model()
+        self.alice = User.objects.create_user(email="alice@example.com", first_name="A", last_name="L")
+        self.bob = User.objects.create_user(email="bob@example.com", first_name="B", last_name="O")
+        self.store_a = create_store(self.alice, "CHEGONDI's store")
+        self.store_b = create_store(self.bob, "CHEGONDI's store")
+        self.client.force_login(User.objects.create_superuser(
+            email="root@example.com", password="Root-pass-123", first_name="R", last_name="T"))
+
+    def rows(self, query=""):
+        r = self.client.get(self.URL + query)
+        self.assertEqual(r.status_code, 200)
+        cl = r.context["cl"]
+        return {s.pk: cl.model_admin.owner_emails(s) for s in cl.result_list}
+
+    def test_same_name_stores_show_their_own_slug_and_owner(self):
+        self.assertNotEqual(self.store_a.store_slug, self.store_b.store_slug)
+        self.assertEqual(self.rows(), {self.store_a.pk: "alice@example.com", self.store_b.pk: "bob@example.com"})
+        r = self.client.get(self.URL)
+        for text in ("Owner email", self.store_a.store_slug, self.store_b.store_slug, "alice@example.com"):
+            self.assertContains(r, text)
+
+    def test_search_by_owner_email_slug_or_name(self):
+        self.assertEqual(set(self.rows("?q=bob@example")), {self.store_b.pk})
+        self.assertEqual(set(self.rows(f"?q={self.store_b.store_slug}")), {self.store_b.pk})  # "...-2"
+        self.assertEqual(set(self.rows("?q=CHEGONDI")), {self.store_a.pk, self.store_b.pk})
+
+    def test_owner_comes_from_memberships_not_from_who_created_the_store(self):
+        # Alice made Bob a co-owner of her store; staff, removed owners and closed stores are handled too
+        carol = get_user_model().objects.create_user(email="carol@example.com", first_name="C", last_name="A")
+        StoreMembership.objects.create(user=self.bob, store=self.store_a, role="owner", status="active")
+        StoreMembership.objects.create(user=carol, store=self.store_a, role="staff", status="active")
+        self.assertEqual(self.rows()[self.store_a.pk], "alice@example.com, bob@example.com")
+        self.assertEqual(set(self.rows("?q=carol@")), set())  # staff are not owners
+
+        StoreMembership.objects.filter(user=self.alice, store=self.store_a).update(status="removed")
+        self.assertEqual(self.rows()[self.store_a.pk], "bob@example.com")
+        self.assertEqual(set(self.rows("?q=alice@")), set())
+
+        close_store(self.store_b)  # its owner membership becomes store_closed but it is still Bob's
+        self.assertEqual(self.rows()[self.store_b.pk], "bob@example.com")
