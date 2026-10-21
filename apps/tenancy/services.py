@@ -137,24 +137,57 @@ def purge_store(store):
     _purge(store, {(store._meta.label, store.pk)})
 
 
+def store_data_blockers(store):
+    """
+    Names of the data a store still holds that forbids deleting it permanently: anything that
+    references it with PROTECT (products, orders, payments, customers, ...). Memberships and theme
+    assignments are not blockers; delete_store clears those itself.
+    """
+    from django.db.models import PROTECT
+
+    handled = {StoreMembership, *_theme_models()}
+    blockers = []
+    for rel in Store._meta.related_objects:
+        model = rel.related_model
+        if rel.on_delete is not PROTECT or model in handled:
+            continue
+        if model._base_manager.filter(**{rel.field.name: store}).exists():
+            blockers.append(str(model._meta.verbose_name_plural))
+    return sorted(blockers)
+
+
+def _theme_models():
+    from apps.themes.models import StoreTheme
+
+    return (StoreTheme,)
+
+
 @transaction.atomic
 def delete_store(store):
     """
-    Permanently delete a store (close_store is the reversible "delete"). Its theme assignments, and its
-    own themes nobody else uses, are removed first (themes.services.remove_store_themes). Everything
-    else that references the store with PROTECT (members, products, orders, ...) still protects it:
-    then nothing at all is deleted, and the error names what is in the way.
+    Permanently delete a store (close_store is the reversible "delete"); callers must have authorized it.
+    Refused, with nothing changed, while the store still holds business data (store_data_blockers).
+    Otherwise, as one transaction: its theme assignments and its own unshared themes go
+    (themes.services.remove_store_themes), then its memberships (users and their accounts stay),
+    then the store, whose roles, invitations and access log cascade. Any failure rolls everything back.
     """
     from django.db.models import ProtectedError
     from rest_framework.exceptions import ValidationError
 
     from apps.themes.services import remove_store_themes
 
-    try:
-        remove_store_themes(store)
-        store.delete()
-    except ProtectedError as error:
-        blockers = sorted({str(obj._meta.verbose_name_plural) for obj in error.protected_objects})
+    blockers = store_data_blockers(store)
+    if blockers:
         raise ValidationError(
             {"detail": f"This store can't be deleted permanently while it still has: {', '.join(blockers)}."}
+        )
+
+    try:
+        remove_store_themes(store)
+        store.memberships.all().delete()
+        store.delete()
+    except ProtectedError as error:
+        names = sorted({str(obj._meta.verbose_name_plural) for obj in error.protected_objects})
+        raise ValidationError(
+            {"detail": f"This store can't be deleted permanently while it still has: {', '.join(names)}."}
         )

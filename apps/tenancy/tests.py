@@ -13,7 +13,7 @@ from apps.core.tests.test_flow import StoreClientMixin
 from apps.themes.models import StoreTheme, Theme, ThemeFile
 from apps.themes.services import get_store_theme
 
-from .models import Store, StoreMembership
+from .models import Store, StoreMembership, StoreRole
 from .services import close_store, create_store, delete_store, reopen_store
 
 
@@ -257,21 +257,140 @@ class DeleteStoreThemesTest(TestCase):
         self.assertEqual(get_store_theme(store).pk, row.pk)
         self.assertTrue(ThemeFile.objects.filter(theme=row.theme).exists())
 
-    def test_a_protected_store_is_refused_and_nothing_is_deleted(self):
-        owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
-        store = create_store(owner, "Has members")  # its owner membership protects it
+    def owned_store(self, name="Has members"):
+        owner = get_user_model().objects.create_user(email=f"{slugify(name)}@example.com", password="x-Strong-123")
+        return owner, create_store(owner, name)
+
+    def test_memberships_are_removed_but_users_stay(self):
+        owner, store = self.owned_store()
+        get_store_theme(store)
+        role_ids = list(store.roles.values_list("pk", flat=True))
+        self.assertTrue(role_ids)
+
+        delete_store(store)
+
+        self.assertFalse(Store.objects.filter(pk=store.pk).exists())
+        self.assertFalse(StoreMembership.objects.filter(store_id=store.pk).exists())
+        self.assertFalse(StoreRole.objects.filter(pk__in=role_ids).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=owner.pk).exists())
+
+    def test_membership_in_another_store_is_untouched(self):
+        owner, store = self.owned_store("Doomed")
+        other = create_store(owner, "Survivor")
+
+        delete_store(store)
+
+        self.assertTrue(StoreMembership.objects.filter(store=other, user=owner, status="active").exists())
+
+    def test_business_data_blocks_deletion_and_nothing_changes(self):
+        from apps.catalog.models import Brand
+
+        owner, store = self.owned_store()
         row = get_store_theme(store)
         files = ThemeFile.objects.filter(theme=row.theme).count()
+        Brand.objects.create(store=store, name="Acme")
 
         with self.assertRaises(ValidationError) as refused:
             delete_store(store)
 
-        self.assertIn("Store Memberships", str(refused.exception.detail["detail"]))
-        # Rolled back as one unit: the theme cleanup that ran first is undone too
+        self.assertIn("brands", str(refused.exception.detail["detail"]).lower())
         self.assertTrue(Store.objects.filter(pk=store.pk).exists())
+        self.assertTrue(StoreMembership.objects.filter(store=store).exists())
         self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
         self.assertTrue(Theme.objects.filter(pk=row.theme_id).exists())
         self.assertEqual(ThemeFile.objects.filter(theme=row.theme).count(), files)
+        self.assertTrue(Brand.objects.filter(store=store).exists())
+
+    def test_failure_midway_rolls_everything_back(self):
+        from unittest import mock
+
+        owner, store = self.owned_store()
+        row = get_store_theme(store)
+        files = ThemeFile.objects.filter(theme=row.theme).count()
+
+        with mock.patch.object(Store, "delete", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                delete_store(store)
+
+        # Themes and memberships were already deleted inside the transaction: all restored
+        self.assertTrue(Store.objects.filter(pk=store.pk).exists())
+        self.assertTrue(StoreMembership.objects.filter(store=store).exists())
+        self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
+        self.assertTrue(Theme.objects.filter(pk=row.theme_id).exists())
+        self.assertEqual(ThemeFile.objects.filter(theme=row.theme).count(), files)
+
+
+class PermanentDeleteApiTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.owner_token, self.store = self.sign_up("owner@example.com", "Doomed store")
+        self.url = f"/api/v1/stores/{self.store['storeId']}/permanent-delete/"
+        self.slug = self.store["storeSlug"]
+        admin = get_user_model().objects.create_user(email="admin@example.com", password="x-Strong-123", is_owner=True)
+        self.client.force_authenticate(admin)  # replaces the bearer token used by sign_up
+        self.admin = admin
+
+    def as_user(self, email, **extra):
+        user = get_user_model().objects.get(email=email)
+        self.client.force_authenticate(user)
+
+    def test_store_owner_cannot_delete_permanently(self):
+        self.as_user("owner@example.com")
+        self.ok("post", self.url, {"confirmSlug": self.slug}, expect=403)
+        self.assertTrue(Store.objects.filter(pk=self.store["storeId"]).exists())
+
+    def test_stranger_gets_404(self):
+        stranger = get_user_model().objects.create_user(email="x@example.com", password="x-Strong-123")
+        self.client.force_authenticate(stranger)
+        self.ok("post", self.url, {"confirmSlug": self.slug}, expect=403)
+
+    def test_anonymous_is_refused(self):
+        self.client.force_authenticate(None)
+        self.client.credentials()
+        r = self.client.post(self.url, {"confirmSlug": self.slug}, format="json")
+        self.assertIn(r.status_code, (401, 403))
+
+    def test_admin_needs_the_slug_to_confirm(self):
+        self.ok("post", self.url, {}, expect=400)
+        self.ok("post", self.url, {"confirmSlug": "wrong"}, expect=400)
+        self.assertTrue(Store.objects.filter(pk=self.store["storeId"]).exists())
+
+    def test_admin_deletes_an_empty_store(self):
+        self.ok("post", self.url, {"confirmSlug": self.slug}, expect=204)
+        self.assertFalse(Store.objects.filter(pk=self.store["storeId"]).exists())
+
+    def test_admin_can_delete_a_closed_store(self):
+        close_store(Store.objects.get(pk=self.store["storeId"]))
+        self.ok("post", self.url, {"confirmSlug": self.slug}, expect=204)
+        self.assertFalse(Store.objects.filter(pk=self.store["storeId"]).exists())
+
+    def test_store_with_a_product_is_refused(self):
+        self.as_user("owner@example.com")
+        self.use(self.owner_token, self.store["storeId"])
+        self.client.force_authenticate(get_user_model().objects.get(email="owner@example.com"))
+        self.ok("post", "/api/v1/catalog/products/", {"title": "P", "sku": "SKU-BLOCK-1", "price": "5"}, expect=201)
+        self.client.force_authenticate(self.admin)
+        self.client.credentials()
+
+        r = self.client.post(self.url, {"confirmSlug": self.slug}, format="json")
+
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("products", str(r.json()).lower())
+        self.assertTrue(Store.objects.filter(pk=self.store["storeId"]).exists())
+
+    def test_normal_delete_still_only_closes_and_reopen_restores(self):
+        store = Store.objects.get(pk=self.store["storeId"])
+        row = get_store_theme(store)
+        self.client.delete(f"/api/v1/stores/{store.pk}/")
+        store.refresh_from_db()
+        self.assertEqual(store.status, "closed")
+        self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
+        self.assertTrue(StoreMembership.objects.filter(store=store, status="store_closed").exists())
+
+        self.ok("post", f"/api/v1/stores/{store.pk}/reopen/", expect=200)
+        store.refresh_from_db()
+        self.assertEqual(store.status, "active")
+        self.assertTrue(StoreMembership.objects.filter(store=store, status="active").exists())
+        self.assertTrue(StoreTheme.objects.filter(pk=row.pk).exists())
 
 
 class PurgeStoreTest(TestCase):
