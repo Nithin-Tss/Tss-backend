@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.db.models import F, Q
 
 from apps.catalog.models import Product, ProductVariant
 from apps.customers.models import Customer
@@ -57,7 +58,10 @@ class Cart(models.Model):
         auto_now=True,
     )
 
-    is_deleted = models.BooleanField()
+    is_deleted = models.BooleanField(
+    default=False,
+    db_default=False,
+        )
 
     deleted_at = models.DateTimeField(
         null=True,
@@ -130,7 +134,10 @@ class CartItem(models.Model):
         auto_now=True,
     )
 
-    is_deleted = models.BooleanField()
+    is_deleted = models.BooleanField(
+    default=False,
+    db_default=False,
+    )
 
     deleted_at = models.DateTimeField(
         null=True,
@@ -261,7 +268,10 @@ class Checkout(models.Model):
         auto_now=True,
     )
 
-    is_deleted = models.BooleanField()
+    is_deleted = models.BooleanField(
+    default=False,
+    db_default=False,
+    )
 
     deleted_at = models.DateTimeField(
         null=True,
@@ -350,7 +360,10 @@ class CheckoutItem(models.Model):
         auto_now=True,
     )
 
-    is_deleted = models.BooleanField()
+    is_deleted = models.BooleanField(
+    default=False,
+    db_default=False,
+    )
 
     deleted_at = models.DateTimeField(
         null=True,
