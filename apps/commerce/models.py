@@ -80,6 +80,38 @@ class Cart(models.Model):
             ),
         ]
 
+        constraints = [
+        models.UniqueConstraint(
+            fields=["store", "customer"],
+            condition=Q(status="open", is_deleted=False, customer__isnull=False),
+            name="uq_cart_open_store_customer",
+        ),
+        models.UniqueConstraint(
+            fields=["store", "session_id"],
+            condition=(
+                Q(
+                    status="open",
+                    is_deleted=False,
+                    customer__isnull=True,
+                    session_id__isnull=False,
+                )
+                & ~Q(session_id="")
+            ),
+            name="uq_cart_open_store_session",
+        ),
+        models.CheckConstraint(
+            condition=(
+                Q(customer__isnull=False)
+                | (Q(session_id__isnull=False) & ~Q(session_id=""))
+            ),
+            name="ck_cart_owner_or_session",
+        ),
+        models.CheckConstraint(
+            condition=Q(status__in=["open", "checked_out", "merged", "expired"]),
+            name="ck_cart_status_valid",
+        ),
+            ]
+
     def __str__(self):
         return str(self.id)
 
@@ -153,8 +185,15 @@ class CartItem(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0),
                 name="ck_cart_item_quantity_positive",
-            )
+            ),
+            models.CheckConstraint(
+                    condition=Q(unit_price__gte=0),
+                    name="ck_cart_item_unit_price_nonnegative",
+            ),
+
         ]
+
+      
 
     def __str__(self):
         return f"{self.cart} - {self.product}"
@@ -290,6 +329,29 @@ class Checkout(models.Model):
             ),
         ]
 
+        constraints = [
+    models.UniqueConstraint(
+        fields=["cart"],
+        condition=Q(status="open", is_deleted=False),
+        name="uq_checkout_open_cart",
+    ),
+    models.CheckConstraint(
+        condition=Q(status__in=["open", "completed", "abandoned"]),
+        name="ck_checkout_status_valid",
+    ),
+    models.CheckConstraint(
+        condition=(
+            Q(subtotal__gte=0)
+            & Q(discount_amount__gte=0)
+            & Q(tax_amount__gte=0)
+            & Q(shipping_amount__gte=0)
+            & Q(total_amount__gte=0)
+            & Q(discount_amount__lte=F("subtotal"))
+        ),
+        name="ck_checkout_amounts_nonnegative",
+    ),
+        ]
+
 
     def __str__(self):
         return str(self.id)
@@ -379,8 +441,14 @@ class CheckoutItem(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0),
                 name="ck_checkout_item_quantity_positive",
-            )
+            ),
+            models.CheckConstraint(
+            condition=Q(unit_price__gte=0) & Q(total_price__gte=0),
+            name="ck_checkout_item_prices_nonnegative",
+        ),
+            
         ]
+        
 
     def __str__(self):
         return f"{self.checkout} - {self.product_name}"
