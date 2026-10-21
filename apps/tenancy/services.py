@@ -119,9 +119,11 @@ def _purge(obj, seen):
             fresh = [b for b in blockers if (b._meta.label, b.pk) not in seen]
             if not fresh:
                 raise
-            for blocker in fresh:
-                seen.add((blocker._meta.label, blocker.pk))
-                _purge(blocker, seen)
+        # Delete the blockers outside the except block: an error from them must not carry this
+        # handled error along, whose objects are deleted (pk None) by then and can't even be printed.
+        for blocker in fresh:
+            seen.add((blocker._meta.label, blocker.pk))
+            _purge(blocker, seen)
 
 
 @transaction.atomic

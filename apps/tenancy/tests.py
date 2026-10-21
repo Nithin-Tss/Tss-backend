@@ -290,6 +290,39 @@ class PurgeStoreTest(TestCase):
         self.assertTrue(Store.objects.filter(pk=other.pk).exists())
         self.assertTrue(get_user_model().objects.filter(pk=owner.pk).exists())
 
+    def test_a_failure_deep_in_the_purge_is_reported_and_nothing_is_deleted(self):
+        # The store's sales channel is deleted first, then a later deletion fails (as a database rule
+        # can on the real database). The error must be printable: it used to drag along the handled
+        # ProtectedError, whose already-deleted sales channel crashed Django's error page with
+        # "Cannot retrieve deferred field 'name' from an unsaved model". The purge must roll back.
+        from unittest import mock
+
+        from django.db import IntegrityError, models
+
+        from apps.catalog.models import SalesChannel
+        from .services import purge_store
+
+        owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
+        store = create_store(owner, "Doomed")
+        channel = SalesChannel.objects.create(store=store, name="Online Store", type="online")
+        real_delete = models.Model.delete
+
+        def fails_once_the_channel_is_gone(obj, *args, **kwargs):
+            if not SalesChannel.objects.filter(pk=channel.pk).exists():
+                raise IntegrityError("blocked by the database")
+            return real_delete(obj, *args, **kwargs)
+
+        with mock.patch.object(models.Model, "delete", fails_once_the_channel_is_gone):
+            with self.assertRaises(IntegrityError) as caught:
+                purge_store(store)
+
+        error = caught.exception
+        while error is not None:  # every error in the chain prints, as Django's error page does
+            str(error)
+            error = error.__context__
+        self.assertTrue(Store.objects.filter(pk=store.pk).exists())
+        self.assertTrue(SalesChannel.objects.filter(pk=channel.pk).exists())
+
 
 class StoreAdminOwnerTest(TestCase):
     """Stores with the same name are told apart by their slug and owner email in Django Admin."""
