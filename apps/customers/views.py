@@ -1,5 +1,6 @@
 import uuid
 
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import exceptions, status, viewsets
 from rest_framework.decorators import action
@@ -10,7 +11,7 @@ from apps.core.permissions import ACTIVE, STORE_HEADER
 from apps.core.viewsets import StoreScopedViewSet
 from apps.tenancy.access import membership_permissions
 from apps.tenancy.models import Store, StoreMembership
-from apps.tenancy.services import OWNER, platform_membership
+from apps.tenancy.services import CLOSED, platform_membership
 
 from . import services
 from .models import Customer, CustomerAddress
@@ -61,6 +62,10 @@ class CustomerAddressViewSet(viewsets.ModelViewSet):
     def _resolve_store_and_access(self, request):
         """
         Resolves the active store and the signed-in user's role/permissions in that store.
+
+        Staff reach their store through a membership. Shoppers have none, so they can
+        only use stores that are open. With no X-Store-Id header we fall back to a store
+        the user already belongs to or shops at, never to an arbitrary one.
         """
         raw_store_id = request.headers.get(STORE_HEADER)
         store = None
@@ -68,12 +73,10 @@ class CustomerAddressViewSet(viewsets.ModelViewSet):
         if raw_store_id:
             try:
                 store_uuid = uuid.UUID(str(raw_store_id).strip())
-                store = Store.objects.filter(pk=store_uuid).first()
             except (ValueError, TypeError):
                 raise exceptions.ParseError(f"{STORE_HEADER} is not a valid store id.")
-
-        if store is None:
-            # Fallback: check if user has an active store membership
+            store = Store.objects.filter(pk=store_uuid).first()
+        else:
             membership = (
                 StoreMembership.objects.select_related("store")
                 .filter(user=request.user, status=ACTIVE)
@@ -82,77 +85,81 @@ class CustomerAddressViewSet(viewsets.ModelViewSet):
             )
             if membership:
                 store = membership.store
-            else:
-                # Check if user is associated as a customer in an active store
+            elif request.user.email_verified_at is not None:
+                # Only a verified address may be matched to shopper records.
                 existing_cust = (
                     Customer.objects.select_related("store")
-                    .filter(email__iexact=request.user.email)
+                    .filter(email__iexact=request.user.email, store__status=ACTIVE)
                     .order_by("-updated_at")
                     .first()
                 )
                 if existing_cust:
                     store = existing_cust.store
-                else:
-                    store = Store.objects.filter(status=ACTIVE).first()
 
         if store is None:
+            if raw_store_id:
+                # Same answer whether the store exists or not, so ids can't be probed.
+                raise exceptions.NotFound("Store not found.")
             raise exceptions.ParseError(f"{STORE_HEADER} header is required.")
 
-        request.store = store
-
-        # Check store membership and roles
         membership = (
             StoreMembership.objects.select_related("store")
             .filter(user=request.user, store=store, status=ACTIVE)
             .first()
         )
 
-        if membership is None and request.user.is_owner:
+        if membership is None and request.user.is_owner and store.status != CLOSED:
             membership = platform_membership(request.user, store)
 
+        if membership is None and store.status != ACTIVE:
+            raise exceptions.NotFound("Store not found.")
+
+        request.store = store
         request.membership = membership
         request.store_role = membership.role if membership else None
 
-    def can_manage_all(self, request):
+    def _staff_permissions(self, request):
         membership = getattr(request, "membership", None)
-        if not membership:
-            return False
-        if membership.role == OWNER:
-            return True
-        perms = membership_permissions(membership)
-        return "customers.manage" in perms
+        if membership is None:
+            return None
+        return membership_permissions(membership)
+
+    def can_manage_all(self, request):
+        perms = self._staff_permissions(request)
+        return perms is not None and "customers.manage" in perms
 
     def can_view_all(self, request):
-        if self.can_manage_all(request):
-            return True
-        membership = getattr(request, "membership", None)
-        if not membership:
-            return False
-        if membership.role == OWNER:
-            return True
-        perms = membership_permissions(membership)
-        return "customers.view" in perms
+        perms = self._staff_permissions(request)
+        return perms is not None and (
+            "customers.view" in perms or "customers.manage" in perms
+        )
 
     def get_user_customer(self, request):
         """
         Returns or creates the Customer record associated with the logged-in user in this store.
         """
         if not hasattr(request, "_user_customer"):
+            if request.user.email_verified_at is None:
+                # Customers are matched by email, so the address must be proven first;
+                # otherwise anyone could sign up with someone else's email and read their addresses.
+                raise exceptions.PermissionDenied("Verify your email address to manage your addresses.")
             email = (request.user.email or "").strip().lower()
-            customer = Customer.objects.filter(
-                store=request.store, email__iexact=email
-            ).first()
-
-            if customer is None:
-                first_name = (request.user.first_name or "").strip()
-                last_name = (request.user.last_name or "").strip()
-                customer = Customer.objects.create(
-                    store=request.store,
-                    email=email,
-                    first_name=first_name,
-                    last_name=last_name,
-                    email_subscription_status="not_subscribed",
+            with transaction.atomic():
+                # Lock the store row so concurrent first requests don't both create a customer.
+                Store.objects.select_for_update().get(pk=request.store.pk)
+                customer = (
+                    Customer.objects.filter(store=request.store, email__iexact=email)
+                    .order_by("created_at")
+                    .first()
                 )
+                if customer is None:
+                    customer = Customer.objects.create(
+                        store=request.store,
+                        email=email,
+                        first_name=(request.user.first_name or "").strip(),
+                        last_name=(request.user.last_name or "").strip(),
+                        email_subscription_status="not_subscribed",
+                    )
             request._user_customer = customer
 
         return request._user_customer
@@ -160,6 +167,12 @@ class CustomerAddressViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         store = self.request.store
         customer_param = self.request.query_params.get("customer", "").strip()
+
+        if customer_param and customer_param != "me":
+            try:
+                customer_param = str(uuid.UUID(customer_param))
+            except ValueError:
+                raise exceptions.ParseError("customer must be a valid customer id or 'me'.")
 
         if customer_param == "me":
             user_cust = self.get_user_customer(self.request)
@@ -219,9 +232,9 @@ class CustomerAddressViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         instance = serializer.instance
         can_manage = self.can_manage_all(self.request)
-        user_cust = self.get_user_customer(self.request)
 
         if not can_manage:
+            user_cust = self.get_user_customer(self.request)
             if instance.customer != user_cust:
                 raise exceptions.PermissionDenied(
                     "You can only edit your own addresses."

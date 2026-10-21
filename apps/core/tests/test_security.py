@@ -285,7 +285,7 @@ class EmailVerificationTest(AccountTestBase):
         self.verify(self.token)
         self.assertTrue(self.verified())
 
-        r = self.client.patch("/api/v1/auth/me/", {"email": "ravi.new@example.com"}, format="json",
+        r = self.client.patch("/api/v1/auth/me/", {"email": "ravi.new@example.com", "currentPassword": PASSWORD}, format="json",
                               HTTP_AUTHORIZATION=f"Bearer {self.tokens['access']}")
         self.assertEqual(r.status_code, 200, r.content)
         self.assertFalse(r.json()["user"]["emailVerified"])

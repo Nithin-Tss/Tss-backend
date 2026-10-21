@@ -5,7 +5,7 @@ orders app's job (orders.services.create_order).
 """
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -361,9 +361,13 @@ def _guest_customer(checkout):
     """
     customer = Customer.objects.filter(store=checkout.store, email__iexact=checkout.email).first()
     if customer is None:
-        customer = Customer.objects.create(
-            store=checkout.store, email=checkout.email, email_subscription_status="not_subscribed"
-        )
+        try:
+            with transaction.atomic():
+                customer = Customer.objects.create(
+                    store=checkout.store, email=checkout.email, email_subscription_status="not_subscribed"
+                )
+        except IntegrityError:  # a concurrent checkout created it first
+            customer = Customer.objects.get(store=checkout.store, email__iexact=checkout.email)
     return customer
 
 

@@ -13,6 +13,7 @@ from apps.tenancy.access import accept_invitations
 from apps.tenancy.services import stores_for_user
 
 from .email_links import send_password_reset_email, send_verification_email
+from .models import normalize_email
 from .serializers import (
     ChangePasswordSerializer, LoginSerializer, PasswordResetConfirmSerializer,
     PasswordResetLinkSerializer, PasswordResetRequestSerializer, ProfileSerializer, SignupSerializer,
@@ -214,7 +215,9 @@ class MeView(APIView):
                             -> {user, stores}
 
     A changed email counts as unverified, and a verification link is sent to
-    the new address.
+    the new address. Changing it also needs {currentPassword}: a stolen access
+    token alone must not be enough to move the account to another address
+    (and then reset its password).
     """
 
     permission_classes = [IsAuthenticated]
@@ -228,6 +231,14 @@ class MeView(APIView):
 
         serializer = ProfileSerializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+
+        new_email = serializer.validated_data.get("email", old_email)
+        if new_email != normalize_email(old_email):
+            current = request.data.get("currentPassword")
+            if not isinstance(current, str) or not current:
+                raise serializers.ValidationError({"currentPassword": "Enter your current password to change your email."})
+            if not user.check_password(current):
+                raise serializers.ValidationError({"currentPassword": "Current password is incorrect."})
         user = serializer.save()
 
         if user.email != old_email:
