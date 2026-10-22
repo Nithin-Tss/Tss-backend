@@ -67,8 +67,31 @@ def record_pending_payment(store, order, checkout, amount, provider="cod", custo
 
 
 @transaction.atomic
+def capture_payment(payment, reference=None):
+    """Mark a pending payment (e.g. cash on delivery) as received."""
+    payment = Payment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status != PENDING:
+        raise ValidationError("Only a pending payment can be captured.")
+
+    PaymentTransaction.objects.create(
+        payment=payment,
+        transaction_type=CAPTURE,
+        amount=payment.amount,
+        status=SUCCESS,
+        provider_transaction_id=reference,
+    )
+    payment.status = CAPTURED
+    if reference:
+        payment.provider_payment_id = reference
+    payment.save(update_fields=["status", "provider_payment_id", "updated_at"])
+    return payment
+
+
+@transaction.atomic
 def refund(payment, amount, reason=None):
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
+        raise ValidationError("Only a captured payment can be refunded.")
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     left = payment.amount - refunded_total(payment)
 
@@ -90,8 +113,9 @@ def refund(payment, amount, reason=None):
 
 
 def paid_total(order):
-    """Captured minus refunded, across all payments for this order."""
+    """Captured minus refunded, across all received payments for this order (pending ones don't count)."""
     total = Decimal("0.00")
-    for payment in Payment.objects.filter(order=order, is_deleted=False):
+    received = (CAPTURED, PARTIALLY_REFUNDED, REFUNDED)
+    for payment in Payment.objects.filter(order=order, is_deleted=False, status__in=received):
         total += payment.amount - refunded_total(payment)
     return total

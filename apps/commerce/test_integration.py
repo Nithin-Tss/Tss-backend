@@ -371,6 +371,36 @@ class PricingAndPaymentTests(CommerceIntegrationBase):
         self.assertEqual(again.data["id"], order.data["id"])
         self.assertEqual(len(self.staff.get(f"/api/v1/payments/?order={order.data['id']}").json()), 1)
 
+    def test_pending_cod_payment_is_not_counted_as_paid_and_cannot_be_refunded(self):
+        order = self.place(self.checkout(email="a@b.com", shipping_address=ADDRESS)).data
+        payment = self.staff.get(f"/api/v1/payments/?order={order['id']}").json()[0]
+
+        refund = self.staff.post(f"/api/v1/payments/{payment['id']}/refund/", {"amount": "1.00"}, format="json")
+        self.assertEqual(refund.status_code, 400)
+
+        # Cash isn't in yet, so a shopper may still cancel
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{order['id']}/cancel/").status_code, 200)
+
+    def test_capturing_cod_payment_marks_it_received_and_blocks_shopper_cancel(self):
+        order = self.place(self.checkout(email="a@b.com", shipping_address=ADDRESS)).data
+        payment = self.staff.get(f"/api/v1/payments/?order={order['id']}").json()[0]
+
+        captured = self.staff.post(f"/api/v1/payments/{payment['id']}/capture/", {"reference": "CASH-1"}, format="json")
+        self.assertEqual((captured.status_code, captured.data["status"]), (200, "captured"))
+        self.assertEqual(self.staff.post(f"/api/v1/payments/{payment['id']}/capture/").status_code, 400)
+
+        # Nothing left to collect
+        extra = self.staff.post("/api/v1/payments/", {"order": order["id"], "amount": "1.00"}, format="json")
+        self.assertEqual(extra.status_code, 400)
+
+        # Money received: the shopper can't cancel; staff can still refund
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{order['id']}/cancel/").status_code, 400)
+        refund = self.staff.post(f"/api/v1/payments/{payment['id']}/refund/", {"amount": "1.00"}, format="json")
+        self.assertEqual(refund.status_code, 200)
+
+    def test_bad_order_filter_on_payments_is_a_400(self):
+        self.assertEqual(self.staff.get("/api/v1/payments/?order=abc").status_code, 400)
+
     def test_unknown_payment_method_is_rejected_and_nothing_is_ordered(self):
         cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
         r = self.shopper.post(f"{self.base}/checkout/{cid}/complete/", {"payment_method": "bitcoin"}, format="json")
