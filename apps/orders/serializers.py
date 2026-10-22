@@ -7,13 +7,22 @@ from .models import DraftOrder, DraftOrderDetail, Order, OrderItem
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
     class Meta:
         model = OrderItem
         fields = [
             "id", "product", "variant", "product_name", "sku", "quantity",
-            "unit_price", "discount_amount", "tax_amount", "total",
+            "unit_price", "discount_amount", "tax_amount", "total", "image_url",
         ]
         read_only_fields = fields
+
+    def get_image_url(self, item):
+        if item.product_id:
+            img = item.product.images.order_by("position").first()
+            if img:
+                return img.url
+        return None
 
 
 class OrderSerializer(serializers.ModelSerializer):

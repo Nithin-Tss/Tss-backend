@@ -134,14 +134,19 @@ class CustomerSerializer(serializers.ModelSerializer):
     location = serializers.SerializerMethodField()
     orders_count = serializers.SerializerMethodField()
     amount_spent = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
 
     class Meta:
         model = Customer
         fields = [
             "id", "first_name", "last_name", "name", "email", "email_subscription_status",
             "city", "state", "country", "location", "orders_count", "amount_spent",
-            "addresses", "created_at", "updated_at",
+            "phone", "addresses", "created_at", "updated_at",
         ]
+
+    def get_phone(self, obj):
+        default_addr = next((a for a in obj.addresses.all() if a.is_default), None) or obj.addresses.first()
+        return default_addr.phone if default_addr else None
 
     def get_name(self, obj):
         name = " ".join(filter(None, [obj.first_name, obj.last_name])).strip()
@@ -159,12 +164,14 @@ class CustomerSerializer(serializers.ModelSerializer):
         return loc or "—"
 
     def get_orders_count(self, obj):
-        return obj.orders.count() if hasattr(obj, "orders") else 0
+        if hasattr(obj, "orders"):
+            return obj.orders.filter(status__in=["open", "closed"]).exclude(status="cancelled").count()
+        return 0
 
     def get_amount_spent(self, obj):
         from django.db.models import Sum
         if hasattr(obj, "orders"):
-            total = obj.orders.aggregate(total_sum=Sum("total"))["total_sum"]
+            total = obj.orders.filter(status__in=["open", "closed"]).exclude(status="cancelled").aggregate(total_sum=Sum("total"))["total_sum"]
             return f"{total:.2f}" if total is not None else "0.00"
         return "0.00"
 

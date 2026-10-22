@@ -88,6 +88,58 @@ class CustomerViewSet(StoreScopedViewSet):
             )
         return qs
 
+    @action(detail=True, methods=["get"], url_path="timeline")
+    def timeline(self, request, pk=None):
+        customer = self.get_object()
+        events = []
+
+        # Customer account creation
+        events.append({
+            "id": f"cust_created_{customer.id}",
+            "type": "customer_created",
+            "title": "Customer was created.",
+            "description": "Customer was created.",
+            "timestamp": customer.created_at.isoformat(),
+        })
+
+        # Customer update event if modified after creation
+        if customer.updated_at and (customer.updated_at - customer.created_at).total_seconds() > 60:
+            events.append({
+                "id": f"cust_updated_{customer.id}",
+                "type": "customer_updated",
+                "title": "Customer details updated.",
+                "description": "Customer details updated.",
+                "timestamp": customer.updated_at.isoformat(),
+            })
+
+        # Order related events
+        for order in customer.orders.all().order_by("-created_at"):
+            channel_name = order.sales_channel.name if order.sales_channel else "Online Store"
+            events.append({
+                "id": f"order_placed_{order.id}",
+                "type": "order_placed",
+                "order_number": order.order_number,
+                "order_id": str(order.id),
+                "channel": channel_name,
+                "title": f"This customer placed test order #{order.order_number} on {channel_name}.",
+                "description": f"This customer placed test order #{order.order_number} on {channel_name}.",
+                "timestamp": order.created_at.isoformat(),
+            })
+            events.append({
+                "id": f"order_email_{order.id}",
+                "type": "order_email",
+                "order_number": order.order_number,
+                "order_id": str(order.id),
+                "email": customer.email or "",
+                "title": f"Order Confirmation email for test order #{order.order_number} sent to this customer ({customer.email or ''}).",
+                "description": f"Order Confirmation email for test order #{order.order_number} sent to this customer ({customer.email or ''}).",
+                "timestamp": order.created_at.isoformat(),
+            })
+
+        # Sort chronological (newest first)
+        events.sort(key=lambda x: x["timestamp"], reverse=True)
+        return Response(events)
+
 
 class CustomerAddressViewSet(viewsets.ModelViewSet):
     """
