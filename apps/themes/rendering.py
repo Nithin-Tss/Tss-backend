@@ -25,7 +25,8 @@ from django.utils.text import slugify
 
 from apps.catalog.models import EXTRA_FIELDS
 from apps.catalog.services import published_collections, published_products
-from apps.orders.models import OrderItem
+from apps.customers.models import Customer, CustomerAddress
+from apps.orders.models import Order, OrderItem
 
 from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import cart as cart_data
@@ -143,9 +144,10 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .wishlist-page{padding:48px 0 64px}.wishlist-page__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
 .wishlist-page__empty{padding:48px 24px;text-align:center;border:1px solid var(--line);border-radius:var(--radius)}
 .wishlist-page__empty p{color:var(--muted)}
-.site-header__cart{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:inherit;text-decoration:none;border-radius:50%}
-.site-header__cart svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.site-header__cart:hover{background:var(--soft)}
+.site-header__search,.site-header__account,.site-header__cart{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin-left:4px;color:inherit;text-decoration:none;border-radius:50%}
+.site-header__search svg,.site-header__account svg,.site-header__cart svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.site-header__cart svg{width:24px;height:24px;stroke-width:1.8}
+.site-header__search:hover,.site-header__account:hover,.site-header__cart:hover{background:var(--soft)}
 .site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
 .site-header__cart-count[hidden]{display:none}
 .site-header__actions+.site-header__actions{margin-left:0}
@@ -1607,10 +1609,141 @@ def render_cart_html(store, data, opts):
     )
 
 
+def _customer_drop(customer, user, store, base_url):
+    """A customer drop for Liquid: name, email, phone, addresses, orders."""
+    if customer is None:
+        return None
+    addresses = list(CustomerAddress.objects.filter(customer=customer).order_by("-is_default", "-created_at"))
+    orders_qs = Order.objects.filter(store=store, customer=customer).prefetch_related("items", "items__product").order_by("-created_at")
+
+    def format_address(addr):
+        return {
+            "id": str(addr.pk),
+            "address_type": addr.address_type,
+            "first_name": addr.first_name or "",
+            "last_name": addr.last_name or "",
+            "name": f"{addr.first_name or ''} {addr.last_name or ''}".strip(),
+            "company": addr.company or "",
+            "address1": addr.address_line_1,
+            "address2": addr.address_line_2 or "",
+            "city": addr.city,
+            "state": addr.state,
+            "postal_code": addr.postal_code,
+            "country": addr.country,
+            "phone": addr.phone or "",
+            "is_default": addr.is_default,
+        }
+
+    def format_order(ord_obj):
+        items = []
+        for itm in ord_obj.items.all():
+            items.append({
+                "id": str(itm.pk),
+                "title": itm.product.title if itm.product else "Product",
+                "quantity": itm.quantity,
+                "price": itm.price_per_unit,
+                "total_price": itm.total_price,
+                "product_url": f"{base_url}/products/{itm.product.pk}" if itm.product else "#",
+            })
+        return {
+            "id": str(ord_obj.pk),
+            "order_number": ord_obj.order_number,
+            "created_at": ord_obj.created_at,
+            "date": _date_text(ord_obj.created_at),
+            "status": ord_obj.status,
+            "fulfillment_status": ord_obj.fulfillment_status,
+            "total": ord_obj.total,
+            "items": items,
+            "items_count": sum(i["quantity"] for i in items),
+        }
+
+    addr_drops = [format_address(a) for a in addresses]
+    default_addr = next((a for a in addr_drops if a["is_default"]), addr_drops[0] if addr_drops else None)
+    order_drops = [format_order(o) for o in orders_qs]
+
+    return {
+        "id": str(customer.pk),
+        "name": f"{customer.first_name or ''} {customer.last_name or ''}".strip() or "Customer",
+        "first_name": customer.first_name or "",
+        "last_name": customer.last_name or "",
+        "email": customer.email,
+        "phone": (user.phone if user else "") or "",
+        "addresses": addr_drops,
+        "addresses_count": len(addr_drops),
+        "default_address": default_addr,
+        "orders": order_drops,
+        "orders_count": len(order_drops),
+    }
+
+
+def _sample_customer_drop(base_url):
+    """Realistic customer data for the theme customizer preview."""
+    sample_address = {
+        "id": "sample-addr-1",
+        "address_type": "shipping",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "name": "Jane Doe",
+        "company": "",
+        "address1": "123 Market Street",
+        "address2": "Suite 400",
+        "city": "Sydney",
+        "state": "NSW",
+        "postal_code": "2000",
+        "country": "Australia",
+        "phone": "+61 400 000 000",
+        "is_default": True,
+    }
+    sample_orders = [
+        {
+            "id": "sample-order-1",
+            "order_number": "#1001",
+            "created_at": timezone.now(),
+            "date": _date_text(timezone.now()),
+            "status": "paid",
+            "fulfillment_status": "fulfilled",
+            "total": Decimal("145.00"),
+            "items": [
+                {
+                    "id": "sample-item-1",
+                    "title": "Signature Canvas Tote",
+                    "quantity": 1,
+                    "price": Decimal("85.00"),
+                    "total_price": Decimal("85.00"),
+                    "product_url": "#",
+                },
+                {
+                    "id": "sample-item-2",
+                    "title": "Minimalist Water Bottle",
+                    "quantity": 1,
+                    "price": Decimal("60.00"),
+                    "total_price": Decimal("60.00"),
+                    "product_url": "#",
+                },
+            ],
+            "items_count": 2,
+        }
+    ]
+    return {
+        "id": "sample-customer",
+        "name": "Jane Doe",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "email": "jane.doe@example.com",
+        "phone": "+61 400 000 000",
+        "addresses": [sample_address],
+        "addresses_count": 1,
+        "default_address": sample_address,
+        "orders": sample_orders,
+        "orders_count": 1,
+    }
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
-                filters=None):
+                filters=None, customer_page=None, customer=None, customer_user=None,
+                auth_error=None, auth_success=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -1632,7 +1765,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             files[promotions_path] = promotions_markup
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
     # A page template whose file is gone shows the base Page template
-    if page != base_page(page) and f"templates/{page}.liquid" not in files:
+    if not customer_page and page != base_page(page) and f"templates/{page}.liquid" not in files:
         page = base_page(page)
     settings = data["settings"]
     base_url = shop_url(store)
@@ -1809,7 +1942,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             "pages": pages,
         }
 
-    template_data = data["templates"].get(page) or default_template(page)
+    template_data = data["templates"].get(page) or ({"order": [], "sections": {}} if customer_page else default_template(page))
 
     # Posts are read only where they show: the blog pages and "Latest posts" sections
     shows_posts = page in ("blog", "article") or any(
@@ -1825,8 +1958,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     elif page == "article" and posts:
         index = next((i for i, p in enumerate(posts) if p["handle"] == article), 0)
         article_drop = _article_drop(posts, index)
-
     page_drop = page_content(store, base_url, page_handle, editor, page) if base_page(page) == "page" else None
+
+    if customer is None and request is not None and not editor:
+        from .views import get_storefront_customer
+        customer, customer_user = get_storefront_customer(store, request)
 
     menu_links = navbar_menu_links(store, base_url)
     common = {
@@ -1846,6 +1982,10 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         # Liquid's `cart` (item_count): headers read it, e.g. {% assign cart_count = cart.item_count | default: 0 %}
         "cart": {"item_count": cart_count},
         "cart_session": cart_session,
+        "customer": _customer_drop(customer, customer_user, store, base_url) if customer else (_sample_customer_drop(base_url) if editor else None),
+        "customer_logged_in": customer is not None,
+        "error": auth_error or "",
+        "success": auth_success or "",
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         "menu_links": menu_links,
@@ -2076,12 +2216,43 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             wishlist_content,
         )))
 
+    if customer_page:
+        tpl_name = f"templates/{customer_page}.liquid"
+        alt_tpl_name = f"templates/customers-{customer_page}.liquid"
+        target_tpl = tpl_name if tpl_name in files else (alt_tpl_name if alt_tpl_name in files else None)
+
+        if target_tpl:
+            cust_content = env.get_template(target_tpl).render(**common)
+        else:
+            if customer_page in ("login", "register"):
+                cust_content = env.from_string(
+                    "{% render 'customer-auth', mode: mode, customer: customer, return_url: return_url, error: error, success: success %}"
+                ).render(**{**common, "mode": customer_page})
+            else:
+                cust_content = env.from_string(
+                    "{% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success %}"
+                ).render(**common)
+
+        content = Markup("".join((
+            str(theme_css(settings, tokens)),
+            str(SECTION_CSS),
+            str(TYPE_CSS),
+            str(CUSTOM_CSS),
+            cust_content,
+        )))
+
     if product:
         title = product.seo_title or product.title
     elif cart_page:
         title = "Cart"
     elif wishlist_page_ids is not None:
         title = "Wishlist"
+    elif customer_page == "login":
+        title = "Sign in or create account"
+    elif customer_page == "register":
+        title = "Create Account"
+    elif customer_page == "account":
+        title = "My Account"
     elif collection_drop:
         title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
     elif page_drop:

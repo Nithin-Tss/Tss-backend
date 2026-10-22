@@ -106,30 +106,33 @@ def reopen_store(store):
     store.memberships.filter(status=STORE_CLOSED).update(status=ACTIVE)
 
 
-def _purge(obj, seen):
-    """Delete obj, first deleting whatever still protects it (PROTECT/RESTRICT), depth first."""
-    from django.db.models import Model, ProtectedError, RestrictedError
-
-    from apps.inventory.models import InventoryHistory
+def _purge(queryset, seen):
+    """
+    Delete the rows of queryset, first deleting whatever still protects them (PROTECT/RESTRICT), depth first.
+    Works a model at a time with bulk deletes: one query per model, not one per row.
+    """
+    from django.db.models import ProtectedError, QuerySet, RestrictedError
 
     while True:
         try:
-            if isinstance(obj, InventoryHistory):
-                # Append-only: its own delete() refuses. Purging the whole store is the one sanctioned exception.
-                Model.delete(obj)
-            else:
-                obj.delete()
+            # The base QuerySet.delete skips append-only guards (InventoryHistory refuses its own delete);
+            # purging the whole store is the one sanctioned exception.
+            QuerySet.delete(queryset)
             return
         except (ProtectedError, RestrictedError) as error:
             blockers = error.protected_objects if isinstance(error, ProtectedError) else error.restricted_objects
-            fresh = [b for b in blockers if (b._meta.label, b.pk) not in seen]
+            fresh = {}
+            for blocker in blockers:
+                key = (blocker._meta.label, blocker.pk)
+                if key not in seen:
+                    seen.add(key)
+                    fresh.setdefault(blocker._meta.model, []).append(blocker.pk)
             if not fresh:
                 raise
         # Delete the blockers outside the except block: an error from them must not carry this
-        # handled error along, whose objects are deleted (pk None) by then and can't even be printed.
-        for blocker in fresh:
-            seen.add((blocker._meta.label, blocker.pk))
-            _purge(blocker, seen)
+        # handled error along, whose objects are deleted by then and can't even be printed.
+        for model, pks in fresh.items():
+            _purge(model._base_manager.filter(pk__in=pks), seen)
 
 
 @transaction.atomic
@@ -142,7 +145,7 @@ def purge_store(store):
     from apps.themes.services import remove_store_themes
 
     remove_store_themes(store)
-    _purge(store, {(store._meta.label, store.pk)})
+    _purge(Store._base_manager.filter(pk=store.pk), {(store._meta.label, store.pk)})
 
 
 def store_data_blockers(store):

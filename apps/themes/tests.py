@@ -17,13 +17,40 @@ from . import section_sync as sync
 
 
 # The starter header's loop over the wishlist and cart icons, in block order
-HEADER_ICONS_LOOP = """    {%- if wishlist_blocks.size > 0 or cart_blocks.size > 0 -%}
+HEADER_ICONS_LOOP = """    {%- assign has_actions = false -%}
+    {%- if s.show_search != false or s.show_account != false or wishlist_blocks.size > 0 or cart_blocks.size > 0 -%}{%- assign has_actions = true -%}{%- endif -%}
+    {%- if has_actions -%}
       <div class="site-header__actions">
+        {%- if s.show_search != false -%}
+          <a class="site-header__search" href="{{ shop.url }}/collections/all" aria-label="Search" title="Search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </a>
+        {%- endif -%}
+        {%- if s.show_account != false -%}
+          <style>.site-header__account:hover { background: transparent; opacity: 1; }</style>
+          {%- if customer_logged_in -%}
+            <a class="site-header__account" href="{{ shop.url }}/account/" aria-label="Account" title="Account">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
+              </svg>
+            </a>
+          {%- else -%}
+            <a class="site-header__account" href="{{ shop.url }}/account/login" aria-label="Sign in or create account" title="Sign in or create account">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
+              </svg>
+            </a>
+          {%- endif -%}
+        {%- endif -%}
         {%- for block in section.blocks -%}
           {%- if block.type == 'wishlist' -%}
             {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
           {%- elsif block.type == 'cart' -%}
             {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
+          {%- elsif block.type == 'profile' -%}
+            <a class="site-header__profile" href="{{ block.settings.url | default: '/account' }}"{{ block.attrs }}><img src="{{ block.settings.image }}" alt="" width="{{ block.settings.size }}"></a>
           {%- endif -%}
         {%- endfor -%}
       </div>
@@ -2336,7 +2363,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 38)
+        self.assertEqual(theme.theme_data["starter_revision"], 39)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -3098,7 +3125,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 38)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 39)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -4534,3 +4561,265 @@ class ThemeLibraryTest(StoreClientMixin, APITestCase):
         for _ in range(MAX_THEMES):
             self.add("blank", name="t")
         self.add("blank", name="one too many", expect=400)
+
+
+class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
+    """Test theme-specific Login, Sign Up, and Customer Account pages."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("owner-auth@example.com", "Auth Store")
+        self.slug = self.store["storeSlug"]
+        self.base = f"/s/{self.slug}"
+        self.client.logout()
+
+    def test_login_page_renders_cleanly(self):
+        r = self.client.get(f"{self.base}/account/login")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode()
+        self.assertIn("Welcome back", content)
+        self.assertIn(">Sign in</button>", content)
+        self.assertIn('name="email"', content)
+        self.assertIn('name="password"', content)
+        self.assertIn(f"{self.base}/account/register", content)
+
+    def test_register_page_renders_cleanly(self):
+        r = self.client.get(f"{self.base}/account/register")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode()
+        self.assertIn("Create Account", content)
+        self.assertIn('name="first_name"', content)
+        self.assertIn('name="last_name"', content)
+        self.assertIn('name="email"', content)
+        self.assertIn('name="password"', content)
+        self.assertIn('name="confirm_password"', content)
+        self.assertIn(f"{self.base}/account/login", content)
+
+    def test_registration_creates_account_and_sets_cookie(self):
+        from apps.customers.models import Customer
+        from django.contrib.auth import get_user_model
+
+        r = self.client.post(f"{self.base}/account/register", {
+            "first_name": "Sarah",
+            "last_name": "Connor",
+            "email": "sarah.connor@example.com",
+            "phone": "0400123456",
+            "password": "Password123!",
+            "confirm_password": "Password123!",
+            "agree_terms": "true",
+            "newsletter": "true",
+        })
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.url, f"{self.base}/account")
+        cookie_name = f"tss_cust_{self.slug}"
+        self.assertIn(cookie_name, r.cookies)
+
+        user = get_user_model().objects.filter(email="sarah.connor@example.com").first()
+        self.assertIsNotNone(user)
+        self.assertEqual(user.first_name, "Sarah")
+
+        cust = Customer.objects.filter(email="sarah.connor@example.com").first()
+        self.assertIsNotNone(cust)
+        self.assertEqual(cust.email_subscription_status, "subscribed")
+
+    def test_login_authenticates_customer(self):
+        from django.contrib.auth import get_user_model
+        get_user_model().objects.create_user(
+            email="shopper@example.com",
+            password="SecretPassword123!",
+            first_name="John",
+            last_name="Doe",
+        )
+
+        # Invalid password fails
+        bad = self.client.post(f"{self.base}/account/login", {
+            "email": "shopper@example.com",
+            "password": "WrongPassword!",
+        })
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("Invalid email or password", bad.content.decode())
+
+        # Valid login succeeds
+        ok = self.client.post(f"{self.base}/account/login", {
+            "email": "shopper@example.com",
+            "password": "SecretPassword123!",
+        })
+        self.assertEqual(ok.status_code, 302)
+        self.assertEqual(ok.url, f"{self.base}/account")
+        self.assertIn(f"tss_cust_{self.slug}", ok.cookies)
+
+    def test_account_page_requires_auth(self):
+        # Unauthenticated redirects to login
+        r = self.client.get(f"{self.base}/account/")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(f"{self.base}/account/login", r.url)
+
+    def test_authenticated_account_page_and_address_management(self):
+        # 1. Register customer
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Alex",
+            "last_name": "Rider",
+            "email": "alex.rider@example.com",
+            "password": "Password123!",
+            "confirm_password": "Password123!",
+            "agree_terms": "true",
+        })
+
+        # 2. Open account page
+        acc = self.client.get(f"{self.base}/account/")
+        self.assertEqual(acc.status_code, 200)
+        content = acc.content.decode()
+        self.assertIn("Hello, Alex", content)
+        self.assertIn("alex.rider@example.com", content)
+        self.assertIn("Order History", content)
+        self.assertIn("Address Book", content)
+
+        # 3. Add an address
+        add_res = self.client.post(f"{self.base}/account/addresses/", {
+            "action": "add",
+            "first_name": "Alex",
+            "last_name": "Rider",
+            "address_line_1": "10 Downing St",
+            "city": "London",
+            "state": "Greater London",
+            "postal_code": "SW1A 2AA",
+            "country": "United Kingdom",
+            "is_default": "true",
+        })
+        self.assertEqual(add_res.status_code, 302)
+
+        # Check address rendered
+        acc_after = self.client.get(f"{self.base}/account/")
+        self.assertEqual(acc_after.status_code, 200)
+        self.assertIn("10 Downing St", acc_after.content.decode())
+        self.assertIn("Default", acc_after.content.decode())
+
+        # 4. Sign out
+        out = self.client.get(f"{self.base}/account/logout")
+        self.assertEqual(out.status_code, 302)
+
+        # 5. Accessing account now redirects to login
+        acc_logged_out = self.client.get(f"{self.base}/account/")
+        self.assertEqual(acc_logged_out.status_code, 302)
+        self.assertIn(f"{self.base}/account/login", acc_logged_out.url)
+
+    def test_all_preset_themes_contain_customer_styles_and_build(self):
+        from .presets import build, list_presets
+        presets = list_presets()
+        for preset in presets:
+            slug = preset["slug"]
+            files, _, _ = build(slug)
+            self.assertIn("templates/login.liquid", files)
+            self.assertIn("templates/register.liquid", files)
+            self.assertIn("templates/account.liquid", files)
+            self.assertIn("snippets/customer-auth.liquid", files)
+            self.assertIn("snippets/customer-account.liquid", files)
+            if slug != "classic":
+                theme_styles = files.get("snippets/theme-styles.liquid", "")
+                self.assertIn(".customer-auth", theme_styles)
+                self.assertIn(".customer-account", theme_styles)
+
+    def test_storefront_header_account_navigation_logged_out_and_logged_in(self):
+        # 1. Logged-out shopper: Account icon links to /account/login
+        self.client.cookies.clear()
+        r = self.client.get(f"{self.base}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode()
+        self.assertIn('class="site-header__search"', html)
+        self.assertIn(f'class="site-header__account" href="{self.base}/account/login"', html)
+        self.assertIn('aria-label="Sign in or create account"', html)
+        self.assertIn('class="site-header__wishlist"', html)
+        self.assertIn('class="site-header__cart"', html)
+
+        # 2. Visiting the destination page: the login form, with a link to create an account
+        r_auth = self.client.get(f"{self.base}/account/login")
+        self.assertEqual(r_auth.status_code, 200)
+        auth_html = r_auth.content.decode()
+        self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', auth_html)
+        self.assertIn('>Sign in</button>', auth_html)
+        self.assertIn('Create an account', auth_html)
+        self.assertIn(f'{self.base}/account/login', auth_html)
+        self.assertIn(f'{self.base}/account/register', auth_html)
+
+        # 3. Register & log in customer
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Oliver",
+            "last_name": "Queen",
+            "email": "oliver@example.com",
+            "password": "Password123!",
+            "confirm_password": "Password123!",
+            "agree_terms": "true",
+        })
+
+        # 4. Logged-in shopper: Account icon links to /account/
+        r_logged_in = self.client.get(f"{self.base}/")
+        self.assertEqual(r_logged_in.status_code, 200)
+        html_logged_in = r_logged_in.content.decode()
+        self.assertIn(f'class="site-header__account" href="{self.base}/account/"', html_logged_in)
+        self.assertIn('aria-label="Account"', html_logged_in)
+
+        # 5. Visiting /account/ when logged in: renders Account/Profile page
+        r_acc = self.client.get(f"{self.base}/account/")
+        self.assertEqual(r_acc.status_code, 200)
+        self.assertIn('My Account', r_acc.content.decode())
+
+    def add_theme(self, source="blank"):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.token}", HTTP_X_STORE_ID=self.store["storeId"])
+        theme = self.ok("post", "/api/v1/themes/library/", {"source": source}, expect=201)
+        self.client.credentials()
+        return theme
+
+    def test_storefront_header_across_all_preset_themes(self):
+        from .presets import list_presets
+        from .views import set_storefront_customer_cookie
+        from django.contrib.auth import get_user_model
+        from django.http import HttpResponse
+
+        user, _ = get_user_model().objects.get_or_create(
+            email="theme-cust@example.com",
+            defaults={"first_name": "Bruce", "last_name": "Wayne"},
+        )
+        from apps.tenancy.models import Store
+        store_obj = Store.objects.get(pk=self.store["storeId"])
+        dummy = HttpResponse()
+        set_storefront_customer_cookie(dummy, store_obj, user)
+        cookie_val = dummy.cookies[f"tss_cust_{self.slug}"].value
+
+        presets = list_presets()
+        for preset in presets:
+            slug = preset["slug"]
+            theme = self.add_theme(slug)
+            self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {self.token}", HTTP_X_STORE_ID=self.store["storeId"])
+            self.client.post(f"/api/v1/themes/library/{theme['id']}/publish/")
+            self.client.credentials()
+
+            # Logged out: header icon points to /account/login with "Sign in or create account"
+            self.client.cookies.clear()
+            r_out = self.client.get(f"{self.base}/")
+            self.assertEqual(r_out.status_code, 200)
+            html_out = r_out.content.decode()
+            self.assertIn('class="site-header__search"', html_out)
+            self.assertIn(f'class="site-header__account" href="{self.base}/account/login"', html_out)
+            self.assertIn('aria-label="Sign in or create account"', html_out)
+
+            # Destination page renders the login form
+            r_dest = self.client.get(f"{self.base}/account/login")
+            self.assertEqual(r_dest.status_code, 200)
+            dest_html = r_dest.content.decode()
+            self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', dest_html)
+            self.assertIn('>Sign in</button>', dest_html)
+            self.assertIn('Create an account', dest_html)
+
+            # Logged in: header icon points to /account/
+            self.client.cookies[f"tss_cust_{self.slug}"] = cookie_val
+            r_in = self.client.get(f"{self.base}/")
+            self.assertEqual(r_in.status_code, 200)
+            html_in = r_in.content.decode()
+            self.assertIn(f'class="site-header__account" href="{self.base}/account/"', html_in)
+            self.assertIn('aria-label="Account"', html_in)
+
+            # Destination account page renders correctly
+            r_in_acc = self.client.get(f"{self.base}/account/")
+            self.assertEqual(r_in_acc.status_code, 200)
+            self.assertIn('My Account', r_in_acc.content.decode())
+
+            self.client.cookies.clear()

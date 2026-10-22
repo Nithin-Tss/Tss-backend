@@ -2,15 +2,26 @@
 from django.urls import path
 
 from .views import (
+    storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
-    storefront_cart_fragment, storefront_collection, storefront_home, storefront_page,
-    storefront_product,
+    storefront_cart_fragment, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_page,
+    storefront_product, storefront_register,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
 
 
 urlpatterns = [
     path("_img/<uuid:image_id>", theme_image, name="theme-image"),
+    path("<slug:store_slug>/account/login", storefront_login, name="storefront-login-noslash"),
+    path("<slug:store_slug>/account/login/", storefront_login, name="storefront-login"),
+    path("<slug:store_slug>/account/register", storefront_register, name="storefront-register-noslash"),
+    path("<slug:store_slug>/account/register/", storefront_register, name="storefront-register"),
+    path("<slug:store_slug>/account/logout", storefront_logout, name="storefront-logout-noslash"),
+    path("<slug:store_slug>/account/logout/", storefront_logout, name="storefront-logout"),
+    path("<slug:store_slug>/account/profile/", storefront_account_profile, name="storefront-account-profile"),
+    path("<slug:store_slug>/account/addresses/", storefront_account_address, name="storefront-account-address"),
+    path("<slug:store_slug>/account", storefront_account, name="storefront-account-noslash"),
+    path("<slug:store_slug>/account/", storefront_account, name="storefront-account"),
     path("<slug:store_slug>/cart", storefront_cart, name="storefront-cart-page-noslash"),
     path("<slug:store_slug>/cart/", storefront_cart, name="storefront-cart-page"),
     path("<slug:store_slug>/cart/fragment", storefront_cart_fragment, name="storefront-cart-fragment"),

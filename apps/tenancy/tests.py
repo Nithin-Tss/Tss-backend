@@ -424,14 +424,14 @@ class PurgeStoreTest(TestCase):
         owner = get_user_model().objects.create_user(email="owner@example.com", password="x-Strong-123")
         store = create_store(owner, "Doomed")
         channel = SalesChannel.objects.create(store=store, name="Online Store", type="online")
-        real_delete = models.Model.delete
+        real_delete = models.QuerySet.delete
 
         def fails_once_the_channel_is_gone(obj, *args, **kwargs):
             if not SalesChannel.objects.filter(pk=channel.pk).exists():
                 raise IntegrityError("blocked by the database")
             return real_delete(obj, *args, **kwargs)
 
-        with mock.patch.object(models.Model, "delete", fails_once_the_channel_is_gone):
+        with mock.patch.object(models.QuerySet, "delete", fails_once_the_channel_is_gone):
             with self.assertRaises(IntegrityError) as caught:
                 purge_store(store)
 

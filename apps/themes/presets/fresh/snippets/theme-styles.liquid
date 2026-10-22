@@ -37,4 +37,11 @@ body .hero.placeholder { color: var(--text); }
 .fresh-hero__card p { color: var(--muted); margin: 0 0 20px; }
 .fresh-hero__buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 @media (max-width: 640px) { .fresh-hero__card { margin: 12px; padding: 22px; } }
+/* Fresh Customer Auth & Account */
+body .customer-auth, body .customer-card, body .customer-account, body .account-card, body .order-item, body .address-item { border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); background: #fff; }
+body .form-input, body .field input, body .field select { border-radius: 999px; padding: 0 18px; border: 1px solid var(--line); }
+body .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
+body .button.customer-card__submit { border-radius: 999px; box-shadow: var(--shadow); font-weight: 700; }
+body .badge { border-radius: 999px; font-weight: 700; padding: 3px 10px; }
+body .customer-card__title, body .customer-account__title, body .account-card__title { font-weight: 800; color: var(--accent); }
 </style>

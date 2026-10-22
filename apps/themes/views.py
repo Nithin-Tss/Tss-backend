@@ -2,7 +2,7 @@ import json
 import re
 import time
 import uuid
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
@@ -33,7 +33,9 @@ from apps.catalog.models import Collection
 from apps.catalog.services import published_collections, published_products
 from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import HasStorePermission, IsStoreMember
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
+from apps.customers.models import Customer, CustomerAddress
+from apps.customers import services as customer_services
 
 from apps.tenancy.models import Store, StoreMembership
 
@@ -87,11 +89,12 @@ class StoreThemeView(APIView):
     def store_theme(self):
         return get_store_theme(self.request.store)
 
-    # The admin edits the theme named by X-Theme-Id (a draft or the published one); without it, the
+    # The admin edits the theme named by X-Theme-Id or ?theme= (a draft or the published one); without it, the
     # published theme. The public storefront never goes through here.
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
-        self._editing = set_editing_theme(request.headers.get("X-Theme-Id"))
+        theme_id = request.headers.get("X-Theme-Id") or request.query_params.get("theme")
+        self._editing = set_editing_theme(theme_id)
 
     def finalize_response(self, request, response, *args, **kwargs):
         token = getattr(self, "_editing", None)
@@ -109,13 +112,19 @@ class ThemeFilesView(StoreThemeView):
     """
 
     def get(self, request):
-        files = code_files(self.store_theme())
+        theme_record = self.store_theme()
+        files = code_files(theme_record)
 
         return Response({
             "store": str(request.store.store_id),
             "storefrontUrl": request.build_absolute_uri(
                 shop_url(request.store) + "/"
             ),
+            "theme": {
+                "id": str(theme_record.theme.id),
+                "name": theme_record.theme.name,
+                "published": theme_record.is_active,
+            },
             "files": [
                 {
                     "path": path,
@@ -573,7 +582,7 @@ PREVIEW_EDITOR = """
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
     if (!m) return null;
     var path = (m[1] || "/").replace(/\\/+$/, "") || "/";
-    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+)?$/i.test(path) ? path : null;
+    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?)?$/i.test(path) ? path : null;
   }
 
   // Edit mode: a click selects the section or block under it, and does nothing else -
@@ -581,7 +590,7 @@ PREVIEW_EDITOR = """
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page) || /^\\/account/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -1460,6 +1469,10 @@ class ThemePreviewView(StoreThemeView):
     def post(self, request):
         clean = validate_custom_data(request.data)
         page, target, message = _preview_target(request)
+        # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
+        customer_page = request.query_params.get("customer")
+        if customer_page in ("login", "register"):
+            page, target, message = "index", {"customer_page": customer_page}, None
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
                              "fonts": ""})
@@ -2109,3 +2122,319 @@ def storefront_page(store, request, params, handle):
         raise Http404("Page not found.")
     # The page template the page uses (page.contact); render_page falls back to Page if its file is gone
     return render_page(store, page.template or "page", page_handle=handle, request=request)
+
+
+# ---------------- Customer Storefront Authentication & Account ----------------
+
+CUSTOMER_COOKIE_PREFIX = "tss_cust_"
+CUSTOMER_COOKIE_AGE = 30 * 24 * 60 * 60  # 30 days
+CUSTOMER_SALT = "tss_storefront_cust_session_v1"
+
+
+def customer_cookie_name(store):
+    return f"{CUSTOMER_COOKIE_PREFIX}{store.store_slug}"
+
+
+def get_storefront_customer(store, request):
+    """
+    Returns (customer, user) if a customer session is active for this store, else (None, None).
+    """
+    cookie_val = request.COOKIES.get(customer_cookie_name(store)) or request.headers.get("X-Customer-Token")
+    user = None
+    if cookie_val:
+        try:
+            data = signing.loads(cookie_val, salt=CUSTOMER_SALT, max_age=CUSTOMER_COOKIE_AGE)
+            if data.get("store_id") == str(store.pk):
+                user = get_user_model().objects.filter(pk=data.get("user_id")).first()
+        except Exception:
+            user = None
+
+    if user is None and getattr(request, "user", None) and request.user.is_authenticated:
+        user = request.user
+
+    if user is None:
+        return None, None
+
+    customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
+    if customer is None:
+        customer = Customer.objects.create(
+            store=store,
+            email=user.email,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            email_subscription_status="not_subscribed",
+        )
+    return customer, user
+
+
+def set_storefront_customer_cookie(response, store, user):
+    token = signing.dumps({"user_id": str(user.pk), "store_id": str(store.pk)}, salt=CUSTOMER_SALT)
+    response.set_cookie(
+        customer_cookie_name(store),
+        token,
+        max_age=CUSTOMER_COOKIE_AGE,
+        path=f"{shop_url(store)}/",
+        httponly=True,
+        samesite="Lax",
+        secure=not settings.DEBUG,
+    )
+    return token
+
+
+def clear_storefront_customer_cookie(response, store):
+    response.delete_cookie(customer_cookie_name(store), path=f"{shop_url(store)}/")
+
+
+def _storefront_response(html, status=200, request=None, store=None):
+    if request is not None and store is not None:
+        visit = _admin_visit(request, store)
+        if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
+            html = _with_admin_bar(html, store, visit)
+    response = HttpResponse(html, status=status)
+    response["Content-Security-Policy"] = (
+        "sandbox allow-scripts allow-forms "
+        "allow-popups allow-popups-to-escape-sandbox"
+    )
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_login(request, store_slug):
+    """Storefront Customer Login: handles GET (login form) and POST (sign-in)."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    return_to = request.GET.get("return_to") or request.POST.get("return_to") or f"{base}/account"
+    if not return_to.startswith(base) and not return_to.startswith("/"):
+        return_to = f"{base}/account"
+    elif return_to.startswith("/") and not return_to.startswith(base):
+        return_to = f"{base}{return_to}"
+
+    customer, user = get_storefront_customer(store, request)
+    if customer is not None and request.method == "GET":
+        return HttpResponseRedirect(f"{base}/account")
+
+    error = None
+    if request.method == "POST":
+        email = (request.POST.get("email") or "").strip().lower()
+        password = request.POST.get("password") or ""
+
+        if not email or not password:
+            error = "Email and password are required."
+        else:
+            user = authenticate(request, username=email, password=password)
+            if user is None:
+                error = "Invalid email or password."
+            else:
+                customer, _ = get_storefront_customer(store, request)
+                if customer is None:
+                    customer = Customer.objects.create(
+                        store=store,
+                        email=user.email,
+                        first_name=user.first_name,
+                        last_name=user.last_name,
+                        email_subscription_status="not_subscribed",
+                    )
+                # Link cart if open
+                pending = getattr(request, "_cart_session", None)
+                cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
+                if cart_id:
+                    open_c = cart_data.open_cart(store, cart_id)
+                    if open_c and not open_c.customer:
+                        open_c.customer = customer
+                        open_c.save(update_fields=["customer", "updated_at"])
+
+                response = HttpResponseRedirect(return_to)
+                set_storefront_customer_cookie(response, store, user)
+                return response
+
+    html = render_page(
+        store, "login", request=request, customer_page="login",
+        customer=customer, customer_user=user, auth_error=error
+    )
+    return _storefront_response(html, status=400 if error else 200, request=request, store=store)
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_register(request, store_slug):
+    """Storefront Customer Registration: handles GET (signup form) and POST (account creation)."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    return_to = request.GET.get("return_to") or request.POST.get("return_to") or f"{base}/account"
+    if not return_to.startswith(base) and not return_to.startswith("/"):
+        return_to = f"{base}/account"
+    elif return_to.startswith("/") and not return_to.startswith(base):
+        return_to = f"{base}{return_to}"
+
+    customer, user = get_storefront_customer(store, request)
+    if customer is not None and request.method == "GET":
+        return HttpResponseRedirect(f"{base}/account")
+
+    error = None
+    if request.method == "POST":
+        first_name = (request.POST.get("first_name") or "").strip()
+        last_name = (request.POST.get("last_name") or "").strip()
+        email = (request.POST.get("email") or "").strip().lower()
+        phone = (request.POST.get("phone") or "").strip()
+        password = request.POST.get("password") or ""
+        confirm_password = request.POST.get("confirm_password") or ""
+        newsletter = bool(request.POST.get("newsletter"))
+
+        if not first_name or not last_name:
+            error = "First name and last name are required."
+        elif not email or "@" not in email:
+            error = "Please enter a valid email address."
+        elif len(password) < 8:
+            error = "Password must be at least 8 characters long."
+        elif password != confirm_password:
+            error = "Passwords do not match."
+        elif get_user_model().objects.filter(email__iexact=email).exists():
+            error = "An account with this email already exists."
+        else:
+            try:
+                user = get_user_model().objects.create_user(
+                    email=email,
+                    password=password,
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone=phone,
+                )
+                customer = Customer.objects.create(
+                    store=store,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    email_subscription_status="subscribed" if newsletter else "not_subscribed",
+                )
+                response = HttpResponseRedirect(return_to)
+                set_storefront_customer_cookie(response, store, user)
+                return response
+            except Exception as e:
+                error = str(e) or "Unable to create account. Please try again."
+
+    html = render_page(
+        store, "register", request=request, customer_page="register",
+        customer=customer, customer_user=user, auth_error=error
+    )
+    return _storefront_response(html, status=400 if error else 200, request=request, store=store)
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_account(request, store_slug):
+    """Storefront Customer Account Dashboard: shows orders, profile, and addresses."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    customer, user = get_storefront_customer(store, request)
+
+    if customer is None:
+        login_url = f"{base}/account/login?return_to={quote(request.get_full_path())}"
+        return HttpResponseRedirect(login_url)
+
+    html = render_page(
+        store, "account", request=request, customer_page="account",
+        customer=customer, customer_user=user
+    )
+    return _storefront_response(html, request=request, store=store)
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_logout(request, store_slug):
+    """Storefront Customer Sign out: clears customer session cookie and redirects."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    response = HttpResponseRedirect(f"{base}/account/login")
+    clear_storefront_customer_cookie(response, store)
+    return response
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_account_profile(request, store_slug):
+    """Storefront Customer Profile update: saves first_name, last_name, and phone."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    customer, user = get_storefront_customer(store, request)
+    if customer is None:
+        return HttpResponseRedirect(f"{base}/account/login")
+
+    if request.method == "POST":
+        first_name = (request.POST.get("first_name") or "").strip()
+        last_name = (request.POST.get("last_name") or "").strip()
+        phone = (request.POST.get("phone") or "").strip()
+        if first_name and last_name:
+            customer.first_name = first_name
+            customer.last_name = last_name
+            customer.save(update_fields=["first_name", "last_name", "updated_at"])
+            if user:
+                user.first_name = first_name
+                user.last_name = last_name
+                user.phone = phone
+                user.save(update_fields=["first_name", "last_name", "phone", "updated_at"])
+
+    return HttpResponseRedirect(f"{base}/account")
+
+
+@xframe_options_exempt
+@csrf_exempt
+def storefront_account_address(request, store_slug):
+    """Storefront Customer Address action: add, delete, or set default address."""
+    store = get_object_or_404(Store, store_slug=store_slug)
+    base = shop_url(store)
+    customer, user = get_storefront_customer(store, request)
+    if customer is None:
+        return HttpResponseRedirect(f"{base}/account/login")
+
+    if request.method == "POST":
+        action = request.POST.get("action", "add")
+        if action == "add":
+            first_name = (request.POST.get("first_name") or "").strip()
+            last_name = (request.POST.get("last_name") or "").strip()
+            company = (request.POST.get("company") or "").strip()
+            line1 = (request.POST.get("address_line_1") or "").strip()
+            line2 = (request.POST.get("address_line_2") or "").strip()
+            city = (request.POST.get("city") or "").strip()
+            state = (request.POST.get("state") or "").strip()
+            postal_code = (request.POST.get("postal_code") or "").strip()
+            country = (request.POST.get("country") or "Australia").strip()
+            phone = (request.POST.get("phone") or "").strip()
+            is_default = bool(request.POST.get("is_default"))
+
+            if line1 and city and state and postal_code:
+                addr = CustomerAddress.objects.create(
+                    customer=customer,
+                    address_type="shipping",
+                    first_name=first_name,
+                    last_name=last_name,
+                    company=company,
+                    address_line_1=line1,
+                    address_line_2=line2,
+                    city=city,
+                    state=state,
+                    postal_code=postal_code,
+                    country=country,
+                    phone=phone,
+                    is_default=is_default,
+                )
+                if is_default:
+                    customer_services.set_default_address(addr)
+                elif CustomerAddress.objects.filter(customer=customer).count() == 1:
+                    addr.is_default = True
+                    addr.save(update_fields=["is_default", "updated_at"])
+
+        elif action == "delete":
+            addr_id = request.POST.get("address_id")
+            addr = CustomerAddress.objects.filter(customer=customer, pk=addr_id).first()
+            if addr:
+                customer_services.delete_address(addr)
+
+        elif action == "set_default":
+            addr_id = request.POST.get("address_id")
+            addr = CustomerAddress.objects.filter(customer=customer, pk=addr_id).first()
+            if addr:
+                customer_services.set_default_address(addr)
+
+    return HttpResponseRedirect(f"{base}/account")

@@ -1,0 +1,153 @@
+{%- comment -%}
+  Register page. This file is the whole page: edit the markup, text and styles here.
+  Available: shop.url, customer, return_url, error, success.
+  The form posts to /account/register (first_name, last_name, email, phone,
+  password, confirm_password, agree_terms, newsletter).
+{%- endcomment -%}
+<style>
+  body .auth-page.auth-page { --auth-line: #e5e7eb; --auth-muted: #6b7280; --auth-radius: 10px; padding: 40px 0 64px; display: flex; justify-content: center; }
+  body .auth-page.auth-page .customer-auth { width: 100%; max-width: 440px; margin: 0 auto; text-align: left; }
+  body .auth-page.auth-page .customer-card { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; letter-spacing: normal; text-transform: none; background: #ffffff; color: #111827; border: 1px solid var(--auth-line); border-radius: calc(var(--auth-radius) + 6px); padding: 40px 36px; box-shadow: 0 12px 40px rgba(0, 0, 0, .08); font-size: 15px; line-height: 1.5; }
+  body .auth-page.auth-page .customer-card__header { text-align: center; margin-bottom: 28px; }
+  body .auth-page.auth-page .customer-card__title { font-family: inherit; text-transform: none; letter-spacing: normal; font-size: 30px; line-height: 1.2; font-weight: 700; margin: 0 0 8px; color: #111827; }
+  body .auth-page.auth-page .customer-card__subtitle { font-size: 15px; color: var(--auth-muted); margin: 0; }
+  body .auth-page.auth-page .customer-form { display: grid; gap: 18px; }
+  body .auth-page.auth-page .form-group { display: grid; gap: 6px; margin: 0; }
+  body .auth-page.auth-page .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  body .auth-page.auth-page .form-label { text-transform: none; letter-spacing: normal; font-size: 13px; font-weight: 600; color: #111827; }
+  body .auth-page.auth-page .form-label-opt { font-weight: 400; color: var(--auth-muted); }
+  body .auth-page.auth-page .form-input { box-shadow: none; text-transform: none; font-weight: 400; box-sizing: border-box; width: 100%; height: 48px; padding: 0 14px; font: inherit; font-size: 15px; color: #111827; background: #ffffff; border: 1px solid var(--auth-line); border-radius: var(--auth-radius); transition: border-color .15s, box-shadow .15s; }
+  body .auth-page.auth-page .form-input::placeholder { color: var(--auth-muted); opacity: .8; }
+  body .auth-page.auth-page .form-input:focus { outline: none; border-color: #111827; box-shadow: 0 0 0 3px rgba(17, 24, 39, .18); }
+  body .auth-page.auth-page .password-wrapper { position: relative; display: flex; align-items: center; }
+  body .auth-page.auth-page .password-wrapper .form-input { padding-right: 46px; }
+  body .auth-page.auth-page .password-toggle { position: absolute; right: 8px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--auth-muted); cursor: pointer; }
+  body .auth-page.auth-page .password-toggle:hover { color: #111827; background: rgba(17, 24, 39, .08); }
+  body .auth-page.auth-page .form-group--checkbox { display: flex; align-items: center; }
+  body .auth-page.auth-page .checkbox-label { display: inline-flex; align-items: flex-start; gap: 10px; font-size: 14px; color: #111827; cursor: pointer; }
+  body .auth-page.auth-page .checkbox-label input { flex: none; width: 17px; height: 17px; margin: 2px 0 0; accent-color: #111827; cursor: pointer; }
+  body .auth-page.auth-page .button.customer-card__submit { box-shadow: none; text-transform: none; letter-spacing: normal; display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; margin-top: 6px; padding: 0 20px; font: inherit; font-size: 16px; font-weight: 600; color: #ffffff; background: #111827; border: 0; border-radius: var(--auth-radius); cursor: pointer; transition: opacity .15s, transform .05s; }
+  body .auth-page.auth-page .button.customer-card__submit:hover { opacity: .9; }
+  body .auth-page.auth-page .button.customer-card__submit:active { transform: translateY(1px); }
+  body .auth-page.auth-page .button.customer-card__submit:disabled { opacity: .6; cursor: default; }
+  body .auth-page.auth-page .customer-card__footer { display: grid; gap: 10px; margin-top: 26px; padding-top: 22px; text-align: center; font-size: 14px; color: var(--auth-muted); border-top: 1px solid var(--auth-line); }
+  body .auth-page.auth-page .customer-card__footer p { margin: 0; }
+  body .auth-page.auth-page .auth-link { color: #111827; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+  body .auth-page.auth-page .auth-link:hover { opacity: .8; }
+  body .auth-page.auth-page .auth-link-subtle { color: var(--auth-muted); text-decoration: none; font-size: 13px; }
+  body .auth-page.auth-page .auth-link-subtle:hover { color: #111827; }
+  body .auth-page.auth-page .alert { display: flex; align-items: center; gap: 10px; margin: 0 0 20px; padding: 12px 14px; font-size: 14px; line-height: 1.4; border-radius: var(--auth-radius); }
+  body .auth-page.auth-page .alert--error { color: #b42318; background: #fef3f2; border: 1px solid #fecdca; }
+  body .auth-page.auth-page .alert--success { color: #067647; background: #ecfdf3; border: 1px solid #abefc6; }
+  @media (max-width: 520px) { body .auth-page.auth-page { padding: 16px 0 40px; } body .auth-page.auth-page .customer-card { padding: 28px 20px; } body .auth-page.auth-page .form-row { grid-template-columns: 1fr; } }
+</style>
+<section class="section customer-auth-section auth-page">
+  <div class="page-width">
+    <div class="customer-auth customer-auth--register">
+      <div class="customer-card">
+        <div class="customer-card__header">
+          <h1 class="customer-card__title">Create your account</h1>
+          <p class="customer-card__subtitle">Track orders, save your details and check out faster.</p>
+        </div>
+
+        {%- if error != blank -%}
+          <div class="alert alert--error" role="alert"><span>{{ error }}</span></div>
+        {%- endif -%}
+        {%- if success != blank -%}
+          <div class="alert alert--success" role="status"><span>{{ success }}</span></div>
+        {%- endif -%}
+
+        <form class="customer-form" method="post" action="{{ shop.url }}/account/register" data-register-form>
+          <input type="hidden" name="return_to" value="{{ return_url | default: '' }}">
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="register-first-name">First name</label>
+              <input id="register-first-name" class="form-input" type="text" name="first_name" required autocomplete="given-name" placeholder="First name">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="register-last-name">Last name</label>
+              <input id="register-last-name" class="form-input" type="text" name="last_name" required autocomplete="family-name" placeholder="Last name">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="register-email">Email</label>
+            <input id="register-email" class="form-input" type="email" name="email" required autocomplete="email" placeholder="name@example.com">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="register-phone">Mobile number <span class="form-label-opt">(optional)</span></label>
+            <input id="register-phone" class="form-input" type="tel" name="phone" autocomplete="tel" placeholder="+1 555-0199">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="register-password">Password</label>
+            <div class="password-wrapper">
+              <input id="register-password" class="form-input" type="password" name="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters">
+              <button type="button" class="password-toggle" data-password-toggle aria-label="Show or hide password">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="register-confirm-password">Confirm password</label>
+            <input id="register-confirm-password" class="form-input" type="password" name="confirm_password" required minlength="8" autocomplete="new-password" placeholder="Re-enter password">
+            <p class="auth-field-error" data-confirm-error hidden style="color:#b91c1c;font-size:13px;margin:6px 0 0;">Passwords do not match.</p>
+          </div>
+
+          <div class="form-group form-group--checkbox">
+            <label class="checkbox-label" for="register-terms">
+              <input id="register-terms" type="checkbox" name="agree_terms" value="true" required>
+              <span>I agree to the <a class="auth-link" href="{{ shop.url }}/pages/terms" target="_blank" rel="noopener">Terms &amp; Conditions</a></span>
+            </label>
+          </div>
+
+          <div class="form-group form-group--checkbox">
+            <label class="checkbox-label" for="register-newsletter">
+              <input id="register-newsletter" type="checkbox" name="newsletter" value="true">
+              <span>Subscribe to updates and promotions</span>
+            </label>
+          </div>
+
+          <button type="submit" class="button button--full customer-card__submit" data-register-submit>Create account</button>
+        </form>
+
+        <div class="customer-card__footer">
+          <p>Already have an account? <a class="auth-link" href="{{ shop.url }}/account/login{% if return_url != blank %}?return_to={{ return_url | url_encode }}{% endif %}">Sign in</a></p>
+          <p><a class="auth-link-subtle" href="{{ shop.url }}/">&larr; Return to store</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+(function () {
+  var form = document.querySelector("[data-register-form]");
+  if (!form) return;
+  var password = form.querySelector("#register-password");
+  var confirm = form.querySelector("#register-confirm-password");
+  var message = form.querySelector("[data-confirm-error]");
+  var toggle = form.querySelector("[data-password-toggle]");
+  if (toggle) toggle.addEventListener("click", function () {
+    password.type = password.type === "password" ? "text" : "password";
+  });
+  function matches() { return password.value === confirm.value; }
+  confirm.addEventListener("input", function () { message.hidden = matches() || !confirm.value; });
+  form.addEventListener("submit", function (e) {
+    if (!matches()) {
+      e.preventDefault();
+      message.hidden = false;
+      confirm.focus();
+      return;
+    }
+    var button = form.querySelector("[data-register-submit]");
+    button.disabled = true;
+    button.textContent = "Creating account...";
+  });
+})();
+</script>

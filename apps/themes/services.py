@@ -53,6 +53,12 @@ REQUIRED_FILES = {
     "snippets/wishlist.liquid",
     # Cart: one snippet with the icon, the drawer, the cart page and the script
     "snippets/cart.liquid",
+    # Customer account & auth
+    "templates/login.liquid",
+    "templates/register.liquid",
+    "templates/account.liquid",
+    "snippets/customer-auth.liquid",
+    "snippets/customer-account.liquid",
     # Promotions is available in the customizer for existing private starter themes too
     "sections/promotions.liquid",
 }
@@ -64,7 +70,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 38
+STARTER_REVISION = 39
 STARTER_UPGRADES = {
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
@@ -173,6 +179,7 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
+        "0f1b0c1d6442b03d7604b4a82f00e99d6d7a05685b312a621f07aace30925b8a",  # revision 39: before the sign-in icon
         "4056175621541f0119feb436226b459a59cb3b63818cf25cd04c49c6a6b9c736",  # revision 21: before the cart snippet
         "6dbee4862d37ededcdf93a750dda3f6ca60794cd16bdb1a0fa0a3995a274962d",  # revision 21: same, with CRLF line endings
         "0447235775798d7cf5839634cfea58c3437e0571c024a24c300ac2f866a85d8b",  # revision 19: before the wishlist snippet
@@ -228,7 +235,8 @@ STARTER_UPGRADES = {
 def starter_files():
     return {
         path.relative_to(STARTER_DIR).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted(STARTER_DIR.rglob("*.liquid"))
+        for path in sorted(STARTER_DIR.rglob("*"))
+        if path.is_file() and path.suffix in (".liquid", ".css", ".js", ".json")
     }
 
 
@@ -975,20 +983,22 @@ def clean_path(path):
         raise exceptions.ValidationError({"path": "Path may not contain '..'."})
 
     name = parts[-1]
-    if name != KEEP and not name.lower().endswith(".liquid"):
-        raise exceptions.ValidationError({"path": "Only Liquid files (.liquid) are allowed."})
+    allowed_exts = (".liquid", ".css", ".js", ".json")
+    if name != KEEP and not any(name.lower().endswith(ext) for ext in allowed_exts):
+        raise exceptions.ValidationError({"path": "Only Liquid (.liquid), CSS (.css), JavaScript (.js) and JSON (.json) files are allowed."})
 
     return path
 
 
 def _new_file(theme, path, content):
     directory, _, name = path.rpartition("/")
+    ext = name.rpartition(".")[2].lower() if "." in name else "liquid"
     return ThemeFile(
         theme=theme,
         file_path=path,
         file_name=name,
         directory=(directory.split("/")[0] if directory else "")[:100],
-        file_type="keep" if name == KEEP else "liquid",
+        file_type="keep" if name == KEEP else ext,
         content=content,
         is_required=path in REQUIRED_FILES,
         file_size=len(content.encode("utf-8")),
