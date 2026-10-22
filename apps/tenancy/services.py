@@ -123,15 +123,17 @@ def _purge(queryset, seen):
             blockers = error.protected_objects if isinstance(error, ProtectedError) else error.restricted_objects
             fresh = {}
             for blocker in blockers:
-                key = (blocker._meta.label, blocker.pk)
-                if key not in seen:
-                    seen.add(key)
+                if (blocker._meta.label, blocker.pk) not in seen:
                     fresh.setdefault(blocker._meta.model, []).append(blocker.pk)
             if not fresh:
                 raise
         # Delete the blockers outside the except block: an error from them must not carry this
         # handled error along, whose objects are deleted by then and can't even be printed.
         for model, pks in fresh.items():
+            # Marked when their own purge starts, not when found: a row queued by an ancestor but not
+            # yet purged (e.g. the store's stock history, while its products are purged first) may
+            # still be deleted here. Only a row already being purged signals a cycle.
+            seen.update((model._meta.label, pk) for pk in pks)
             _purge(model._base_manager.filter(pk__in=pks), seen)
 
 
