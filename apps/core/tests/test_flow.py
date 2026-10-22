@@ -789,7 +789,8 @@ class BlogPagesTest(StoreClientMixin, APITestCase):
         self.ok("post", "/api/v1/catalog/products/", {"title": "Oat milk", "sku": "OAT-1", "status": "active", "price": "4"}, expect=201)
         self.assertIn("Oat milk", self.preview("product")["html"])
         self.assertIn("All products", self.preview("collection")["html"])
-        self.preview("checkout", expect=400)
+        self.assertIn("Checkout", self.preview("checkout")["html"])
+        self.preview("unknown", expect=400)
 
     def test_latest_posts_show_in_the_preview_but_not_on_the_live_store_yet(self):
         layout = {"templates": {"index": {"order": ["posts"], "sections": {
