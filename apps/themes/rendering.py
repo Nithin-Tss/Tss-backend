@@ -1967,8 +1967,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     cart_lines_data = cart_data.view_data(cart_data.open_cart(store, cart_session), base_url)
     if editor and page == "checkout" and not cart_lines_data.get("lines"):
         sample_prod = published_products(store).first()
+        sample_variant = sample_prod.variants.order_by("created_at").first() if sample_prod else None
         title = sample_prod.title if sample_prod else "Sample Product"
-        price = str(sample_prod.price) if sample_prod and sample_prod.price else "49.00"
+        price = str(sample_variant.price) if sample_variant and sample_variant.price is not None else "49.00"
         img = sample_prod.images.first().url if sample_prod and sample_prod.images.exists() else ""
         cart_lines_data = {
             "count": 1,
