@@ -291,7 +291,8 @@ class OrdersApiTests(StoreClientMixin, APITestCase):
             "apps.orders.views.DraftOrderDetail.objects.create",
             side_effect=RuntimeError("detail failure"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "detail failure"):
+            with self.assertLogs("django.request", level="ERROR"), \
+                    self.assertRaisesRegex(RuntimeError, "detail failure"):
                 self.client.post(
                     "/api/v1/orders/drafts/",
                     {
