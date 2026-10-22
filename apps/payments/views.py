@@ -23,6 +23,7 @@ class PaymentViewSet(
     """
     /api/v1/payments/?order=<id>             list, retrieve
     POST /api/v1/payments/                   record a manual payment {order, amount, reference}
+    POST /api/v1/payments/<id>/capture/      mark a pending payment as received
     POST /api/v1/payments/<id>/refund/       {amount, reason}
     Payments are never edited or deleted - refund instead.
     """

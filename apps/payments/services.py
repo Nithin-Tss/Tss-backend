@@ -93,7 +93,9 @@ def capture_payment(payment, reference=None):
 def refund(payment, amount, reason=None):
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
     if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
-        raise ValidationError("Only a captured payment can be refunded.")
+        raise ValidationError({
+            "payment": "Only captured or partially refunded payments can be refunded."
+        })
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     left = payment.amount - refunded_total(payment)
 
@@ -122,9 +124,14 @@ def cancel_pending(order):
 
 
 def paid_total(order):
-    """Captured minus refunded, across all received payments for this order (pending ones don't count)."""
+    """Return captured payments minus successful refunds."""
     total = Decimal("0.00")
-    received = (CAPTURED, PARTIALLY_REFUNDED, REFUNDED)
-    for payment in Payment.objects.filter(order=order, is_deleted=False, status__in=received):
+    payments = Payment.objects.filter(
+        order=order,
+        is_deleted=False,
+        status__in=(CAPTURED, PARTIALLY_REFUNDED, REFUNDED),
+    )
+    for payment in payments:
         total += payment.amount - refunded_total(payment)
+
     return total

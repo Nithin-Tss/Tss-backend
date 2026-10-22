@@ -65,22 +65,54 @@ class OrderSerializer(serializers.ModelSerializer):
         return getattr(order, "tags", []) if hasattr(order, "tags") else []
 
     def get_payment_status(self, order):
-        payments = [payment for payment in order.payments.all() if not payment.is_deleted]
+        payments = [
+            payment
+            for payment in order.payments.all()
+            if not payment.is_deleted
+        ]
+
         if not payments:
+            return "pending"
+
+        eligible_statuses = (
+            "captured",
+            "partially_refunded",
+            "refunded",
+        )
+
+        paid_payments = [
+            payment
+            for payment in payments
+            if payment.status in eligible_statuses
+        ]
+
+        if not paid_payments:
             return "pending"
 
         amount_paid = sum(
             payment.amount - sum(
                 transaction.amount
                 for transaction in payment.transactions.all()
-                if transaction.transaction_type == "refund" and transaction.status == "success"
+                if transaction.transaction_type == "refund"
+                and transaction.status == "success"
             )
-            for payment in payments
+            for payment in paid_payments
         )
-        if any(payment.status in ("partially_refunded", "refunded") for payment in payments):
-            return "refunded" if amount_paid == 0 else "partially_refunded"
+
+        # A full payment balance takes priority over historical refunds.
         if amount_paid >= order.total:
             return "paid"
+
+        if any(
+            payment.status in ("partially_refunded", "refunded")
+            for payment in paid_payments
+        ):
+            return (
+                "refunded"
+                if amount_paid <= 0
+                else "partially_refunded"
+            )
+
         return "partially_paid" if amount_paid > 0 else "pending"
 
 

@@ -6,6 +6,9 @@ from apps.core.tests.test_flow import StoreClientMixin
 from apps.orders import services
 from apps.orders.models import DraftOrder, DraftOrderDetail, Order, OrderItem
 from apps.tenancy.models import Store
+from decimal import Decimal
+
+from apps.payments.services import record_payment, record_pending_payment, refund
 
 
 class OrdersApiTests(StoreClientMixin, APITestCase):
@@ -223,6 +226,51 @@ class OrdersApiTests(StoreClientMixin, APITestCase):
         self.assertEqual(payment["status"], "captured")
         retrieved = self.ok("get", f"/api/v1/orders/{order['id']}/")
         self.assertEqual(retrieved["payment_status"], "paid")
+
+    def test_full_repayment_after_refund_is_paid(self):
+        order_data = self.create_order(customer=self.customer["id"])
+        order = Order.objects.get(pk=order_data["id"])
+
+        original_payment = record_payment(
+            store=self.store,
+            order=order,
+            amount=Decimal("50.00"),
+        )
+
+        refund(original_payment, Decimal("50.00"))
+
+        record_payment(
+            store=self.store,
+            order=order,
+            amount=Decimal("50.00"),
+        )
+
+        retrieved = self.ok(
+            "get",
+            f"/api/v1/orders/{order.pk}/",
+        )
+
+        self.assertEqual(retrieved["payment_status"], "paid")
+
+    def test_pending_payment_does_not_mark_order_paid(self):
+        order_data = self.create_order()
+        order = Order.objects.get(pk=order_data["id"])
+
+        record_pending_payment(
+            store=self.store,
+            order=order,
+            checkout=None,
+            amount=Decimal("50.00"),
+            provider="cod",
+            customer=order.customer,
+        )
+
+        retrieved = self.ok(
+            "get",
+            f"/api/v1/orders/{order.pk}/",
+        )
+
+        self.assertEqual(retrieved["payment_status"], "pending")
 
     def test_order_creation_rolls_back_if_inventory_commit_fails(self):
         from apps.catalog.models import Product
