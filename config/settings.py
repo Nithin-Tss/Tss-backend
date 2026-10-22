@@ -57,6 +57,10 @@ ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1' if DEBUG 
 # Frontend origins allowed to send forms/cookies to this backend (must include https://)
 CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 
+# Admin bulk actions (e.g. delete) POST one field per selected row; Django's default
+# limit of 1000 returns "Bad Request (400)" when more rows than that are selected.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+
 
 # Application definition
 
