@@ -444,3 +444,327 @@ class DraftCompleteStockTests(StockValidationCases, StoreClientMixin, APITestCas
         self.assertEqual(draft.status, "open")  # saved fine; only completing is checked
         self.assertIsNone(draft.order_id)
         self.assertFalse(Order.objects.exists())
+
+
+class OrderAccessTests(StoreClientMixin, APITestCase):
+    """Store isolation and role permissions for /api/v1/orders/."""
+
+    def setUp(self):
+        self.token_a, store_a = self.sign_up("owner-a@example.com", "Store A")
+        self.store_a = store_a["storeId"]
+        self.product_a = self.make_product("Shirt A")
+        self.customer_a = self.make_customer("alex@example.com")
+
+        self.token_b, store_b = self.sign_up("owner-b@example.com", "Store B")
+        self.store_b = store_b["storeId"]
+        self.product_b = self.make_product("Shirt B")
+        self.customer_b = self.make_customer("sam@example.com")
+        self.order_b = self.ok("post", "/api/v1/orders/", {
+            "customer": self.customer_b["id"],
+            "items": [{"product": self.product_b["id"], "quantity": 1}],
+        }, expect=201)
+
+        self.use(self.token_a, self.store_a)
+
+    def make_product(self, title):
+        return self.ok("post", "/api/v1/catalog/products/", {
+            "title": title, "sku": f"SKU-{title.upper().replace(' ', '-')}", "price": "25",
+        }, expect=201)
+
+    def make_customer(self, email):
+        return self.ok("post", "/api/v1/customers/", {"first_name": "Test", "email": email}, expect=201)
+
+    def order_payload(self, **extra):
+        return {"items": [{"product": self.product_a["id"], "quantity": 2}], **extra}
+
+    def staff(self, email, *role_names):
+        """A second account that is staff in Store A with the given roles (by key or name)."""
+        roles = {r["key"] or r["name"]: r for r in self.ok("get", "/api/v1/roles/")}
+        token, _ = self.sign_up(email, f"{email} own store")
+        self.use(self.token_a, self.store_a)
+        self.ok("post", "/api/v1/members/", {
+            "email": email, "roleIds": [roles[name]["id"] for name in role_names],
+        }, expect=201)
+        self.use(token, self.store_a)
+        return token
+
+    # 1. A Store A user cannot view, update, or cancel a Store B order
+
+    def test_store_a_cannot_see_store_b_order(self):
+        self.assertEqual(self.ok("get", "/api/v1/orders/"), [])
+        self.ok("get", f"/api/v1/orders/{self.order_b['id']}/", expect=404)
+
+    def test_store_a_cannot_update_store_b_order(self):
+        self.ok("patch", f"/api/v1/orders/{self.order_b['id']}/", {"delivery_method": "pickup"}, expect=404)
+        self.assertIsNone(Order.objects.get(pk=self.order_b["id"]).delivery_method)
+
+    def test_store_a_cannot_cancel_store_b_order(self):
+        self.ok("post", f"/api/v1/orders/{self.order_b['id']}/cancel/", expect=404)
+        self.assertEqual(Order.objects.get(pk=self.order_b["id"]).status, "open")
+
+    def test_store_a_user_cannot_switch_to_store_b_header(self):
+        self.use(self.token_a, self.store_b)
+        self.ok("get", f"/api/v1/orders/{self.order_b['id']}/", expect=403)
+        self.ok("patch", f"/api/v1/orders/{self.order_b['id']}/", {"delivery_method": "pickup"}, expect=403)
+        self.ok("post", f"/api/v1/orders/{self.order_b['id']}/cancel/", expect=403)
+        order = Order.objects.get(pk=self.order_b["id"])
+        self.assertEqual((order.status, order.delivery_method), ("open", None))
+
+    # 2. Staff without the required permission cannot create an order
+
+    def test_staff_without_roles_cannot_create_order(self):
+        self.staff("nobody@example.com")
+        self.ok("post", "/api/v1/orders/", self.order_payload(), expect=403)
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+    def test_merchandiser_cannot_create_order(self):
+        self.staff("merch@example.com", "merchandiser")
+        self.ok("post", "/api/v1/orders/", self.order_payload(), expect=403)
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+    def test_view_only_staff_can_list_but_not_create_update_or_cancel(self):
+        self.ok("post", "/api/v1/roles/", {
+            "name": "Order viewer", "permissions": ["orders.view", "products.view", "customers.view"],
+        }, expect=201)
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(), expect=201)
+
+        self.staff("viewer@example.com", "Order viewer")
+        self.assertEqual(len(self.ok("get", "/api/v1/orders/")), 1)
+        self.ok("post", "/api/v1/orders/", self.order_payload(), expect=403)
+        self.ok("patch", f"/api/v1/orders/{order['id']}/", {"delivery_method": "pickup"}, expect=403)
+        self.ok("post", f"/api/v1/orders/{order['id']}/cancel/", expect=403)
+        self.assertEqual(Order.objects.filter(store_id=self.store_a).count(), 1)
+        self.assertEqual(Order.objects.get(pk=order["id"]).status, "open")
+
+    def test_customer_support_staff_can_create_order(self):
+        self.staff("support@example.com", "customer_support")
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(customer=self.customer_a["id"]), expect=201)
+        self.assertEqual(str(Order.objects.get(pk=order["id"]).store_id), self.store_a)
+
+    # 3. A Store A order cannot be linked to a Store B customer
+
+    def test_create_order_with_store_b_customer_is_rejected(self):
+        response = self.client.post(
+            "/api/v1/orders/", self.order_payload(customer=self.customer_b["id"]), format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("customer", response.json())
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+    def test_patch_cannot_relink_order_to_store_b_customer(self):
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(customer=self.customer_a["id"]), expect=201)
+        self.ok("patch", f"/api/v1/orders/{order['id']}/", {"customer": self.customer_b["id"]})
+        self.assertEqual(str(Order.objects.get(pk=order["id"]).customer_id), self.customer_a["id"])
+
+    def test_service_rejects_store_b_customer(self):
+        from rest_framework.exceptions import ValidationError
+
+        from apps.catalog.models import Product
+        from apps.customers.models import Customer
+
+        store_a = Store.objects.get(pk=self.store_a)
+        with self.assertRaises(ValidationError):
+            services.create_order(
+                store_a,
+                [{"product": Product.objects.get(pk=self.product_a["id"]), "quantity": 1}],
+                customer=Customer.objects.get(pk=self.customer_b["id"]),
+            )
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+    def test_draft_with_store_b_customer_is_rejected(self):
+        response = self.client.post("/api/v1/orders/drafts/", {
+            "customer": self.customer_b["id"],
+            "details": [{"product": self.product_a["id"], "quantity": 1, "unit_price": "25"}],
+        }, format="json")
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("customer", response.json())
+        self.assertFalse(DraftOrder.objects.filter(store_id=self.store_a).exists())
+
+    # 4. Valid order operations within the same store keep working
+
+    def test_same_store_create_list_retrieve_update_cancel(self):
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(customer=self.customer_a["id"]), expect=201)
+        self.assertEqual(order["customer"], self.customer_a["id"])
+        self.assertEqual(order["total"], "50.00")
+        self.assertEqual(order["status"], "open")
+
+        self.assertEqual([o["id"] for o in self.ok("get", "/api/v1/orders/")], [order["id"]])
+        self.assertEqual(
+            [o["id"] for o in self.ok("get", f"/api/v1/orders/?customer={self.customer_a['id']}")], [order["id"]],
+        )
+        self.assertEqual(self.ok("get", f"/api/v1/orders/{order['id']}/")["id"], order["id"])
+
+        updated = self.ok("patch", f"/api/v1/orders/{order['id']}/", {"delivery_method": "pickup", "total": "1.00"})
+        self.assertEqual(updated["delivery_method"], "pickup")
+        self.assertEqual(updated["total"], "50.00")  # read-only, ignored
+
+        cancelled = self.ok("post", f"/api/v1/orders/{order['id']}/cancel/")
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.ok("post", f"/api/v1/orders/{order['id']}/cancel/", expect=400)
+
+    def test_orders_cannot_be_deleted(self):
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(), expect=201)
+        self.ok("delete", f"/api/v1/orders/{order['id']}/", expect=405)
+        self.assertTrue(Order.objects.filter(pk=order["id"]).exists())
+
+    # Sales channels and draft orders across stores
+
+    def store_b_channel(self):
+        self.use(self.token_b, self.store_b)
+        channels = self.ok("get", "/api/v1/catalog/sales-channels/")
+        self.use(self.token_a, self.store_a)
+        return channels[0]["id"]
+
+    def store_b_draft(self):
+        self.use(self.token_b, self.store_b)
+        draft = self.ok("post", "/api/v1/orders/drafts/", {
+            "customer": self.customer_b["id"],
+            "details": [{"product": self.product_b["id"], "quantity": 1, "unit_price": "25"}],
+        }, expect=201)
+        self.use(self.token_a, self.store_a)
+        return draft
+
+    def post_draft(self, *details, customer=None):
+        return self.client.post("/api/v1/orders/drafts/", {
+            "customer": customer or self.customer_a["id"], "details": list(details),
+        }, format="json")
+
+    def test_create_order_with_store_b_sales_channel_is_rejected(self):
+        response = self.client.post(
+            "/api/v1/orders/", self.order_payload(sales_channel=self.store_b_channel()), format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("sales_channel", response.json())
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+        own_channel = self.ok("get", "/api/v1/catalog/sales-channels/")[0]["id"]
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(sales_channel=own_channel), expect=201)
+        self.assertEqual(order["sales_channel"], own_channel)
+
+    def test_draft_with_store_b_product_or_variant_is_rejected(self):
+        variant_b = self.product_b["variants"][0]["id"]
+        for detail in (
+            {"product": self.product_b["id"], "quantity": 1, "unit_price": "25"},
+            {"product": self.product_a["id"], "variant": variant_b, "quantity": 1, "unit_price": "25"},
+        ):
+            with self.subTest(detail=detail):
+                response = self.post_draft(detail)
+                self.assertEqual(response.status_code, 400, response.content)
+        self.assertFalse(DraftOrder.objects.filter(store_id=self.store_a).exists())
+
+    def test_store_a_cannot_update_delete_or_complete_store_b_draft(self):
+        draft = self.store_b_draft()
+        url = f"/api/v1/orders/drafts/{draft['id']}/"
+
+        self.ok("get", url, expect=404)
+        self.ok("patch", url, {"po_number": "HIJACK"}, expect=404)
+        self.ok("delete", url, expect=404)
+        self.ok("post", f"{url}complete/", expect=404)
+
+        saved = DraftOrder.objects.get(pk=draft["id"])
+        self.assertEqual((saved.po_number, saved.status, saved.order_id), (None, "open", None))
+        self.assertEqual(saved.details.count(), 1)
+        self.assertEqual(Order.objects.count(), 1)  # only Store B's order from setUp
+
+    # Invalid input
+
+    def test_invalid_customer_ids_return_400(self):
+        for bad in ("not-a-uuid", "00000000-0000-0000-0000-000000000000"):
+            with self.subTest(customer=bad):
+                response = self.client.post("/api/v1/orders/", self.order_payload(customer=bad), format="json")
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertIn("customer", response.json())
+
+                response = self.post_draft(
+                    {"product": self.product_a["id"], "quantity": 1, "unit_price": "25"}, customer=bad,
+                )
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertIn("customer", response.json())
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+        self.assertFalse(DraftOrder.objects.filter(store_id=self.store_a).exists())
+
+    def test_invalid_customer_filter_returns_400(self):
+        for url in ("/api/v1/orders/", "/api/v1/orders/drafts/"):
+            with self.subTest(url=url):
+                self.ok("get", f"{url}?customer=not-a-uuid", expect=400)
+                self.assertEqual(self.ok("get", f"{url}?customer=00000000-0000-0000-0000-000000000000"), [])
+
+    def test_negative_quantities_and_amounts_are_rejected(self):
+        product = self.product_a["id"]
+        cases = [
+            {"items": [{"product": product, "quantity": -1}]},
+            {"items": [{"product": product, "quantity": 1, "unit_price": "-1"}]},
+            {"items": [{"product": product, "quantity": 1, "discount_amount": "-1"}]},
+            {"items": []},
+            self.order_payload(discount_amount="-1"),
+            self.order_payload(tax_amount="-1"),
+            self.order_payload(shipping_amount="-1"),
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                response = self.client.post("/api/v1/orders/", payload, format="json")
+                self.assertEqual(response.status_code, 400, response.content)
+
+        for detail in (
+            {"product": product, "quantity": 0, "unit_price": "25"},
+            {"product": product, "quantity": -1, "unit_price": "25"},
+            {"product": product, "quantity": 1, "unit_price": "-1"},
+            {"product": product, "quantity": 1, "unit_price": "25", "discount_amount": "-1"},
+        ):
+            with self.subTest(detail=detail):
+                response = self.post_draft(detail)
+                self.assertEqual(response.status_code, 400, response.content)
+
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+        self.assertFalse(DraftOrder.objects.filter(store_id=self.store_a).exists())
+
+    def test_excessive_order_discounts_are_rejected(self):
+        line_discount = {"items": [{"product": self.product_a["id"], "quantity": 1, "unit_price": "10", "discount_amount": "11"}]}
+        response = self.client.post("/api/v1/orders/", line_discount, format="json")
+        self.assertEqual(response.status_code, 400, response.content)
+
+        # Subtotal is 2 x 25 = 50: a discount above it is refused, the whole subtotal is allowed.
+        response = self.client.post("/api/v1/orders/", self.order_payload(discount_amount="50.01"), format="json")
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("discount_amount", response.json())
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
+
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(discount_amount="50.00"), expect=201)
+        self.assertEqual(order["total"], "0.00")
+
+    # Business rules for finished orders and drafts
+
+    def test_fulfilled_or_partly_fulfilled_order_cannot_be_cancelled(self):
+        order = self.ok("post", "/api/v1/orders/", self.order_payload(), expect=201)
+        for fulfillment_status in ("partial", "fulfilled"):
+            with self.subTest(fulfillment_status=fulfillment_status):
+                Order.objects.filter(pk=order["id"]).update(fulfillment_status=fulfillment_status)
+                self.ok("post", f"/api/v1/orders/{order['id']}/cancel/", expect=400)
+                self.assertEqual(Order.objects.get(pk=order["id"]).status, "open")
+
+    def test_completed_draft_cannot_be_updated(self):
+        draft = self.ok("post", "/api/v1/orders/drafts/", {
+            "customer": self.customer_a["id"], "po_number": "PO-1",
+            "details": [{"product": self.product_a["id"], "quantity": 1, "unit_price": "25"}],
+        }, expect=201)
+        url = f"/api/v1/orders/drafts/{draft['id']}/"
+        order = self.ok("post", f"{url}complete/", expect=201)
+
+        self.ok("patch", url, {"po_number": "PO-2"}, expect=400)
+        self.ok("patch", url, {"details": [{"product": self.product_a["id"], "quantity": 5, "unit_price": "1"}]}, expect=400)
+
+        saved = DraftOrder.objects.get(pk=draft["id"])
+        self.assertEqual((saved.po_number, saved.status, str(saved.order_id)), ("PO-1", "completed", order["id"]))
+        self.assertEqual(saved.details.get().quantity, 1)
+        self.assertEqual(saved.total, 25)
+
+    def test_draft_with_custom_item_saves_but_cannot_be_completed(self):
+        draft = self.ok("post", "/api/v1/orders/drafts/", {
+            "customer": self.customer_a["id"],
+            "details": [{"title": "Gift wrap", "quantity": 1, "unit_price": "5"}],
+        }, expect=201)
+        self.ok("post", f"/api/v1/orders/drafts/{draft['id']}/complete/", expect=400)
+
+        saved = DraftOrder.objects.get(pk=draft["id"])
+        self.assertEqual((saved.status, saved.order_id), ("open", None))
+        self.assertFalse(Order.objects.filter(store_id=self.store_a).exists())
