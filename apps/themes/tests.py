@@ -29,16 +29,17 @@ HEADER_ICONS_LOOP = """    {%- assign has_actions = false -%}
           </a>
         {%- endif -%}
         {%- if s.show_account != false -%}
+          <style>.site-header__account:hover { background: transparent; opacity: 1; }</style>
           {%- if customer_logged_in -%}
             <a class="site-header__account" href="{{ shop.url }}/account/" aria-label="Account" title="Account">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
               </svg>
             </a>
           {%- else -%}
             <a class="site-header__account" href="{{ shop.url }}/account/login" aria-label="Sign in or create account" title="Sign in or create account">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
               </svg>
             </a>
           {%- endif -%}
@@ -2362,7 +2363,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 38)
+        self.assertEqual(theme.theme_data["starter_revision"], 39)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -3124,7 +3125,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 38)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 39)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -4575,7 +4576,8 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         r = self.client.get(f"{self.base}/account/login")
         self.assertEqual(r.status_code, 200)
         content = r.content.decode()
-        self.assertIn("Sign In", content)
+        self.assertIn("Welcome back", content)
+        self.assertIn(">Sign in</button>", content)
         self.assertIn('name="email"', content)
         self.assertIn('name="password"', content)
         self.assertIn(f"{self.base}/account/register", content)
@@ -4728,13 +4730,13 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertIn('class="site-header__wishlist"', html)
         self.assertIn('class="site-header__cart"', html)
 
-        # 2. Visiting the destination page: displays "Sign in or create account" with both Sign In and Create Account options
+        # 2. Visiting the destination page: the login form, with a link to create an account
         r_auth = self.client.get(f"{self.base}/account/login")
         self.assertEqual(r_auth.status_code, 200)
         auth_html = r_auth.content.decode()
-        self.assertIn('<h1 class="customer-card__title">Sign in or create account</h1>', auth_html)
-        self.assertIn('Sign In', auth_html)
-        self.assertIn('Create Account', auth_html)
+        self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', auth_html)
+        self.assertIn('>Sign in</button>', auth_html)
+        self.assertIn('Create an account', auth_html)
         self.assertIn(f'{self.base}/account/login', auth_html)
         self.assertIn(f'{self.base}/account/register', auth_html)
 
@@ -4799,13 +4801,13 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             self.assertIn(f'class="site-header__account" href="{self.base}/account/login"', html_out)
             self.assertIn('aria-label="Sign in or create account"', html_out)
 
-            # Destination page renders correctly with "Sign in or create account"
+            # Destination page renders the login form
             r_dest = self.client.get(f"{self.base}/account/login")
             self.assertEqual(r_dest.status_code, 200)
             dest_html = r_dest.content.decode()
-            self.assertIn('<h1 class="customer-card__title">Sign in or create account</h1>', dest_html)
-            self.assertIn('Sign In', dest_html)
-            self.assertIn('Create Account', dest_html)
+            self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', dest_html)
+            self.assertIn('>Sign in</button>', dest_html)
+            self.assertIn('Create an account', dest_html)
 
             # Logged in: header icon points to /account/
             self.client.cookies[f"tss_cust_{self.slug}"] = cookie_val

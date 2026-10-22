@@ -582,7 +582,7 @@ PREVIEW_EDITOR = """
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
     if (!m) return null;
     var path = (m[1] || "/").replace(/\\/+$/, "") || "/";
-    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+)?$/i.test(path) ? path : null;
+    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?)?$/i.test(path) ? path : null;
   }
 
   // Edit mode: a click selects the section or block under it, and does nothing else -
@@ -590,7 +590,7 @@ PREVIEW_EDITOR = """
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page) || /^\\/account/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -1469,6 +1469,10 @@ class ThemePreviewView(StoreThemeView):
     def post(self, request):
         clean = validate_custom_data(request.data)
         page, target, message = _preview_target(request)
+        # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
+        customer_page = request.query_params.get("customer")
+        if customer_page in ("login", "register"):
+            page, target, message = "index", {"customer_page": customer_page}, None
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
                              "fonts": ""})
