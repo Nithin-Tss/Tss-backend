@@ -1,0 +1,832 @@
+{%- comment -%}
+  Checkout section.
+  Provides a modern, high-converting two-column checkout experience.
+  Reuses store commerce services for cart validation, discount pricing, taxes, shipping, and order placement.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- assign heading = s.heading | default: 'Checkout' -%}
+{%- assign btn_text = s.order_button_text | default: 'Place order' -%}
+{%- assign cur = settings.currency_symbol | default: '₹' -%}
+
+<style>
+  .checkout-container {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+    font-family: inherit;
+    color: var(--text-color, #111827);
+  }
+  .checkout-header {
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--line-color, #E5E7EB);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .checkout-header__title {
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.2;
+  }
+  .checkout-header__breadcrumbs {
+    font-size: 13px;
+    color: #6B7280;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .checkout-header__breadcrumbs a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .checkout-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .checkout-grid {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+    .checkout-summary-col {
+      order: -1;
+    }
+  }
+  .checkout-card {
+    background: #FFFFFF;
+    border: 1px solid var(--line-color, #E5E7EB);
+    border-radius: calc(var(--button-radius, 8px) + 4px);
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .checkout-card__title {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .checkout-form-grid {
+    display: grid;
+    gap: 14px;
+  }
+  .checkout-form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 600px) {
+    .checkout-form-row {
+      grid-template-columns: 1fr;
+    }
+  }
+  .checkout-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .checkout-field label {
+    font-size: 13px;
+    font-weight: 500;
+    color: #374151;
+  }
+  .checkout-field input, .checkout-field select, .checkout-field textarea {
+    height: 44px;
+    padding: 0 12px;
+    font-size: 14px;
+    border: 1px solid var(--line-color, #D1D5DB);
+    border-radius: var(--button-radius, 6px);
+    background: #FFFFFF;
+    color: inherit;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+    font-family: inherit;
+  }
+  .checkout-field textarea {
+    height: 80px;
+    padding: 10px 12px;
+    resize: vertical;
+  }
+  .checkout-field input:focus, .checkout-field select:focus, .checkout-field textarea:focus {
+    border-color: var(--accent-color, #111827);
+    box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.1);
+  }
+  .checkout-items {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 20px;
+    max-height: 380px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .checkout-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .checkout-item__image-wrap {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    border: 1px solid #E5E7EB;
+    overflow: visible;
+    background: #F9FAFB;
+    flex-shrink: 0;
+  }
+  .checkout-item__image-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 8px;
+  }
+  .checkout-item__badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: #4B5563;
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 600;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .checkout-item__details {
+    flex: 1;
+    min-width: 0;
+  }
+  .checkout-item__title {
+    font-size: 14px;
+    font-weight: 500;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .checkout-item__subtitle {
+    font-size: 12px;
+    color: #6B7280;
+    margin-top: 2px;
+  }
+  .checkout-item__price {
+    font-size: 14px;
+    font-weight: 600;
+    text-align: right;
+  }
+  .checkout-discount-box {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .checkout-discount-box input {
+    flex: 1;
+    height: 42px;
+    padding: 0 12px;
+    border: 1px solid #D1D5DB;
+    border-radius: var(--button-radius, 6px);
+    font-size: 13px;
+    text-transform: uppercase;
+  }
+  .checkout-discount-box button {
+    height: 42px;
+    padding: 0 16px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: var(--button-radius, 6px);
+    border: 1px solid #D1D5DB;
+    background: #F3F4F6;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .checkout-discount-box button:hover {
+    background: #E5E7EB;
+  }
+  .checkout-discount-applied {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #ECFDF5;
+    border: 1px solid #A7F3D0;
+    color: #065F46;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .checkout-discount-remove {
+    background: transparent;
+    border: none;
+    color: #065F46;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 16px;
+    padding: 0 4px;
+  }
+  .checkout-totals-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    margin-bottom: 10px;
+    color: #4B5563;
+  }
+  .checkout-totals-row--grand {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+    padding-top: 14px;
+    border-top: 1px solid #E5E7EB;
+    margin-top: 14px;
+    margin-bottom: 0;
+  }
+  .checkout-submit-btn {
+    width: 100%;
+    min-height: 50px;
+    background: var(--button-bg, #111827);
+    color: var(--button-text, #FFFFFF);
+    border: 0;
+    border-radius: var(--button-radius, 8px);
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s, transform .05s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 20px;
+  }
+  .checkout-submit-btn:hover {
+    opacity: 0.9;
+  }
+  .checkout-submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .checkout-alert {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .checkout-alert--error {
+    background: #FEF2F2;
+    border: 1px solid #FECDCA;
+    color: #B42318;
+  }
+  .checkout-alert--success {
+    background: #ECFDF3;
+    border: 1px solid #ABEFC6;
+    color: #067647;
+  }
+  .checkout-radio-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid #E5E7EB;
+    border-radius: var(--button-radius, 6px);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .checkout-radio-option:hover {
+    background: #F9FAFB;
+  }
+  .checkout-radio-option.selected {
+    border-color: var(--accent-color, #111827);
+    background: rgba(17, 24, 39, 0.02);
+  }
+  .checkout-empty {
+    text-align: center;
+    padding: 60px 20px;
+  }
+  .checkout-empty__title {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .checkout-empty__text {
+    font-size: 15px;
+    color: #6B7280;
+    margin-bottom: 24px;
+  }
+  .checkout-confirmation {
+    max-width: 680px;
+    margin: 0 auto;
+    text-align: center;
+    padding: 48px 24px;
+    background: #FFFFFF;
+    border: 1px solid var(--line-color, #E5E7EB);
+    border-radius: 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+  }
+  .checkout-confirmation__icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #DCFCE7;
+    color: #16A34A;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+  }
+  .checkout-confirmation__icon svg {
+    width: 36px;
+    height: 36px;
+  }
+  .checkout-confirmation__title {
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0 0 10px;
+  }
+  .checkout-confirmation__num {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    background: #F3F4F6;
+    font-size: 14px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 16px;
+  }
+  .checkout-confirmation__details {
+    text-align: left;
+    background: #F9FAFB;
+    border-radius: 10px;
+    padding: 20px;
+    margin: 24px 0;
+    font-size: 14px;
+    display: grid;
+    gap: 10px;
+  }
+</style>
+
+<div class="checkout-container" data-checkout-root data-cart-session="{{ cart_session }}" data-shop-url="{{ shop.url }}" data-shop-slug="{{ shop.slug }}">
+  <div class="checkout-header">
+    <h1 class="checkout-header__title">{{ heading }}</h1>
+    <div class="checkout-header__breadcrumbs">
+      <a href="{{ shop.url }}/cart">Cart</a>
+      <span>&rsaquo;</span>
+      <span style="font-weight: 600; color: #111827;">Information &amp; Payment</span>
+    </div>
+  </div>
+
+  <div id="checkout-alert-box" style="display: none;" class="checkout-alert checkout-alert--error" role="alert">
+    <span id="checkout-alert-msg"></span>
+  </div>
+
+  {%- if order_completed -%}
+    {# Confirmation view when order has just been placed #}
+    <div class="checkout-confirmation">
+      <div class="checkout-confirmation__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      </div>
+      <h2 class="checkout-confirmation__title">Thank you for your order!</h2>
+      <div class="checkout-confirmation__num">Order #{{ order.order_number | default: order.id }}</div>
+      <p style="color: #6B7280; font-size: 15px; margin: 0 0 16px;">
+        A confirmation email has been sent to <strong>{{ order.email }}</strong>.
+      </p>
+
+      <div class="checkout-confirmation__details">
+        <div><strong>Shipping address:</strong> {{ order.shipping_address.first_name }} {{ order.shipping_address.last_name }}, {{ order.shipping_address.address1 }}, {{ order.shipping_address.city }} {{ order.shipping_address.postal_code }}</div>
+        <div><strong>Payment method:</strong> {{ order.payment_method | default: 'Cash on Delivery' | upcase }}</div>
+        <div><strong>Total paid:</strong> {{ cur }}{{ order.total }}</div>
+      </div>
+
+      {%- if order.items.size > 0 -%}
+        <div style="margin: 20px 0; text-align: left; border-top: 1px solid #E5E7EB; padding-top: 16px;">
+          <h3 style="font-size: 15px; font-weight: 600; margin: 0 0 10px;">Items ordered</h3>
+          {%- for item in order.items -%}
+            <div style="display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px;">
+              <span>{{ item.title }} &times; {{ item.quantity }}</span>
+              <span>{{ cur }}{{ item.total }}</span>
+            </div>
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+
+      <a href="{{ shop.url }}/collections/all" class="checkout-submit-btn" style="text-decoration: none; display: inline-flex; width: auto; padding: 0 32px;">
+        Continue shopping
+      </a>
+    </div>
+
+  {%- elsif cart.lines.size == 0 and design_mode != true -%}
+    <div class="checkout-empty">
+      <h2 class="checkout-empty__title">Your cart is empty</h2>
+      <p class="checkout-empty__text">Add products to your cart before proceeding to checkout.</p>
+      <a href="{{ shop.url }}/collections/all" class="checkout-submit-btn" style="text-decoration: none; display: inline-flex; width: auto; padding: 0 32px;">
+        Return to shop
+      </a>
+    </div>
+
+  {%- else -%}
+    <div class="checkout-grid" id="checkout-main-grid">
+      {# LEFT COLUMN: Customer and Delivery Forms #}
+      <div class="checkout-form-col">
+        <form id="checkout-form" method="post" action="{{ shop.url }}/checkout/">
+          <input type="hidden" name="cart_session" value="{{ cart_session }}">
+          <input type="hidden" name="discount_code" id="hidden_discount_code" value="">
+
+          {# 1. Contact Information #}
+          <div class="checkout-card">
+            <h2 class="checkout-card__title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              Contact information
+            </h2>
+            <div class="checkout-form-grid">
+              <div class="checkout-field">
+                <label for="checkout-email">Email address *</label>
+                <input type="email" id="checkout-email" name="email" required placeholder="you@example.com" value="{{ customer.email | default: '' }}">
+              </div>
+            </div>
+          </div>
+
+          {# 2. Shipping Address #}
+          <div class="checkout-card">
+            <h2 class="checkout-card__title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              Delivery address
+            </h2>
+            <div class="checkout-form-grid">
+              <div class="checkout-form-row">
+                <div class="checkout-field">
+                  <label for="checkout-first-name">First name *</label>
+                  <input type="text" id="checkout-first-name" name="first_name" required value="{{ customer.first_name | default: '' }}">
+                </div>
+                <div class="checkout-field">
+                  <label for="checkout-last-name">Last name *</label>
+                  <input type="text" id="checkout-last-name" name="last_name" required value="{{ customer.last_name | default: '' }}">
+                </div>
+              </div>
+
+              {%- if s.show_company_field -%}
+                <div class="checkout-field">
+                  <label for="checkout-company">Company (optional)</label>
+                  <input type="text" id="checkout-company" name="company">
+                </div>
+              {%- endif -%}
+
+              <div class="checkout-field">
+                <label for="checkout-address1">Street address *</label>
+                <input type="text" id="checkout-address1" name="address1" required placeholder="House number and street name">
+              </div>
+
+              <div class="checkout-field">
+                <label for="checkout-address2">Apartment, suite, unit (optional)</label>
+                <input type="text" id="checkout-address2" name="address2">
+              </div>
+
+              <div class="checkout-form-row">
+                <div class="checkout-field">
+                  <label for="checkout-city">City *</label>
+                  <input type="text" id="checkout-city" name="city" required>
+                </div>
+                <div class="checkout-field">
+                  <label for="checkout-state">State / Province</label>
+                  <input type="text" id="checkout-state" name="state">
+                </div>
+              </div>
+
+              <div class="checkout-form-row">
+                <div class="checkout-field">
+                  <label for="checkout-postal-code">PIN / Postal code *</label>
+                  <input type="text" id="checkout-postal-code" name="postal_code" required>
+                </div>
+                <div class="checkout-field">
+                  <label for="checkout-country">Country</label>
+                  <input type="text" id="checkout-country" name="country" value="India">
+                </div>
+              </div>
+
+              {%- if s.show_phone_field != false -%}
+                <div class="checkout-field">
+                  <label for="checkout-phone">Phone number *</label>
+                  <input type="tel" id="checkout-phone" name="phone" placeholder="Mobile number for delivery updates" value="{{ customer.phone | default: '' }}">
+                </div>
+              {%- endif -%}
+            </div>
+          </div>
+
+          {# 3. Payment Method #}
+          <div class="checkout-card">
+            <h2 class="checkout-card__title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+              Payment method
+            </h2>
+            <div class="checkout-form-grid">
+              <label class="checkout-radio-option selected">
+                <input type="radio" name="payment_method" value="cod" checked>
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">Cash on Delivery (COD)</div>
+                  <div style="font-size: 12px; color: #6B7280; margin-top: 2px;">Pay with cash or UPI upon delivery.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {# 4. Optional Order Notes #}
+          {%- if s.show_notes != false -%}
+            <div class="checkout-card">
+              <h2 class="checkout-card__title">Order notes (optional)</h2>
+              <div class="checkout-field">
+                <textarea id="checkout-notes" name="notes" placeholder="Special delivery instructions or order notes..."></textarea>
+              </div>
+            </div>
+          {%- endif -%}
+
+          <button type="submit" id="checkout-submit-btn" class="checkout-submit-btn">
+            {{ btn_text }}
+          </button>
+        </form>
+      </div>
+
+      {# RIGHT COLUMN: Order Summary #}
+      {%- if s.show_order_summary != false -%}
+        <div class="checkout-summary-col">
+          <div class="checkout-card" style="position: sticky; top: 24px;">
+            <h2 class="checkout-card__title">Order summary</h2>
+
+            <div class="checkout-items" id="checkout-summary-items">
+              {%- for line in cart.lines -%}
+                <div class="checkout-item" data-line-id="{{ line.id }}">
+                  <div class="checkout-item__image-wrap">
+                    {%- if line.image != blank -%}
+                      <img src="{{ line.image }}" alt="{{ line.title }}">
+                    {%- else -%}
+                      <div style="width:100%;height:100%;background:#E5E7EB;border-radius:8px;"></div>
+                    {%- endif -%}
+                    <span class="checkout-item__badge">{{ line.quantity }}</span>
+                  </div>
+                  <div class="checkout-item__details">
+                    <h3 class="checkout-item__title">{{ line.title }}</h3>
+                    <div class="checkout-item__subtitle">Qty: {{ line.quantity }}</div>
+                  </div>
+                  <div class="checkout-item__price">{{ cur }}{{ line.total }}</div>
+                </div>
+              {%- endfor -%}
+            </div>
+
+            {%- if s.show_discount_box != false -%}
+              <div class="checkout-discount-box" id="discount-input-container">
+                <input type="text" id="discount-code-input" placeholder="Discount code">
+                <button type="button" id="discount-apply-btn">Apply</button>
+              </div>
+              <div id="discount-badge" class="checkout-discount-applied" style="display: none;">
+                <span>Discount (<strong id="discount-badge-code"></strong>): -{{ cur }}<span id="discount-badge-amount">0.00</span></span>
+                <button type="button" class="checkout-discount-remove" id="discount-remove-btn">&times;</button>
+              </div>
+            {%- endif -%}
+
+            <div class="checkout-totals-row">
+              <span>Subtotal</span>
+              <span id="summary-subtotal">{{ cur }}{{ cart.subtotal | default: '0.00' }}</span>
+            </div>
+
+            <div class="checkout-totals-row" id="summary-discount-row" style="display: none; color: #065F46;">
+              <span>Discount</span>
+              <span>-{{ cur }}<span id="summary-discount-amount">0.00</span></span>
+            </div>
+
+            <div class="checkout-totals-row">
+              <span>Shipping</span>
+              <span id="summary-shipping">Calculated at completion</span>
+            </div>
+
+            <div class="checkout-totals-row">
+              <span>Estimated taxes</span>
+              <span id="summary-tax">{{ cur }}0.00</span>
+            </div>
+
+            <div class="checkout-totals-row checkout-totals-row--grand">
+              <span>Total</span>
+              <span id="summary-grand-total">{{ cur }}{{ cart.subtotal | default: '0.00' }}</span>
+            </div>
+          </div>
+        </div>
+      {%- endif -%}
+    </div>
+  {%- endif -%}
+</div>
+
+<script>
+(function() {
+  var root = document.querySelector('[data-checkout-root]');
+  if (!root) return;
+
+  var session = root.getAttribute('data-cart-session') || '';
+  var shopUrl = root.getAttribute('data-shop-url') || '';
+  var shopSlug = root.getAttribute('data-shop-slug') || '';
+  var form = document.getElementById('checkout-form');
+  var submitBtn = document.getElementById('checkout-submit-btn');
+  var alertBox = document.getElementById('checkout-alert-box');
+  var alertMsg = document.getElementById('checkout-alert-msg');
+
+  var discountInput = document.getElementById('discount-code-input');
+  var discountApplyBtn = document.getElementById('discount-apply-btn');
+  var discountBadge = document.getElementById('discount-badge');
+  var discountBadgeCode = document.getElementById('discount-badge-code');
+  var discountBadgeAmount = document.getElementById('discount-badge-amount');
+  var discountRemoveBtn = document.getElementById('discount-remove-btn');
+  var hiddenDiscount = document.getElementById('hidden_discount_code');
+
+  var subtotalEl = document.getElementById('summary-subtotal');
+  var discountRow = document.getElementById('summary-discount-row');
+  var discountAmtEl = document.getElementById('summary-discount-amount');
+  var shippingEl = document.getElementById('summary-shipping');
+  var taxEl = document.getElementById('summary-tax');
+  var totalEl = document.getElementById('summary-grand-total');
+
+  var currentDiscount = '';
+  var currency = '{{ cur }}';
+
+  function showAlert(msg) {
+    if (!alertBox || !alertMsg) return;
+    alertMsg.textContent = msg;
+    alertBox.style.display = 'flex';
+    alertBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function hideAlert() {
+    if (alertBox) alertBox.style.display = 'none';
+  }
+
+  // Apply discount code
+  if (discountApplyBtn && discountInput) {
+    discountApplyBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      var code = discountInput.value.trim();
+      if (!code) return;
+      hideAlert();
+      discountApplyBtn.disabled = true;
+
+      fetch(shopUrl + '/checkout/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Cart-Session': session
+        },
+        body: JSON.stringify({
+          action: 'apply_discount',
+          discount_code: code
+        })
+      })
+      .then(function(res) {
+        return res.json().then(function(data) {
+          if (!res.ok) throw new Error(data.error || 'Invalid discount code.');
+          return data;
+        });
+      })
+      .then(function(data) {
+        currentDiscount = code;
+        if (hiddenDiscount) hiddenDiscount.value = code;
+        if (discountBadge) {
+          discountBadge.style.display = 'flex';
+          discountBadgeCode.textContent = code.toUpperCase();
+          discountBadgeAmount.textContent = data.discount_amount || '0.00';
+        }
+        if (discountRow) {
+          discountRow.style.display = 'flex';
+          discountAmtEl.textContent = data.discount_amount || '0.00';
+        }
+        if (totalEl && data.total_amount) {
+          totalEl.textContent = currency + data.total_amount;
+        }
+        if (shippingEl && data.shipping_amount !== undefined) {
+          shippingEl.textContent = Number(data.shipping_amount) === 0 ? 'FREE' : currency + data.shipping_amount;
+        }
+        if (taxEl && data.tax_amount !== undefined) {
+          taxEl.textContent = currency + data.tax_amount;
+        }
+        discountInput.value = '';
+      })
+      .catch(function(err) {
+        showAlert(err.message || 'Could not apply discount code.');
+      })
+      .then(function() {
+        discountApplyBtn.disabled = false;
+      });
+    });
+  }
+
+  // Remove discount code
+  if (discountRemoveBtn) {
+    discountRemoveBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      currentDiscount = '';
+      if (hiddenDiscount) hiddenDiscount.value = '';
+      if (discountBadge) discountBadge.style.display = 'none';
+      if (discountRow) discountRow.style.display = 'none';
+
+      fetch(shopUrl + '/checkout/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Cart-Session': session
+        },
+        body: JSON.stringify({
+          action: 'apply_discount',
+          discount_code: ''
+        })
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (totalEl && data.total_amount) totalEl.textContent = currency + data.total_amount;
+      })
+      .catch(function() {});
+    });
+  }
+
+  // Handle Order Placement
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      hideAlert();
+
+      var email = form.email.value.trim();
+      var first_name = form.first_name.value.trim();
+      var last_name = form.last_name.value.trim();
+      var address1 = form.address1.value.trim();
+      var city = form.city.value.trim();
+      var postal_code = form.postal_code.value.trim();
+
+      if (!email || !first_name || !last_name || !address1 || !city || !postal_code) {
+        showAlert('Please fill in all required delivery fields.');
+        return;
+      }
+
+      var payload = {
+        action: 'place_order',
+        email: email,
+        first_name: first_name,
+        last_name: last_name,
+        company: form.company ? form.company.value.trim() : '',
+        address1: address1,
+        address2: form.address2 ? form.address2.value.trim() : '',
+        city: city,
+        state: form.state ? form.state.value.trim() : '',
+        postal_code: postal_code,
+        country: form.country ? form.country.value.trim() : 'India',
+        phone: form.phone ? form.phone.value.trim() : '',
+        payment_method: form.payment_method ? form.payment_method.value : 'cod',
+        notes: form.notes ? form.notes.value.trim() : '',
+        discount_code: currentDiscount
+      };
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Processing order...';
+      }
+
+      fetch(shopUrl + '/checkout/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Cart-Session': session
+        },
+        body: JSON.stringify(payload)
+      })
+      .then(function(res) {
+        return res.json().then(function(data) {
+          if (!res.ok) throw new Error(data.error || 'Could not place order.');
+          return data;
+        });
+      })
+      .then(function(data) {
+        if (data.order_id || data.success) {
+          window.location.href = shopUrl + '/checkout/order/' + (data.order_id || '') + '/';
+        } else {
+          showAlert('Order created successfully.');
+        }
+      })
+      .catch(function(err) {
+        showAlert(err.message || 'There was a problem processing your order. Please try again.');
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '{{ btn_text }}';
+        }
+      });
+    });
+  }
+})();
+</script>

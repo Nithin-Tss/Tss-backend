@@ -4823,3 +4823,238 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             self.assertIn('My Account', r_in_acc.content.decode())
 
             self.client.cookies.clear()
+
+
+class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
+    """Test independent theme-specific checkout pages, persistence, and functionality."""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        self.token, self.store = self.sign_up("owner-checkout@example.com", "Checkout Test Store")
+        self.slug = self.store["storeSlug"]
+        self.base = f"/s/{self.slug}"
+        self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Minimalist Lamp", "sku": "LAMP-1", "status": "active", "price": "49.99",
+            "location": self.location, "quantity": 10,
+        }, expect=201)
+        self.shopper = APIClient()
+
+    def add_theme(self, source="blank", name=None):
+        self.use(self.token, self.store["storeId"])
+        payload = {"source": source}
+        if name:
+            payload["name"] = name
+        return self.ok("post", "/api/v1/themes/library/", payload, expect=201)
+
+    def editing(self, theme_id, method, url, data=None):
+        kwargs = {"HTTP_X_THEME_ID": theme_id}
+        r = getattr(self.client, method)(url, data, format="json", **kwargs) if data is not None \
+            else getattr(self.client, method)(url, **kwargs)
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        return r.json()
+
+    def code(self, theme_id, path):
+        files = self.editing(theme_id, "get", "/api/v1/themes/files/")["files"]
+        return next((f["content"] for f in files if f["path"] == path), None)
+
+    def save_code(self, theme_id, path, content):
+        return self.editing(theme_id, "post", "/api/v1/themes/files/", {"path": path, "content": content})
+
+    def test_all_themes_start_with_default_checkout_templates_and_sections(self):
+        # 1. First theme added is published and starts with default checkout template and main-checkout section
+        active_theme = self.add_theme(source="blank", name="Initial Theme")
+
+        checkout_content = self.code(active_theme["id"], "templates/checkout.liquid")
+        self.assertIsNotNone(checkout_content)
+        self.assertIn("sections", checkout_content)
+
+        main_checkout_content = self.code(active_theme["id"], "sections/main-checkout.liquid")
+        self.assertIsNotNone(main_checkout_content)
+        self.assertIn("checkout-form", main_checkout_content)
+        self.assertIn("checkout-summary", main_checkout_content)
+
+        # 2. Add themes from different presets (bold, boutique) and verify identical default checkout files
+        theme_bold = self.add_theme(source="bold", name="Bold Theme")
+        theme_boutique = self.add_theme(source="boutique", name="Boutique Theme")
+
+        for th in (theme_bold, theme_boutique):
+            th_checkout = self.code(th["id"], "templates/checkout.liquid")
+            th_main_sec = self.code(th["id"], "sections/main-checkout.liquid")
+            self.assertEqual(th_checkout, checkout_content)
+            self.assertEqual(th_main_sec, main_checkout_content)
+
+    def test_independent_checkout_editing_per_theme_no_cross_changes(self):
+        theme_a = self.add_theme(source="blank", name="Theme A")
+        theme_b = self.add_theme(source="bold", name="Theme B")
+
+        # 1. Modify Theme A's checkout page
+        theme_a_code = "{% comment %}Theme A Custom Checkout{% endcomment %}\n<div class='theme-a-checkout'>{{ sections }}</div>"
+        self.save_code(theme_a["id"], "templates/checkout.liquid", theme_a_code)
+
+        # 2. Verify Theme A has the change
+        self.assertEqual(self.code(theme_a["id"], "templates/checkout.liquid"), theme_a_code)
+
+        # 3. Verify Theme B is untouched
+        theme_b_code_before = self.code(theme_b["id"], "templates/checkout.liquid")
+        self.assertNotIn("theme-a-checkout", theme_b_code_before)
+        self.assertIn("sections", theme_b_code_before)
+
+        # 4. Modify Theme B's checkout page
+        theme_b_code = "{% comment %}Theme B Custom Checkout{% endcomment %}\n<div class='theme-b-checkout'>{{ sections }}</div>"
+        self.save_code(theme_b["id"], "templates/checkout.liquid", theme_b_code)
+
+        # 5. Verify both retain their independent customizations
+        self.assertEqual(self.code(theme_a["id"], "templates/checkout.liquid"), theme_a_code)
+        self.assertEqual(self.code(theme_b["id"], "templates/checkout.liquid"), theme_b_code)
+
+    def test_checkout_customization_persists_across_theme_switches_and_renders(self):
+        theme_a = self.add_theme(source="blank", name="Theme A")
+        theme_b = self.add_theme(source="bold", name="Theme B")
+
+        # Customize checkout section for Theme A
+        custom_a_section = "<div class='theme-a-sec'><h1>Theme A Checkout</h1></div>"
+        self.save_code(theme_a["id"], "sections/main-checkout.liquid", custom_a_section)
+
+        # Customize checkout section for Theme B
+        custom_b_section = "<div class='theme-b-sec'><h1>Theme B Checkout</h1></div>"
+        self.save_code(theme_b["id"], "sections/main-checkout.liquid", custom_b_section)
+
+        # Publish Theme A -> storefront /checkout renders Theme A
+        self.ok("post", f"/api/v1/themes/library/{theme_a['id']}/publish/", {})
+        r_a = self.shopper.get(f"{self.base}/checkout")
+        self.assertEqual(r_a.status_code, 200)
+        self.assertIn("theme-a-sec", r_a.content.decode())
+        self.assertNotIn("theme-b-sec", r_a.content.decode())
+
+        # Publish Theme B -> storefront /checkout renders Theme B
+        self.ok("post", f"/api/v1/themes/library/{theme_b['id']}/publish/", {})
+        r_b = self.shopper.get(f"{self.base}/checkout")
+        self.assertEqual(r_b.status_code, 200)
+        self.assertIn("theme-b-sec", r_b.content.decode())
+        self.assertNotIn("theme-a-sec", r_b.content.decode())
+
+        # Re-publish Theme A -> still retains Theme A customizations
+        self.ok("post", f"/api/v1/themes/library/{theme_a['id']}/publish/", {})
+        r_a2 = self.shopper.get(f"{self.base}/checkout")
+        self.assertEqual(r_a2.status_code, 200)
+        self.assertIn("theme-a-sec", r_a2.content.decode())
+        self.assertNotIn("theme-b-sec", r_a2.content.decode())
+
+    def test_storefront_checkout_full_order_journey(self):
+        import re
+        self.add_theme(source="blank", name="Main Theme")
+
+        # Shopper visits home to obtain cart session
+        home = self.shopper.get(f"{self.base}/")
+        match = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode())
+        self.assertIsNotNone(match)
+        session_id = match.group(1)
+
+        # Add item to cart
+        add_resp = self.shopper.post(
+            f"{self.base}/cart/add",
+            data=json.dumps({"product": self.product["id"], "quantity": 2}),
+            content_type="application/json",
+            HTTP_X_CART_SESSION=session_id
+        )
+        self.assertEqual(add_resp.status_code, 200)
+
+        # View checkout page
+        checkout_page = self.shopper.get(f"{self.base}/checkout?cart={session_id}")
+        self.assertEqual(checkout_page.status_code, 200)
+        html = checkout_page.content.decode()
+        self.assertIn("Minimalist Lamp", html)
+        self.assertIn("Contact information", html)
+        self.assertIn("Delivery address", html)
+        self.assertIn("Cash on Delivery (COD)", html)
+
+        # Submit order via checkout form
+        order_post = self.shopper.post(
+            f"{self.base}/checkout?cart={session_id}",
+            data={
+                "email": "eleanor@example.com",
+                "first_name": "Eleanor",
+                "last_name": "Vance",
+                "phone": "555-0199",
+                "address_line_1": "42 Hill House Lane",
+                "city": "Boston",
+                "state": "MA",
+                "postal_code": "02108",
+                "country": "United States",
+                "payment_method": "cash_on_delivery",
+                "order_notes": "Leave at front door",
+            }
+        )
+        self.assertEqual(order_post.status_code, 302)
+        redirect_url = order_post.url
+        self.assertIn(f"{self.base}/checkout/order/", redirect_url)
+
+        # Order confirmation page
+        conf_page = self.shopper.get(redirect_url)
+        self.assertEqual(conf_page.status_code, 200)
+        conf_html = conf_page.content.decode()
+        self.assertIn("Thank you for your order!", conf_html)
+        self.assertIn("Eleanor Vance", conf_html)
+        self.assertIn("42 Hill House Lane", conf_html)
+        self.assertIn("Minimalist Lamp", conf_html)
+
+        # Verify Order object in database
+        from apps.orders.models import Order
+        order = Order.objects.filter(customer__email="eleanor@example.com").first()
+        self.assertIsNotNone(order)
+        self.assertEqual(order.items.count(), 1)
+        self.assertEqual(order.items.first().product.title, "Minimalist Lamp")
+        self.assertEqual(order.items.first().quantity, 2)
+
+    def test_cart_drawer_checkout_button_navigation_and_rendering(self):
+        """Test complete flow: add product -> cart drawer -> checkout button -> checkout page rendering."""
+        import re
+        self.add_theme(source="blank", name="Active Store Theme")
+
+        # 1. Shopper visits storefront to initialize cart session
+        home_resp = self.shopper.get(f"{self.base}/")
+        self.assertEqual(home_resp.status_code, 200)
+        session_match = re.search(r'data-cart-session="([0-9a-f]{32})"', home_resp.content.decode())
+        self.assertIsNotNone(session_match)
+        session_id = session_match.group(1)
+
+        # 2. Add product to cart
+        add_resp = self.shopper.post(
+            f"{self.base}/cart/add",
+            data=json.dumps({"product": self.product["id"], "quantity": 3}),
+            content_type="application/json",
+            HTTP_X_CART_SESSION=session_id
+        )
+        self.assertEqual(add_resp.status_code, 200)
+
+        # 3. Request cart fragment (the content inside the cart drawer)
+        frag_resp = self.shopper.get(
+            f"{self.base}/cart/fragment",
+            HTTP_X_CART_SESSION=session_id
+        )
+        self.assertEqual(frag_resp.status_code, 200)
+        frag_html = frag_resp.json().get("html", "")
+        # The drawer includes the checkout button
+        self.assertIn("cart-checkout", frag_html)
+        self.assertIn("Check out", frag_html)
+
+        # 4. Navigate to checkout URL (both with query param and with session cookie)
+        checkout_resp = self.shopper.get(f"{self.base}/checkout?cart={session_id}")
+        self.assertEqual(checkout_resp.status_code, 200)
+        checkout_html = checkout_resp.content.decode()
+
+        # 5. Verify checkout page renders correctly:
+        # - Has the selected theme's checkout template structure
+        self.assertIn("checkout-page", checkout_html)
+        self.assertIn("checkout-container", checkout_html)
+        # - Cart item details preserved
+        self.assertIn("Minimalist Lamp", checkout_html)
+        self.assertIn("3", checkout_html)  # Quantity badge
+        # - Checkout sections connected
+        self.assertIn("Delivery address", checkout_html)
+        self.assertIn("Contact information", checkout_html)
+        self.assertIn("Payment method", checkout_html)
+        self.assertIn("Cash on Delivery (COD)", checkout_html)
+        self.assertIn("Place order", checkout_html)
+

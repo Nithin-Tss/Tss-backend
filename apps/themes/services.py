@@ -59,6 +59,9 @@ REQUIRED_FILES = {
     "templates/account.liquid",
     "snippets/customer-auth.liquid",
     "snippets/customer-account.liquid",
+    # Checkout
+    "templates/checkout.liquid",
+    "sections/main-checkout.liquid",
     # Promotions is available in the customizer for existing private starter themes too
     "sections/promotions.liquid",
 }

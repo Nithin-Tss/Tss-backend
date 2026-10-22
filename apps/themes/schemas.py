@@ -30,7 +30,7 @@ from html.parser import HTMLParser
 
 from rest_framework import serializers
 
-PAGES = ("index", "product", "collection", "blog", "article", "page")
+PAGES = ("index", "product", "collection", "blog", "article", "page", "checkout")
 # Alternate page templates (Shopify's page.contact): templates/page.<name>.liquid, edited like the Page template
 PAGE_TEMPLATE = re.compile(r"^page\.[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_PAGE_TEMPLATES = 100
@@ -1227,6 +1227,23 @@ SECTIONS["featured-posts"] = {
 DEFAULT_TEMPLATES["blog"] = {"order": ["main"], "sections": {"main": {"type": "main-blog", "settings": {}}}}
 DEFAULT_TEMPLATES["article"] = {"order": ["main"], "sections": {"main": {"type": "main-article", "settings": {}}}}
 DEFAULT_TEMPLATES["page"] = {"order": ["main"], "sections": {"main": {"type": "main-page", "settings": {}}}}
+DEFAULT_TEMPLATES["checkout"] = {"order": ["main"], "sections": {"main": {"type": "main-checkout", "settings": {}}}}
+
+SECTIONS["main-checkout"] = {
+    "name": "Checkout form",
+    "pages": ("checkout",),
+    "required": True,
+    "settings": {
+        "heading": _opt("content", "text", "Heading", "Checkout"),
+        "show_order_summary": _opt("content", "checkbox", "Show order summary", True),
+        "show_discount_box": _opt("content", "checkbox", "Show discount box", True),
+        "show_phone_field": _opt("content", "checkbox", "Show phone field", True),
+        "show_company_field": _opt("content", "checkbox", "Show company field", False),
+        "show_notes": _opt("content", "checkbox", "Show order notes", True),
+        "order_button_text": _opt("content", "text", "Place order button text", "Place order"),
+        **common_settings(),
+    },
+}
 
 # Page templates every store starts with besides the base Page template. Each has a file
 # (starter/templates/page.<name>.liquid) and these sections; a store can edit or delete them.

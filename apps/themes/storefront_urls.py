@@ -4,7 +4,7 @@ from django.urls import path
 from .views import (
     storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
-    storefront_cart_fragment, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_page,
+    storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_page,
     storefront_product, storefront_register,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
@@ -28,6 +28,9 @@ urlpatterns = [
     path("<slug:store_slug>/cart/add", storefront_cart_add, name="storefront-cart-add"),
     path("<slug:store_slug>/cart/change", storefront_cart_change, name="storefront-cart-change"),
     path("<slug:store_slug>/cart/clear", storefront_cart_clear, name="storefront-cart-clear"),
+    path("<slug:store_slug>/checkout", storefront_checkout, name="storefront-checkout-page-noslash"),
+    path("<slug:store_slug>/checkout/", storefront_checkout, name="storefront-checkout-page"),
+    path("<slug:store_slug>/checkout/order/<uuid:order_id>/", storefront_checkout_order, name="storefront-checkout-order"),
     path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
     path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),
