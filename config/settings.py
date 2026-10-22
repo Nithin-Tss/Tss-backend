@@ -285,6 +285,9 @@ REST_FRAMEWORK = {
         'auth': '10/min',
         # Password reset / verification emails: stops mailbox flooding
         'email': '5/hour',
+        # Public storefront: browsing/cart traffic, and the calls that create orders
+        'storefront': '120/min',
+        'storefront_checkout': '20/hour',
     },
 }
 

@@ -38,6 +38,15 @@ def find_code(store, code):
     return match
 
 
+def check_customer_limit(discount, customer):
+    """Refuse when `customer` has already used `discount` as often as it allows."""
+    if discount.per_customer_limit is None or customer is None:
+        return
+    used = OrderDiscount.objects.filter(discount=discount, order__customer=customer, is_deleted=False).count()
+    if used >= discount.per_customer_limit:
+        raise ValidationError({"code": "You have already used this discount the maximum number of times."})
+
+
 def times_used(discount):
     return OrderDiscount.objects.filter(discount=discount, is_deleted=False).count()
 

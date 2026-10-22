@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.dispatch import Signal
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.core.numbering import next_number
@@ -150,6 +151,14 @@ def cancel_order(order, user=None):
 
     order.status = CANCELLED
     order.save(update_fields=["status", "updated_at"])
+
+    # Void the unpaid payment and give the discount code its use back
+    from apps.discounts.models import OrderDiscount
+    from apps.payments import services as payments
+
+    payments.cancel_pending(order)
+    now = timezone.now()
+    OrderDiscount.objects.filter(order=order, is_deleted=False).update(is_deleted=True, deleted_at=now)
 
     transaction.on_commit(lambda: order_cancelled.send(sender=Order, order=order))
     return order

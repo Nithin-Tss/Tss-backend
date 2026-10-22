@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.test import override_settings
 from django.urls import include, path
 from django.utils import timezone
@@ -29,6 +30,7 @@ urlpatterns = [
 @override_settings(ROOT_URLCONF=__name__)
 class CommerceTestBase(APITestCase):
     def setUp(self):
+        cache.clear()  # storefront calls are rate limited; every test starts with a fresh allowance
         self.store = Store.objects.create(store_name="Shop", store_slug="shop", status="active")
         self.product = Product.objects.create(store=self.store, title="Tee", status="active")
         self.variant = ProductVariant.objects.create(product=self.product, sku="TEE-1", price=Decimal("499.00"))
@@ -108,7 +110,7 @@ class StorefrontApiTests(CommerceTestBase):
     base = "/api/v1/storefront/shop"
 
     def test_cart_to_checkout_flow(self):
-        h = {"HTTP_X_CART_SESSION": "sess-1"}
+        h = {"HTTP_X_CART_SESSION": "sess-1-aaaaaaaaaaaa"}
         r = self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 2}, format="json", **h)
         self.assertEqual(r.status_code, 201)
         item_id = r.data["items"][0]["id"]
@@ -120,14 +122,14 @@ class StorefrontApiTests(CommerceTestBase):
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.data["total_amount"], "1497.00")
 
-        other = self.client.get(f"{self.base}/checkout/{r.data['id']}/", HTTP_X_CART_SESSION="someone-else")
+        other = self.client.get(f"{self.base}/checkout/{r.data['id']}/", HTTP_X_CART_SESSION="someone-else-aaaaaaaa")
         self.assertEqual(other.status_code, 404)
 
     def test_requires_session_header(self):
         self.assertEqual(self.client.get(f"{self.base}/cart/").status_code, 400)
 
     def test_unknown_store_404(self):
-        self.assertEqual(self.client.get("/api/v1/storefront/nope/cart/", HTTP_X_CART_SESSION="s").status_code, 404)
+        self.assertEqual(self.client.get("/api/v1/storefront/nope/cart/", HTTP_X_CART_SESSION="s-aaaaaaaaaaaaaaaa").status_code, 404)
 
     def test_staff_urls_require_auth(self):
         self.assertIn(self.client.get("/api/v1/carts/").status_code, (401, 403))
@@ -135,8 +137,8 @@ class StorefrontApiTests(CommerceTestBase):
 
 class PlaceOrderTests(CommerceTestBase):
     base = "/api/v1/storefront/shop"
-    h = {"HTTP_X_CART_SESSION": "sess-1"}
-    address = {"name": "A", "line1": "1 Main St", "city": "Chennai", "postal_code": "600001", "country": "IN"}
+    h = {"HTTP_X_CART_SESSION": "sess-1-aaaaaaaaaaaa"}
+    address = {"first_name": "A", "last_name": "B", "address_line_1": "1 Main St", "city": "Chennai", "state": "TN", "postal_code": "600001", "country": "India"}
 
     def _checkout(self, quantity=2, **extra):
         self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": quantity}, format="json", **self.h)
@@ -160,7 +162,7 @@ class PlaceOrderTests(CommerceTestBase):
 
         got = self.client.get(f"{self.base}/orders/{r.data['id']}/", **self.h)
         self.assertEqual(got.status_code, 200)
-        other = self.client.get(f"{self.base}/orders/{r.data['id']}/", HTTP_X_CART_SESSION="someone-else")
+        other = self.client.get(f"{self.base}/orders/{r.data['id']}/", HTTP_X_CART_SESSION="someone-else-aaaaaaaa")
         self.assertEqual(other.status_code, 404)
 
     def test_needs_email_and_address(self):
@@ -202,10 +204,10 @@ class PlaceOrderTests(CommerceTestBase):
 
         listed = self.client.get(f"{self.base}/orders/", **self.h)
         self.assertEqual([o["id"] for o in listed.data], [order["id"]])
-        self.assertEqual(self.client.get(f"{self.base}/orders/", HTTP_X_CART_SESSION="other").data, [])
+        self.assertEqual(self.client.get(f"{self.base}/orders/", HTTP_X_CART_SESSION="other-aaaaaaaaaaaaaaa").data, [])
 
         # someone else's session can't cancel it
-        theirs = self.client.post(f"{self.base}/orders/{order['id']}/cancel/", HTTP_X_CART_SESSION="other")
+        theirs = self.client.post(f"{self.base}/orders/{order['id']}/cancel/", HTTP_X_CART_SESSION="other-aaaaaaaaaaaaaaa")
         self.assertEqual(theirs.status_code, 404)
 
         r = self.client.post(f"{self.base}/orders/{order['id']}/cancel/", **self.h)
@@ -320,3 +322,112 @@ class CartHardeningTests(CommerceTestBase):
         services.Checkout.objects.update(updated_at=timezone.now() - timedelta(hours=3))
         call_command("sweep_carts")
         self.assertTrue(services.Checkout.objects.get().abandoned_at)
+
+
+class OrderCreationGapTests(CommerceTestBase):
+    """Regression tests for the order-creation hardening."""
+
+    base = PlaceOrderTests.base
+    h = PlaceOrderTests.h
+    address = PlaceOrderTests.address
+    _checkout = PlaceOrderTests._checkout
+
+    def _percent_code(self, **discount_fields):
+        discount = Discount.objects.create(
+            store=self.store, name="Ten off", discount_type="percentage", value=Decimal("10"),
+            starts_at=timezone.now() - timedelta(days=1), is_active=True, is_deleted=False, **discount_fields,
+        )
+        return DiscountCode.objects.create(discount=discount, code="SAVE10", is_active=True, is_deleted=False)
+
+    def _place(self, **checkout):
+        cid = self._checkout(email="a@b.com", shipping_address=self.address, **checkout)
+        return cid, self.client.post(f"{self.base}/checkout/{cid}/complete/", **self.h)
+
+    # --- price drift
+    def test_discount_change_after_checkout_needs_reconfirmation(self):
+        code = self._percent_code()
+        cid = self._checkout(email="a@b.com", shipping_address=self.address, discount_code="save10")
+        code.discount.value = Decimal("50")
+        code.discount.save()
+        refused = self.client.post(f"{self.base}/checkout/{cid}/complete/", **self.h)
+        self.assertEqual(refused.status_code, 400)
+        shown = self.client.get(f"{self.base}/checkout/{cid}/", **self.h).data
+        self.assertEqual(shown["discount_amount"], "499.00")
+        self.assertEqual(self.client.post(f"{self.base}/checkout/{cid}/complete/", **self.h).status_code, 201)
+
+    def test_unchanged_checkout_places_without_a_second_confirmation(self):
+        self.assertEqual(self._place()[1].status_code, 201)
+
+    # --- availability
+    def test_product_unpublished_after_checkout_blocks_order(self):
+        cid = self._checkout(email="a@b.com", shipping_address=self.address)
+        self.product.status = "draft"
+        self.product.save()
+        self.assertEqual(self.client.post(f"{self.base}/checkout/{cid}/complete/", **self.h).status_code, 400)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_product_without_variant_cannot_be_added(self):
+        bare = Product.objects.create(store=self.store, title="Bare", status="active")
+        for channel in online_channels(self.store):
+            ProductSalesChannel.objects.create(product=bare, sales_channel=channel)
+        cart = services.get_or_create_cart(self.store, session_id="s1")
+        with self.assertRaises(ValidationError):
+            services.add_item(cart, bare, 1)
+
+    # --- cancelling
+    def test_cancel_voids_pending_payment_and_frees_discount_use(self):
+        from apps.discounts.services import times_used
+        from apps.payments.models import Payment
+
+        code = self._percent_code(usage_limit=1)
+        cid, placed = self._place(discount_code="save10")
+        self.assertEqual(times_used(code.discount), 1)
+
+        self.client.post(f"{self.base}/orders/{placed.data['id']}/cancel/", **self.h)
+        self.assertEqual(Payment.objects.get(order_id=placed.data["id"]).status, "cancelled")
+        self.assertEqual(times_used(code.discount), 0)
+
+    # --- discount limits
+    def test_per_customer_limit_is_enforced(self):
+        self._percent_code(per_customer_limit=1)
+        self.assertEqual(self._place(discount_code="save10")[1].status_code, 201)
+        # same email, new session, tries the code again
+        self.h = {"HTTP_X_CART_SESSION": "sess-2-aaaaaaaaaaaa"}
+        cid = self._checkout(email="a@b.com", shipping_address=self.address, discount_code="save10")
+        r = self.client.post(f"{self.base}/checkout/{cid}/complete/", **self.h)
+        self.assertEqual(r.status_code, 400)
+
+    def test_usage_limit_cannot_be_passed_by_a_second_checkout(self):
+        self._percent_code(usage_limit=1)
+        cid_a = self._checkout(email="a@b.com", shipping_address=self.address, discount_code="save10")
+        self.h = {"HTTP_X_CART_SESSION": "sess-2-aaaaaaaaaaaa"}
+        cid_b = self._checkout(email="c@d.com", shipping_address=self.address, discount_code="save10")
+        self.assertEqual(self.client.post(f"{self.base}/checkout/{cid_b}/complete/", **self.h).status_code, 201)
+        self.h = {"HTTP_X_CART_SESSION": "sess-1-aaaaaaaaaaaa"}
+        self.assertEqual(self.client.post(f"{self.base}/checkout/{cid_a}/complete/", **self.h).status_code, 400)
+
+    # --- abuse
+    def test_open_cod_orders_are_capped_per_customer(self):
+        set_available(self.variant, self.location, 100)
+        for n in range(services.MAX_OPEN_COD_ORDERS):
+            self.h = {"HTTP_X_CART_SESSION": f"cap-session-{n}-aaaaaaaa"}
+            self.assertEqual(self._place()[1].status_code, 201)
+        self.h = {"HTTP_X_CART_SESSION": "cap-session-last-aaaaaa"}
+        self.assertEqual(self._place()[1].status_code, 400)
+
+    def test_address_must_be_complete(self):
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 1}, format="json", **self.h)
+        r = self.client.post(f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": {"x": 1}}, format="json", **self.h)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("shipping_address", r.data)
+
+    def test_weak_session_ids_are_refused(self):
+        for bad in ("1", "short", "has spaces in it aaaaaaaa", "x" * 100):
+            r = self.client.get(f"{self.base}/cart/", HTTP_X_CART_SESSION=bad)
+            self.assertEqual(r.status_code, 400, bad)
+
+    def test_order_placement_is_rate_limited(self):
+        statuses = [
+            self.client.post(f"{self.base}/checkout/", {}, format="json", **self.h).status_code for _ in range(25)
+        ]
+        self.assertIn(429, statuses)

@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import Payment, PaymentTransaction
@@ -17,6 +18,7 @@ PENDING = "pending"
 CAPTURED, PARTIALLY_REFUNDED, REFUNDED = "captured", "partially_refunded", "refunded"
 CAPTURE, REFUND, SUCCESS = "capture", "refund", "success"
 PROVIDERS = ("manual",)
+CANCELLED = "cancelled"
 
 
 def refunded_total(payment):
@@ -110,6 +112,13 @@ def refund(payment, amount, reason=None):
     payment.status = REFUNDED if amount == left else PARTIALLY_REFUNDED
     payment.save(update_fields=["status", "updated_at"])
     return payment
+
+
+def cancel_pending(order):
+    """The order is cancelled: promised-but-unreceived payments (e.g. cash on delivery) are void."""
+    Payment.objects.filter(order=order, is_deleted=False, status=PENDING).update(
+        status=CANCELLED, updated_at=timezone.now()
+    )
 
 
 def paid_total(order):
