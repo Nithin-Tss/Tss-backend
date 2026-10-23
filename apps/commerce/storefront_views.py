@@ -26,7 +26,6 @@ from apps.catalog.models import Product, ProductVariant
 from apps.orders import services as orders_services
 from apps.orders.models import Order
 from apps.orders.serializers import OrderSerializer
-from apps.payments import services as payment_services
 from apps.tenancy.models import Store
 
 from . import services
@@ -227,7 +226,5 @@ class OrderCancelView(SessionOrdersMixin, StorefrontView):
         # Puts the stock back; refused once items have shipped or money has been received
         # (the shopper's session id is the only proof here, so refunds go through staff).
         order = self.session_order(request, order_id)
-        if payment_services.paid_total(order) > 0:
-            raise ValidationError("This order has been paid. Please contact the store to cancel it.")
-        order = orders_services.cancel_order(order)
+        order = orders_services.cancel_order(order, refuse_if_paid=True)
         return Response(OrderSerializer(order).data)

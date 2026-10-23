@@ -138,13 +138,19 @@ def create_order(
 
 
 @transaction.atomic
-def cancel_order(order, user=None):
+def cancel_order(order, user=None, refuse_if_paid=False):
     order = Order.objects.select_for_update().get(pk=order.pk)
 
     if order.status == CANCELLED:
         raise ValidationError("This order is already cancelled.")
     if order.fulfillment_status != UNFULFILLED:
         raise ValidationError("Orders with shipped items can't be cancelled.")
+    if refuse_if_paid:
+        # Checked under the order lock so a payment captured meanwhile can't slip past
+        from apps.payments import services as payments
+
+        if payments.paid_total(order) > 0:
+            raise ValidationError("This order has been paid. Please contact the store to cancel it.")
 
     for item in order.items.filter(is_deleted=False):
         inventory.release(item.variant, item.quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
