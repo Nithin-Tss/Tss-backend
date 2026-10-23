@@ -1423,12 +1423,15 @@ class PageTemplatesView(StoreThemeView):
 
 def _preview_target(request):
     """
-    (page, render_page arguments, message) for ?page=index|product|collection|blog|article.
+    (page, render_page arguments, message) for a theme preview page.
     The product page shows ?product=<id> or the newest product; the collection page shows all products;
-    the article page shows ?article=<handle> or the newest post.
+    the article page shows ?article=<handle> or the newest post. The cart is rendered from the existing
+    cart snippet, so it uses the home page's theme data rather than a saved cart template.
     message: why the page can't be shown (no product to show), else None.
     """
     page = request.query_params.get("page") or "index"
+    if page == "cart":
+        return "index", {"cart_page": True}, None
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
     if page == "collection":
@@ -1472,7 +1475,16 @@ class ThemePreviewView(StoreThemeView):
     action_permissions = {"POST": "themes.view"}
 
     def post(self, request):
-        clean = validate_custom_data(request.data)
+        preview_data = request.data
+        if request.query_params.get("page") == "cart" and isinstance(request.data, dict):
+            # The customizer may attach an empty, temporary cart entry while switching preview pages.
+            # Cart markup is a shared snippet, not an editable/saved template, so omit that entry
+            # before validating the theme data.
+            templates = request.data.get("templates")
+            if isinstance(templates, dict) and "cart" in templates:
+                preview_data = {**request.data, "templates": {**templates}}
+                preview_data["templates"].pop("cart")
+        clean = validate_custom_data(preview_data)
         page, target, message = _preview_target(request)
         # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
         customer_page = request.query_params.get("customer")
