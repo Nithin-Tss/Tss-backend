@@ -74,6 +74,31 @@ class Order(models.Model):
                 fields=["store", "order_number"],
                 name="uq_order_store_number",
             ),
+
+            models.CheckConstraint(
+                condition=models.Q(subtotal__gte=0),
+                name="ck_ord_subtotal_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(discount_amount__gte=0),
+                name="ck_ord_discount_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(discount_amount__lte=models.F("subtotal")),
+                name="ck_ord_discount_lte_subtotal",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tax_amount__gte=0),
+                name="ck_ord_tax_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(shipping_amount__gte=0),
+                name="ck_ord_shipping_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total__gte=0),
+                name="ck_ord_total_nonneg",
+            ),
         ]
 
     def __str__(self):
@@ -126,6 +151,28 @@ class OrderItem(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0),
                 name="ck_order_item_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_price__gte=0),
+                name="ck_oi_price_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(discount_amount__gte=0),
+                name="ck_oi_discount_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    discount_amount__lte=models.F("unit_price") * models.F("quantity")
+                ),
+                name="ck_oi_discount_lte_gross",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tax_amount__gte=0),
+                name="ck_oi_tax_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total__gte=0),
+                name="ck_oi_total_nonneg",
             ),
         ]
 
@@ -198,6 +245,10 @@ class DraftOrder(models.Model):
                 fields=["store", "draft_number"],
                 name="uq_draft_store_number",
             ),
+            models.CheckConstraint(
+                condition=models.Q(total__gte=0),
+                name="ck_draft_total_nonneg",
+            ),
         ]
 
     def __str__(self):
@@ -253,6 +304,30 @@ class DraftOrderDetail(models.Model):
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0),
                 name="ck_draft_order_detail_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_price__gte=0),
+                name="ck_dod_price_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(discount_amount__isnull=True)
+                    | models.Q(discount_amount__gte=0)
+                ),
+                name="ck_dod_discount_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(discount_amount__isnull=True)
+                    | models.Q(
+                        discount_amount__lte=models.F("unit_price") * models.F("quantity")
+                    )
+                ),
+                name="ck_dod_disc_lte_gross",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total__gte=0),
+                name="ck_dod_total_nonneg",
             ),
         ]
 

@@ -7,7 +7,7 @@ from apps.orders import services
 from apps.orders.models import DraftOrder, DraftOrderDetail, Order, OrderItem
 from apps.tenancy.models import Store
 from decimal import Decimal
-
+from django.db import IntegrityError, transaction
 from apps.payments.services import record_payment, record_pending_payment, refund
 
 
@@ -311,6 +311,72 @@ class OrdersApiTests(StoreClientMixin, APITestCase):
         self.assertFalse(DraftOrder.objects.exists())
         self.assertFalse(DraftOrderDetail.objects.exists())
 
+    def test_order_monetary_constraints_reject_invalid_values(self):
+        order_data = self.create_order(customer=self.customer["id"])
+        order = Order.objects.get(pk=order_data["id"])
+
+        invalid_updates = [
+            {"subtotal": Decimal("-1.00")},
+            {"discount_amount": Decimal("-1.00")},
+            {"discount_amount": Decimal("51.00")},
+            {"tax_amount": Decimal("-1.00")},
+            {"shipping_amount": Decimal("-1.00")},
+            {"total": Decimal("-1.00")},
+        ]
+
+        for updates in invalid_updates:
+            with self.subTest(updates=updates):
+                with self.assertRaises(IntegrityError):
+                    with transaction.atomic():
+                        Order.objects.filter(pk=order.pk).update(**updates)
+
+
+    def test_order_item_constraints_reject_invalid_values(self):
+        order_data = self.create_order(customer=self.customer["id"])
+        item = OrderItem.objects.get(order_id=order_data["id"])
+
+        invalid_updates = [
+            {"quantity": 0},
+            {"unit_price": Decimal("-1.00")},
+            {"discount_amount": Decimal("-1.00")},
+            {"discount_amount": Decimal("51.00")},
+            {"tax_amount": Decimal("-1.00")},
+            {"total": Decimal("-1.00")},
+        ]
+
+        for updates in invalid_updates:
+            with self.subTest(updates=updates):
+                with self.assertRaises(IntegrityError):
+                    with transaction.atomic():
+                        OrderItem.objects.filter(pk=item.pk).update(**updates)
+
+
+    def test_draft_order_constraints_reject_invalid_values(self):
+        draft_data = self.create_draft()
+        draft = DraftOrder.objects.get(pk=draft_data["id"])
+        detail = DraftOrderDetail.objects.get(draft_order=draft)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                DraftOrder.objects.filter(pk=draft.pk).update(
+                    total=Decimal("-1.00")
+                )
+
+        invalid_updates = [
+            {"quantity": 0},
+            {"unit_price": Decimal("-1.00")},
+            {"discount_amount": Decimal("-1.00")},
+            {"discount_amount": Decimal("51.00")},
+            {"total": Decimal("-1.00")},
+        ]
+
+        for updates in invalid_updates:
+            with self.subTest(updates=updates):
+                with self.assertRaises(IntegrityError):
+                    with transaction.atomic():
+                        DraftOrderDetail.objects.filter(pk=detail.pk).update(
+                            **updates
+                        )
 
 class StockValidationCases:
     """
