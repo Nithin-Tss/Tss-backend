@@ -61,16 +61,17 @@
           </a>
         {%- endif -%}
         {%- if s.show_account != false -%}
+          <style>.site-header__account:hover { background: transparent; opacity: 1; }</style>
           {%- if customer_logged_in -%}
             <a class="site-header__account" href="{{ shop.url }}/account/" aria-label="Account" title="Account">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
               </svg>
             </a>
           {%- else -%}
             <a class="site-header__account" href="{{ shop.url }}/account/login" aria-label="Sign in or create account" title="Sign in or create account">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                <circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
               </svg>
             </a>
           {%- endif -%}

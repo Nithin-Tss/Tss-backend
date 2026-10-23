@@ -18,12 +18,15 @@ from .models import Customer, CustomerAddress
 from .serializers import CustomerAddressSerializer, CustomerSerializer
 
 
+_last_user_sync = {}
+
+
 class CustomerViewSet(StoreScopedViewSet):
     """/api/v1/customers/  ?search=name or email"""
 
     permission_resource = "customers"
     queryset = (
-        Customer.objects.prefetch_related("addresses", "orders")
+        Customer.objects.prefetch_related("addresses")
         .order_by("-created_at")
     )
     serializer_class = CustomerSerializer
@@ -31,54 +34,87 @@ class CustomerViewSet(StoreScopedViewSet):
     def get_queryset(self):
         store = getattr(self.request, "store", None)
         if store:
-            import sys
-            import uuid
-            from django.conf import settings
-            from django.contrib.auth import get_user_model
-            from django.utils import timezone
+            import time
+            now_time = time.time()
+            # Only scan and sync users once every 15 seconds per store to avoid massive overhead
+            if now_time - _last_user_sync.get(str(store.pk), 0) > 15:
+                _last_user_sync[str(store.pk)] = now_time
+                import sys
+                import uuid
+                from django.conf import settings
+                from django.contrib.auth import get_user_model
+                from django.utils import timezone
 
-            User = get_user_model()
-            existing_emails = {
-                e.lower()
-                for e in Customer.objects.filter(store=store).values_list("email", flat=True)
-                if e
-            }
-            is_testing = (
-                "test" in sys.argv
-                or getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE") == "apps.core.testdb"
-            )
-            if is_testing:
-                users = (
-                    User.objects.filter(store_memberships__store=store)
-                    .exclude(email="")
-                    .exclude(email__isnull=True)
-                    .distinct()
+                User = get_user_model()
+                existing_emails = {
+                    e.lower()
+                    for e in Customer.objects.filter(store=store).values_list("email", flat=True)
+                    if e
+                }
+                is_testing = (
+                    "test" in sys.argv
+                    or getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE") == "apps.core.testdb"
                 )
-            else:
-                users = User.objects.exclude(email="").exclude(email__isnull=True).distinct()
-
-            to_create = []
-            now = timezone.now()
-            for u in users:
-                if u.email and u.email.lower() not in existing_emails:
-                    existing_emails.add(u.email.lower())
-                    to_create.append(
-                        Customer(
-                            id=uuid.uuid4(),
-                            store=store,
-                            email=u.email.lower(),
-                            first_name=u.first_name or "",
-                            last_name=u.last_name or "",
-                            email_subscription_status="subscribed",
-                            country="Australia",
-                            created_at=now,
-                            updated_at=now,
-                        )
+                if is_testing:
+                    users = (
+                        User.objects.filter(store_memberships__store=store)
+                        .exclude(email="")
+                        .exclude(email__isnull=True)
+                        .only("email", "first_name", "last_name")
+                        .distinct()
                     )
-            if to_create:
-                Customer.objects.bulk_create(to_create, ignore_conflicts=True)
+                else:
+                    users = (
+                        User.objects.exclude(email="")
+                        .exclude(email__isnull=True)
+                        .only("email", "first_name", "last_name")
+                        .distinct()
+                    )
+
+                to_create = []
+                now = timezone.now()
+                for u in users:
+                    if u.email and u.email.lower() not in existing_emails:
+                        existing_emails.add(u.email.lower())
+                        to_create.append(
+                            Customer(
+                                id=uuid.uuid4(),
+                                store=store,
+                                email=u.email.lower(),
+                                first_name=u.first_name or "",
+                                last_name=u.last_name or "",
+                                email_subscription_status="subscribed",
+                                country="Australia",
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        )
+                if to_create:
+                    Customer.objects.bulk_create(to_create, ignore_conflicts=True)
 
         qs = super().get_queryset()
+
+        # Database-side aggregation for orders_count and amount_spent to eliminate N+1 queries
+        from decimal import Decimal
+        from django.db.models import Count, DecimalField, Q, Sum
+        from django.db.models.functions import Coalesce
+
+        qs = qs.annotate(
+            annotated_orders_count=Count(
+                "orders",
+                filter=Q(orders__status__in=["open", "closed"]) & ~Q(orders__status="cancelled"),
+                distinct=True,
+            ),
+            annotated_amount_spent=Coalesce(
+                Sum(
+                    "orders__total",
+                    filter=Q(orders__status__in=["open", "closed"]) & ~Q(orders__status="cancelled"),
+                ),
+                Decimal("0.00"),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+        )
+
         search = self.request.query_params.get("search", "").strip()
         if search:
             qs = qs.filter(
@@ -87,6 +123,58 @@ class CustomerViewSet(StoreScopedViewSet):
                 | Q(email__icontains=search)
             )
         return qs
+
+    @action(detail=True, methods=["get"], url_path="timeline")
+    def timeline(self, request, pk=None):
+        customer = self.get_object()
+        events = []
+
+        # Customer account creation
+        events.append({
+            "id": f"cust_created_{customer.id}",
+            "type": "customer_created",
+            "title": "Customer was created.",
+            "description": "Customer was created.",
+            "timestamp": customer.created_at.isoformat(),
+        })
+
+        # Customer update event if modified after creation
+        if customer.updated_at and (customer.updated_at - customer.created_at).total_seconds() > 60:
+            events.append({
+                "id": f"cust_updated_{customer.id}",
+                "type": "customer_updated",
+                "title": "Customer details updated.",
+                "description": "Customer details updated.",
+                "timestamp": customer.updated_at.isoformat(),
+            })
+
+        # Order related events (optimized with select_related)
+        for order in customer.orders.select_related("sales_channel").order_by("-created_at")[:20]:
+            channel_name = order.sales_channel.name if order.sales_channel else "Online Store"
+            events.append({
+                "id": f"order_placed_{order.id}",
+                "type": "order_placed",
+                "order_number": order.order_number,
+                "order_id": str(order.id),
+                "channel": channel_name,
+                "title": f"This customer placed test order #{order.order_number} on {channel_name}.",
+                "description": f"This customer placed test order #{order.order_number} on {channel_name}.",
+                "timestamp": order.created_at.isoformat(),
+            })
+            events.append({
+                "id": f"order_email_{order.id}",
+                "type": "order_email",
+                "order_number": order.order_number,
+                "order_id": str(order.id),
+                "email": customer.email or "",
+                "title": f"Order Confirmation email for test order #{order.order_number} sent to this customer ({customer.email or ''}).",
+                "description": f"Order Confirmation email for test order #{order.order_number} sent to this customer ({customer.email or ''}).",
+                "timestamp": order.created_at.isoformat(),
+            })
+
+        # Sort chronological (newest first)
+        events.sort(key=lambda x: x["timestamp"], reverse=True)
+        return Response(events)
 
 
 class CustomerAddressViewSet(viewsets.ModelViewSet):

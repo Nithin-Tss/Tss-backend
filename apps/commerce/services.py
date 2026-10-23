@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.catalog.services import published_products
 from apps.discounts import services as discounts
-from apps.discounts.models import OrderDiscount
+from apps.discounts.models import Discount, OrderDiscount
 from apps.customers.models import Customer
 from apps.inventory.services import sellable
 from apps.orders import services as orders
@@ -25,6 +25,7 @@ CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "ab
 
 ZERO = Decimal("0.00")
 PAYMENT_METHODS = ("cod",)
+MAX_OPEN_COD_ORDERS = 5
 
 
 def _money(value):
@@ -144,6 +145,12 @@ def _check_stock(product, variant, quantity):
         raise ValidationError({"quantity": f"Only {in_stock} of {product.title} left."})
 
 
+def _check_available(store, product):
+    """Same rule as the storefront: Active and on the Online Store."""
+    if product.store_id != store.pk or not published_products(store).filter(pk=product.pk).exists():
+        raise ValidationError({"product": f"{product.title} isn't available."})
+
+
 @transaction.atomic
 def add_item(cart, product, quantity, variant=None):
     """Add a product to the cart; adding it again raises the quantity."""
@@ -151,13 +158,13 @@ def add_item(cart, product, quantity, variant=None):
 
     if quantity < 1:
         raise ValidationError({"quantity": "Must be at least 1."})
-    # Same rule as the storefront: Active and on the Online Store
-    if product.store_id != cart.store_id or not published_products(cart.store).filter(pk=product.pk).exists():
-        raise ValidationError({"product": "This product isn't available."})
+    _check_available(cart.store, product)
     if variant is not None and variant.product_id != product.pk:
         raise ValidationError({"variant": f"Doesn't belong to {product.title}."})
     if variant is None:
         variant = product.variants.order_by("created_at").first()
+    if variant is None:
+        raise ValidationError({"product": "This product isn't available."})
 
     item = CartItem.objects.filter(cart=cart, product=product, variant=variant, is_deleted=False).first()
     _check_stock(product, variant, quantity + (item.quantity if item else 0))
@@ -223,6 +230,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
         raise ValidationError("The cart is empty.")
     # Stock may have run out since the items were added
     for item in items:
+        _check_available(cart.store, item.product)
         _check_stock(item.product, item.variant, item.quantity)
 
     checkout = Checkout.objects.filter(cart=cart, status=CHECKOUT_OPEN, is_deleted=False).first()
@@ -353,6 +361,19 @@ def complete_checkout(checkout):
     return checkout
 
 
+def _check_open_order_cap(customer):
+    """Cash on delivery commits stock before any money moves: cap what one customer can hold open."""
+    open_cod = Order.objects.filter(
+        customer=customer, status="open", fulfillment_status="unfulfilled",
+        payments__status="pending", payments__is_deleted=False,
+    ).distinct().count()
+    if open_cod >= MAX_OPEN_COD_ORDERS:
+        raise ValidationError(
+            f"You already have {open_cod} unpaid cash-on-delivery orders waiting. "
+            "Please wait for them to be delivered or cancel one."
+        )
+
+
 def _guest_customer(checkout):
     """
     Guest checkout still leaves the store a customer record, matched by email.
@@ -372,11 +393,44 @@ def _guest_customer(checkout):
 
 
 @transaction.atomic
+def reprice_checkout(checkout):
+    """
+    Bring an open checkout's lines, discount, tax and shipping up to date with
+    the catalogue and store settings. Returns True if the total changed, so the
+    shopper can confirm the new amount instead of being charged a different one.
+    """
+    checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
+    if checkout.status != CHECKOUT_OPEN:
+        return False
+
+    before = checkout.total_amount
+    for item in checkout.items.filter(is_deleted=False).select_related("variant"):
+        if item.variant is None:
+            continue
+        current = _money(item.variant.price)
+        if current != item.unit_price:
+            item.unit_price = current
+            item.total_price = current * item.quantity
+            item.save(update_fields=["unit_price", "total_price", "updated_at"])
+    return update_checkout(checkout).total_amount != before
+
+
 def place_order(checkout, payment_method="cod"):
     """
-    Turn an open checkout into an order: commits stock, records the discount,
-    closes the checkout and its cart. Safe to repeat: a completed checkout
-    returns the order it already produced.
+    Turn an open checkout into an order. If prices, discount, tax or shipping
+    moved since the shopper last saw the total, the checkout is refreshed and
+    the order is refused so they can review the new total and confirm again.
+    """
+    if reprice_checkout(checkout):
+        raise ValidationError({"total": "Prices or charges changed. Please review your order and confirm again."})
+    return _place_order(checkout, payment_method)
+
+
+@transaction.atomic
+def _place_order(checkout, payment_method):
+    """
+    Commits stock, records the discount, closes the checkout and its cart.
+    Safe to repeat: a completed checkout returns the order it already produced.
 
     payment_method: only "cod" (cash on delivery) for now; it leaves a pending
     payment for the order total, to be captured when the money arrives.
@@ -404,9 +458,20 @@ def place_order(checkout, payment_method="cod"):
 
     # Catalogue prices may have moved since the cart was frozen
     for item in items:
+        _check_available(checkout.store, item.product)
         _check_stock(item.product, item.variant, item.quantity)
 
     customer = checkout.customer or _guest_customer(checkout)
+    _check_open_order_cap(customer)
+
+    # Lock the discount so concurrent orders can't both take its last use
+    code = (checkout.metadata or {}).get("discount_code")
+    match = None
+    if code and checkout.discount_amount > ZERO:
+        match = discounts.find_code(checkout.store, code)
+        Discount.objects.select_for_update().get(pk=match.discount_id)
+        match = discounts.find_code(checkout.store, code)
+        discounts.check_customer_limit(match.discount, customer)
 
     order = orders.create_order(
         checkout.store,
@@ -421,9 +486,7 @@ def place_order(checkout, payment_method="cod"):
         shipping_amount=checkout.shipping_amount,
     )
 
-    code = (checkout.metadata or {}).get("discount_code")
-    if code and checkout.discount_amount > ZERO:
-        match = discounts.find_code(checkout.store, code)
+    if match is not None:
         OrderDiscount.objects.create(
             order=order,
             discount=match.discount,

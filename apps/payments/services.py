@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import Payment, PaymentTransaction
@@ -17,6 +18,7 @@ PENDING = "pending"
 CAPTURED, PARTIALLY_REFUNDED, REFUNDED = "captured", "partially_refunded", "refunded"
 CAPTURE, REFUND, SUCCESS = "capture", "refund", "success"
 PROVIDERS = ("manual",)
+CANCELLED = "cancelled"
 
 
 def refunded_total(payment):
@@ -67,8 +69,33 @@ def record_pending_payment(store, order, checkout, amount, provider="cod", custo
 
 
 @transaction.atomic
+def capture_payment(payment, reference=None):
+    """Mark a pending payment (e.g. cash on delivery) as received."""
+    payment = Payment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status != PENDING:
+        raise ValidationError("Only a pending payment can be captured.")
+
+    PaymentTransaction.objects.create(
+        payment=payment,
+        transaction_type=CAPTURE,
+        amount=payment.amount,
+        status=SUCCESS,
+        provider_transaction_id=reference,
+    )
+    payment.status = CAPTURED
+    if reference:
+        payment.provider_payment_id = reference
+    payment.save(update_fields=["status", "provider_payment_id", "updated_at"])
+    return payment
+
+
+@transaction.atomic
 def refund(payment, amount, reason=None):
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
+        raise ValidationError({
+            "payment": "Only captured or partially refunded payments can be refunded."
+        })
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
     left = payment.amount - refunded_total(payment)
 
@@ -89,9 +116,22 @@ def refund(payment, amount, reason=None):
     return payment
 
 
+def cancel_pending(order):
+    """The order is cancelled: promised-but-unreceived payments (e.g. cash on delivery) are void."""
+    Payment.objects.filter(order=order, is_deleted=False, status=PENDING).update(
+        status=CANCELLED, updated_at=timezone.now()
+    )
+
+
 def paid_total(order):
-    """Captured minus refunded, across all payments for this order."""
+    """Return captured payments minus successful refunds."""
     total = Decimal("0.00")
-    for payment in Payment.objects.filter(order=order, is_deleted=False):
+    payments = Payment.objects.filter(
+        order=order,
+        is_deleted=False,
+        status__in=(CAPTURED, PARTIALLY_REFUNDED, REFUNDED),
+    )
+    for payment in payments:
         total += payment.amount - refunded_total(payment)
+
     return total

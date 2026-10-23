@@ -1,3 +1,5 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import mixins, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -21,6 +23,7 @@ class PaymentViewSet(
     """
     /api/v1/payments/?order=<id>             list, retrieve
     POST /api/v1/payments/                   record a manual payment {order, amount, reference}
+    POST /api/v1/payments/<id>/capture/      mark a pending payment as received
     POST /api/v1/payments/<id>/refund/       {amount, reason}
     Payments are never edited or deleted - refund instead.
     """
@@ -34,15 +37,20 @@ class PaymentViewSet(
     def get_queryset(self):
         qs = super().get_queryset()
         if self.request.query_params.get("order"):
-            qs = qs.filter(order=self.request.query_params["order"])
+            try:
+                qs = qs.filter(order=self.request.query_params["order"])
+            except DjangoValidationError:
+                raise ValidationError({"order": "Enter a valid id."})
         return qs
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         data = RecordPaymentSerializer(data=request.data)
         data.is_valid(raise_exception=True)
         v = data.validated_data
 
-        order = Order.objects.filter(store=request.store, pk=v["order"]).first()
+        # Lock the order so two concurrent payments can't both pass the "amount due" check.
+        order = Order.objects.select_for_update().filter(store=request.store, pk=v["order"]).first()
         if order is None:
             raise ValidationError({"order": "No such order in this store."})
         if order.status == CANCELLED:
@@ -56,6 +64,13 @@ class PaymentViewSet(
             request.store, order, v["amount"], provider=v["provider"], reference=v.get("reference") or None
         )
         return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def capture(self, request, pk=None):
+        """Mark a pending payment (cash on delivery) as received."""
+        reference = (request.data.get("reference") or "").strip() or None
+        payment = services.capture_payment(self.get_object(), reference=reference)
+        return Response(PaymentSerializer(self.get_queryset().get(pk=payment.pk)).data)
 
     @action(detail=True, methods=["post"])
     def refund(self, request, pk=None):

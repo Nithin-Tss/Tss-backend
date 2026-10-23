@@ -489,3 +489,33 @@ class StoreAdminOwnerTest(TestCase):
 
         close_store(self.store_b)  # its owner membership becomes store_closed but it is still Bob's
         self.assertEqual(self.rows()[self.store_b.pk], "bob@example.com")
+
+
+class PurgeStoreWithStockAndCartsTest(StoreClientMixin, APITestCase):
+    def test_purge_removes_variants_held_by_carts_and_stock_history(self):
+        from decimal import Decimal
+
+        from apps.catalog.models import Product, ProductVariant
+        from apps.commerce.models import Cart, CartItem
+        from apps.inventory.models import InventoryHistory, Location
+        from .services import purge_store
+
+        _, store_data = self.sign_up("owner@example.com", "Doomed")
+        self.ok("post", "/api/v1/catalog/products/", {"title": "P", "sku": "SKU-PURGE-1", "price": "5"}, expect=201)
+        store = Store.objects.get(pk=store_data["storeId"])
+        product = Product.objects.get(store=store)
+        variant = ProductVariant.objects.filter(product=product).first()
+        location = Location.objects.create(store=store, name="Shop")
+        cart = Cart.objects.create(store=store, session_id="s1", currency="USD", status="open")
+        CartItem.objects.create(cart=cart, product=product, variant=variant, quantity=1, unit_price=Decimal("5"))
+        for change in (2, 3):
+            InventoryHistory.objects.create(
+                store=store, variant=variant, location=location, reason="import", source="import",
+                before=0, after=change, change=change, committed=0, unavailable=0, on_hand=change, incoming=0,
+            )
+
+        purge_store(store)
+
+        self.assertFalse(Store.objects.filter(pk=store.pk).exists())
+        self.assertFalse(InventoryHistory.objects.exists())
+        self.assertFalse(CartItem.objects.exists())

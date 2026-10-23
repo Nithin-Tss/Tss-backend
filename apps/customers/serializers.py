@@ -134,21 +134,30 @@ class CustomerSerializer(serializers.ModelSerializer):
     location = serializers.SerializerMethodField()
     orders_count = serializers.SerializerMethodField()
     amount_spent = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
 
     class Meta:
         model = Customer
         fields = [
             "id", "first_name", "last_name", "name", "email", "email_subscription_status",
             "city", "state", "country", "location", "orders_count", "amount_spent",
-            "addresses", "created_at", "updated_at",
+            "phone", "addresses", "created_at", "updated_at",
         ]
+
+    def _get_default_or_first_address(self, obj):
+        addrs = list(obj.addresses.all())
+        return next((a for a in addrs if a.is_default), None) or (addrs[0] if addrs else None)
+
+    def get_phone(self, obj):
+        default_addr = self._get_default_or_first_address(obj)
+        return default_addr.phone if default_addr else None
 
     def get_name(self, obj):
         name = " ".join(filter(None, [obj.first_name, obj.last_name])).strip()
         return name or obj.email or "—"
 
     def get_location(self, obj):
-        default_addr = next((a for a in obj.addresses.all() if a.is_default), None) or obj.addresses.first()
+        default_addr = self._get_default_or_first_address(obj)
         if default_addr:
             parts = [default_addr.address_line_1, default_addr.city, default_addr.state, default_addr.country]
             loc = ", ".join(filter(None, parts)).strip()
@@ -159,12 +168,18 @@ class CustomerSerializer(serializers.ModelSerializer):
         return loc or "—"
 
     def get_orders_count(self, obj):
-        return obj.orders.count() if hasattr(obj, "orders") else 0
+        if hasattr(obj, "annotated_orders_count"):
+            return obj.annotated_orders_count
+        if hasattr(obj, "orders"):
+            return obj.orders.filter(status__in=["open", "closed"]).exclude(status="cancelled").count()
+        return 0
 
     def get_amount_spent(self, obj):
+        if hasattr(obj, "annotated_amount_spent"):
+            return f"{obj.annotated_amount_spent:.2f}"
         from django.db.models import Sum
         if hasattr(obj, "orders"):
-            total = obj.orders.aggregate(total_sum=Sum("total"))["total_sum"]
+            total = obj.orders.filter(status__in=["open", "closed"]).exclude(status="cancelled").aggregate(total_sum=Sum("total"))["total_sum"]
             return f"{total:.2f}" if total is not None else "0.00"
         return "0.00"
 

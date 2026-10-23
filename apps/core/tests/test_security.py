@@ -726,7 +726,7 @@ class StorefrontSessionSecurityTest(CommerceTestBase):
     """Shoppers have no account: the X-Cart-Session they send is all that separates them."""
 
     base = "/api/v1/storefront/shop"
-    address = {"name": "A", "line1": "1 Main St", "city": "Chennai", "postal_code": "600001", "country": "IN"}
+    address = {"first_name": "A", "last_name": "B", "address_line_1": "1 Main St", "city": "Chennai", "state": "TN", "postal_code": "600001", "country": "India"}
 
     def as_session(self, session, method, path, body=None):
         return getattr(self.client, method)(
@@ -743,25 +743,25 @@ class StorefrontSessionSecurityTest(CommerceTestBase):
         return checkout_id, r.json()["id"]
 
     def test_another_session_cannot_read_change_or_cancel_my_order(self):
-        checkout_id, order_id = self.place_order("alice-session")
+        checkout_id, order_id = self.place_order("alice-session-aaaaaa")
 
-        self.assertEqual([o["id"] for o in self.as_session("alice-session", "get", "/orders/").json()], [order_id])
-        self.assertEqual(self.as_session("mallory-session", "get", "/orders/").json(), [])
-        self.assertEqual(self.as_session("mallory-session", "get", f"/orders/{order_id}/").status_code, 404)
-        self.assertEqual(self.as_session("mallory-session", "post", f"/orders/{order_id}/cancel/").status_code, 404)
+        self.assertEqual([o["id"] for o in self.as_session("alice-session-aaaaaa", "get", "/orders/").json()], [order_id])
+        self.assertEqual(self.as_session("mallory-session-aaaa", "get", "/orders/").json(), [])
+        self.assertEqual(self.as_session("mallory-session-aaaa", "get", f"/orders/{order_id}/").status_code, 404)
+        self.assertEqual(self.as_session("mallory-session-aaaa", "post", f"/orders/{order_id}/cancel/").status_code, 404)
         self.assertNotEqual(Order.objects.get(pk=order_id).status, "cancelled")
 
         for method, path in (("get", f"/checkout/{checkout_id}/"), ("patch", f"/checkout/{checkout_id}/"),
                              ("post", f"/checkout/{checkout_id}/complete/")):
-            self.assertEqual(self.as_session("mallory-session", method, path, {}).status_code, 404, path)
+            self.assertEqual(self.as_session("mallory-session-aaaa", method, path, {}).status_code, 404, path)
 
     def test_the_same_session_id_in_another_store_sees_nothing(self):
         from apps.tenancy.models import Store
         Store.objects.create(store_name="Other", store_slug="other", status="active")
-        checkout_id, order_id = self.place_order("alice-session")
+        checkout_id, order_id = self.place_order("alice-session-aaaaaa")
 
         theirs = "/api/v1/storefront/other"
-        h = {"HTTP_X_CART_SESSION": "alice-session"}
+        h = {"HTTP_X_CART_SESSION": "alice-session-aaaaaa"}
         self.assertEqual(self.client.get(f"{theirs}/orders/", **h).json(), [])
         self.assertEqual(self.client.get(f"{theirs}/orders/{order_id}/", **h).status_code, 404)
         self.assertEqual(self.client.get(f"{theirs}/checkout/{checkout_id}/", **h).status_code, 404)
@@ -774,27 +774,27 @@ class StorefrontSessionSecurityTest(CommerceTestBase):
     def test_closed_stores_have_no_storefront_api(self):
         from apps.tenancy.models import Store
         Store.objects.filter(pk=self.store.pk).update(status="closed")
-        self.assertEqual(self.as_session("s", "get", "/cart/").status_code, 404)
+        self.assertEqual(self.as_session("s-aaaaaaaaaaaaaaaa", "get", "/cart/").status_code, 404)
 
     def test_carts_reject_other_stores_products_and_nonsense_quantities(self):
         from apps.tenancy.models import Store
         other = Store.objects.create(store_name="Other", store_slug="other", status="active")
         foreign = Product.objects.create(store=other, title="Foreign", status="active")
 
-        r = self.as_session("s", "post", "/cart/items/", {"product": str(foreign.pk), "quantity": 1})
+        r = self.as_session("s-aaaaaaaaaaaaaaaa", "post", "/cart/items/", {"product": str(foreign.pk), "quantity": 1})
         self.assertEqual(r.status_code, 400)
 
         for quantity in (0, -1, "lots", None, 1.5):
-            r = self.as_session("s", "post", "/cart/items/", {"product": str(self.product.pk), "quantity": quantity})
+            r = self.as_session("s-aaaaaaaaaaaaaaaa", "post", "/cart/items/", {"product": str(self.product.pk), "quantity": quantity})
             self.assertEqual(r.status_code, 400, quantity)
 
-        item = self.as_session("s", "post", "/cart/items/", {"product": str(self.product.pk), "quantity": 1}).json()
+        item = self.as_session("s-aaaaaaaaaaaaaaaa", "post", "/cart/items/", {"product": str(self.product.pk), "quantity": 1}).json()
         item_id = item["items"][0]["id"]
-        self.assertEqual(self.as_session("s", "patch", f"/cart/items/{item_id}/", {"quantity": -5}).status_code, 400)
+        self.assertEqual(self.as_session("s-aaaaaaaaaaaaaaaa", "patch", f"/cart/items/{item_id}/", {"quantity": -5}).status_code, 400)
 
     def test_shoppers_have_no_way_into_the_staff_api(self):
         for path in ("/api/v1/carts/", "/api/v1/checkouts/"):
-            r = self.client.get(path, HTTP_X_CART_SESSION="alice-session", HTTP_X_STORE_ID=str(self.store.pk))
+            r = self.client.get(path, HTTP_X_CART_SESSION="alice-session-aaaaaa", HTTP_X_STORE_ID=str(self.store.pk))
             self.assertIn(r.status_code, (401, 403), path)
 
 
@@ -1006,7 +1006,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"auth", "email"})
+        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.

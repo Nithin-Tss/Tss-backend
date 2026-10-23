@@ -12,17 +12,21 @@ Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 /api/v1/storefront/<store_slug>/orders/<id>/          GET
 /api/v1/storefront/<store_slug>/orders/<id>/cancel/   POST: cancel, stock goes back
 """
+import re
+
 from django.http import Http404
 from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.catalog.models import Product, ProductVariant
 from apps.orders import services as orders_services
 from apps.orders.models import Order
 from apps.orders.serializers import OrderSerializer
+from apps.payments import services as payment_services
 from apps.tenancy.models import Store
 
 from . import services
@@ -33,9 +37,14 @@ SESSION_HEADER = "X-Cart-Session"
 STORE_ACTIVE = "active"
 
 
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
 class StorefrontView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "storefront"
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -47,6 +56,9 @@ class StorefrontView(APIView):
         session_id = request.headers.get(SESSION_HEADER)
         if not session_id:
             raise ValidationError(f"{SESSION_HEADER} header is required.")
+        # The session id is the shopper's only credential: it must be long and random (e.g. a UUID)
+        if not SESSION_ID_PATTERN.match(session_id):
+            raise ValidationError(f"{SESSION_HEADER} must be 16-64 letters, digits, '-' or '_'.")
         return session_id
 
     def cart(self, request):
@@ -67,10 +79,29 @@ class CompleteSerializer(serializers.Serializer):
     payment_method = serializers.ChoiceField(choices=services.PAYMENT_METHODS, default="cod")
 
 
+class AddressSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=100)
+    last_name = serializers.CharField(max_length=100)
+    company = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    address_line_1 = serializers.CharField(max_length=255)
+    address_line_2 = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=100)
+    state = serializers.CharField(max_length=100)
+    postal_code = serializers.CharField(max_length=20)
+    country = serializers.CharField(max_length=100)
+    phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
+
+    def to_representation(self, instance):
+        return dict(super().to_representation(instance))
+
+    def validate(self, attrs):
+        return dict(attrs)
+
+
 class CheckoutInputSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
-    shipping_address = serializers.JSONField(required=False)
-    billing_address = serializers.JSONField(required=False)
+    shipping_address = AddressSerializer(required=False)
+    billing_address = AddressSerializer(required=False)
     discount_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
 
 
@@ -120,6 +151,8 @@ class CartItemView(StorefrontView):
 
 
 class CheckoutStartView(StorefrontView):
+    throttle_scope = "storefront_checkout"
+
     def post(self, request, store_slug):
         data = CheckoutInputSerializer(data=request.data)
         data.is_valid(raise_exception=True)
@@ -149,6 +182,7 @@ class CheckoutDetailView(StorefrontView):
 
 
 class CheckoutCompleteView(CheckoutDetailView):
+    throttle_scope = "storefront_checkout"
     http_method_names = ["post", "options"]
 
     def post(self, request, store_slug, checkout_id):
@@ -190,6 +224,10 @@ class OrderDetailView(SessionOrdersMixin, StorefrontView):
 
 class OrderCancelView(SessionOrdersMixin, StorefrontView):
     def post(self, request, store_slug, order_id):
-        # Puts the stock back; refused once items have shipped.
-        order = orders_services.cancel_order(self.session_order(request, order_id))
+        # Puts the stock back; refused once items have shipped or money has been received
+        # (the shopper's session id is the only proof here, so refunds go through staff).
+        order = self.session_order(request, order_id)
+        if payment_services.paid_total(order) > 0:
+            raise ValidationError("This order has been paid. Please contact the store to cancel it.")
+        order = orders_services.cancel_order(order)
         return Response(OrderSerializer(order).data)

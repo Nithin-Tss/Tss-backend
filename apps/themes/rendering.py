@@ -1743,7 +1743,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
                 filters=None, customer_page=None, customer=None, customer_user=None,
-                auth_error=None, auth_success=None):
+                auth_error=None, auth_success=None, order_completed=False, order=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -1964,9 +1964,32 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         from .views import get_storefront_customer
         customer, customer_user = get_storefront_customer(store, request)
 
+    cart_lines_data = cart_data.view_data(cart_data.open_cart(store, cart_session), base_url)
+    if editor and page == "checkout" and not cart_lines_data.get("lines"):
+        sample_prod = published_products(store).first()
+        sample_variant = sample_prod.variants.order_by("created_at").first() if sample_prod else None
+        title = sample_prod.title if sample_prod else "Sample Product"
+        price = str(sample_variant.price) if sample_variant and sample_variant.price is not None else "49.00"
+        img = sample_prod.images.first().url if sample_prod and sample_prod.images.exists() else ""
+        cart_lines_data = {
+            "count": 1,
+            "subtotal": price,
+            "lines": [{
+                "id": "sample-1",
+                "title": title,
+                "url": f"{base_url}/collections/all",
+                "image": img,
+                "unit_price": price,
+                "quantity": 1,
+                "total": price,
+                "at_max": False,
+                "warning": "",
+            }],
+        }
+
     menu_links = navbar_menu_links(store, base_url)
     common = {
-        "shop": dict(shop, blog_url=f"{base_url}/blog"),
+        "shop": dict(shop, blog_url=f"{base_url}/blog", slug=store.store_slug),
         "settings": settings,
         "product": product_drop_,
         "collection": collection_drop,
@@ -1978,14 +2001,21 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "return_url": request.get_full_path() if request else "",
         "wishlist_ids": wishlist_ids,
         "wishlist_count": len(wishlist_ids),
-        "cart_count": cart_count,
-        # Liquid's `cart` (item_count): headers read it, e.g. {% assign cart_count = cart.item_count | default: 0 %}
-        "cart": {"item_count": cart_count},
+        "cart_count": cart_count or cart_lines_data.get("count", 0),
+        # Liquid's `cart` (item_count + lines & subtotal for cart and checkout templates)
+        "cart": {"item_count": cart_count or cart_lines_data.get("count", 0), **cart_lines_data},
         "cart_session": cart_session,
+        "store_details": {
+            "tax_rate": str(store.tax_rate or 0),
+            "shipping_flat_rate": str(store.shipping_flat_rate or "0.00"),
+            "free_shipping_threshold": str(store.free_shipping_threshold or "") if store.free_shipping_threshold is not None else "",
+        },
         "customer": _customer_drop(customer, customer_user, store, base_url) if customer else (_sample_customer_drop(base_url) if editor else None),
         "customer_logged_in": customer is not None,
         "error": auth_error or "",
         "success": auth_success or "",
+        "order_completed": order_completed,
+        "order": order or {},
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         "menu_links": menu_links,
@@ -2245,6 +2275,8 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         title = product.seo_title or product.title
     elif cart_page:
         title = "Cart"
+    elif page == "checkout":
+        title = "Checkout"
     elif wishlist_page_ids is not None:
         title = "Wishlist"
     elif customer_page == "login":

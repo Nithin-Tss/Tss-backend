@@ -49,6 +49,7 @@ from .rendering import (
 )
 from apps.catalog.models import Product, ProductVariant
 from apps.commerce import services as commerce_services
+from apps.orders.models import Order
 from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
@@ -574,15 +575,19 @@ PREVIEW_EDITOR = """
   // link to one of this store's pages that has a template, else null
   function storePage(e) {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return null;
-    var a = e.target.closest && e.target.closest("a[href]");
+    var a = e.target.closest && e.target.closest("a[href], .cart-checkout, [data-cart-checkout-soon]");
     if (!a || (a.target && a.target !== "_self")) return null;
+    if (a.matches && a.matches(".cart-checkout, [data-cart-checkout-soon]")) return "/checkout";
+    var rawHref = a.getAttribute("href");
+    if (!rawHref) return null;
+    if (rawHref === "/checkout" || rawHref.endsWith("/checkout")) return "/checkout";
     var url;
-    try { url = new URL(a.href, document.baseURI); } catch (err) { return null; }
+    try { url = new URL(rawHref, document.baseURI); } catch (err) { return null; }
     if (url.origin !== new URL(document.baseURI).origin) return null;
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
-    if (!m) return null;
-    var path = (m[1] || "/").replace(/\\/+$/, "") || "/";
-    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+)?$/i.test(path) ? path : null;
+    var path = m ? (m[1] || "/") : url.pathname;
+    path = path.replace(/\\/+$/, "") || "/";
+    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?|checkout(\\/.*)?|cart(\\/.*)?)?$/i.test(path) ? path : null;
   }
 
   // Edit mode: a click selects the section or block under it, and does nothing else -
@@ -590,7 +595,7 @@ PREVIEW_EDITOR = """
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -1469,6 +1474,10 @@ class ThemePreviewView(StoreThemeView):
     def post(self, request):
         clean = validate_custom_data(request.data)
         page, target, message = _preview_target(request)
+        # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
+        customer_page = request.query_params.get("customer")
+        if customer_page in ("login", "register"):
+            page, target, message = "index", {"customer_page": customer_page}, None
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
                              "fonts": ""})
@@ -2066,6 +2075,162 @@ def storefront_cart(store, request, params):
     return render_page(store, "index", request=request, cart_page=True)
 
 
+@xframe_options_exempt
+@csrf_exempt
+def storefront_checkout(request, store_slug):
+    store = get_object_or_404(Store, store_slug=store_slug)
+    cart_session, cart_new = cart_data.session_for_page(store, request)
+    if cart_new:
+        request._cart_session = (cart_session, True)
+
+    if request.method == "POST":
+        is_json = "application/json" in request.headers.get("Accept", "") or request.content_type == "application/json"
+        data = _json_body(request) if request.content_type == "application/json" else request.POST
+        post_session = cart_data.clean_id(data.get("cart_session") or data.get("cart") or request.headers.get("X-Cart-Session") or "")
+        if post_session:
+            cart_session = post_session
+        action = data.get("action", "place_order")
+        cart = cart_data.open_cart(store, cart_session)
+
+        if action == "apply_discount":
+            if cart is None or not cart.items.filter(is_deleted=False).exists():
+                return JsonResponse({"error": "Your cart is empty."}, status=400)
+            code = (data.get("discount_code") or "").strip()
+            try:
+                checkout = commerce_services.start_checkout(cart, discount_code=code)
+                return JsonResponse({
+                    "success": True,
+                    "discount_amount": str(checkout.discount_amount),
+                    "shipping_amount": str(checkout.shipping_amount),
+                    "tax_amount": str(checkout.tax_amount),
+                    "subtotal": str(checkout.subtotal),
+                    "total_amount": str(checkout.total_amount),
+                })
+            except Exception as e:
+                msg = _first_message(getattr(e, "detail", str(e)))
+                return JsonResponse({"error": msg}, status=400)
+
+        # Place order
+        if cart is None or not cart.items.filter(is_deleted=False).exists():
+            if is_json:
+                return JsonResponse({"error": "Your cart is empty."}, status=400)
+            html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error="Your cart is empty.")
+            return _storefront_response(html, status=400, request=request, store=store)
+
+        email = (data.get("email") or "").strip()
+        first_name = (data.get("first_name") or "").strip()
+        last_name = (data.get("last_name") or "").strip()
+        address1 = (data.get("address1") or data.get("address_line_1") or "").strip()
+        address2 = (data.get("address2") or data.get("address_line_2") or "").strip()
+        city = (data.get("city") or "").strip()
+        state = (data.get("state") or "").strip()
+        postal_code = (data.get("postal_code") or "").strip()
+        country = (data.get("country") or "India").strip()
+        phone = (data.get("phone") or "").strip()
+        payment_method = (data.get("payment_method") or "cod").strip().lower()
+        if payment_method in ("cash_on_delivery", "cash-on-delivery", "cash on delivery"):
+            payment_method = "cod"
+        discount_code = (data.get("discount_code") or "").strip()
+        notes = (data.get("notes") or data.get("order_notes") or "").strip()
+
+        if not email or "@" not in email:
+            error = "Please provide a valid email address."
+        elif not first_name or not last_name:
+            error = "First and last name are required."
+        elif not address1 or not city or not postal_code:
+            error = "Delivery address, city and postal code are required."
+        else:
+            error = None
+
+        if error:
+            if is_json:
+                return JsonResponse({"error": error}, status=400)
+            html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error=error)
+            return _storefront_response(html, status=400, request=request, store=store)
+
+        try:
+            shipping_address = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "company": (data.get("company") or "").strip(),
+                "address1": address1,
+                "address2": address2,
+                "city": city,
+                "province": state,
+                "state": state,
+                "postal_code": postal_code,
+                "country": country,
+                "phone": phone,
+            }
+            checkout = commerce_services.start_checkout(
+                cart,
+                email=email,
+                shipping_address=shipping_address,
+                billing_address=shipping_address,
+                discount_code=discount_code,
+            )
+            if notes:
+                metadata = dict(checkout.metadata or {})
+                metadata["notes"] = notes
+                checkout.metadata = metadata
+                checkout.save(update_fields=["metadata"])
+
+            order = commerce_services.place_order(checkout, payment_method=payment_method)
+            if is_json:
+                return JsonResponse({
+                    "success": True,
+                    "order_id": str(order.pk),
+                    "order_number": getattr(order, "order_number", str(order.pk)[:8]),
+                    "total": str(order.total),
+                    "email": email,
+                })
+            return HttpResponseRedirect(f"{shop_url(store)}/checkout/order/{order.pk}/")
+        except Exception as e:
+            msg = _first_message(getattr(e, "detail", str(e)))
+            if is_json:
+                return JsonResponse({"error": msg}, status=400)
+            html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error=msg)
+            return _storefront_response(html, status=400, request=request, store=store)
+
+    html = render_page(store, "checkout", request=request, cart_id=cart_session)
+    return _storefront_response(html, status=200, request=request, store=store)
+
+
+@xframe_options_exempt
+def storefront_checkout_order(request, store_slug, order_id):
+    store = get_object_or_404(Store, store_slug=store_slug)
+    order = get_object_or_404(Order, store=store, pk=order_id)
+    from apps.commerce.models import Checkout
+    checkout = Checkout.objects.filter(store=store, metadata__order_id=str(order.pk)).first()
+    shipping_addr = dict(checkout.shipping_address or {}) if checkout and checkout.shipping_address else {}
+    cust = order.customer
+    if cust:
+        shipping_addr.setdefault("first_name", cust.first_name or "")
+        shipping_addr.setdefault("last_name", cust.last_name or "")
+        shipping_addr.setdefault("phone", getattr(cust, "phone_number", ""))
+    order_items = [
+        {"title": item.product.title, "quantity": item.quantity, "unit_price": str(item.unit_price), "total": str(item.total)}
+        for item in order.items.select_related("product").all()
+    ]
+    order_data = {
+        "id": str(order.pk),
+        "order_number": getattr(order, "order_number", str(order.pk)[:8]),
+        "email": cust.email if cust else getattr(order, "customer_email", ""),
+        "total": str(order.total),
+        "shipping_address": shipping_addr,
+        "payment_method": (checkout.metadata or {}).get("payment_method", "cod") if checkout and checkout.metadata else "cod",
+        "items": order_items,
+    }
+    html = render_page(
+        store,
+        "checkout",
+        request=request,
+        order_completed=True,
+        order=order_data,
+    )
+    return _storefront_response(html, status=200, request=request, store=store)
+
+
 @csrf_exempt
 @require_POST
 def storefront_wishlist_item(request, store_slug):
@@ -2192,6 +2357,13 @@ def _storefront_response(html, status=200, request=None, store=None):
         "allow-popups allow-popups-to-escape-sandbox"
     )
     response["Cache-Control"] = "no-store"
+    if request is not None and store is not None:
+        pending = getattr(request, "_cart_session", None)
+        if pending and pending[1] and ("data-cart-session=" in html or "cart_session" in html):
+            response.set_cookie(
+                cart_data.cookie_name(store), pending[0], max_age=cart_data.CART_COOKIE_AGE,
+                path=f"{shop_url(store)}/", httponly=True, samesite="Lax", secure=not settings.DEBUG,
+            )
     return response
 
 

@@ -1,9 +1,14 @@
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 from django.db.models import Prefetch
 
 from apps.core.admin_guards import StoreGuardAdmin
 from .models import Store, StoreMembership
 from .services import OWNER, REMOVED, purge_store
+
+
+logger = logging.getLogger(__name__)
 
 
 def owner_memberships():
@@ -43,11 +48,20 @@ class StoreAdmin(admin.ModelAdmin):
         return ([f"Store: {names} and ALL of its data (members, products, orders, themes, ...)"], {}, set(), [])
 
     def delete_model(self, request, obj):
-        purge_store(obj)
+        self._purge(request, obj)
 
     def delete_queryset(self, request, queryset):
         for store in queryset:
+            self._purge(request, store)
+
+    def _purge(self, request, store):
+        # Each store is its own transaction; a failure is reported on the page (and logged)
+        # instead of turning the whole request into a bare "Server Error (500)".
+        try:
             purge_store(store)
+        except Exception as error:
+            logger.exception("Could not delete store %s", store.pk)
+            messages.error(request, f'Could not delete store "{store}": {type(error).__name__}: {error}')
 
 
 @admin.register(StoreMembership)

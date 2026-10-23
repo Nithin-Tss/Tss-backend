@@ -21,7 +21,7 @@ from apps.tenancy.models import Store
 from . import services
 from .models import Cart, Checkout
 
-ADDRESS = {"name": "A", "line1": "1 Main St", "city": "Chennai", "postal_code": "600001", "country": "IN"}
+ADDRESS = {"first_name": "A", "last_name": "B", "address_line_1": "1 Main St", "city": "Chennai", "state": "TN", "postal_code": "600001", "country": "India"}
 
 
 def sign_up_with_store(email):
@@ -51,6 +51,7 @@ def stock_product(store, title, sku, price, quantity, location):
 
 class CommerceIntegrationBase(APITestCase):
     def setUp(self):
+        cache.clear()
         self.staff, self.store = sign_up_with_store("owner@example.com")
         self.store.status = "active"
         self.store.save()
@@ -59,7 +60,7 @@ class CommerceIntegrationBase(APITestCase):
         self.product, self.variant = stock_product(self.store, "Tee", "TEE-1", "499.00", 10, self.location)
 
         self.shopper = APIClient()
-        self.shopper.credentials(HTTP_X_CART_SESSION="sess-1")
+        self.shopper.credentials(HTTP_X_CART_SESSION="sess-1-aaaaaaaaaaaa")
 
     def add(self, product=None, quantity=1, client=None, **extra):
         return (client or self.shopper).post(
@@ -86,14 +87,14 @@ class ShopperToStaffJourneyTests(CommerceIntegrationBase):
         r = self.staff.get("/api/v1/checkouts/")
         self.assertEqual([c["id"] for c in r.json()], [cid])
         self.assertEqual(self.staff.post("/api/v1/checkouts/", {}, format="json").status_code, 405)
-        self.assertEqual(self.staff.get("/api/v1/carts/?status=open").json()[0]["session_id"], "sess-1")
+        self.assertEqual(self.staff.get("/api/v1/carts/?status=open").json()[0]["session_id"], "sess-1-aaaaaaaaaaaa")
 
         order = self.place(cid)
         self.assertEqual(order.status_code, 201, order.data)
 
         # The cart and checkout close, the order shows up in the back office
         self.assertEqual(self.staff.get("/api/v1/carts/?status=open").json(), [])
-        self.assertEqual(self.staff.get("/api/v1/carts/?status=checked_out").json()[0]["session_id"], "sess-1")
+        self.assertEqual(self.staff.get("/api/v1/carts/?status=checked_out").json()[0]["session_id"], "sess-1-aaaaaaaaaaaa")
         self.assertEqual(self.staff.get("/api/v1/checkouts/?status=completed").json()[0]["id"], cid)
         self.assertEqual(Order.objects.get().total, Decimal("998.00"))
         self.assertEqual(sellable(self.variant), 8)
@@ -199,7 +200,7 @@ class VariantAndStockTests(CommerceIntegrationBase):
     def test_last_unit_goes_to_first_buyer(self):
         set_available(self.variant, self.location, 1)
         second = APIClient()
-        second.credentials(HTTP_X_CART_SESSION="sess-2")
+        second.credentials(HTTP_X_CART_SESSION="sess-2-aaaaaaaaaaaa")
 
         first_cid = self.checkout(quantity=1, email="a@b.com", shipping_address=ADDRESS)
         second_cid = self.checkout(quantity=1, client=second, email="c@d.com", shipping_address=ADDRESS)
@@ -209,12 +210,21 @@ class VariantAndStockTests(CommerceIntegrationBase):
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(sellable(self.variant), 0)
 
-    def test_price_change_after_checkout_does_not_affect_the_order(self):
+    def test_price_change_after_checkout_asks_shopper_to_confirm_new_total(self):
         cid = self.checkout(quantity=1, email="a@b.com", shipping_address=ADDRESS)
         self.variant.price = Decimal("999.00")
         self.variant.save()
+
+        refused = self.place(cid)
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(sellable(self.variant), 10)  # nothing was committed
+
+        # The checkout now shows the new price; confirming again places the order
+        self.assertEqual(self.shopper.get(f"{self.base}/checkout/{cid}/").json()["subtotal"], "999.00")
         order = self.place(cid)
-        self.assertEqual(order.data["total"], "499.00")
+        self.assertEqual(order.status_code, 201)
+        self.assertEqual(order.data["subtotal"], "999.00")
 
 
 class CartAndCheckoutEditingTests(CommerceIntegrationBase):
@@ -371,6 +381,36 @@ class PricingAndPaymentTests(CommerceIntegrationBase):
         self.assertEqual(again.data["id"], order.data["id"])
         self.assertEqual(len(self.staff.get(f"/api/v1/payments/?order={order.data['id']}").json()), 1)
 
+    def test_pending_cod_payment_is_not_counted_as_paid_and_cannot_be_refunded(self):
+        order = self.place(self.checkout(email="a@b.com", shipping_address=ADDRESS)).data
+        payment = self.staff.get(f"/api/v1/payments/?order={order['id']}").json()[0]
+
+        refund = self.staff.post(f"/api/v1/payments/{payment['id']}/refund/", {"amount": "1.00"}, format="json")
+        self.assertEqual(refund.status_code, 400)
+
+        # Cash isn't in yet, so a shopper may still cancel
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{order['id']}/cancel/").status_code, 200)
+
+    def test_capturing_cod_payment_marks_it_received_and_blocks_shopper_cancel(self):
+        order = self.place(self.checkout(email="a@b.com", shipping_address=ADDRESS)).data
+        payment = self.staff.get(f"/api/v1/payments/?order={order['id']}").json()[0]
+
+        captured = self.staff.post(f"/api/v1/payments/{payment['id']}/capture/", {"reference": "CASH-1"}, format="json")
+        self.assertEqual((captured.status_code, captured.data["status"]), (200, "captured"))
+        self.assertEqual(self.staff.post(f"/api/v1/payments/{payment['id']}/capture/").status_code, 400)
+
+        # Nothing left to collect
+        extra = self.staff.post("/api/v1/payments/", {"order": order["id"], "amount": "1.00"}, format="json")
+        self.assertEqual(extra.status_code, 400)
+
+        # Money received: the shopper can't cancel; staff can still refund
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{order['id']}/cancel/").status_code, 400)
+        refund = self.staff.post(f"/api/v1/payments/{payment['id']}/refund/", {"amount": "1.00"}, format="json")
+        self.assertEqual(refund.status_code, 200)
+
+    def test_bad_order_filter_on_payments_is_a_400(self):
+        self.assertEqual(self.staff.get("/api/v1/payments/?order=abc").status_code, 400)
+
     def test_unknown_payment_method_is_rejected_and_nothing_is_ordered(self):
         cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
         r = self.shopper.post(f"{self.base}/checkout/{cid}/complete/", {"payment_method": "bitcoin"}, format="json")
@@ -381,7 +421,7 @@ class PricingAndPaymentTests(CommerceIntegrationBase):
     def test_guest_order_creates_one_customer_reused_next_time(self):
         self.place(self.checkout(email="Guest@Example.com", shipping_address=ADDRESS))
         other = APIClient()
-        other.credentials(HTTP_X_CART_SESSION="sess-2")
+        other.credentials(HTTP_X_CART_SESSION="sess-2-aaaaaaaaaaaa")
         self.place(self.checkout(quantity=1, client=other, email="guest@example.com", shipping_address=ADDRESS), client=other)
         orders = list(Order.objects.all())
         self.assertEqual(len(orders), 2)
@@ -404,14 +444,14 @@ class SweepCartsTests(CommerceIntegrationBase):
 
         cid = self.checkout(email="a@b.com", shipping_address=ADDRESS)
         idle = APIClient()
-        idle.credentials(HTTP_X_CART_SESSION="sess-idle")
+        idle.credentials(HTTP_X_CART_SESSION="sess-idle-aaaaaaaaaaa")
         idle.get(f"{self.base}/cart/")
 
         Checkout.objects.update(updated_at=timezone.now() - timedelta(hours=3))
-        Cart.objects.filter(session_id="sess-idle").update(updated_at=timezone.now() - timedelta(days=45))
+        Cart.objects.filter(session_id="sess-idle-aaaaaaaaaaa").update(updated_at=timezone.now() - timedelta(days=45))
         call_command("sweep_carts", stdout=StringIO())
 
         self.assertEqual([c["id"] for c in self.staff.get("/api/v1/checkouts/?abandoned=true").json()], [cid])
-        self.assertEqual(self.staff.get("/api/v1/carts/?status=expired").json()[0]["session_id"], "sess-idle")
+        self.assertEqual(self.staff.get("/api/v1/carts/?status=expired").json()[0]["session_id"], "sess-idle-aaaaaaaaaaa")
         # the cart with a checkout in progress is kept open so the shopper can still buy
         self.assertEqual(self.place(cid).status_code, 201)

@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import ProtectedError
 from rest_framework import mixins, status
@@ -15,6 +16,17 @@ from .models import DraftOrder, DraftOrderDetail, Order
 from .serializers import DraftOrderSerializer, OrderCreateSerializer, OrderSerializer
 
 OPEN_DRAFT, COMPLETED_DRAFT = "open", "completed"
+
+
+def filter_by_params(qs, query_params, params):
+    """Apply ?param= filters; a malformed id (e.g. ?customer=abc) is a 400, not a 500."""
+    for param in params:
+        if query_params.get(param):
+            try:
+                qs = qs.filter(**{param: query_params[param]})
+            except DjangoValidationError:
+                raise ValidationError({param: "Enter a valid id."})
+    return qs
 
 
 class OrderViewSet(
@@ -41,11 +53,9 @@ class OrderViewSet(
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        for param in ("status", "fulfillment_status", "customer"):
-            if self.request.query_params.get(param):
-                qs = qs.filter(**{param: self.request.query_params[param]})
-        return qs
+        return filter_by_params(
+            super().get_queryset(), self.request.query_params, ("status", "fulfillment_status", "customer")
+        )
 
     def create(self, request, *args, **kwargs):
         data = OrderCreateSerializer(data=request.data, context={"request": request})
@@ -81,11 +91,7 @@ class DraftOrderViewSet(StoreScopedViewSet):
     serializer_class = DraftOrderSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        for param in ("status", "customer"):
-            if self.request.query_params.get(param):
-                qs = qs.filter(**{param: self.request.query_params[param]})
-        return qs
+        return filter_by_params(super().get_queryset(), self.request.query_params, ("status", "customer"))
 
     def _save_details(self, draft, details):
         draft.details.all().delete()

@@ -255,6 +255,24 @@
       return;
     }
 
+    var checkoutBtn = target.closest(".cart-checkout, [data-cart-checkout-soon]");
+    if (checkoutBtn) {
+      event.preventDefault();
+      var ctx = context(checkoutBtn);
+      var base = ctx && ctx.base ? ctx.base.replace(/\/cart\/?$/, "") : "";
+      var href = checkoutBtn.getAttribute("href") || (base ? base + "/checkout" : "/checkout");
+      var session = ctx && ctx.session ? ctx.session : cartId();
+      if (session && !/[?&]cart=/.test(href)) {
+        href += (href.indexOf("?") === -1 ? "?" : "&") + "cart=" + encodeURIComponent(session);
+      }
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "navigate", path: "/checkout" }, "*");
+        return;
+      }
+      window.location.href = href;
+      return;
+    }
+
     if (target.closest("[data-cart-checkout-soon]")) {
       var notice = document.querySelector("[data-cart-notice]");
       if (notice) notice.textContent = "Checkout is coming soon.";

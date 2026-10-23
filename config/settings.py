@@ -57,6 +57,19 @@ ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1' if DEBUG 
 # Frontend origins allowed to send forms/cookies to this backend (must include https://)
 CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 
+# Admin bulk actions (e.g. delete) POST one field per selected row; Django's default
+# limit of 1000 returns "Bad Request (400)" when more rows than that are selected.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+
+# With DEBUG off Django only mails 500 tracebacks to ADMINS, so they never reached the host's
+# logs. Send them to stderr so the Render log shows the cause of a server error.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {'django.request': {'handlers': ['console'], 'level': 'ERROR'}},
+}
+
 
 # Application definition
 
@@ -285,6 +298,9 @@ REST_FRAMEWORK = {
         'auth': '10/min',
         # Password reset / verification emails: stops mailbox flooding
         'email': '5/hour',
+        # Public storefront: browsing/cart traffic, and the calls that create orders
+        'storefront': '120/min',
+        'storefront_checkout': '20/hour',
     },
 }
 
