@@ -1222,30 +1222,32 @@ def _add_synced_sections(theme, custom_data=None):
                     continue
                 if config["path"] in files:
                     if name == "header":
-                        file = locked.files.get(file_path=config["path"])
-                        upgraded = _add_header_wishlist_setting(file.content)
-                        if upgraded is not None:
-                            sync.record_version(locked, name, file.content, "upgrade")
-                            file.content = upgraded
-                            file.file_size = len(upgraded.encode("utf-8"))
-                            file.save(update_fields=["content", "file_size", "updated_at"])
-                            sync.invalidate(locked.pk, config["path"])
+                        file = locked.files.filter(file_path=config["path"]).order_by("-updated_at").first()
+                        if file:
+                            upgraded = _add_header_wishlist_setting(file.content)
+                            if upgraded is not None:
+                                sync.record_version(locked, name, file.content, "upgrade")
+                                file.content = upgraded
+                                file.file_size = len(upgraded.encode("utf-8"))
+                                file.save(update_fields=["content", "file_size", "updated_at"])
+                                sync.invalidate(locked.pk, config["path"])
                     if name == "footer":
-                        file = locked.files.get(file_path=config["path"])
-                        upgraded = _add_footer_logo_block(file.content)
-                        if upgraded is not None:
-                            sync.record_version(locked, name, file.content, "upgrade")
-                            file.content = upgraded
-                            file.file_size = len(upgraded.encode("utf-8"))
-                            file.save(update_fields=["content", "file_size", "updated_at"])
-                            sync.invalidate(locked.pk, config["path"])
-                        upgraded_icon = _add_footer_icon_setting(file.content)
-                        if upgraded_icon is not None:
-                            sync.record_version(locked, name, file.content, "upgrade")
-                            file.content = upgraded_icon
-                            file.file_size = len(upgraded_icon.encode("utf-8"))
-                            file.save(update_fields=["content", "file_size", "updated_at"])
-                            sync.invalidate(locked.pk, config["path"])
+                        file = locked.files.filter(file_path=config["path"]).order_by("-updated_at").first()
+                        if file:
+                            upgraded = _add_footer_logo_block(file.content)
+                            if upgraded is not None:
+                                sync.record_version(locked, name, file.content, "upgrade")
+                                file.content = upgraded
+                                file.file_size = len(upgraded.encode("utf-8"))
+                                file.save(update_fields=["content", "file_size", "updated_at"])
+                                sync.invalidate(locked.pk, config["path"])
+                            upgraded_icon = _add_footer_icon_setting(file.content)
+                            if upgraded_icon is not None:
+                                sync.record_version(locked, name, file.content, "upgrade")
+                                file.content = upgraded_icon
+                                file.file_size = len(upgraded_icon.encode("utf-8"))
+                                file.save(update_fields=["content", "file_size", "updated_at"])
+                                sync.invalidate(locked.pk, config["path"])
                     if name == "header":
                         _upgrade_header_wishlist_styles(locked, files.get("snippets/styles.liquid"))
                     continue
@@ -1268,7 +1270,9 @@ def _upgrade_header_wishlist_styles(theme, content):
     upgraded = _add_header_wishlist_styles(content)
     if upgraded is None:
         return
-    file = theme.files.get(file_path="snippets/styles.liquid")
+    file = theme.files.filter(file_path="snippets/styles.liquid").order_by("-updated_at").first()
+    if file is None:
+        return
     file.content = upgraded
     file.file_size = len(upgraded.encode("utf-8"))
     file.save(update_fields=["content", "file_size", "updated_at"])
@@ -1687,7 +1691,9 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
         raise exceptions.ValidationError({"sections": str(error)})
 
     theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
-    file = theme.files.get(file_path=current["path"])
+    file = theme.files.filter(file_path=current["path"]).order_by("-updated_at").first()
+    if file is None:
+        raise exceptions.ValidationError({"sections": f"This theme has no {current['path']} file."})
     state = sync.section_state(theme, name)
     conflict = None
     if base_version is not None and base_version != state["version"] and state["source"] in ("code", "restore"):

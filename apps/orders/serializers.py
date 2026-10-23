@@ -72,7 +72,7 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
 
         if not payments:
-            return "pending"
+            return "paid" if order.total <= 0 else "pending"
 
         eligible_statuses = (
             "captured",

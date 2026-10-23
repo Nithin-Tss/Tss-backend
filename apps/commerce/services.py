@@ -495,9 +495,10 @@ def _place_order(checkout, payment_method):
             is_deleted=False,
         )
 
-    payments.record_pending_payment(
-        checkout.store, order, checkout, order.total, provider=payment_method, customer=customer
-    )
+    if order.total > ZERO:
+        payments.record_pending_payment(
+            checkout.store, order, checkout, order.total, provider=payment_method, customer=customer
+        )
 
     checkout.customer = customer
     checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk), "payment_method": payment_method}
