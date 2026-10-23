@@ -3,6 +3,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
 from apps.inventory.models import InventoryItem
+from apps.core.tests.test_flow import StoreClientMixin
 
 from apps.identity.models import User
 from apps.tenancy.models import Store
@@ -236,6 +237,107 @@ class VariantApiTests(APITestCase):
         bad = self.client.put(f"{URL}{self.product['id']}/", {"title": "Shirt", "variants": [
             {"id": "11111111-1111-1111-1111-111111111111", "price": "1"}]}, format="json")
         self.assertEqual(bad.status_code, 400)
+
+
+class CatalogStockDeletionIntegrationTests(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.sign_up(f"catalog-integration-{self._testMethodName}@example.com", "Catalog Integration")
+        self.location = self.ok(
+            "post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201
+        )["id"]
+
+    def create_product(self, title="Integration product", sku="INT-1", quantity=10):
+        return self.ok("post", URL, {
+            "title": title, "sku": sku, "price": "10", "location": self.location,
+            "quantity": quantity,
+        }, expect=201)
+
+    def history(self, variant_id):
+        return self.ok("get", f"/api/v1/inventory/items/history/?variant={variant_id}")
+
+    def test_06_editing_same_quantity_does_not_add_history(self):
+        product = self.create_product()
+        variant_id = product["variants"][0]["id"]
+        before_history = self.history(variant_id)
+
+        response = self.client.patch(
+            f"{URL}{product['id']}/", {"quantity": 10, "location": self.location}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(self.history(variant_id)), len(before_history))
+        stock = self.ok("get", f"/api/v1/inventory/items/?variant={variant_id}")
+        self.assertEqual(sum(row["available"] for row in stock), 10)
+
+    def test_07_price_and_title_edit_preserves_stock_and_history(self):
+        product = self.create_product()
+        variant_id = product["variants"][0]["id"]
+        order = self.ok("post", "/api/v1/orders/", {
+            "items": [{"product": product["id"], "quantity": 3}],
+        }, expect=201)
+        before_history = self.history(variant_id)
+        before_stock = self.ok("get", f"/api/v1/inventory/items/?variant={variant_id}")
+        self.assertEqual(len(before_stock), 1)
+        before = {key: before_stock[0][key] for key in ("available", "committed", "on_hand")}
+        self.assertEqual((before["available"], before["committed"], before["on_hand"]), (7, 3, 10))
+
+        response = self.client.patch(
+            f"{URL}{product['id']}/", {"title": "Renamed integration product", "price": "12"}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        after_stock = self.ok("get", f"/api/v1/inventory/items/?variant={variant_id}")
+        self.assertEqual(
+            {key: after_stock[0][key] for key in ("available", "committed", "on_hand")}, before
+        )
+        self.assertEqual(len(self.history(variant_id)), len(before_history))
+        self.assertEqual(self.ok("get", f"/api/v1/orders/{order['id']}/")["items"][0]["product"], product["id"])
+
+    def test_14_product_with_order_item_cannot_be_deleted_or_break_order(self):
+        product = self.create_product(quantity=None)
+        order = self.ok("post", "/api/v1/orders/", {
+            "items": [{"product": product["id"], "quantity": 1}],
+        }, expect=201)
+
+        response = self.client.delete(f"{URL}{product['id']}/")
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json(), [
+            "This product is used by orders or inventory. Set it to Draft instead."
+        ])
+        self.assertTrue(Product.objects.filter(pk=product["id"]).exists())
+        retrieved = self.ok("get", f"/api/v1/orders/{order['id']}/")
+        self.assertEqual(len(retrieved["items"]), 1)
+        self.assertEqual(retrieved["items"][0]["product"], product["id"])
+
+    def test_15_variants_with_stock_or_order_item_cannot_be_deleted(self):
+        product = self.create_product(title="Variant stock", sku="VAR-BASE", quantity=None)
+        stocked = self.ok("post", "/api/v1/catalog/variants/", {
+            "product": product["id"], "sku": "VAR-STOCK", "price": "10",
+        }, expect=201)
+        stock = self.ok("post", "/api/v1/inventory/items/set/", {
+            "variant": stocked["id"], "location": self.location, "available": 4,
+        })
+        stock_delete = self.client.delete(f"/api/v1/catalog/variants/{stocked['id']}/")
+        self.assertEqual(stock_delete.status_code, 400, stock_delete.content)
+        self.assertEqual(stock_delete.json(), [
+            "This variant is used by orders or inventory, so it can't be deleted."
+        ])
+        self.assertEqual(self.ok("get", f"/api/v1/inventory/items/{stock['id']}/")["available"], 4)
+        self.assertEqual(self.ok("get", f"/api/v1/catalog/variants/{stocked['id']}/")["id"], stocked["id"])
+
+        ordered_product = self.create_product(title="Variant order", sku="ORD-BASE", quantity=None)
+        ordered_variant = self.ok("post", "/api/v1/catalog/variants/", {
+            "product": ordered_product["id"], "sku": "ORD-ITEM", "price": "10",
+        }, expect=201)
+        order = self.ok("post", "/api/v1/orders/", {
+            "items": [{"product": ordered_product["id"], "variant": ordered_variant["id"], "quantity": 1}],
+        }, expect=201)
+        order_delete = self.client.delete(f"/api/v1/catalog/variants/{ordered_variant['id']}/")
+        self.assertEqual(order_delete.status_code, 400, order_delete.content)
+        self.assertEqual(order_delete.json(), [
+            "This variant is used by orders or inventory, so it can't be deleted."
+        ])
+        self.assertEqual(self.ok("get", f"/api/v1/catalog/variants/{ordered_variant['id']}/")["id"], ordered_variant["id"])
+        loaded_order = self.ok("get", f"/api/v1/orders/{order['id']}/")
+        self.assertEqual(loaded_order["items"][0]["variant"], ordered_variant["id"])
 
 
 class ProductServiceTests(APITestCase):
