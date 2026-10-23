@@ -127,14 +127,7 @@ class SignupView(PublicAuthView):
                     target_stores.append(store)
 
         if not target_stores:
-            import sys
-            from django.conf import settings
-            is_testing = (
-                "test" in sys.argv
-                or getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE") == "apps.core.testdb"
-            )
-            if not is_testing:
-                target_stores = list(Store.objects.filter(status="active"))
+            return
 
         for store in target_stores:
             email = (user.email or "").strip().lower()
