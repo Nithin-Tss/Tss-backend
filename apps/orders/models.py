@@ -58,6 +58,20 @@ class Order(models.Model):
         null=True,
         blank=True,
     )
+    # Snapshots taken when the order is placed; null on orders created before these existed.
+    shipping_address = models.JSONField(
+        null=True,
+        blank=True,
+    )
+    billing_address = models.JSONField(
+        null=True,
+        blank=True,
+    )
+    customer_email = models.EmailField(
+        max_length=320,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
