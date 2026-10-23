@@ -12,7 +12,9 @@ from apps.core.numbering import next_number
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 from . import services
-from .models import DraftOrder, DraftOrderDetail, Order
+from apps.tenancy.models import Store
+
+from .models import DraftOrder, DraftOrderDetail, Order, OrderIdempotencyKey
 from .serializers import DraftOrderSerializer, OrderCreateSerializer, OrderSerializer
 
 OPEN_DRAFT, COMPLETED_DRAFT = "open", "completed"
@@ -61,13 +63,29 @@ class OrderViewSet(
         data = OrderCreateSerializer(data=request.data, context={"request": request})
         data.is_valid(raise_exception=True)
         v = dict(data.validated_data)
-        order = services.create_order(
-            request.store,
-            v.pop("items"),
-            currency=v.pop("currency_code"),
-            user=request.user,
-            **v,
-        )
+
+        # An Idempotency-Key header makes a retried request return the first order instead of a second one.
+        key = (request.headers.get("Idempotency-Key") or "").strip()
+        if len(key) > 100:
+            raise ValidationError({"Idempotency-Key": "Must be at most 100 characters."})
+
+        with transaction.atomic():
+            if key:
+                # The store row lock serialises concurrent requests carrying the same key.
+                Store.objects.select_for_update().filter(pk=request.store.pk).first()
+                seen = OrderIdempotencyKey.objects.filter(store=request.store, key=key).select_related("order").first()
+                if seen is not None:
+                    return Response(OrderSerializer(seen.order).data, status=status.HTTP_200_OK)
+
+            order = services.create_order(
+                request.store,
+                v.pop("items"),
+                currency=v.pop("currency_code", None),
+                user=request.user,
+                **v,
+            )
+            if key:
+                OrderIdempotencyKey.objects.create(store=request.store, key=key, order=order)
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])

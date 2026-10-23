@@ -333,3 +333,19 @@ class DraftOrderDetail(models.Model):
 
     def __str__(self):
         return f"{self.draft_order} - {self.title}"
+
+
+class OrderIdempotencyKey(models.Model):
+    """A client-chosen key for a staff create-order request, so a retry returns the first order."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="+")
+    key = models.CharField(max_length=100)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, db_column="order_id", related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"orders"."order_idempotency_keys"'
+        constraints = [
+            models.UniqueConstraint(fields=["store", "key"], name="uq_order_idem_store_key"),
+        ]

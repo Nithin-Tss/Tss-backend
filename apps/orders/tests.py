@@ -40,6 +40,33 @@ class OrdersApiTests(StoreClientMixin, APITestCase):
             expect=201,
         )
 
+    def test_idempotency_key_returns_the_first_order(self):
+        payload = {"items": [{"product": self.product["id"], "quantity": 1}]}
+        first = self.client.post("/api/v1/orders/", payload, format="json", HTTP_IDEMPOTENCY_KEY="abc-1")
+        again = self.client.post("/api/v1/orders/", payload, format="json", HTTP_IDEMPOTENCY_KEY="abc-1")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(first.json()["id"], again.json()["id"])
+        self.assertEqual(Order.objects.filter(store=self.store).count(), 1)
+
+    def test_currency_must_match_the_store(self):
+        response = self.client.post(
+            "/api/v1/orders/",
+            {"items": [{"product": self.product["id"], "quantity": 1}], "currency_code": "XYZ"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.create_order()["currency_code"], self.store.currency)
+
+    def test_archived_product_cannot_be_ordered(self):
+        from apps.catalog.models import Product
+
+        Product.objects.filter(pk=self.product["id"]).update(status="archived")
+        response = self.client.post(
+            "/api/v1/orders/", {"items": [{"product": self.product["id"], "quantity": 1}]}, format="json"
+        )
+        self.assertEqual(response.status_code, 400)
+
     def create_draft(self, **extra):
         return self.ok(
             "post",

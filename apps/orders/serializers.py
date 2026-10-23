@@ -141,7 +141,7 @@ class OrderCreateSerializer(StoreScopedSerializerMixin, serializers.ModelSeriali
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
     tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
     shipping_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
-    currency_code = CurrencyCodeField(max_length=3, default="INR")
+    currency_code = CurrencyCodeField(max_length=3, required=False)
 
     class Meta:
         model = Order

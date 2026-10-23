@@ -12,6 +12,8 @@ from rest_framework.exceptions import ValidationError
 from apps.core.numbering import next_number
 from apps.inventory import services as inventory
 
+from apps.catalog.services import ARCHIVED
+
 from .models import Order, OrderItem
 
 OPEN, CANCELLED, CLOSED = "open", "cancelled", "closed"
@@ -39,7 +41,7 @@ def create_order(
     store,
     lines,
     customer=None,
-    currency="INR",
+    currency=None,
     discount_amount=ZERO,
     tax_amount=ZERO,
     shipping_amount=ZERO,
@@ -54,6 +56,9 @@ def create_order(
     """
     if not lines:
         raise ValidationError({"items": "An order needs at least one item."})
+    currency = (currency or store.currency).upper()
+    if currency != store.currency:
+        raise ValidationError({"currency_code": f"This store sells in {store.currency}."})
     if customer is not None and customer.store_id != store.pk:
         raise ValidationError({"customer": "Customer does not belong to this store."})
     if sales_channel is not None and sales_channel.store_id != store.pk:
@@ -92,6 +97,8 @@ def create_order(
             raise ValidationError({"items": f"{product.title} doesn't belong to this store."})
         if quantity <= 0:
             raise ValidationError({"items": "Item quantities must be greater than zero."})
+        if product.status == ARCHIVED:
+            raise ValidationError({"items": f"{product.title} is archived, so it can't be ordered."})
         if variant is not None and variant.product_id != product.pk:
             raise ValidationError({"items": f"{variant.sku or 'A variant'} doesn't belong to {product.title}."})
         if variant is not None and variant.product.store_id != store.pk:
