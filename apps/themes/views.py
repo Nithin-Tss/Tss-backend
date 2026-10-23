@@ -1477,8 +1477,9 @@ class ThemePreviewView(StoreThemeView):
 
     def post(self, request):
         preview_data = request.data
-        if request.query_params.get("page") == "cart" and isinstance(request.data, dict):
-            # The customizer may attach an empty, temporary cart entry while switching preview pages.
+        if isinstance(request.data, dict):
+            # The customizer may attach an empty, temporary cart entry while switching preview pages
+            # (and keeps it when moving on to another page, e.g. checkout).
             # Cart markup is a shared snippet, not an editable/saved template, so omit that entry
             # before validating the theme data.
             templates = request.data.get("templates")
