@@ -182,8 +182,8 @@ class StoreIsolationTest(StoreClientMixin, APITestCase):
         token_b, store_b = self.sign_up("b@example.com", "Store B")
 
         # B can't list or read A's records
-        # (B's own owner is listed as a customer; nobody from store A is)
-        self.assertEqual([c["email"] for c in self.ok("get", "/api/v1/customers/")], ["b@example.com"])
+        # (store B has no customers yet; nobody from store A is visible)
+        self.assertEqual(self.ok("get", "/api/v1/customers/"), [])
         self.ok("get", f"/api/v1/customers/{customer_a['id']}/", expect=404)
         self.ok("get", f"/api/v1/catalog/products/{product_a['id']}/", expect=404)
 
