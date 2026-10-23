@@ -48,7 +48,13 @@ class OrderViewSet(
     permission_resource = "orders"
     queryset = (
         Order.objects.select_related("customer", "sales_channel")
-        .prefetch_related("items", "payments__transactions")
+        .prefetch_related(
+            "items__product__images",
+            "items__variant",
+            "payments__transactions",
+            "fulfillments__items__order_item",
+            "source_draft__created_by_user",
+        )
         .order_by("-created_at")
     )
     serializer_class = OrderSerializer
