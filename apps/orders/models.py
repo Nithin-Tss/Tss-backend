@@ -13,13 +13,14 @@ class Order(models.Model):
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
-        editable=False,
+        editable=False        
     )
     store = models.ForeignKey(
         Store,
         on_delete=models.PROTECT,
         db_column="store_id",
         related_name="orders",
+        db_index=False
     )
     order_number = models.CharField(max_length=50)
     customer = models.ForeignKey(
@@ -29,6 +30,7 @@ class Order(models.Model):
         related_name="orders",
         null=True,
         blank=True,
+        db_index=False,      
     )
     sales_channel = models.ForeignKey(
         SalesChannel,
@@ -67,6 +69,10 @@ class Order(models.Model):
             models.Index(
                 fields=["store", "-created_at"],
                 name="ord_store_created_idx",
+            ),
+            models.Index(
+                fields=["customer", "store", "-created_at"],
+                name="ord_cust_store_created_idx",
             ),
         ]
         constraints = [
@@ -191,6 +197,7 @@ class DraftOrder(models.Model):
         on_delete=models.PROTECT,
         db_column="store_id",
         related_name="draft_orders",
+        db_index=False,
     )
     draft_number = models.CharField(max_length=50)
     customer = models.ForeignKey(
@@ -216,6 +223,7 @@ class DraftOrder(models.Model):
         related_name="source_draft",
         null=True,
         blank=True,
+        db_index=False,
     )
     created_by_user = models.ForeignKey(
         User,
