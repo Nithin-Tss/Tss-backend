@@ -2,6 +2,7 @@ import json
 import re
 import time
 import uuid
+from functools import wraps
 from urllib.parse import quote, urlencode, urlsplit
 
 from django.conf import settings
@@ -2087,8 +2088,23 @@ def storefront_cart(store, request, params):
     return render_page(store, "index", request=request, cart_page=True)
 
 
+def _with_cart_cors(view):
+    """The checkout page's script runs sandboxed too: answer its preflight and tag every reply, as the cart API does."""
+
+    @wraps(view)
+    def wrapper(request, *args, **kwargs):
+        response = HttpResponse(status=204) if request.method == "OPTIONS" else view(request, *args, **kwargs)
+        for name, value in CART_API_HEADERS.items():
+            if name != "Cache-Control":
+                response[name] = value
+        return response
+
+    return wrapper
+
+
 @xframe_options_exempt
 @csrf_exempt
+@_with_cart_cors
 def storefront_checkout(request, store_slug):
     store = get_object_or_404(Store, store_slug=store_slug)
     cart_session, cart_new = cart_data.session_for_page(store, request)
