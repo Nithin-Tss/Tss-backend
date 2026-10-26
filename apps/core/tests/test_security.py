@@ -30,7 +30,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from django.utils import timezone
 
-from apps.catalog.models import Category, Collection, Product, ProductVariant
+from apps.catalog.models import Catalogue, Category, Collection, Product, ProductVariant
 from apps.commerce.models import Cart, Checkout
 from apps.commerce.tests import CommerceTestBase
 from apps.core.viewsets import StoreScopedGenericViewSet
@@ -441,6 +441,7 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             product, variant, customer, location, order, order_item, fulfillment, gateway, cart, wishlist,
             Category.objects.create(store=store, name="Tops"),
             Collection.objects.create(store=store, name="promotions"),
+            Catalogue.objects.create(store=store, name="wholesale"),
             CustomerAddress.objects.create(customer=customer, address_type="shipping", address_line_1="1 Main St",
                                            city="Chennai", state="TN", postal_code="600001", country="IN"),
             InventoryItem.objects.create(variant=variant, location=location, unavailable=0, committed=0,

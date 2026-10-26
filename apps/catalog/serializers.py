@@ -9,7 +9,7 @@ from apps.core.viewsets import StoreScopedSerializerMixin
 from apps.inventory.models import Location
 
 from .models import (
-    EXTRA_FIELDS, RESERVED_HANDLES, Category, Collection, CollectionRule, Product, ProductVariant, SalesChannel,
+    EXTRA_FIELDS, RESERVED_HANDLES, Catalogue, Category, Collection, CollectionRule, Product, ProductVariant, SalesChannel,
     unique_handle,
 )
 from .services import (
@@ -483,3 +483,67 @@ class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer)
         if self.instance and value.pk != self.instance.product_id:
             raise serializers.ValidationError("A variant can't be moved to another product.")
         return value
+
+
+class CatalogueSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
+    name = serializers.CharField(max_length=255)
+    status = serializers.ChoiceField(choices=Catalogue.STATUSES, required=False)
+    adjustment_direction = serializers.ChoiceField(choices=Catalogue.DIRECTIONS, required=False)
+    price_adjustment = serializers.DecimalField(
+        max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False
+    )
+    currency_code = serializers.RegexField(r"^([A-Za-z]{3})?$", required=False, allow_blank=True)
+    markets = serializers.ListField(child=serializers.CharField(max_length=100), required=False, max_length=250)
+    products = serializers.ListField(child=serializers.UUIDField(), required=False, max_length=5000)
+    excluded_products = serializers.ListField(child=serializers.UUIDField(), required=False, max_length=5000)
+    products_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Catalogue
+        fields = [
+            "id", "name", "description", "status", "currency_code", "price_adjustment",
+            "adjustment_direction", "include_compare_at_price", "auto_include_new_products",
+            "markets", "products", "excluded_products", "products_count", "created_at", "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Enter a catalog title.")
+        return value
+
+    def validate_currency_code(self, value):
+        return value.upper()
+
+    def _live_products(self, store):
+        return Product.objects.filter(store=store)
+
+    def _check_products(self, ids):
+        """Only this store's products may be named."""
+        store = self.context["request"].store
+        found = set(self._live_products(store).filter(pk__in=ids).values_list("pk", flat=True))
+        if len(found) != len(set(ids)):
+            raise serializers.ValidationError("One or more products don't exist in this store.")
+        return [str(i) for i in dict.fromkeys(ids)]
+
+    def validate_products(self, value):
+        return self._check_products(value)
+
+    def validate_excluded_products(self, value):
+        return self._check_products(value)
+
+    def validate(self, attrs):
+        both = set(attrs.get("products", self.instance.products if self.instance else [])) & set(
+            attrs.get("excluded_products", self.instance.excluded_products if self.instance else [])
+        )
+        if both:
+            raise serializers.ValidationError("A product can't be both included and excluded.")
+        return attrs
+
+    def get_products_count(self, obj):
+        live = self._live_products(obj.store)
+        excluded = set(obj.excluded_products)
+        if obj.auto_include_new_products:
+            return live.exclude(pk__in=excluded).count()
+        return live.filter(pk__in=obj.products).exclude(pk__in=excluded).count()

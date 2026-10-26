@@ -20,10 +20,11 @@ from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 
 
-from .models import Category, Collection, Product, ProductVariant
+from .models import Catalogue, Category, Collection, Product, ProductVariant
 
 from .serializers import (
 
+    CatalogueSerializer,
     CategorySerializer,
 
     CollectionRuleSerializer,
@@ -438,3 +439,11 @@ class SalesChannelViewSet(mixins.ListModelMixin, StoreScopedGenericViewSet):
 
         return sales_channels_for(self.request.store)
 
+
+
+class CatalogueViewSet(StoreScopedViewSet):
+    """/api/v1/catalog/catalogues/  list, create, retrieve, update, delete"""
+
+    permission_resource = "products"
+    queryset = Catalogue.objects.order_by("name")
+    serializer_class = CatalogueSerializer

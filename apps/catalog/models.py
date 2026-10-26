@@ -681,3 +681,47 @@ class ProductReview(models.Model):
 
     def __str__(self):
         return f"{self.product} - {self.rating}/5"
+
+class Catalogue(models.Model):
+    """
+    A catalog: a named set of products sold to some markets, with its own
+    currency and a price adjustment applied to the base prices.
+    """
+
+    ACTIVE = "active"
+    DRAFT = "draft"
+    STATUSES = (ACTIVE, DRAFT)
+    INCREASE = "increase"
+    DECREASE = "decrease"
+    DIRECTIONS = (INCREASE, DECREASE)
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="catalogues")
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(default="", blank=True)
+    status = models.CharField(max_length=20, default=ACTIVE)
+    # Blank: the store's own currency
+    currency_code = models.CharField(max_length=3, default="", blank=True)
+    # Percent, always >= 0; the direction says whether prices go up or down
+    price_adjustment = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    adjustment_direction = models.CharField(max_length=10, default=DECREASE)
+    include_compare_at_price = models.BooleanField(default=False)
+    # New products join the catalog on their own
+    auto_include_new_products = models.BooleanField(default=True)
+    # Market names this catalog is sold in
+    markets = models.JSONField(default=list, blank=True)
+    # Product ids picked for the catalog / kept out of it
+    products = models.JSONField(default=list, blank=True)
+    excluded_products = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"catalog"."catalogues"'
+        verbose_name = "Catalog"
+        verbose_name_plural = "Catalogs"
+
+    def __str__(self):
+        return self.name

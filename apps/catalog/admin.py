@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from apps.core.admin_guards import StoreGuardAdmin
-from .models import Category, Product, ProductVariant, ProductImage, Collection, ProductCollection, Tag, ProductTag, SalesChannel, ProductSalesChannel, CollectionSalesChannel, ProductReview, Brand
+from .models import Catalogue, Category, Product, ProductVariant, ProductImage, Collection, ProductCollection, Tag, ProductTag, SalesChannel, ProductSalesChannel, CollectionSalesChannel, ProductReview, Brand
 
 
 @admin.register(Category)
@@ -85,3 +85,10 @@ class ProductSalesChannelAdmin(StoreGuardAdmin):
 class CollectionSalesChannelAdmin(StoreGuardAdmin):
     store_path = "collection__store"
     store_links = {"collection": "store", "sales_channel": "store"}
+
+
+@admin.register(Catalogue)
+class CatalogueAdmin(StoreGuardAdmin):
+    list_display = ("name", "store_name", "status", "currency_code")
+    list_filter = ("status",)
+    search_fields = ("name", "store__store_name")
