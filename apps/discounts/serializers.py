@@ -28,6 +28,10 @@ class DiscountSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
         ]
         extra_kwargs = {
             "value": {"min_value": 0},
+            "minimum_order_amount": {"min_value": 0},
+            "maximum_discount_amount": {"min_value": 0},
+            "usage_limit": {"min_value": 1},
+            "per_customer_limit": {"min_value": 1},
             "is_active": {"default": True},
             "starts_at": {"required": False},  # defaults to now
         }
