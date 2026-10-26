@@ -581,10 +581,18 @@ def import_products(store, rows, user=None):
 
     stock_updated = 0
     if restock:
+        from apps.inventory.models import InventoryItem
+
         fallback = default_location(store)
+        stocked = {}
+        for item in InventoryItem.objects.filter(variant__in=list(restock)).order_by("created_at"):
+            stocked.setdefault(item.variant_id, []).append(item.location)
         for variant, (location, quantity) in restock.items():
+            # No location in the file: update where the variant is already stocked (when that is one place)
+            places = stocked.get(variant.pk, [])
+            where = location or (places[0] if len(places) == 1 else fallback)
             set_available(
-                variant, location or fallback, quantity,
+                variant, where, quantity,
                 user_id=getattr(user, "pk", None), source="import", reason="import",
             )
             stock_updated += 1

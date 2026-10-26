@@ -638,6 +638,18 @@ class AllProductsStorefrontTests(APITestCase):
         self.assertEqual(InventoryItem.objects.get(variant__sku="RS-1").available, 25)
         self.assertEqual(InventoryItem.objects.get(variant__sku="RS-2").available, 7)
 
+    def test_reimport_updates_stock_where_the_variant_already_is(self):
+        from apps.inventory.models import Location
+
+        self.client.post(f"{URL}bulk/", {"products": [{"title": "Elsewhere", "sku": "EL-1", "quantity": 3}]}, format="json")
+        item = InventoryItem.objects.get(variant__sku="EL-1")
+        other = Location.objects.create(store=item.variant.product.store, name="Warehouse")
+        item.location = other
+        item.save()
+        self.client.post(f"{URL}bulk/", {"products": [{"title": "Elsewhere", "sku": "EL-1", "quantity": 9}]}, format="json")
+        self.assertEqual(InventoryItem.objects.filter(variant__sku="EL-1").count(), 1)
+        self.assertEqual(InventoryItem.objects.get(variant__sku="EL-1").available, 9)
+
     def test_a_product_made_active_shows_in_the_store(self):
         # Saved with no channel at all (as older imports were), then made Active from the product form
         from .models import ProductSalesChannel
