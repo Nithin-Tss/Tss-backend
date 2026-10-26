@@ -290,9 +290,27 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
     def test_custom_blocks_are_validated(self):
         self.sign_up("valid@example.com", "Valid Shop")
         bad_block = self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
-            {"type": "marquee", "settings": {}},
+            {"type": "not_a_block", "settings": {}},
         ]}})
         self.ok("put", "/api/v1/themes/settings/", bad_block, expect=400)
+
+    def test_horizon_blocks_and_groups(self):
+        _, store = self.sign_up("group@example.com", "Group Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["g"], {"g": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "marquee", "settings": {"text": "Marquee words"}},
+            {"type": "jumbo_text", "settings": {"text": "Jumbo words"}},
+            {"type": "menu", "settings": {"links": "Shop | /collections/all"}},
+            {"type": "group", "settings": {"direction": "horizontal"}, "children": [
+                {"type": "heading", "settings": {"text": "Inside group"}},
+            ]},
+        ]}}))
+        html = self.home(store["storeSlug"])
+        for text in ("Marquee words", "Jumbo words", "tss-menu", "tss-group", "Inside group"):
+            self.assertIn(text, html)
+        nested = self.index(["g"], {"g": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "group", "settings": {}, "children": [{"type": "group", "settings": {}}]},
+        ]}})
+        self.ok("put", "/api/v1/themes/settings/", nested, expect=400)
 
     def test_preview_renders_draft_without_saving(self):
         _, store = self.sign_up("draft@example.com", "Draft Shop")

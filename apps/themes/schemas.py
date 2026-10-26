@@ -377,13 +377,16 @@ def _clean_section(page, section_id, raw):
             if not isinstance(block_hidden, bool):
                 raise serializers.ValidationError(f"{where}.blocks[{i}].hidden must be true or false.")
             block_schema = schema["blocks"][block["type"]]
-            section["blocks"].append({
+            cleaned = {
                 "type": block["type"],
                 "hidden": block_hidden,
                 "settings": _clean_settings(
                     block_schema["settings"], block.get("settings", {}), f"{where}.blocks[{i}].settings"
                 ),
-            })
+            }
+            if block_schema.get("nests"):
+                cleaned["children"] = _clean_children(schema, block.get("children"), f"{where}.blocks[{i}].children")
+            section["blocks"].append(cleaned)
 
         if legacy_heart is True and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
             section["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}})
@@ -397,6 +400,41 @@ def _clean_section(page, section_id, raw):
                 raise serializers.ValidationError(f"{where} can have at most {limit} {name}s.")
 
     return section
+
+
+
+def _clean_children(schema, raw, where):
+    """A group's child blocks: generic blocks only (no nested groups), at most MAX_GROUP_CHILDREN."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_GROUP_CHILDREN:
+        raise serializers.ValidationError(f"{where} must be a list of at most {MAX_GROUP_CHILDREN} blocks.")
+    out = []
+    for i, child in enumerate(raw):
+        if not isinstance(child, dict) or child.get("type") not in schema["blocks"] or schema["blocks"][child["type"]].get("nests") \
+                or child["type"] not in GENERIC_BLOCK_TYPES:
+            raise serializers.ValidationError(f"{where}[{i}].type is not valid inside a group.")
+        hidden = child.get("hidden", False)
+        if not isinstance(hidden, bool):
+            raise serializers.ValidationError(f"{where}[{i}].hidden must be true or false.")
+        out.append({
+            "type": child["type"],
+            "hidden": hidden,
+            "settings": _clean_settings(schema["blocks"][child["type"]]["settings"], child.get("settings", {}), f"{where}[{i}].settings"),
+        })
+    return out
+
+
+def _with_default_children(schema, raw):
+    return [
+        {
+            "type": c["type"],
+            "hidden": bool(c.get("hidden", False)),
+            "settings": _with_defaults(schema["blocks"][c["type"]]["settings"], c.get("settings", {})),
+        }
+        for c in (raw if isinstance(raw, list) else [])
+        if isinstance(c, dict) and c.get("type") in GENERIC_BLOCK_TYPES and not schema["blocks"].get(c["type"], {}).get("nests")
+    ][:MAX_GROUP_CHILDREN]
 
 
 def validate_custom_data(data):
@@ -492,6 +530,7 @@ def resolve(custom_data):
                         "type": b["type"],
                         "hidden": bool(b.get("hidden", False)),
                         "settings": _with_defaults(schema["blocks"][b["type"]]["settings"], b.get("settings", {})),
+                        **({"children": _with_default_children(schema, b.get("children"))} if schema["blocks"][b["type"]].get("nests") else {}),
                     }
                     for b in section.get("blocks", [])
                     if b.get("type") in schema["blocks"]  # block types that no longer exist are dropped
@@ -1434,7 +1473,68 @@ BLOCKS = {
         "Custom HTML",
         html=_opt("content", "embed", "HTML", "", max=20000),
     ),
+    # Shopify's Icon, Menu, Marquee and Jumbo text blocks
+    "icon": _block(
+        "Icon",
+        icon=_choice("content", "Icon", ICONS, "star"),
+        size=_opt("content", "range", "Size", 40, min=16, max=96, step=2, unit="px"),
+        link=_opt("content", "url", "Link (optional)", ""),
+    ),
+    "menu": _block(
+        "Menu",
+        heading=_opt("content", "text", "Heading", "", max=120),
+        links=_opt("content", "menu", "Links", "Shop | /collections/all\nAbout | /pages/about", help="One link per line: Label | /page"),
+        direction=_choice("content", "Direction", ["vertical", "horizontal"], "vertical", ui="segmented"),
+    ),
+    "marquee": _block(
+        "Marquee",
+        text=_opt("content", "text", "Text", "Free shipping on orders over ₹999", max=200),
+        speed=_opt("content", "range", "Speed (seconds per loop)", 20, min=5, max=60, unit="s"),
+        pause_on_hover=_opt("content", "checkbox", "Pause on hover", True),
+    ),
+    "logo": _block(
+        "Logo",
+        image_url=_opt("content", "image", "Logo image", ""),
+        text=_opt("content", "text", "Store name (used when no image)", "", max=120),
+        width=_opt("content", "range", "Width", 120, min=40, max=400, step=4, unit="px"),
+        link=_opt("content", "url", "Link", "/"),
+    ),
+    "collection_card": _block(
+        "Collection card",
+        collections=_opt("content", "collections", "Collection", [], max=1),
+        image_url=_opt("content", "image", "Image (optional)", ""),
+        label=_opt("content", "text", "Label (optional)", "", max=120),
+    ),
+    "collection_link": _block(
+        "Collection link",
+        collections=_opt("content", "collections", "Collection", [], max=1),
+        label=_opt("content", "text", "Label (optional)", "", max=120),
+    ),
+    "product_card": _block(
+        "Product card",
+        products=_opt("content", "products", "Product", [], max=1),
+    ),
+    "group": _block(
+        "Group",
+        direction=_choice("layout", "Direction", ["vertical", "horizontal"], "vertical", ui="segmented"),
+        gap=_opt("layout", "range", "Gap", 16, min=0, max=64, step=2, unit="px"),
+        items_align=_choice("layout", "Align items", ["start", "center", "end", "stretch"], "start", ui="segmented"),
+        justify=_choice("layout", "Distribute", ["start", "center", "end", "space-between"], "start"),
+        padding=_opt("layout", "range", "Inner padding", 0, min=0, max=80, step=4, unit="px"),
+        background=_opt("style", "color_optional", "Background", "", help="None keeps the section background."),
+        radius=_opt("style", "range", "Corner radius", 0, min=0, max=40, step=2, unit="px"),
+    ),
+    "jumbo_text": _block(
+        "Jumbo text",
+        text=_opt("content", "text", "Text", "Big, bold statement", max=200),
+        size=_choice("content", "Size", ["large", "xlarge", "huge"], "xlarge", ui="segmented"),
+    ),
 }
+
+for _spec in BLOCKS.values():
+    _spec["generic"] = True  # the customizer offers these inside a group
+BLOCKS["group"]["nests"] = True  # holds its own "children" blocks (one level deep, never another group)
+MAX_GROUP_CHILDREN = 12
 
 GENERIC_BLOCK_TYPES = set(BLOCKS)
 
