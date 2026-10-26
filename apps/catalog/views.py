@@ -3,6 +3,7 @@ import uuid
 
 
 from django.db import transaction
+from django.utils import timezone
 
 from rest_framework import mixins, status
 
@@ -43,11 +44,14 @@ from .serializers import (
 
 from .services import (
 
+    STATUSES as PRODUCT_STATUSES,
+
     ProductInUse,
 
     create_variant,
 
     delete_product,
+    delete_all_products,
     delete_products,
 
     delete_variant,
@@ -109,7 +113,7 @@ class ProductViewSet(StoreScopedViewSet):
 
 
     permission_resource = "products"
-    action_permissions = {"bulk_delete": "products.delete"}
+    action_permissions = {"bulk_delete": "products.delete", "delete_all": "products.delete"}
     queryset = Product.objects.select_related("category").prefetch_related(
 
         "variants__inventory_items",
@@ -211,6 +215,29 @@ class ProductViewSet(StoreScopedViewSet):
         created, skipped = import_products(request.store, valid, user=request.user) if valid else (0, 0)
         return Response({"created": created, "skipped": skipped, "errors": errors})
 
+    @action(detail=False, methods=["post"], url_path="bulk-status")
+    def bulk_status(self, request):
+        """
+        POST /api/v1/catalog/products/bulk-status/  {"ids": [id, ...], "status": "active"|"draft"}  (up to 500)
+        -> {"updated": n}
+        """
+        data = request.data if isinstance(request.data, dict) else {}
+        ids = data.get("ids")
+        new_status = data.get("status")
+        if not isinstance(ids, list) or not ids:
+            raise ValidationError({"ids": "Send a non-empty list of product ids."})
+        if len(ids) > MAX_BULK_ROWS:
+            raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
+        if new_status not in PRODUCT_STATUSES:
+            raise ValidationError({"status": "Status must be active, draft or archived."})
+        try:
+            ids = [uuid.UUID(str(i)) for i in ids]
+        except ValueError:
+            raise ValidationError({"ids": "Every id must be a valid product id."})
+
+        updated = Product.objects.filter(store=request.store, pk__in=ids).update(status=new_status, updated_at=timezone.now())
+        return Response({"updated": updated})
+
     @action(detail=False, methods=["post"], url_path="bulk-delete")
     def bulk_delete(self, request):
         """
@@ -229,6 +256,18 @@ class ProductViewSet(StoreScopedViewSet):
             raise ValidationError({"ids": "Every id must be a valid product id."})
 
         deleted, blocked = delete_products(request.store, ids)
+        return Response({"deleted": deleted, "blocked": blocked})
+
+    @action(detail=False, methods=["post"], url_path="delete-all")
+    def delete_all(self, request):
+        """
+        POST /api/v1/catalog/products/delete-all/  {"confirm": true}
+        -> {"deleted": n, "blocked": ["title", ...]}
+        Deletes every product in the store, active ones included, along with their stock history.
+        """
+        if not (isinstance(request.data, dict) and request.data.get("confirm") is True):
+            raise ValidationError({"confirm": "Send confirm: true to delete all products."})
+        deleted, blocked = delete_all_products(request.store)
         return Response({"deleted": deleted, "blocked": blocked})
 
     @action(detail=False, methods=["post"], url_path="images", parser_classes=[MultiPartParser])

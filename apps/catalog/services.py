@@ -6,7 +6,7 @@ from django.db.models import Exists, OuterRef, PROTECT, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from rest_framework.exceptions import ValidationError
 
-from apps.inventory.services import default_location, set_available
+from apps.inventory.services import default_location, import_stock, set_available
 
 from .models import (
     EXTRA_FIELDS,
@@ -419,6 +419,34 @@ def delete_products(store, ids):
     return len(free), sorted(products[pk] for pk in blocked)
 
 
+def delete_all_products(store):
+    """
+    Delete every product in the store, active or draft, plus the carts, wishlists, discount links,
+    stock rows/history, transfers, purchase lines and drafts that point at them.
+    Products on placed orders are kept (deleting them would corrupt the order); their titles are returned.
+    """
+    from apps.inventory.models import InventoryHistory
+    from apps.orders.models import OrderItem
+
+    ids = list(Product.objects.filter(store=store).values_list("pk", flat=True))
+    if not ids:
+        return 0, []
+    children = (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant)
+    with transaction.atomic():
+        for rel in Product._meta.related_objects:
+            if rel.on_delete is PROTECT and rel.related_model not in children:
+                rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids}).delete()
+        for rel in ProductVariant._meta.related_objects:
+            if rel.on_delete is not PROTECT or rel.related_model is OrderItem:
+                continue
+            qs = rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
+            if rel.related_model is InventoryHistory:
+                qs._raw_delete(qs.db)  # append-only table refuses normal deletes
+            else:
+                qs.delete()
+        return delete_products(store, ids)
+
+
 def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
     if "continue_selling" in row:
@@ -555,7 +583,7 @@ def import_products(store, rows, user=None):
     collections = _name_map(Collection, store, names("collections"))
     tags = _name_map(Tag, store, names("tags"))
 
-    products, variants, product_collections, product_tags = [], [], [], []
+    products, variants, product_collections, product_tags, product_images = [], [], [], [], []
     for row, sku in fresh:
         product = Product(
             store=store,
@@ -578,9 +606,12 @@ def import_products(store, rows, user=None):
                 product_collections.append(ProductCollection(product=product, collection=collections[name]))
         for name in {n.strip() for n in row.get("tags") or [] if n.strip()}:
             product_tags.append(ProductTag(product=product, tag=tags[name]))
+        for position, url in enumerate(dict.fromkeys(row.get("images") or [])):
+            product_images.append(ProductImage(product=product, url=url, position=position))
 
     Product.objects.bulk_create(products)
     ProductVariant.objects.bulk_create(variants)
+    ProductImage.objects.bulk_create(product_images)
     ProductCollection.objects.bulk_create(product_collections)
     ProductTag.objects.bulk_create(product_tags)
 
@@ -592,11 +623,11 @@ def import_products(store, rows, user=None):
     )
 
     fallback = default_location(store)
-    for variant, (row, _) in zip(variants, fresh):
-        set_available(
-            variant, row.get("location") or fallback, row.get("quantity") or 0,
-            user_id=getattr(user, "pk", None), source="import", reason="import", reference_id=variant.product_id,
-        )
+    import_stock(
+        [(variant, row.get("location") or fallback, row.get("quantity") or 0)
+         for variant, (row, _) in zip(variants, fresh)],
+        user_id=getattr(user, "pk", None),
+    )
 
     # bulk_create sends no signals: put the new products in the automated collections they match
     refresh_automated_collections(store, [p.pk for p in products])
