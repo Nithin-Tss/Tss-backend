@@ -186,7 +186,7 @@ class ProductViewSet(StoreScopedViewSet):
     def bulk(self, request):
         """
         POST /api/v1/catalog/products/bulk/  {"products": [row, ...]}  (up to 500 rows)
-        -> {"created": n, "skipped": n, "errors": [{"index": i, "message": "..."}]}
+        -> {"created": n, "skipped": n, "stockUpdated": n, "errors": [{"index": i, "message": "..."}]}
         Used by the admin "Import products" popup. Invalid rows are reported, not fatal.
         """
         rows = request.data.get("products") if isinstance(request.data, dict) else None
@@ -212,8 +212,12 @@ class ProductViewSet(StoreScopedViewSet):
                 parts.append(f"{field}: {message}")
             errors.append({"index": index, "message": "; ".join(parts)})
 
-        created, skipped = import_products(request.store, valid, user=request.user) if valid else (0, 0)
-        return Response({"created": created, "skipped": skipped, "errors": errors})
+        created, skipped, stock_updated = (
+            import_products(request.store, valid, user=request.user) if valid else (0, 0, 0)
+        )
+        return Response(
+            {"created": created, "skipped": skipped, "stockUpdated": stock_updated, "errors": errors}
+        )
 
     @action(detail=False, methods=["post"], url_path="bulk-status")
     def bulk_status(self, request):

@@ -537,6 +537,19 @@ CUSTOM_CSS = Markup("""<style>
 .tss-balign-center .tss-countdown__time{justify-content:center}.tss-balign-right .tss-countdown__time{justify-content:flex-end}
 .tss-countdown__time span{display:flex;flex-direction:column;align-items:center;min-width:64px;padding:10px 8px;border-radius:12px;background:var(--soft)}
 .tss-countdown__time b{font-size:26px;line-height:1.1}.tss-countdown__time small{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.tss-menu ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.tss-menu--horizontal ul{flex-direction:row;flex-wrap:wrap;gap:8px 20px}
+.tss-balign-center .tss-menu--horizontal ul{justify-content:center}.tss-balign-right .tss-menu--horizontal ul{justify-content:flex-end}
+.tss-menu a{color:inherit;text-decoration:none}.tss-menu a:hover{text-decoration:underline}
+.tss-menu__heading{font-size:16px;margin:0 0 10px}
+.tss-marquee{overflow:hidden;white-space:nowrap}
+.tss-marquee__track{display:inline-flex;animation:tss-marquee var(--tss-marquee-s,20s) linear infinite}
+.tss-marquee__track span{padding-right:3em;font-weight:600}
+.tss-marquee--pause:hover .tss-marquee__track{animation-play-state:paused}
+@keyframes tss-marquee{to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){.tss-marquee__track{animation:none}}
+.tss-jumbo{margin:0;font-weight:800;line-height:1.05;font-family:var(--tss-heading-font)}
+.tss-jumbo--large{font-size:clamp(32px,6vw,56px)}.tss-jumbo--xlarge{font-size:clamp(44px,9vw,96px)}.tss-jumbo--huge{font-size:clamp(56px,13vw,160px)}
 .tss-accordion{text-align:left}
 .tss-accordion details{border-bottom:1px solid var(--line,rgba(0,0,0,.12))}
 .tss-accordion summary{cursor:pointer;padding:14px 0;font-weight:600;list-style:none;display:flex;justify-content:space-between;gap:12px}
@@ -1180,13 +1193,90 @@ def _block_html(block, store, env, base_url):
             )
         return '<div class="tss-empty">Add an address or embed code.</div>'
 
+    if kind == "group":
+        parts = _render_blocks(block.get("children") or [], store, env, base_url, nested=True)
+        if not parts:
+            return ""
+        direction = "row" if b.get("direction") == "horizontal" else "column"
+        align = b.get("items_align") if b.get("items_align") in ("start", "center", "end", "stretch") else "start"
+        justify = b.get("justify") if b.get("justify") in ("start", "center", "end", "space-between") else "start"
+        style = (
+            f"display:flex;flex-direction:{direction};flex-wrap:wrap;gap:{int(b.get('gap') or 0)}px;align-items:{align};"
+            f"justify-content:{justify};padding:{int(b.get('padding') or 0)}px;border-radius:{int(b.get('radius') or 0)}px"
+        )
+        if b.get("background"):
+            style += f";background:{escape(b['background'])}"
+        return f'<div class="tss-group" style="{style}">{"".join(parts)}</div>'
+
+    if kind == "icon":
+        size = int(b.get("size") or 40)
+        svg = (
+            f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" stroke="currentColor" stroke-width="1.7" '
+            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICON_PATHS.get(b.get("icon"), ICON_PATHS["star"])}</svg>'
+        )
+        if b.get("link"):
+            svg = f'<a href="{escape(link(b["link"]))}" style="color:inherit">{svg}</a>'
+        return f'<div class="tss-icon" style="color:var(--accent)">{svg}</div>'
+
+    if kind == "menu":
+        rows = []
+        for line in (b.get("links") or "").splitlines():
+            label, _, url = line.partition("|")
+            label, url = label.strip(), (url or label).strip()
+            if label and url:
+                rows.append(f'<li><a href="{escape(link(url))}">{escape(label)}</a></li>')
+        if not rows:
+            return '<div class="tss-empty">Add menu links.</div>'
+        heading = f'<h3 class="tss-menu__heading">{escape(b["heading"])}</h3>' if b.get("heading") else ""
+        direction = "horizontal" if b.get("direction") == "horizontal" else "vertical"
+        return f'<nav class="tss-menu tss-menu--{direction}">{heading}<ul>{"".join(rows)}</ul></nav>'
+
+    if kind == "marquee" and b.get("text"):
+        item = f'<span>{escape(b["text"])}</span>'
+        pause = " tss-marquee--pause" if b.get("pause_on_hover", True) else ""
+        return (
+            f'<div class="tss-marquee{pause}" style="--tss-marquee-s:{int(b.get("speed") or 20)}s">'
+            f'<div class="tss-marquee__track">{item * 6}</div></div>'
+        )
+
+    if kind == "logo" and (b.get("image_url") or b.get("text")):
+        inner = (
+            f'<img src="{escape(b["image_url"])}" alt="{escape(b.get("text") or "")}" style="width:{int(b.get("width") or 120)}px;max-width:100%;height:auto">'
+            if b.get("image_url") else f'<strong>{escape(b["text"])}</strong>'
+        )
+        return f'<a class="tss-logo" href="{escape(link(b.get("link") or "/"))}" style="color:inherit;text-decoration:none">{inner}</a>'
+
+    if kind in ("collection_card", "collection_link"):
+        ids = (b.get("collections") or [])[:1]
+        found = published_collections(store).filter(id__in=ids).first() if store and ids else None
+        if not found:
+            return '<div class="tss-empty">Choose a collection.</div>'
+        href, name = escape(collection_url(base_url, found)), escape(b.get("label") or found.name)
+        if kind == "collection_link":
+            return f'<a class="tss-collection-link" href="{href}">{name}</a>'
+        bg = f' style="background:url({escape(b["image_url"])}) center/cover;color:#fff"' if b.get("image_url") else ""
+        return f'<a class="tss-collection" href="{href}"{bg}>{name}</a>'
+
+    if kind == "product_card":
+        products = _chosen_products(store, base_url, (b.get("products") or [])[:1])
+        if not products:
+            return '<div class="tss-empty">Choose a product.</div>'
+        try:
+            return env.from_string("{% render 'product-card', product: product, show_vendor: false %}").render(product=products[0])
+        except LiquidError:
+            return f'<a href="{escape(products[0]["url"])}">{escape(products[0]["title"])}</a>'
+
+    if kind == "jumbo_text" and b.get("text"):
+        size = b.get("size") if b.get("size") in ("large", "xlarge", "huge") else "xlarge"
+        return f'<p class="tss-jumbo tss-jumbo--{size}">{escape(b["text"])}</p>'
+
     if kind == "html" and b.get("html"):
         return f'<div class="tss-embed">{sanitize_embed(b["html"])}</div>'
 
     return ""
 
 
-def _render_blocks(blocks, store, env, base_url, theme=None):
+def _render_blocks(blocks, store, env, base_url, theme=None, nested=False):
     """Visible blocks in order, each in a wrapper with its own spacing, alignment and width."""
     parts = []
     for position, block in enumerate(blocks):
@@ -1210,8 +1300,9 @@ def _render_blocks(blocks, store, env, base_url, theme=None):
             b_classes, b_style = button_attrs(b, theme or {})
             classes += b_classes
             style += b_style
+        marker = "" if nested else f' data-tss-block="{int(index)}"'
         parts.append(
-            f'<div class="{escape(" ".join(classes))}" style="{escape(";".join(style))}" data-tss-block="{int(index)}">{inner}</div>'
+            f'<div class="{escape(" ".join(classes))}" style="{escape(";".join(style))}"{marker}>{inner}</div>'
         )
     return parts
 

@@ -624,6 +624,32 @@ class AllProductsStorefrontTests(APITestCase):
         self.assertIn("Imported active", listing)
         self.assertNotIn("Imported draft", listing)
 
+    def test_reimporting_a_sheet_updates_quantities_of_existing_skus(self):
+        self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Restock me", "sku": "RS-1", "quantity": 4},
+            {"title": "Leave me", "sku": "RS-2", "quantity": 7},
+        ]}, format="json")
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Restock me", "sku": "RS-1", "quantity": 25},
+            {"title": "Leave me", "sku": "RS-2"},
+        ]}, format="json")
+        data = r.json()
+        self.assertEqual((data["created"], data["skipped"], data["stockUpdated"]), (0, 2, 1), r.content)
+        self.assertEqual(InventoryItem.objects.get(variant__sku="RS-1").available, 25)
+        self.assertEqual(InventoryItem.objects.get(variant__sku="RS-2").available, 7)
+
+    def test_reimport_updates_stock_where_the_variant_already_is(self):
+        from apps.inventory.models import Location
+
+        self.client.post(f"{URL}bulk/", {"products": [{"title": "Elsewhere", "sku": "EL-1", "quantity": 3}]}, format="json")
+        item = InventoryItem.objects.get(variant__sku="EL-1")
+        other = Location.objects.create(store=item.variant.product.store, name="Warehouse")
+        item.location = other
+        item.save()
+        self.client.post(f"{URL}bulk/", {"products": [{"title": "Elsewhere", "sku": "EL-1", "quantity": 9}]}, format="json")
+        self.assertEqual(InventoryItem.objects.filter(variant__sku="EL-1").count(), 1)
+        self.assertEqual(InventoryItem.objects.get(variant__sku="EL-1").available, 9)
+
     def test_a_product_made_active_shows_in_the_store(self):
         # Saved with no channel at all (as older imports were), then made Active from the product form
         from .models import ProductSalesChannel

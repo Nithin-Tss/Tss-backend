@@ -543,25 +543,33 @@ def import_products(store, rows, user=None):
     Create many products at once from validated rows (see ProductInputSerializer).
 
     Rows whose SKU, or title when there is no SKU, already exist in the store
-    (or earlier in `rows`) are skipped, so importing the same file twice is safe.
+    (or earlier in `rows`) are not created again, so importing the same file twice is safe.
+    A row for an existing SKU that has a quantity sets that variant's stock to it, so
+    re-uploading a sheet updates quantities.
     Every product gets a price (0.00 when the file has none) and a stock record
     at the row's location or the store's first one (quantity 0 when the file has
     none). Active products are put on the Online Store channel, as in Shopify.
-    Returns (created, skipped).
+    Returns (created, skipped, stock_updated).
     """
     skus = {(r.get("sku") or "").strip() for r in rows} - {""}
     titles = {r["title"] for r in rows}
-    seen_skus = set(
-        ProductVariant.objects.filter(product__store=store, sku__in=skus).values_list("sku", flat=True)
-    )
+    existing_variants = {
+        v.sku: v
+        for v in ProductVariant.objects.filter(product__store=store, sku__in=skus).select_related("product")
+    }
+    seen_skus = set(existing_variants)
     seen_titles = set(
         Product.objects.filter(store=store, title__in=titles).values_list("title", flat=True)
     )
 
     fresh = []
+    restock = {}  # existing variant -> (location, quantity); the last row for a SKU wins
     for row in rows:
         sku = (row.get("sku") or "").strip()
         if sku and sku in seen_skus:
+            variant = existing_variants.get(sku)
+            if variant is not None and row.get("quantity") is not None:
+                restock[variant] = (row.get("location"), int(row["quantity"]))
             continue
         if not sku and row["title"] in seen_titles:
             continue
@@ -571,8 +579,26 @@ def import_products(store, rows, user=None):
             seen_titles.add(row["title"])
         fresh.append((row, sku))
 
+    stock_updated = 0
+    if restock:
+        from apps.inventory.models import InventoryItem
+
+        fallback = default_location(store)
+        stocked = {}
+        for item in InventoryItem.objects.filter(variant__in=list(restock)).order_by("created_at"):
+            stocked.setdefault(item.variant_id, []).append(item.location)
+        for variant, (location, quantity) in restock.items():
+            # No location in the file: update where the variant is already stocked (when that is one place)
+            places = stocked.get(variant.pk, [])
+            where = location or (places[0] if len(places) == 1 else fallback)
+            set_available(
+                variant, where, quantity,
+                user_id=getattr(user, "pk", None), source="import", reason="import",
+            )
+            stock_updated += 1
+
     if not fresh:
-        return 0, len(rows)
+        return 0, len(rows), stock_updated
 
     def names(key):
         return {n.strip() for row, _ in fresh for n in row.get(key) or [] if n.strip()}
@@ -632,7 +658,7 @@ def import_products(store, rows, user=None):
     # bulk_create sends no signals: put the new products in the automated collections they match
     refresh_automated_collections(store, [p.pk for p in products])
 
-    return len(products), len(rows) - len(products)
+    return len(products), len(rows) - len(products), stock_updated
 
 
 # ---------------------------------------------------------------------------
