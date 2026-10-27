@@ -6,6 +6,7 @@ from apps.commerce.models import Checkout
 from apps.customers.models import Customer
 from apps.tenancy.models import Store
 from apps.orders.models import Order
+from django.core.exceptions import ValidationError
 
 
 class Payment(models.Model):
@@ -90,6 +91,16 @@ class Payment(models.Model):
     def __str__(self):
         return str(self.id)
 
+class AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError(
+            "Payment transactions cannot be edited."
+        )
+
+    def delete(self):
+        raise ValidationError(
+            "Payment transactions cannot be deleted."
+        )
 
 class PaymentTransaction(models.Model):
     id = models.UUIDField(
@@ -145,11 +156,24 @@ class PaymentTransaction(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     updated_at = models.DateTimeField(auto_now=True)
+    objects = AppendOnlyQuerySet.as_manager()
 
     class Meta:
         db_table = '"payments"."payment_transactions"'
         verbose_name = "Payment Transaction"
         verbose_name_plural = "Payment Transactions"
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError(
+                "Payment transactions cannot be edited."
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Payment transactions cannot be deleted."
+        )
 
     def __str__(self):
         return f"{self.payment} - {self.transaction_type}"

@@ -4,8 +4,8 @@ adjust_inventory(): the one function behind every stock change.
     python manage.py test apps.inventory.test_adjust --settings=config.test_settings
 """
 from unittest import mock
-
-from django.db import transaction
+# from django.db import transaction
+from django.db import DatabaseError, connection, transaction
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
@@ -117,6 +117,38 @@ class AdjustInventoryTests(StockBase):
         with self.assertRaises(Exception):
             InventoryHistory.objects.all().delete()
         self.assertEqual(InventoryHistory.objects.get().note, "")
+
+    def test_database_trigger_blocks_history_updates_and_deletes(self):
+        _, variant = self.variant_with_stock(5)
+        self.adjust(variant, delta=1)
+
+        entry = InventoryHistory.objects.get()
+
+        # Direct SQL UPDATE must be rejected.
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'UPDATE "inventory"."inventory_history" '
+                        'SET note = %s WHERE id = %s',
+                        ["tampered", str(entry.pk)],
+                    )
+
+        # Direct SQL DELETE must also be rejected.
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'DELETE FROM "inventory"."inventory_history" '
+                        'WHERE id = %s',
+                        [str(entry.pk)],
+                    )
+
+        entry.refresh_from_db()
+        self.assertEqual(entry.note, "")
+        self.assertTrue(
+            InventoryHistory.objects.filter(pk=entry.pk).exists()
+        )
 
     def test_two_changes_at_the_same_moment_are_both_counted(self):
         """

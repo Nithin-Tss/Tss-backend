@@ -4,6 +4,12 @@ from django.test import TestCase
 from decimal import Decimal
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
+from django.core.exceptions import ValidationError
+from apps.payments.models import PaymentTransaction
+
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError as DRFValidationError
+from django.db import DatabaseError, connection, transaction
 
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.orders.models import Order
@@ -61,6 +67,92 @@ class PaidTotalTests(StoreClientMixin, APITestCase):
         )
 
         self.order = Order.objects.get(pk=order_data["id"])
+    def test_payment_transaction_instance_cannot_be_updated_or_deleted(self):
+        payment = record_payment(
+            store=self.store,
+            order=self.order,
+            amount=Decimal("50.00"),
+        )
+        transaction_record = payment.transactions.get(
+            transaction_type="capture"
+        )
+
+        transaction_record.amount = Decimal("1.00")
+
+        with self.assertRaises(ValidationError):
+            transaction_record.save()
+
+        transaction_record.refresh_from_db()
+        self.assertEqual(
+            transaction_record.amount,
+            Decimal("50.00"),
+        )
+
+        with self.assertRaises(ValidationError):
+            transaction_record.delete()
+
+        self.assertTrue(
+            PaymentTransaction.objects.filter(
+                pk=transaction_record.pk
+            ).exists()
+        )
+
+    def test_database_trigger_blocks_payment_transaction_updates_and_deletes(self):
+        payment = record_payment(
+            store=self.store,
+            order=self.order,
+            amount=Decimal("50.00"),
+        )
+        record = payment.transactions.get(transaction_type="capture")
+
+        # Direct SQL UPDATE should be rejected by PostgreSQL.
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'UPDATE "payments"."payment_transactions" '
+                        'SET reason = %s WHERE id = %s',
+                        ["tampered", str(record.pk)],
+                    )
+
+        # Direct SQL DELETE should also be rejected.
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'DELETE FROM "payments"."payment_transactions" '
+                        'WHERE id = %s',
+                        [str(record.pk)],
+                    )
+
+        self.assertTrue(
+            payment.transactions.filter(pk=record.pk).exists()
+        )
+    def test_payment_transaction_queryset_cannot_be_updated_or_deleted(self):
+        payment = record_payment(
+            store=self.store,
+            order=self.order,
+            amount=Decimal("50.00"),
+        )
+        transaction_record = payment.transactions.get(
+            transaction_type="capture"
+        )
+
+        with self.assertRaises(ValidationError):
+            PaymentTransaction.objects.filter(
+                pk=transaction_record.pk
+            ).update(amount=Decimal("1.00"))
+
+        with self.assertRaises(ValidationError):
+            PaymentTransaction.objects.filter(
+                pk=transaction_record.pk
+            ).delete()
+
+        self.assertTrue(
+            PaymentTransaction.objects.filter(
+                pk=transaction_record.pk
+            ).exists()
+        )
 
     def test_pending_payment_cannot_be_refunded(self):
         payment = record_pending_payment(
@@ -72,7 +164,7 @@ class PaidTotalTests(StoreClientMixin, APITestCase):
             customer=self.order.customer,
         )
 
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(DRFValidationError):
             refund(payment, Decimal("10.00"))
 
         payment.refresh_from_db()
