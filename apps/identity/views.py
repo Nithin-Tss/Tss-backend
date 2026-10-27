@@ -10,7 +10,7 @@ from apps.core.tokens import (
     REMEMBER_CLAIM, SessionStore, SESSION_CLAIM, end_token_session, issue_tokens, refresh_tokens,
 )
 from apps.tenancy.access import accept_invitations
-from apps.tenancy.services import stores_for_user
+from apps.tenancy.services import ACTIVE, stores_for_user
 
 from .email_links import send_password_reset_email, send_verification_email
 from .models import normalize_email
@@ -115,13 +115,15 @@ class SignupView(PublicAuthView):
             raw_str = str(raw_store_id).strip()
             try:
                 store_uuid = uuid.UUID(raw_str)
-                store = Store.objects.filter(pk=store_uuid).first()
+                store = Store.objects.filter(pk=store_uuid, status=ACTIVE).first()
                 if store:
                     target_stores.append(store)
             except (ValueError, TypeError):
+                # Only stores that are open to shoppers get a customer record
+                open_stores = Store.objects.filter(status=ACTIVE)
                 store = (
-                    Store.objects.filter(store_slug=raw_str).first()
-                    or Store.objects.filter(store_name=raw_str).first()
+                    open_stores.filter(store_slug=raw_str).first()
+                    or open_stores.filter(store_name=raw_str).first()
                 )
                 if store:
                     target_stores.append(store)
@@ -139,8 +141,8 @@ class SignupView(PublicAuthView):
                     email=email,
                     first_name=user.first_name or "",
                     last_name=user.last_name or "",
-                    email_subscription_status="subscribed",
-                    country="Australia",
+                    # Marketing email needs the shopper's own opt-in, never a sign-up side effect
+                    email_subscription_status="not_subscribed",
                 )
             else:
                 updated_fields = []
