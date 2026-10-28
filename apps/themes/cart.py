@@ -68,9 +68,8 @@ def _wishlist_row_key(cart_id):
     return f"wl{cart_id}"
 
 
-def get_wishlist(store, request, cart_id):
-    """The product ids this shopper saved in this store: the list kept under their cart id, else the session's."""
-    cart_id = clean_id(cart_id)
+def _session_wishlist(store, request, cart_id):
+    """The guest list: kept under the cart id when there is one, else in the browser session."""
     if cart_id:
         row = Session.objects.filter(session_key=_wishlist_row_key(cart_id), expire_date__gt=timezone.now()).first()
         if row is not None:
@@ -81,9 +80,109 @@ def get_wishlist(store, request, cart_id):
     return ids if isinstance(ids, list) else []
 
 
-def put_wishlist(store, request, cart_id, ids):
-    """Keep the shopper's list: under their cart id when they have one, otherwise in the session."""
+def _customer_key(store):
+    return f"customer:{store.pk}"
+
+
+def _wishlist_customer(store, request, cart_id):
+    """
+    The signed-in customer whose wishlist this is, else None (a guest).
+
+    A page load carries the customer's cookie; the heart's click does not (sandbox), so a page load binds the
+    customer to the shopper's cart id on the server and the click finds them by that id. A page load without
+    the cookie (signed out) unbinds it.
+    """
+    if request is None:
+        return None
+    from .views import get_storefront_customer  # views imports this module
+    customer, _ = get_storefront_customer(store, request)
+    if not cart_id:
+        return customer
+    key = _wishlist_row_key(cart_id)
+    row = Session.objects.filter(session_key=key).first()
+    data = SessionStore().decode(row.session_data) if row is not None else {}
+    bound = data.get(_customer_key(store))
+    if customer is not None:
+        if bound != str(customer.pk):
+            _save_wishlist_row(key, {**data, _customer_key(store): str(customer.pk)})
+        return customer
+    if request.method == "GET":
+        if bound:
+            data.pop(_customer_key(store), None)
+            _save_wishlist_row(key, data)
+        return None
+    if bound and row is not None and row.expire_date > timezone.now():
+        from apps.customers.models import Customer
+        return Customer.objects.filter(pk=bound, store=store).first()
+    return None
+
+
+def _save_wishlist_row(key, data):
+    Session.objects.update_or_create(session_key=key, defaults={
+        "session_data": SessionStore().encode(data),
+        "expire_date": timezone.now() + timedelta(seconds=CART_COOKIE_AGE),
+    })
+
+
+def _db_wishlist(store, customer):
+    """The wishlist table rows of this customer, as product ids (oldest first)."""
+    from apps.wishlist.models import WishlistItem
+    return [
+        str(pid) for pid in WishlistItem.objects.filter(
+            wishlist__store=store, wishlist__customer=customer, variant__isnull=True,
+        ).order_by("created_at").values_list("product_id", flat=True)
+    ]
+
+
+def _save_db_wishlist(store, customer, ids):
+    """Make the customer's wishlist rows match ids: add the new products, delete the removed ones."""
+    from apps.catalog.models import Product
+    from apps.wishlist.models import Wishlist, WishlistItem
+    wishlist = Wishlist.objects.filter(store=store, customer=customer).order_by("created_at").first()
+    if wishlist is None:
+        wishlist = Wishlist.objects.create(store=store, customer=customer, name="Wishlist")
+    items = WishlistItem.objects.filter(wishlist=wishlist, variant__isnull=True)
+    have = {str(pid) for pid in items.values_list("product_id", flat=True)}
+    want = list(dict.fromkeys(str(value) for value in ids))
+    gone = have - set(want)
+    if gone:
+        items.filter(product_id__in=gone).delete()
+    new = [pid for pid in want if pid not in have]
+    if new:
+        for product in Product.objects.filter(store=store, pk__in=new):
+            WishlistItem.objects.create(wishlist=wishlist, product=product)
+
+
+def get_wishlist(store, request, cart_id):
+    """
+    The product ids this shopper saved in this store. A signed-in customer's list is in the wishlist tables
+    (anything they saved as a guest is moved there); a guest's is under their cart id, else in the session.
+    """
     cart_id = clean_id(cart_id)
+    customer = _wishlist_customer(store, request, cart_id)
+    guest_ids = _session_wishlist(store, request, cart_id)
+    if customer is None:
+        return guest_ids
+    saved = _db_wishlist(store, customer)
+    extra = [value for value in guest_ids if value not in saved]
+    if guest_ids:
+        _save_db_wishlist(store, customer, saved + extra)
+        _put_session_wishlist(store, request, cart_id, [])
+        saved = _db_wishlist(store, customer)
+    return saved
+
+
+def put_wishlist(store, request, cart_id, ids):
+    """Keep the shopper's list: in the wishlist tables for a signed-in customer, else as a guest's."""
+    cart_id = clean_id(cart_id)
+    customer = _wishlist_customer(store, request, cart_id)
+    if customer is not None:
+        _save_db_wishlist(store, customer, ids)
+        return
+    _put_session_wishlist(store, request, cart_id, ids)
+
+
+def _put_session_wishlist(store, request, cart_id, ids):
     if not cart_id:
         if request is not None:
             request.session[f"wishlist:{store.pk}"] = list(ids)

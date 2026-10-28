@@ -3006,6 +3006,59 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertEqual(gone.json()["count"], 0)
         self.assertNotIn("Blue mug", APIClient().get(f"/s/{slug}/wishlist/?cart={cart}").content.decode())
 
+    def test_a_signed_in_customer_wishlist_is_saved_in_the_wishlist_tables(self):
+        """A heart clicked by a signed-in customer (from the sandbox: cart id only) becomes a wishlist_items row."""
+        import re
+
+        from django.contrib.auth import get_user_model
+        from django.http import HttpResponse
+        from rest_framework.test import APIClient
+
+        from apps.tenancy.models import Store
+        from apps.wishlist.models import Wishlist, WishlistItem
+
+        from .views import set_storefront_customer_cookie
+
+        slug = self.store["storeSlug"]
+        user, _ = get_user_model().objects.get_or_create(
+            email="wish-cust@example.com", defaults={"first_name": "Ada", "last_name": "Lovelace"})
+        dummy = HttpResponse()
+        set_storefront_customer_cookie(dummy, Store.objects.get(pk=self.store["storeId"]), user)
+        cookie = dummy.cookies[f"tss_cust_{slug}"].value
+
+        # the page load carries the customer's cookie and gives the page its cart id
+        shopper = APIClient()
+        shopper.cookies[f"tss_cust_{slug}"] = cookie
+        home = shopper.get(f"/s/{slug}/").content.decode()
+        cart = re.search(r'data-cart-session="([0-9a-f]{32})"', home).group(1)
+
+        # the click: no cookie, only the cart id
+        saved = APIClient().post(f"/s/{slug}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
+        self.assertEqual(saved.json()["count"], 1)
+        item = WishlistItem.objects.get(wishlist__store_id=self.store["storeId"])
+        self.assertEqual(str(item.product_id), self.product["id"])
+        self.assertEqual(item.wishlist.customer.email, "wish-cust@example.com")
+
+        # adding it twice keeps one row; the page shows it
+        APIClient().post(f"/s/{slug}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
+        self.assertEqual(WishlistItem.objects.count(), 1)
+        self.assertIn("Blue mug", shopper.get(f"/s/{slug}/wishlist/?cart={cart}").content.decode())
+
+        # removing deletes the row (the customer keeps their wishlist)
+        gone = APIClient().post(f"/s/{slug}/wishlist/items/", {
+            "action": "remove", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
+        self.assertEqual(gone.json()["count"], 0)
+        self.assertEqual(WishlistItem.objects.count(), 0)
+        self.assertEqual(Wishlist.objects.count(), 1)
+
+        # signed out (a page load without the cookie): the same cart id is a guest again, nothing reaches the tables
+        APIClient().get(f"/s/{slug}/?cart={cart}")
+        APIClient().post(f"/s/{slug}/wishlist/items/", {
+            "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
+        self.assertEqual(WishlistItem.objects.count(), 0)
+
     def test_a_sold_out_product_shows_sold_out_in_the_wishlist(self):
         slug = self.store["storeSlug"]
         location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)
