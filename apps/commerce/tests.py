@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
 
 from django.core.cache import cache
 from django.test import override_settings
@@ -320,7 +321,7 @@ class CartHardeningTests(CommerceTestBase):
         from django.core.management import call_command
         self._checkout()
         services.Checkout.objects.update(updated_at=timezone.now() - timedelta(hours=3))
-        call_command("sweep_carts")
+        call_command("sweep_carts", stdout=StringIO())
         self.assertTrue(services.Checkout.objects.get().abandoned_at)
 
 

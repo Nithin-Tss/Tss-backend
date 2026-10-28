@@ -224,6 +224,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 # `collectstatic` gathers admin/DRF assets here; WhiteNoise serves them in production.
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+# WhiteNoise warns on every middleware init when this directory is missing (fresh checkout, tests).
+STATIC_ROOT.mkdir(exist_ok=True)
 
 # Uploaded files (product photos). Served by Django only while DEBUG is on;
 # in production the web server or a storage bucket serves MEDIA_URL.

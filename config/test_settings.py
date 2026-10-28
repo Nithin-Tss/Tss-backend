@@ -27,6 +27,17 @@ import tempfile  # noqa: E402
 
 MEDIA_ROOT = tempfile.mkdtemp(prefix="tss-test-media-")
 
+# Tests exercise error paths on purpose (failed refunds, disputes, 503s); keep their log output off the console.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"null": {"class": "logging.NullHandler"}},
+    "loggers": {
+        "django.request": {"handlers": ["null"], "propagate": False},
+        "apps": {"handlers": ["null"], "propagate": False},
+    },
+}
+
 # Per-process cache, never the shared Redis from .env: parallel test workers
 # call cache.clear() in setUp, which would wipe each other's throttle counters.
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
