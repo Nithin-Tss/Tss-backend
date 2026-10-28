@@ -282,14 +282,18 @@ class InventoryResourceApiTests(StoreClientMixin, APITestCase):
 
     def test_history_breakdown_zero_stock_and_rejects_below_zero(self):
         row = self.ok("post", f"{ITEMS}set/", {
-            "variant": self.variant, "location": self.location, "available": 0,
+            "variant": self.variant, "location": self.location, "available": 2,
         })
-        self.assertEqual((row["available"], row["on_hand"]), (0, 0))
+        self.assertEqual((row["available"], row["on_hand"]), (2, 2))
         below_zero = self.client.post(f"{ITEMS}adjust/", {
-            "variant": self.variant, "location": self.location, "delta": -2,
+            "variant": self.variant, "location": self.location, "delta": -3,
         }, format="json")
         self.assertEqual(below_zero.status_code, 400)
         self.assertIn("available", str(below_zero.json()).lower())
+        zeroed = self.ok("post", f"{ITEMS}adjust/", {
+            "variant": self.variant, "location": self.location, "delta": -2,
+        })
+        self.assertEqual((zeroed["available"], zeroed["on_hand"]), (0, 0))
         current = self.ok("get", f"{ITEMS}{row['id']}/")
         self.assertEqual((current["available"], current["on_hand"]), (0, 0))
         history = self.ok("get", f"{ITEMS}history/?variant={self.variant}&limit=1")

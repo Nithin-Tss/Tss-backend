@@ -247,7 +247,7 @@ class CatalogResourceApiTests(StoreClientMixin, APITestCase):
         self.store_id = store["storeId"]
 
     def product(self, title="Shirt", sku="R-1"):
-        return self.ok("post", URL, {"title": title, "sku": sku, "price": "10"}, expect=201)
+        return self.ok("post", URL, {"title": title, "sku": sku, "price": "10", "vendor": "Acme"}, expect=201)
 
     def test_categories_create_update_list_and_reject_unknown_parent(self):
         parent = self.ok("post", "/api/v1/catalog/categories/", {"name": " Apparel "}, expect=201)
@@ -272,7 +272,7 @@ class CatalogResourceApiTests(StoreClientMixin, APITestCase):
         self.assertEqual(self.ok("get", f"/api/v1/catalog/collections/{created['id']}/")["products_count"], 1)
         self.assertEqual(self.ok("patch", f"/api/v1/catalog/collections/{created['id']}/", {"description": "Seasonal"})["description"], "Seasonal")
         preview = self.ok("post", "/api/v1/catalog/collections/preview/", {
-            "rules": [{"field": "title", "operator": "contains", "value": "Shirt"}],
+            "rules": [{"field": "vendor", "operator": "equals", "value": "Acme"}],
         })
         self.assertEqual(preview["count"], 1)
         self.assertEqual(preview["products"][0]["id"], item["id"])
