@@ -1806,6 +1806,14 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
         conflict = (f"The code editor changed the {_label(name)} at {_when(state['updated_at'])}. Your change here was saved on top; "
                     "the code editor's version is kept in its History.")
 
+    if name == "header":
+        was_search = any(b.get("type") == "search" for b in current["values"]["blocks"])
+        has_search = any(b.get("type") == "search" for b in values["blocks"])
+        if was_search != has_search:
+            patched = sync.add_search_block(file.content) if has_search else sync.remove_search_render_branch(file.content)
+            if patched is not None:
+                file.content = patched
+
     code = sync.write_values(file.content, values)
     version = state["version"]
     if code != file.content:

@@ -7,6 +7,7 @@ The header and the footer run the same checks through SyncedSectionMixin.
 import hashlib
 import copy
 import json
+import re
 import time
 import uuid
 
@@ -499,7 +500,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn(">New in</a>", preview)
 
         after = self.code()
-        self.assertEqual(sync.split(before)[0].rstrip("\n"), sync.split(after)[0].rstrip("\n"))  # markup untouched
+        self.assertEqual(sync.split(sync.remove_search_render_branch(before) or before)[0].rstrip("\n"),
+                         sync.split(after)[0].rstrip("\n"))  # only the Search branch was removed
         schema = self.schema_of(after)
         self.assertEqual(next(f for f in schema["settings"] if f["id"] == "logo_text")["default"], "Maison Lune")
         self.assertEqual(schema["default"]["blocks"][0]["settings"]["label"], "New in")
@@ -598,6 +600,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertEqual(block["settings"]["show_count"]["type"], "checkbox")
         self.assertNotIn("show_wishlist", header["spec"]["settings"])  # no more checkbox: it is a block now
         self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist", "cart", "search"])
+        self.assertEqual(header["spec"]["blocks"]["search"]["name"], "Search")
         styles = next(file["content"] for file in self.ok("get", "/api/v1/themes/files/")["files"]
                       if file["path"] == "snippets/styles.liquid")
         self.assertIn(".site-header__wishlist", styles)
@@ -718,6 +721,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertNotIn('class="site-header__search"', preview)
         self.assertNotIn('class="site-header__search"', self.home())
         self.assertNotIn("search", self.default_block_types())
+        self.assertIn("search", self.section()["spec"]["blocks"])
+        self.assertNotIn("data-header-search", self.code())
 
     def test_search_block_schema_field_saved_in_customizer_updates_code(self):
         header = self.section()
@@ -726,6 +731,43 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.save_values(header["values"], header["version"])
         default_search = next(item for item in self.schema_of(self.code())["default"]["blocks"] if item["type"] == "search")
         self.assertEqual(default_search["settings"]["placeholder"], "Find something")
+
+    def test_search_render_branch_removed_in_code_keeps_add_block_but_hides_icon(self):
+        header = self.section()
+        self.assertIn("search", header["spec"]["blocks"])
+        branchless = sync.remove_search_render_branch(self.code())
+        self.assertIsNotNone(branchless)
+        self.save_code(branchless)
+        current = self.section()
+        self.assertIn("search", current["spec"]["blocks"])
+        self.assertTrue(any(block["type"] == "search" for block in current["values"]["blocks"]))
+        self.assertNotIn("data-header-search", self.home())
+        self.assertNotIn('class="site-header__search"', self.home())
+
+    def test_customizer_add_restores_missing_search_render_branch_once(self):
+        values = self.section()["values"]
+        values["blocks"] = [block for block in values["blocks"] if block["type"] != "search"]
+        self.save_values(values)
+        self.assertNotIn("data-header-search", self.code())
+
+        values = self.section()["values"]
+        values["blocks"].append({"type": "search", "settings": {"label": "Find", "placeholder": "Find items"}})
+        _, preview = self.save_values(values)
+        self.assertIn("data-header-search", self.code())
+        self.assertEqual(preview.count('class="site-header__search"'), 1)
+        self.assertEqual(self.header_html(self.home()).count('class="site-header__search"'), 1)
+
+    def test_search_block_added_to_schema_in_code_appears_in_add_block(self):
+        content = self.code()
+        original = next(block for block in self.schema_of(content)["blocks"] if block["type"] == "search")
+        without_search = self.with_schema(content, lambda schema: schema.update(
+            blocks=[block for block in schema["blocks"] if block["type"] != "search"]))
+        self.save_code(without_search)
+        self.assertNotIn("search", self.section()["spec"]["blocks"])
+        with_search = self.with_schema(self.code(), lambda schema: schema["blocks"].append(original))
+        saved = self.save_code(with_search)
+        self.assertEqual(saved["sync"]["spec"]["blocks"]["search"]["name"], "Search")
+        self.assertIn("search", self.section()["spec"]["blocks"])
 
     def test_adding_hiding_reordering_and_removing_the_icon_in_the_customizer(self):
         header = self.section()
@@ -828,7 +870,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         values["blocks"] = [self.wishlist_block()]
         self.save_values(values)
         good = self.code()
-        bad = good.replace("{%- elsif block.type == 'wishlist' -%}", "{%- elsif block.type == 'wishlist' -%}{%- if -%}", 1)
+        bad = re.sub(r"({%-?\s*(?:if|elsif)\s+block\.type == 'wishlist'\s*-?%})",
+                     r"\1{%- if -%}", good, count=1)
         error = self.save_code(bad, expect=400)
         self.assertIn("Line", str(error["content"]))
         self.assertEqual(self.code(), good)  # the previous version keeps working
@@ -2747,12 +2790,13 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
         from . import rendering
 
         self.assertIn("getBoundingClientRect()", sync.SEARCH_BLOCK_BRANCH)
-        self.assertIn("desiredLeft = rect.right - width", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("desiredLeft = iconRect.right - width", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("left - rootRect.left", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("panel.style.right = '0'", sync.SEARCH_BLOCK_BRANCH)
         self.assertIn("window.innerWidth - width - 12", sync.SEARCH_BLOCK_BRANCH)
-        self.assertIn("panel.style.right = shift < 0", sync.SEARCH_BLOCK_BRANCH)
         self.assertIn("input.focus()", sync.SEARCH_BLOCK_BRANCH)
-        self.assertIn("position:relative", rendering.SECTION_CSS)
-        self.assertIn("position:absolute;top:100%;right:0", rendering.SECTION_CSS)
+        self.assertIn(".site-header__search-block{position:relative", rendering.SECTION_CSS)
+        self.assertIn(".site-header__search-panel{position:absolute;top:100%;right:0", rendering.SECTION_CSS)
         self.assertIn("width:min(92vw,360px)", rendering.SECTION_CSS)
         self.assertIn(".tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}", rendering.SECTION_CSS)
 

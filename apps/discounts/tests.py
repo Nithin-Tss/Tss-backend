@@ -50,7 +50,7 @@ class DiscountValidationApiTests(StoreClientMixin, APITestCase):
         self.assertEqual((d["value"], d["minimum_order_amount"], d["maximum_discount_amount"]), ("0.00", "0.00", "0.00"))
 
         d = self.ok("post", URL, self.payload(
-            discount_type="fixed_amount", value="150", minimum_order_amount="500",
+            name="Fixed amount", discount_type="fixed_amount", value="150", minimum_order_amount="500",
             maximum_discount_amount="100", usage_limit=1, per_customer_limit=1,
         ), expect=201)
         self.assertEqual((d["usage_limit"], d["per_customer_limit"]), (1, 1))
@@ -100,7 +100,7 @@ class DiscountConstraintTests(StoreClientMixin, APITestCase):
         self.assertEqual(Discount.objects.count(), 0)
 
     def test_null_zero_and_minimum_values_satisfy_constraints(self):
-        self.make()
+        self.make(name="Baseline")
         self.make(value=Decimal("0"), minimum_order_amount=Decimal("0"), maximum_discount_amount=Decimal("0"),
-                  usage_limit=1, per_customer_limit=1)
+                  usage_limit=1, per_customer_limit=1, name="Zero values")
         self.assertEqual(Discount.objects.count(), 2)

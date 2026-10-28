@@ -88,13 +88,18 @@
                   var panel = root.querySelector('.site-header__search-panel');
                   var input = root.querySelector('.site-header__search-input');
                   function positionPanel() {
-                    var rect = toggle.getBoundingClientRect();
-                    var width = panel.offsetWidth;
-                    var desiredLeft = rect.right - width;
+                    var rootRect = root.getBoundingClientRect();
+                    var iconRect = toggle.getBoundingClientRect();
+                    var width = panel.getBoundingClientRect().width || panel.offsetWidth;
+                    var desiredLeft = iconRect.right - width;
                     var left = Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12));
-                    var shift = left - desiredLeft;
-                    panel.style.left = shift > 0 ? (root.clientWidth - width + shift) + 'px' : 'auto';
-                    panel.style.right = shift < 0 ? (-shift) + 'px' : '0';
+                    if (left !== desiredLeft) {
+                      panel.style.left = (left - rootRect.left) + 'px';
+                      panel.style.right = 'auto';
+                    } else {
+                      panel.style.left = 'auto';
+                      panel.style.right = '0';
+                    }
                   }
                   function close(restoreFocus) {
                     panel.hidden = true;

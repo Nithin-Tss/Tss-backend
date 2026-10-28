@@ -437,15 +437,20 @@ SEARCH_BLOCK_BRANCH = """          {%- elsif block.type == 'search' -%}
                   var toggle = root.querySelector('.site-header__search');
                   var panel = root.querySelector('.site-header__search-panel');
                   var input = root.querySelector('.site-header__search-input');
-              function positionPanel() {
-                var rect = toggle.getBoundingClientRect();
-                var width = panel.offsetWidth;
-                var desiredLeft = rect.right - width;
-                var left = Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12));
-                var shift = left - desiredLeft;
-                panel.style.left = shift > 0 ? (root.clientWidth - width + shift) + 'px' : 'auto';
-                panel.style.right = shift < 0 ? (-shift) + 'px' : '0';
-              }
+                  function positionPanel() {
+                    var rootRect = root.getBoundingClientRect();
+                    var iconRect = toggle.getBoundingClientRect();
+                    var width = panel.getBoundingClientRect().width || panel.offsetWidth;
+                    var desiredLeft = iconRect.right - width;
+                    var left = Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12));
+                    if (left !== desiredLeft) {
+                      panel.style.left = (left - rootRect.left) + 'px';
+                      panel.style.right = 'auto';
+                    } else {
+                      panel.style.left = 'auto';
+                      panel.style.right = '0';
+                    }
+                  }
                   function close(restoreFocus) {
                     panel.hidden = true;
                     toggle.setAttribute('aria-expanded', 'false');
@@ -455,10 +460,10 @@ SEARCH_BLOCK_BRANCH = """          {%- elsif block.type == 'search' -%}
                     var opening = panel.hidden;
                     panel.hidden = !opening;
                     toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
-                  if (opening) window.requestAnimationFrame(function () { positionPanel(); input.focus(); });
+                    if (opening) window.requestAnimationFrame(function () { positionPanel(); input.focus(); });
                   });
-                window.addEventListener('resize', function () { if (!panel.hidden) positionPanel(); });
-                window.addEventListener('scroll', function () { if (!panel.hidden) positionPanel(); }, true);
+                  window.addEventListener('resize', function () { if (!panel.hidden) positionPanel(); });
+                  window.addEventListener('scroll', function () { if (!panel.hidden) positionPanel(); }, true);
                   document.addEventListener('click', function (event) {
                     if (!root.contains(event.target) && !panel.hidden) close(false);
                   });
@@ -470,6 +475,52 @@ SEARCH_BLOCK_BRANCH = """          {%- elsif block.type == 'search' -%}
                 })();
               </script>
             </div>"""
+
+
+def remove_search_render_branch(content):
+    """Remove only the Search branch from an existing section.blocks loop."""
+    markup, schema_text, _ = split(content)
+    if schema_text is None or "data-header-search" not in markup:
+        return None
+    loop_re = re.compile(r"{%-?\s*for\s+block\s+in\s+section\.blocks\s*-?%}")
+    tag_re = re.compile(r"{%-?\s*(if|elsif|else|endif)\b.*?-?%}", re.DOTALL)
+    branch_re = re.compile(r"{%-?\s*(if|elsif)\s+block\.type\s*==\s*['\"]search['\"]\s*-?%}")
+    for loop in loop_re.finditer(markup):
+        endfor = re.search(r"{%-?\s*endfor\s*-?%}", markup[loop.end():])
+        if not endfor:
+            continue
+        body = markup[loop.end():loop.end() + endfor.start()]
+        branch = branch_re.search(body)
+        if not branch or "data-header-search" not in body[branch.end():]:
+            continue
+        depth = 0
+        boundary = None
+        for tag in tag_re.finditer(body, branch.end()):
+            if tag.group(1) == "if":
+                depth += 1
+            elif tag.group(1) == "endif":
+                if depth:
+                    depth -= 1
+                else:
+                    boundary = tag
+                    break
+            elif depth == 0:
+                boundary = tag
+                break
+        if boundary is None:
+            return None
+        absolute_start = loop.end() + branch.start()
+        if branch.group(1) == "if":
+            if boundary.group(1) in ("elsif", "else"):
+                if boundary.group(1) != "elsif":
+                    return None
+                replacement = boundary.group(0).replace("elsif", "if", 1)
+                return content[:absolute_start] + replacement + content[loop.end() + boundary.end():]
+            absolute_end = loop.end() + boundary.end()
+        else:
+            absolute_end = loop.end() + boundary.start()
+        return content[:absolute_start] + content[absolute_end:]
+    return None
 
 
 def add_search_block(content):
@@ -1030,6 +1081,15 @@ def render_section(name, *, theme_id, content, values, env, env_key, context, ed
     started = time.perf_counter()
     spec = spec_of(name, parse_cached(theme_id, name, content))
     clean = clean_values(spec, values)
+    if name == "header":
+        blocks, seen_search = [], False
+        for block in clean["blocks"]:
+            if block["type"] == "search":
+                if seen_search:
+                    continue
+                seen_search = True
+            blocks.append(block)
+        clean["blocks"] = blocks
     config = SYNCED_SECTIONS[name]
 
     def resolved(fields, settings):
