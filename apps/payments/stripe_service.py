@@ -19,11 +19,16 @@ from rest_framework.exceptions import ValidationError
 
 from apps.commerce import services as commerce
 from apps.commerce.models import Checkout
+from apps.tenancy.models import Store
+
+from . import services as payments
+from .models import Payment, PaymentTransaction
 
 logger = logging.getLogger(__name__)
 
 PROVIDER = "stripe"
 SUCCEEDED = "succeeded"
+DISPUTE = "dispute"
 # Currencies Stripe counts in whole units, not 1/100ths
 ZERO_DECIMAL = {
     "BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
@@ -34,6 +39,11 @@ def client():
     if not settings.STRIPE_SECRET_KEY:
         raise ValidationError("Card payments are not configured on this server.")
     return stripe.StripeClient(settings.STRIPE_SECRET_KEY)
+
+
+def from_minor_units(amount, currency):
+    amount = Decimal(amount)
+    return amount if currency.upper() in ZERO_DECIMAL else amount / 100
 
 
 def to_minor_units(amount, currency):
@@ -171,7 +181,12 @@ def finalize(intent, account_id):
             return order
     except ValidationError as exc:
         logger.warning("Refunding Stripe payment %s, order not placed: %s", intent.id, exc.detail)
-        refund_intent(intent.id, account_id, reason="order_not_placed")
+        try:
+            refund_intent(intent.id, account_id, reason="order_not_placed")
+        except Exception:
+            # Raised on so Stripe retries the webhook (the refund key makes that safe), but say loudly that money is unplaced
+            logger.exception("REFUND FAILED for Stripe payment %s on account %s: no order and money not returned", intent.id, account_id)
+            raise
         return None
 
 
@@ -201,3 +216,67 @@ def refund_payment(payment, amount, already_refunded):
     except stripe.StripeError as exc:
         raise ValidationError({"payment": f"Stripe refused the refund: {exc.user_message or exc}"})
     return refund.id
+
+
+# -- Events that arrive on their own -----------------------------------------------------------
+
+def _stripe_payment(intent_id, account_id):
+    if not intent_id or not account_id:
+        return None
+    return Payment.objects.filter(
+        provider=PROVIDER, provider_payment_id=intent_id, store__stripe_account_id=account_id, is_deleted=False
+    ).first()
+
+
+def record_charge_refunds(charge, account_id):
+    """charge.refunded: a refund made outside the app (Stripe dashboard) is recorded here too."""
+    payment = _stripe_payment(charge.get("payment_intent"), account_id)
+    if payment is None:
+        # Includes the automatic "order_not_placed" refunds: those payments never became orders
+        return None
+    total = from_minor_units(charge.get("amount_refunded") or 0, charge.get("currency") or payment.currency)
+    return payments.record_external_refund(payment, total, reason="refunded_in_stripe")
+
+
+def record_dispute(dispute, account_id):
+    """charge.dispute.created / .closed: keep an audit row and the latest state on the payment."""
+    payment = _stripe_payment(dispute.get("payment_intent"), account_id)
+    if payment is None:
+        logger.error("Stripe dispute %s matches no payment on account %s", dispute.get("id"), account_id)
+        return None
+    status = dispute.get("status") or "unknown"
+    with transaction.atomic():
+        payment = Payment.objects.select_for_update().get(pk=payment.pk)
+        txn = payment.transactions.filter(
+            transaction_type=DISPUTE, provider_transaction_id=dispute["id"], status=status
+        )
+        if not txn.exists():
+            PaymentTransaction.objects.create(
+                payment=payment,
+                transaction_type=DISPUTE,
+                amount=from_minor_units(dispute.get("amount") or 0, dispute.get("currency") or payment.currency),
+                status=status,
+                provider_transaction_id=dispute["id"],
+                reason=dispute.get("reason"),
+            )
+        payment.metadata = {**(payment.metadata or {}), "dispute": {"id": dispute["id"], "status": status}}
+        payment.save(update_fields=["metadata", "updated_at"])
+    logger.warning("Stripe dispute %s on payment %s is now %s", dispute["id"], payment.pk, status)
+    return payment
+
+
+def disconnect(account_id):
+    """account.application.deauthorized: the store revoked us, so stop taking card payments for it."""
+    store = Store.objects.filter(stripe_account_id=account_id).first()
+    if store is None:
+        return None
+    store.stripe_account_id, store.stripe_charges_enabled, store.stripe_details_submitted = "", False, False
+    store.save(update_fields=["stripe_account_id", "stripe_charges_enabled", "stripe_details_submitted", "updated_at"])
+    logger.warning("Store %s disconnected Stripe account %s", store.pk, account_id)
+    return store
+
+
+def note_unpaid(intent, account_id):
+    """payment_intent.payment_failed / .canceled: no order exists yet, so there is nothing to undo."""
+    error = (intent.get("last_payment_error") or {}).get("message")
+    logger.info("Stripe payment %s on %s ended unpaid (%s): %s", intent.get("id"), account_id, intent.get("status"), error)

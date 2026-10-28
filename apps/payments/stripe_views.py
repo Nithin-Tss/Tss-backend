@@ -77,6 +77,14 @@ class StripeWebhookView(APIView):
         # An error here answers 5xx so Stripe retries; a payment we can't place is refunded inside finalize
         if event["type"] == "payment_intent.succeeded" and account_id:
             stripe_service.finalize(obj, account_id)
+        elif event["type"] == "charge.refunded" and account_id:
+            stripe_service.record_charge_refunds(obj, account_id)
+        elif event["type"] in ("charge.dispute.created", "charge.dispute.closed") and account_id:
+            stripe_service.record_dispute(obj, account_id)
+        elif event["type"] in ("payment_intent.payment_failed", "payment_intent.canceled"):
+            stripe_service.note_unpaid(obj, account_id)
+        elif event["type"] == "account.application.deauthorized" and account_id:
+            stripe_service.disconnect(account_id)
         elif event["type"] == "account.updated":
             store = Store.objects.filter(stripe_account_id=obj["id"]).first()
             if store:
