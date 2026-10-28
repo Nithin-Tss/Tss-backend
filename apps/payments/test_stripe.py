@@ -95,6 +95,25 @@ class StripeTests(base_tests.CommerceTestBase):
         self.assertEqual(services.paid_total(first), Decimal("998.00"))
         self.assertEqual(sellable(self.variant), 8)
 
+    def test_paid_order_sends_one_confirmation_email(self):
+        from django.core import mail
+
+        checkout = self.checkout()
+        with self.captureOnCommitCallbacks(execute=True):
+            stripe_service.finalize(intent(checkout), ACCOUNT)
+            stripe_service.finalize(intent(checkout), ACCOUNT)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["a@b.com"])
+        self.assertIn("Total:", mail.outbox[0].body)
+
+    def test_refunded_payment_sends_no_confirmation(self):
+        from django.core import mail
+
+        checkout = self.checkout()
+        with self.captureOnCommitCallbacks(execute=True):
+            stripe_service.finalize(intent(checkout, amount=1), ACCOUNT)
+        self.assertEqual(mail.outbox, [])
+
     def test_unpaid_intent_places_nothing(self):
         checkout = self.checkout()
         self.assertIsNone(stripe_service.finalize(intent(checkout, status="processing"), ACCOUNT))
@@ -184,6 +203,74 @@ class StripeTests(base_tests.CommerceTestBase):
         stripe_service.sync_account(self.store, account=account)
         self.store.refresh_from_db()
         self.assertTrue(self.store.stripe_charges_enabled)
+
+    def paid(self):
+        checkout = self.checkout()
+        stripe_service.finalize(intent(checkout), ACCOUNT)
+        return Payment.objects.get()
+
+    def send(self, type, obj, account=ACCOUNT):
+        with self.post_event({"type": type, "account": account, "data": {"object": obj}}):
+            return self.webhook()
+
+    def test_webhook_dashboard_refund_is_recorded_once(self):
+        payment = self.paid()
+        charge = {"payment_intent": "pi_1", "currency": "inr", "amount_refunded": 10000}
+        self.assertEqual(self.send("charge.refunded", charge).status_code, 200)
+        self.send("charge.refunded", charge)
+        refunds = payment.transactions.filter(transaction_type="refund")
+        self.assertEqual([r.amount for r in refunds], [Decimal("100.00")])
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, services.PARTIALLY_REFUNDED)
+        self.send("charge.refunded", {**charge, "amount_refunded": int(payment.amount * 100)})
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, services.REFUNDED)
+        self.assertEqual(services.refunded_total(payment), payment.amount)
+
+    def test_webhook_refund_made_in_the_app_is_not_counted_twice(self):
+        payment = self.paid()
+        self.client_mock.v1.refunds.create.return_value = SimpleNamespace(id="re_1")
+        services.refund(payment, Decimal("100.00"))
+        self.send("charge.refunded", {"payment_intent": "pi_1", "currency": "inr", "amount_refunded": 10000})
+        self.assertEqual(payment.transactions.filter(transaction_type="refund").count(), 1)
+
+    def test_webhook_refund_of_unknown_payment_is_ignored(self):
+        self.paid()
+        r = self.send("charge.refunded", {"payment_intent": "pi_other", "currency": "inr", "amount_refunded": 100})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(services.PaymentTransaction.objects.filter(transaction_type="refund").exists())
+
+    def test_webhook_dispute_is_recorded_and_updated(self):
+        payment = self.paid()
+        dispute = {"id": "dp_1", "payment_intent": "pi_1", "amount": 5000, "currency": "inr",
+                   "status": "needs_response", "reason": "fraudulent"}
+        self.send("charge.dispute.created", dispute)
+        self.send("charge.dispute.created", dispute)
+        self.send("charge.dispute.closed", {**dispute, "status": "lost"})
+        rows = payment.transactions.filter(transaction_type="dispute")
+        self.assertEqual(sorted(r.status for r in rows), ["lost", "needs_response"])
+        payment.refresh_from_db()
+        self.assertEqual(payment.metadata["dispute"], {"id": "dp_1", "status": "lost"})
+
+    def test_webhook_failed_and_canceled_payments_change_nothing(self):
+        for type in ("payment_intent.payment_failed", "payment_intent.canceled"):
+            r = self.send(type, {"id": "pi_1", "status": "requires_payment_method",
+                                 "last_payment_error": {"message": "declined"}})
+            self.assertEqual(r.status_code, 200)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_webhook_deauthorization_disconnects_the_store(self):
+        r = self.send("account.application.deauthorized", {"id": "ca_1"})
+        self.assertEqual(r.status_code, 200)
+        self.store.refresh_from_db()
+        self.assertEqual(self.store.stripe_account_id, "")
+        self.assertFalse(self.store.stripe_charges_enabled)
+
+    def test_failed_automatic_refund_surfaces_so_stripe_retries(self):
+        checkout = self.checkout()
+        self.client_mock.v1.refunds.create.side_effect = RuntimeError("stripe down")
+        with self.assertRaises(RuntimeError), self.assertLogs("apps.payments.stripe_service", "ERROR"):
+            stripe_service.finalize(intent(checkout, amount=1), ACCOUNT)
 
     def test_confirm_endpoint_asks_stripe_and_places_the_order(self):
         checkout = self.checkout()

@@ -123,6 +123,32 @@ def refund(payment, amount, reason=None):
     return payment
 
 
+@transaction.atomic
+def record_external_refund(payment, total_refunded, reason="refunded_at_provider"):
+    """
+    The provider says `total_refunded` of this payment has been refunded in all (e.g. from the
+    Stripe dashboard). Record whatever we don't know about yet; safe to repeat.
+    Returns the new refund amount, or None if there was nothing new.
+    """
+    payment = Payment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status not in (CAPTURED, PARTIALLY_REFUNDED, REFUNDED):
+        return None
+    already = refunded_total(payment)
+    new = min(Decimal(total_refunded), payment.amount) - already
+    if new <= 0:
+        return None
+    PaymentTransaction.objects.create(
+        payment=payment,
+        transaction_type=REFUND,
+        amount=new,
+        status=SUCCESS,
+        reason=reason,
+    )
+    payment.status = REFUNDED if already + new >= payment.amount else PARTIALLY_REFUNDED
+    payment.save(update_fields=["status", "updated_at"])
+    return new
+
+
 def cancel_pending(order):
     """The order is cancelled: promised-but-unreceived payments (e.g. cash on delivery) are void."""
     Payment.objects.filter(order=order, is_deleted=False, status=PENDING).update(
