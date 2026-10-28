@@ -112,7 +112,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .cards--bordered .product-card{border:1px solid var(--line,rgba(0,0,0,.12))}
 .product-card__rating{font-size:13px;color:#B7791F}.product-card__rating span{color:var(--muted)}
 .product-card__media{position:relative}
-.product-card__badge{position:absolute;top:10px;left:10px;z-index:1;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#141b2d;color:#fff}
+.product-card__badges{position:absolute;top:10px;left:10px;z-index:1;display:flex;flex-direction:column;align-items:flex-start;gap:6px}.product-card__badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#141b2d;color:#fff}.product-card__badge--new{background:var(--accent)}
 .product-card--sold-out .product-card__media img,.product-card--sold-out .product-card__media .placeholder{opacity:.6}
 .product__stock{font-size:14px;font-weight:600;margin:-12px 0 16px}
 .product__stock--few{color:#B45309}.product__stock--out{color:var(--muted)}
@@ -669,7 +669,8 @@ def layout_data(settings, base_url, nav, menu_links=None):
         for key, name in SOCIAL_NAMES.items()
         if settings.get(f"footer_{key}")
     ]
-    return {"header_links": header, "footer_links": footer, "footer_social": social}
+    utility = _menu_links(settings.get("utility_menu"), base_url)
+    return {"header_links": header, "footer_links": footer, "footer_social": social, "utility_links": utility}
 
 
 def _environment(files, base_url, currency, overrides=None):
@@ -762,6 +763,8 @@ def parse_collection_filters(params):
         "max_price": _number(params.get("max_price", "")),
         "vendor": [v for v in many("vendor") if v],
         "tag": [t for t in many("tag") if t],
+        # ?q= : the words typed in the header's search box
+        "q": " ".join(str(params.get("q") or "").split())[:100],
     }
 
 
@@ -808,6 +811,12 @@ def _matches_filters(product, f, skip=None):
     if skip != "tag" and f["tag"] and not set(f["tag"]) & set(product["tags"]):
         return False
 
+    # 7. Search: every word must be in the title, vendor, type or a tag
+    if f.get("q"):
+        haystack = " ".join([product["title"], product["vendor"], product["product_type"], *product["tags"]]).lower()
+        if not all(word in haystack for word in f["q"].lower().split()):
+            return False
+
     return True
 
 
@@ -825,11 +834,35 @@ def _filter_query(f, sort):
     if f["max_price"] is not None:
         pairs.append(("max_price", f["max_price"]))
     pairs += [("vendor", v) for v in f["vendor"]] + [("tag", t) for t in f["tag"]]
+    if f.get("q"):
+        pairs.append(("q", f["q"]))
     return urlencode(pairs)
 
 
 # "Only a few left" at this quantity or lower
 FEW_LEFT = 5
+NEW_PRODUCT_DAYS = 14
+MAX_BADGES = 2
+
+
+def product_badges(tags, sold_out, few_left, is_new):
+    """
+    The labels a product card shows over its image, most important first: "Sold out", "Few left",
+    the merchant's own (a tag written "badge:Best seller" shows "Best seller") and "New" for
+    products added in the last NEW_PRODUCT_DAYS days.
+    """
+    badges = []
+    if sold_out:
+        badges.append("Sold out")
+    elif few_left:
+        badges.append("Few left")
+    for tag in tags:
+        label = tag[6:].strip() if tag.lower().startswith("badge:") else ""
+        if label and label not in badges:
+            badges.append(label[:24])
+    if is_new and "New" not in badges:
+        badges.append("New")
+    return badges[:MAX_BADGES]
 
 
 def _available(variant):
@@ -847,6 +880,11 @@ def product_drop(product, base_url):
     selling_on = any(v.continue_selling for v in variants)
     sold_out = available_total <= 0 and not selling_on
 
+    tags = [pt.tag.name for pt in product.product_tags.all()]
+    few_left = 0 < available_total <= FEW_LEFT
+    created = getattr(product, "created_at", None)
+    is_new = bool(created) and (timezone.now() - created).days < NEW_PRODUCT_DAYS
+
     category_id = str(product.category_id) if getattr(product, "category_id", None) else ""
     category_name = product.category.name if getattr(product, "category", None) else ""
 
@@ -862,13 +900,15 @@ def product_drop(product, base_url):
         "price_varies": len(set(prices)) > 1,
         "images": images,
         "featured_image": images[0] if images else None,
-        "tags": [pt.tag.name for pt in product.product_tags.all()],
+        "tags": tags,
+        "badges": product_badges(tags, sold_out, few_left, is_new),
+        "is_new": is_new,
         "category_id": category_id,
         "category_name": category_name,
         # Stock for the templates: a number and a true/false. Quantity 0 (or no stock record) is sold out.
         "available_total": available_total,
         "is_sold_out": sold_out,
-        "few_left": 0 < available_total <= FEW_LEFT,
+        "few_left": few_left,
         "sold_out": sold_out,  # older name, kept for theme copies that still use it
         "rating": round(float(product.avg_rating), 1) if getattr(product, "avg_rating", None) else None,
         "review_count": getattr(product, "review_count", 0) or 0,
@@ -1995,7 +2035,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
             or filters["category"]
             or filters["min_rating"] is not None
             or filters["min_price"] is not None or filters["max_price"] is not None
-            or filters["vendor"] or filters["tag"]
+            or filters["vendor"] or filters["tag"] or filters["q"]
         )
 
         collection_drop = {
@@ -2027,6 +2067,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 "vendors": [{"name": n, "count": c, "selected": n in filters["vendor"]} for n, c in sorted(vendors.items())],
                 "tags": [{"name": n, "count": c, "selected": n in filters["tag"]} for n, c in sorted(tags.items())],
                 "query": filter_query,
+                "q": filters["q"],
             },
             "sort": sort,
             "page": page_number,

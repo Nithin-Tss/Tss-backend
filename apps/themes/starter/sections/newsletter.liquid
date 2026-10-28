@@ -1,0 +1,71 @@
+{%- comment -%}
+  Newsletter sign-up. The form posts the email address to the store, which adds it to the
+  customers who accept marketing emails (Customers in the admin).
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section newsletter newsletter--{{ s.layout }} align-{{ s.text_alignment }}{% if s.image_url != blank %} newsletter--image{% endif %}">
+  <div class="page-width newsletter__inner">
+    {%- if s.image_url != blank -%}
+      <div class="newsletter__image"><img src="{{ s.image_url }}" alt="{{ s.image_alt }}" loading="lazy"></div>
+    {%- endif -%}
+    <div class="newsletter__content">
+      {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
+      {%- if s.subheading != blank -%}<p class="newsletter__sub">{{ s.subheading }}</p>{%- endif -%}
+      <form class="newsletter__form" data-newsletter-form data-success="{{ s.success_message | escape }}" action="{{ shop.url }}/newsletter" method="post" novalidate>
+        <label class="newsletter__label" for="newsletter-{{ section.id }}">Email address</label>
+        <input id="newsletter-{{ section.id }}" class="newsletter__input" type="email" name="email" required autocomplete="email" placeholder="{{ s.placeholder | escape }}">
+        <button class="button newsletter__button" type="submit">{{ s.button_label }}</button>
+      </form>
+      <p class="newsletter__message" role="status" data-newsletter-message hidden></p>
+      {%- if s.consent_text != blank -%}<p class="newsletter__consent">{{ s.consent_text }}</p>{%- endif -%}
+    </div>
+  </div>
+</section>
+<style>
+  .newsletter__inner { display: grid; gap: 28px; align-items: center; }
+  .newsletter--image .newsletter__inner { grid-template-columns: 1fr 1fr; }
+  .newsletter__image img { width: 100%; height: 100%; max-height: 420px; object-fit: cover; display: block; border-radius: 12px; }
+  .newsletter__sub { margin: 8px 0 20px; color: var(--muted); }
+  .newsletter__form { display: flex; gap: 10px; flex-wrap: wrap; }
+  .newsletter.align-center .newsletter__form { justify-content: center; }
+  .newsletter.align-right .newsletter__form { justify-content: flex-end; }
+  .newsletter--stacked .newsletter__form { flex-direction: column; align-items: stretch; }
+  .newsletter__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .newsletter__input { flex: 1 1 220px; min-width: 0; min-height: 46px; padding: 0 18px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; }
+  .newsletter__input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .newsletter__message { margin: 12px 0 0; font-weight: 600; }
+  .newsletter__message--error { color: #b42318; }
+  .newsletter__consent { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+  @media (max-width: 720px) { .newsletter--image .newsletter__inner { grid-template-columns: 1fr; } }
+</style>
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var form = root.querySelector("[data-newsletter-form]");
+    var message = root.querySelector("[data-newsletter-message]");
+    var button = form.querySelector("button");
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var email = form.elements.email.value.trim();
+      function show(text, isError) {
+        message.hidden = false;
+        message.textContent = text;
+        message.className = "newsletter__message" + (isError ? " newsletter__message--error" : "");
+      }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { show("Enter a valid email address.", true); return; }
+      button.disabled = true;
+      fetch(form.getAttribute("action"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email })
+      }).then(function (response) {
+        return response.json().then(function (data) { return { ok: response.ok, data: data }; });
+      }).then(function (result) {
+        if (result.ok) { form.hidden = true; show(form.getAttribute("data-success"), false); }
+        else show(result.data.error || "Something went wrong. Try again.", true);
+      }).catch(function () {
+        show("Something went wrong. Try again.", true);
+      }).then(function () { button.disabled = false; });
+    });
+  })();
+</script>

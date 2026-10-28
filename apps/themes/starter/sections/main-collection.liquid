@@ -13,7 +13,11 @@
         <img src="{{ collection.image }}" alt="{{ collection.name }}">
       </div>
     {%- endif -%}
-    <h1 class="section-heading collection-heading">{{ collection.name }}</h1>
+    {%- if collection.filters.q != blank -%}
+      <h1 class="section-heading collection-heading">Search results for &ldquo;{{ collection.filters.q }}&rdquo;</h1>
+    {%- else -%}
+      <h1 class="section-heading collection-heading">{{ collection.name }}</h1>
+    {%- endif -%}
     {%- if s.show_description and collection.description != blank -%}
       <div class="collection-description">{{ collection.description }}</div>
     {%- endif -%}
@@ -29,6 +33,18 @@
       @media (max-width: 749px) { .collection-hero { aspect-ratio: 2 / 1; } }
     </style>
 
+    {%- comment -%} Search: the header's magnifier opens this page; ?q= lists the products that match {%- endcomment -%}
+    {%- if s.show_search != false and collection.total_count > 0 -%}
+      <form class="collection-search" action="{{ collection.url }}" method="get" role="search">
+        <input type="search" name="q" value="{{ collection.filters.q | escape }}" placeholder="Search products" aria-label="Search products" autocomplete="off">
+        <button class="button" type="submit">Search</button>
+      </form>
+      <style>
+        .collection-search { display: flex; gap: 8px; max-width: 520px; margin: 0 auto 24px; }
+        .collection-search input { flex: 1; min-width: 0; min-height: 46px; padding: 0 18px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; }
+      </style>
+    {%- endif -%}
+
     {%- if collection.total_count == 0 -%}
       <div class="empty-state">{{ s.empty_text | default: 'No products yet.' }}</div>
     {%- else -%}
@@ -39,6 +55,7 @@
       {%- if s.show_filters != false and collection.total_count > 0 -%}{%- assign can_filter = true -%}{%- endif -%}
 
       <form action="{{ collection.url }}" method="get" class="collection-filters">
+        {%- if f.q != blank -%}<input type="hidden" name="q" value="{{ f.q | escape }}">{%- endif -%}
         <div class="collection-toolbar-row">
           {%- if can_filter -%}
             <div class="collection-filters__bar">
@@ -115,7 +132,7 @@
               {%- endif -%}
 
               {%- if f.active -%}
-                <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}">Clear all</a>
+                <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}{% if f.q != blank %}&amp;q={{ f.q | escape }}{% endif %}">Clear all</a>
               {%- endif -%}
             </div>
           {%- endif -%}

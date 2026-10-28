@@ -1118,6 +1118,7 @@ SECTIONS["main-collection"]["settings"] = {
         "content", "checkbox", "Show filters", True,
         help="Availability, price, vendor and tag filters built from the collection's products.",
     ),
+    "show_search": _opt("content", "checkbox", "Show the search box", True, help="Shoppers reach it from the header's magnifier."),
     "empty_text": _opt("content", "text", "Text when there are no products", "No products yet.", max=200),
     "columns": _opt("layout", "range", "Products per row (desktop)", 4, min=2, max=6),
     "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
@@ -1153,6 +1154,16 @@ SECTIONS["main-product"]["settings"] = {
     "show_description": _opt("content", "checkbox", "Show description", True),
     "add_to_cart_label": _opt("content", "text", "Add to cart button text", "Add to cart", max=40),
     "sold_out_label": _opt("content", "text", "Sold out button text", "Sold out", max=40),
+    "variant_style": _choice(
+        "content", "Options shown as", ["buttons", "dropdown"], "buttons", ui="segmented",
+        labels={"buttons": "Tier cards", "dropdown": "Dropdown"},
+        help="Tier cards show every option with its price, for products sold in sizes or tiers.",
+    ),
+    "show_badges": _opt("content", "checkbox", "Show badges on the image", True, help="Sold out, Few left, New and your own \"badge:\" tags."),
+    "image_zoom": _choice(
+        "layout", "Image zoom", ["hover", "lightbox", "none"], "hover",
+        labels={"hover": "Magnify on hover", "lightbox": "Open full size on click", "none": "Off"},
+    ),
     "show_thumbnails": _opt("layout", "checkbox", "Show image thumbnails", True),
     "media_position": _choice("layout", "Image position", ["left", "right"], "left", ui="segmented"),
     "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
@@ -1192,6 +1203,87 @@ def _post_card_settings():
         "card_style": _choice("style", "Card style", ["plain", "bordered", "shadow"], "plain", ui="segmented"),
     }
 
+
+# ---------------------------------------------------------------------------
+# Newsletter sign-up, "Responsibly drink" style notice box and product quiz.
+# Their markup is in starter/sections/<type>.liquid.
+# ---------------------------------------------------------------------------
+
+CONTENT_PAGES = ("index", "product", "collection", "blog", "article", "page")
+
+SECTIONS["newsletter"] = {
+    "name": "Newsletter",
+    "pages": CONTENT_PAGES,
+    "settings": {
+        "heading": _opt("content", "text", "Heading", "Join our newsletter", max=120),
+        "subheading": _opt("content", "textarea", "Sub-text", "New products and offers, straight to your inbox.", max=300),
+        "placeholder": _opt("content", "text", "Email placeholder", "Your email address", max=60),
+        "button_label": _opt("content", "text", "Button text", "Subscribe", max=40),
+        "success_message": _opt("content", "text", "Message after signing up", "Thanks for subscribing!", max=200),
+        "consent_text": _opt("content", "text", "Small print", "", max=200, help="Optional. Shown under the form."),
+        "image_url": _opt("content", "image", "Image", "", help="Optional. Shown beside the form."),
+        "image_alt": dict(_opt("content", "text", "Image description", "", max=200), show_if={"image_url": "*"}),
+        "layout": _choice("layout", "Form layout", ["inline", "stacked"], "inline", ui="segmented"),
+        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
+        **common_settings(width="narrow"),
+    },
+}
+
+SECTIONS["static-text"] = {
+    "name": "Notice box",
+    "pages": CONTENT_PAGES,
+    "settings": {
+        "heading": _opt("content", "text", "Heading", "Please drink responsibly", max=120),
+        "text": _opt(
+            "content", "richtext", "Text", "<p>Alcohol is for adults of legal drinking age only. Enjoy responsibly.</p>",
+            max=5000,
+        ),
+        "icon": _choice(
+            "content", "Icon", ["none", "alert", "info", "shield", "check"], "alert",
+            labels={"alert": "Warning", "info": "Information", "shield": "Shield", "check": "Tick"},
+        ),
+        "box_style": _choice("style", "Box style", ["bordered", "filled", "plain"], "bordered", ui="segmented"),
+        "border_color": _opt("style", "color_optional", "Border colour", ""),
+        "text_size": _choice("style", "Text size", ["small", "medium", "large"], "small", ui="segmented"),
+        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
+        **common_settings(width="narrow", spacing_top=24, spacing_bottom=24),
+    },
+}
+
+_QUIZ_OPTIONS = {}
+for _n in range(1, 5):
+    _QUIZ_OPTIONS[f"option_{_n}"] = _opt("content", "text", f"Answer {_n}", "", max=80, help="Leave empty to hide this answer." if _n > 2 else "")
+    _QUIZ_OPTIONS[f"tag_{_n}"] = _opt(
+        "content", "text", f"Answer {_n} product tag", "", max=60,
+        help="Products with this tag are suggested when shoppers pick this answer.",
+    )
+
+SECTIONS["quiz"] = {
+    "name": "Product quiz",
+    "pages": CONTENT_PAGES,
+    "settings": {
+        "heading": _opt("content", "text", "Heading", "Find your perfect match", max=120),
+        "subheading": _opt("content", "textarea", "Sub-text", "Answer a few questions and we'll suggest products.", max=300),
+        "start_label": _opt("content", "text", "Start button text", "Take the quiz", max=40),
+        "result_heading": _opt("content", "text", "Result heading", "Here's what we recommend", max=120),
+        "result_text": _opt("content", "textarea", "Result text", "Based on your answers, these should suit you.", max=300),
+        "result_button_label": _opt("content", "text", "Result button text", "See my picks", max=40),
+        "result_link": _opt(
+            "content", "url", "Result page", "/collections/all",
+            help="Shoppers go here, filtered by the tags of the answers they chose.",
+        ),
+        "restart_label": _opt("content", "text", "Restart text", "Start over", max=40),
+        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
+        **common_settings(width="narrow"),
+    },
+    "blocks": {
+        "question": {
+            "name": "Question",
+            "settings": {"question": _opt("content", "text", "Question", "What are you looking for?", max=200), **_QUIZ_OPTIONS},
+        },
+    },
+    "type_limits": {"question": 10},
+}
 
 SECTIONS["main-blog"] = {
     "name": "Blog posts",
@@ -1856,6 +1948,16 @@ THEME_SETTINGS.update({
     "announcement_link": _theme_opt("announcement", "url", "Link (optional)", "", help="Makes the whole bar a link."),
     "announcement_bg": _theme_opt("announcement", "color_optional", "Bar colour", "", help="None uses the accent colour."),
     "announcement_text": _theme_opt("announcement", "color_optional", "Text colour", ""),
+    "utility_show": _theme_opt("utility", "checkbox", "Show the utility bar", False, help="A thin bar above the header for contact details and quick links."),
+    "utility_left": _theme_opt("utility", "text", "Left text", "", max=120, help="For example: Free delivery over ₹999."),
+    "utility_phone": _theme_opt("utility", "text", "Phone number", "", max=30),
+    "utility_email": _theme_opt("utility", "text", "Email address", "", max=120),
+    "utility_menu": _theme_opt(
+        "utility", "menu", "Links", "",
+        help="One link per line: Label | /page. Shown on the right, e.g. Track order | /account.",
+    ),
+    "utility_bg": _theme_opt("utility", "color_optional", "Bar colour", "", help="None uses the soft background colour."),
+    "utility_text": _theme_opt("utility", "color_optional", "Text colour", ""),
     "header_layout": _theme_opt(
         "header", "select", "Logo position", "left", options=["left", "center"], ui="segmented",
         labels={"left": "Left", "center": "Centred"},
@@ -1911,6 +2013,7 @@ THEME_GROUPS = [
     {"id": "colors", "label": "Colours"},
     {"id": "typography", "label": "Typography"},
     {"id": "buttons", "label": "Buttons"},
+    {"id": "utility", "label": "Utility bar"},
     {"id": "announcement", "label": "Announcement bar"},
     {"id": "header", "label": "Header and navigation"},
     {"id": "footer", "label": "Footer"},

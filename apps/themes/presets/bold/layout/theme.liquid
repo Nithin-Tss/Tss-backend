@@ -9,6 +9,9 @@
   {% render 'theme-styles' %}
 </head>
 <body class="template-{{ template }} theme-bold">
+  {%- comment -%} Utility bar: Theme settings > Utility bar {%- endcomment -%}
+  {% render 'utility-bar', settings: settings, utility_links: utility_links %}
+
   {%- comment -%} Announcement bar: Theme settings > Announcement bar {%- endcomment -%}
   {% if settings.announcement != blank and settings.announcement_show != false %}
     {%- capture announcement_style -%}

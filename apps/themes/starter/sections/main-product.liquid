@@ -13,7 +13,14 @@
 <section id="section-{{ section.id }}" class="section">
   <div class="page-width product{% if s.media_position == 'right' %} product--media-right{% endif %}">
     <div class="product__media">
-      <div class="product__main-image ratio-{{ s.image_ratio }}" style="--img-fit: {{ s.image_fit }}">
+      <div class="product__main-image ratio-{{ s.image_ratio }}{% if s.image_zoom != 'none' and product.featured_image %} product__main-image--zoom-{{ s.image_zoom }}{% endif %}" style="--img-fit: {{ s.image_fit }}" data-zoom="{{ s.image_zoom }}">
+        {%- if s.show_badges and product.badges.size > 0 -%}
+          <span class="product-card__badges">
+            {%- for badge in product.badges -%}
+              <span class="product-card__badge{% if badge == 'New' %} product-card__badge--new{% endif %}">{{ badge }}</span>
+            {%- endfor -%}
+          </span>
+        {%- endif -%}
         {%- if product.featured_image -%}
           <img src="{{ product.featured_image }}" alt="{{ product.title }}" data-main-image>
         {%- else -%}
@@ -58,7 +65,23 @@
       <form class="product__form" data-product-form data-cart-add data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}">
         <input type="hidden" name="product" value="{{ product.id }}">
         {%- if product.variants.size > 1 -%}
-          <label class="field">
+          {%- comment -%} "Tier cards": one card per option with its price. They drive the select below, which stays in the form {%- endcomment -%}
+          {%- if s.variant_style == 'buttons' -%}
+            <div class="field" role="radiogroup" aria-label="Option">
+              <span>Option</span>
+              <div class="product__tiers" data-tiers>
+                {%- for variant in product.variants -%}
+                  <button class="product__tier" type="button" role="radio" data-variant-id="{{ variant.id }}"
+                    aria-checked="{% if variant.id == shown_variant.id %}true{% else %}false{% endif %}"{% if variant.is_sold_out %} data-sold-out="true"{% endif %}>
+                    <span class="product__tier-name">{{ variant.sku | default: 'Option' }}{% if variant.sku == blank %} {{ forloop.index }}{% endif %}</span>
+                    {%- if variant.price != nil -%}<span class="product__tier-price">{{ variant.price | money }}</span>{%- endif -%}
+                    {%- if variant.is_sold_out -%}<span class="product__tier-note">{{ s.sold_out_label | default: 'Sold out' }}</span>{%- endif -%}
+                  </button>
+                {%- endfor -%}
+              </div>
+            </div>
+          {%- endif -%}
+          <label class="field"{% if s.variant_style == 'buttons' %} hidden{% endif %}>
             <span>Option</span>
             <select name="variant" data-variant>
               {%- for variant in product.variants -%}
@@ -99,10 +122,55 @@
     </div>
   </div>
 </section>
+<style>
+  #section-{{ section.id }} .product__main-image { position: relative; overflow: hidden; }
+  #section-{{ section.id }} .product__main-image--zoom-hover img { transition: transform .15s ease-out; }
+  #section-{{ section.id }} .product__main-image--zoom-hover.is-zooming { cursor: zoom-in; }
+  #section-{{ section.id }} .product__main-image--zoom-hover.is-zooming img { transform: scale(2); }
+  #section-{{ section.id }} .product__main-image--zoom-lightbox { cursor: zoom-in; }
+  #section-{{ section.id }} .product__tiers { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin-top: 6px; }
+  #section-{{ section.id }} .product__tier { display: grid; gap: 2px; justify-items: start; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  #section-{{ section.id }} .product__tier[aria-checked="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #section-{{ section.id }} .product__tier[data-sold-out="true"] { opacity: .55; }
+  #section-{{ section.id }} .product__tier-name { font-weight: 600; }
+  #section-{{ section.id }} .product__tier-note { font-size: 12px; color: var(--muted); }
+  .product-zoom { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgba(0, 0, 0, .85); cursor: zoom-out; }
+  .product-zoom img { max-width: 100%; max-height: 100%; object-fit: contain; }
+</style>
 <script>
   (function () {
     var root = document.getElementById("section-{{ section.id }}");
     var main = root.querySelector("[data-main-image]");
+
+    // Image zoom: "hover" magnifies under the pointer (mouse only), "lightbox" opens the picture full size
+    var frame = root.querySelector(".product__main-image");
+    if (main && frame) {
+      var zoom = frame.getAttribute("data-zoom");
+      if (zoom === "hover") {
+        frame.addEventListener("mouseenter", function (event) { if (event.pointerType !== "touch") frame.classList.add("is-zooming"); });
+        frame.addEventListener("mouseleave", function () { frame.classList.remove("is-zooming"); main.style.transformOrigin = ""; });
+        frame.addEventListener("mousemove", function (event) {
+          var box = frame.getBoundingClientRect();
+          main.style.transformOrigin = ((event.clientX - box.left) / box.width * 100) + "% " + ((event.clientY - box.top) / box.height * 100) + "%";
+        });
+      } else if (zoom === "lightbox") {
+        frame.addEventListener("click", function () {
+          var overlay = document.createElement("div");
+          overlay.className = "product-zoom";
+          overlay.setAttribute("role", "dialog");
+          overlay.setAttribute("aria-label", "Enlarged image");
+          var big = document.createElement("img");
+          big.src = main.src;
+          big.alt = main.alt;
+          overlay.appendChild(big);
+          function close() { overlay.remove(); document.removeEventListener("keydown", onKey); }
+          function onKey(event) { if (event.key === "Escape") close(); }
+          overlay.addEventListener("click", close);
+          document.addEventListener("keydown", onKey);
+          document.body.appendChild(overlay);
+        });
+      }
+    }
 
     root.querySelectorAll(".product__thumb").forEach(function (thumb) {
       thumb.addEventListener("click", function () {
@@ -150,7 +218,18 @@
 
     var select = root.querySelector("[data-variant]");
     if (select) {
-      select.addEventListener("change", function () { showOption(select.selectedOptions[0]); });
+      select.addEventListener("change", function () {
+        showOption(select.selectedOptions[0]);
+        root.querySelectorAll(".product__tier").forEach(function (tier) {
+          tier.setAttribute("aria-checked", tier.getAttribute("data-variant-id") === select.value ? "true" : "false");
+        });
+      });
+      root.querySelectorAll(".product__tier").forEach(function (tier) {
+        tier.addEventListener("click", function () {
+          select.value = tier.getAttribute("data-variant-id");
+          select.dispatchEvent(new Event("change"));
+        });
+      });
     }
 
     // Add to cart: the form is handled by snippets/cart.liquid
