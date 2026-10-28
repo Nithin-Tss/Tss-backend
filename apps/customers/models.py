@@ -60,6 +60,7 @@ class Customer(models.Model):
         blank=True,
     )
 
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

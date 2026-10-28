@@ -35,6 +35,14 @@ ZERO_DECIMAL = {
 }
 
 
+def plain(obj):
+    """
+    Events and intents from the real Stripe library are Stripe objects, not dicts: they have no
+    .get(). Handlers that read them dict-style go through this first (a plain dict passes through).
+    """
+    return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
+
+
 def client():
     if not settings.STRIPE_SECRET_KEY:
         raise ValidationError("Card payments are not configured on this server.")
@@ -107,6 +115,9 @@ def payment_session(checkout):
     if checkout.total_amount <= 0:
         raise ValidationError("There is nothing to pay for.")
 
+    for item in checkout.items.filter(is_deleted=False).select_related("product", "variant"):
+        commerce._check_stock(item.product, item.variant, item.quantity)
+
     store = checkout.store
     options = {"stripe_account": store.stripe_account_id}
     amount = to_minor_units(checkout.total_amount, checkout.currency)
@@ -154,7 +165,7 @@ def finalize(intent, account_id):
     """
     if intent.status != SUCCEEDED:
         return None
-    checkout_id = (intent.metadata or {}).get("checkout_id")
+    checkout_id = plain(intent.metadata).get("checkout_id")
     checkout = (
         Checkout.objects.select_related("store")
         .filter(pk=checkout_id, store__stripe_account_id=account_id, is_deleted=False)
@@ -230,6 +241,7 @@ def _stripe_payment(intent_id, account_id):
 
 def record_charge_refunds(charge, account_id):
     """charge.refunded: a refund made outside the app (Stripe dashboard) is recorded here too."""
+    charge = plain(charge)
     payment = _stripe_payment(charge.get("payment_intent"), account_id)
     if payment is None:
         # Includes the automatic "order_not_placed" refunds: those payments never became orders
@@ -240,6 +252,7 @@ def record_charge_refunds(charge, account_id):
 
 def record_dispute(dispute, account_id):
     """charge.dispute.created / .closed: keep an audit row and the latest state on the payment."""
+    dispute = plain(dispute)
     payment = _stripe_payment(dispute.get("payment_intent"), account_id)
     if payment is None:
         logger.error("Stripe dispute %s matches no payment on account %s", dispute.get("id"), account_id)
@@ -278,5 +291,6 @@ def disconnect(account_id):
 
 def note_unpaid(intent, account_id):
     """payment_intent.payment_failed / .canceled: no order exists yet, so there is nothing to undo."""
+    intent = plain(intent)
     error = (intent.get("last_payment_error") or {}).get("message")
     logger.info("Stripe payment %s on %s ended unpaid (%s): %s", intent.get("id"), account_id, intent.get("status"), error)

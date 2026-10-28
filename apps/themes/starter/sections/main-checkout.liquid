@@ -427,8 +427,8 @@
     </div>
   </div>
 
-  <div id="checkout-alert-box" style="display: none;" class="checkout-alert checkout-alert--error" role="alert">
-    <span id="checkout-alert-msg"></span>
+  <div id="checkout-alert-box" style="{% if error != blank %}display: flex;{% else %}display: none;{% endif %}" class="checkout-alert checkout-alert--error" role="alert">
+    <span id="checkout-alert-msg">{{ error | escape }}</span>
   </div>
 
   {%- if order_completed -%}

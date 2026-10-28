@@ -22,7 +22,8 @@ from django.views.decorators.http import require_GET, require_POST
 from liquid.exceptions import LiquidError
 from markupsafe import escape
 
-from rest_framework import serializers, status
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework import exceptions, serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -40,7 +41,7 @@ from apps.customers import services as customer_services
 
 from apps.tenancy.models import Store, StoreMembership
 
-from .models import BlogPost, Menu, MenuItem, StorePage, ThemeImage, UrlRedirect
+from .models import BlogPost, Menu, MenuItem, StorePage, StoreTheme, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import presets
 from . import section_sync as sync
@@ -55,6 +56,7 @@ from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
+    is_private,
     MAX_THEMES,
     create_theme,
     delete_path,
@@ -1630,6 +1632,15 @@ def _admin_visit(request, store):
     return _member_visit(store, data)
 
 
+def _preview_theme_id(store, theme_id):
+    """The id of one of this store's own themes, or None (unknown, or not a uuid)."""
+    try:
+        found = StoreTheme.objects.select_related("theme").filter(store=store, theme_id=theme_id).first()
+    except (ValueError, DjangoValidationError):
+        return None
+    return str(found.theme_id) if found and is_private(store, found.theme) else None
+
+
 def _admin_bar_redirect(request, store):
     """
     ?admin_bar=<token>: start a visit (sets the cookie). ?admin_bar_hide=1: hide
@@ -1700,14 +1711,19 @@ class StorefrontLinkView(APIView):
         path = str(request.data.get("path") or "/")
         if not path.startswith("/") or path.startswith("//"):
             path = "/"
-        token = signing.dumps(
-            {
-                "u": str(request.user.pk),
-                "s": str(request.store.store_id),
-                "r": _safe_return_url(request.data.get("return_url")),
-            },
-            salt=ADMIN_BAR_SALT,
-        )
+        visit = {
+            "u": str(request.user.pk),
+            "s": str(request.store.store_id),
+            "r": _safe_return_url(request.data.get("return_url")),
+        }
+        # "Open theme" on a draft: this visit sees that draft instead of the published theme
+        theme_id = request.data.get("theme_id")
+        if theme_id:
+            draft = _preview_theme_id(request.store, theme_id)
+            if draft is None:
+                raise exceptions.NotFound("That theme doesn't exist.")
+            visit["t"] = draft
+        token = signing.dumps(visit, salt=ADMIN_BAR_SALT)
         url = request.build_absolute_uri(shop_url(request.store) + path)
         return Response({"url": url + ("&" if "?" in url else "?") + urlencode({"admin_bar": token})})
 
@@ -1733,6 +1749,11 @@ def _storefront(render):
 
         if "admin_bar" in request.GET or "admin_bar_hide" in request.GET:
             return _admin_bar_redirect(request, store)
+
+        # A visit started from "Open theme" on a draft shows that draft on every page of the visit
+        visit = _admin_visit(request, store)
+        draft = _preview_theme_id(store, visit["t"]) if visit and visit.get("t") else None
+        editing = set_editing_theme(draft) if draft else None
 
         try:
             html = render(store, request, request.GET, **kwargs)
@@ -1763,9 +1784,12 @@ def _storefront(render):
 
             status_code = 500
 
+        finally:
+            if editing is not None:
+                reset_editing_theme(editing)
+
         # Store members who came from "View store" get the "Back to admin" bar.
         # Never inside a frame (the customizer's live preview).
-        visit = _admin_visit(request, store)
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
             html = _with_admin_bar(html, store, visit)
 

@@ -79,7 +79,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 40
+STARTER_REVISION = 41
 STARTER_UPGRADES = {
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
@@ -192,6 +192,10 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
+        "ffb4bab6dfa1d089aeac006429c44e893f8da005169f991c21501f04d45e60a7",  # revision 20: legacy wishlist block fixture
+        "273a5cc1d49eddaa271162239a00bf333bece877bb41516479cbef77001d4f7b",  # revision 18: legacy Show Wishlist fixture
+        # Revision 40: before the header Search block
+        "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",  # revision 40: before the Search block
         "0f1b0c1d6442b03d7604b4a82f00e99d6d7a05685b312a621f07aace30925b8a",  # revision 39: before the sign-in icon
         "4056175621541f0119feb436226b459a59cb3b63818cf25cd04c49c6a6b9c736",  # revision 21: before the cart snippet
         "6dbee4862d37ededcdf93a750dda3f6ca60794cd16bdb1a0fa0a3995a274962d",  # revision 21: same, with CRLF line endings
@@ -342,10 +346,12 @@ def _prepare(store_theme, new_store=False):
     _add_wishlist_blocks(store_theme)
     _offer_wishlist_icon_block(store_theme.theme)
     _offer_cart_icon_block(store_theme.theme)
+    _offer_search_block(store_theme)
     _keep_wishlist_hearts(store_theme, new_store=new_store)
     _add_page_templates(store_theme)
     sync_card_cart_icon(store_theme)
     _upgrade_footer_icon(store_theme.theme)
+    _add_utility_bar(store_theme.theme)
 
 
 def get_store_theme(store):
@@ -638,6 +644,89 @@ def _offer_cart_icon_block(theme):
         file.save(update_fields=["content", "file_size", "updated_at"])
         sync.invalidate(theme.pk, file.file_path)
     theme.theme_data = {**(theme.theme_data or {}), "cart_icon_offered": 1}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+def _offer_search_block(store_theme):
+    """Add Search to an existing header by insertion only, and append it to saved block values."""
+    theme = store_theme.theme
+    if (theme.theme_data or {}).get("search_block_offered") == 2:
+        return
+    file = theme.files.filter(file_path="sections/header.liquid").first()
+    if file:
+        content = file.content
+        try:
+            schema = sync.parse(content, "sections/header.liquid")
+        except sync.SectionCodeError:
+            schema = None
+        supports_search = bool(
+            schema
+            and any(block.get("type") == "search" for block in schema.get("blocks") or [])
+            and "data-header-search" in content
+        )
+        # Also run the safe patch on already-upgraded sections so a legacy show_search
+        # link left beside the Search block is removed from the same historical code row.
+        patched = sync.add_search_block(content)
+        if patched is not None and patched != content:
+            sync.record_version(theme, "header", content, "upgrade")
+            file.content = patched
+            file.file_size = len(patched.encode("utf-8"))
+            file.save(update_fields=["content", "file_size", "updated_at"])
+            sync.invalidate(theme.pk, file.file_path)
+            content = patched
+            supports_search = True
+
+        if supports_search:
+            # A preceding legacy migration may have written the saved block list to the schema defaults.
+            # Append Search to that list too, without replacing its order or settings.
+            try:
+                schema = sync.parse(content, "sections/header.liquid")
+                spec = sync.spec_of("header", schema)
+                defaults = sync.defaults_of(spec, schema)
+            except sync.SectionCodeError:
+                defaults = None
+            if defaults is not None:
+                blocks, seen_search = [], False
+                for block in defaults["blocks"]:
+                    if block.get("type") == "search":
+                        if seen_search:
+                            continue
+                        seen_search = True
+                    blocks.append(block)
+                defaults["blocks"] = blocks
+                if not seen_search:
+                    defaults["blocks"].append({"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}})
+                updated = sync.write_values(content, defaults)
+                if updated != content:
+                    sync.record_version(theme, "header", content, "upgrade")
+                    file.content = updated
+                    file.file_size = len(updated.encode("utf-8"))
+                    file.save(update_fields=["content", "file_size", "updated_at"])
+                    sync.invalidate(theme.pk, file.file_path)
+
+            sections = store_theme.custom_data.get("sections") or {}
+            saved = sections.get("header")
+            if saved is not None:
+                values = copy.deepcopy(saved)
+                blocks = values.get("blocks")
+                if not isinstance(blocks, list):
+                    blocks = []
+                unique_blocks, seen_search = [], False
+                for block in blocks:
+                    if isinstance(block, dict) and block.get("type") == "search":
+                        if seen_search:
+                            continue
+                        seen_search = True
+                    unique_blocks.append(block)
+                if not seen_search:
+                    unique_blocks.append({"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}})
+                if unique_blocks != blocks:
+                    values["blocks"] = unique_blocks
+                    store_theme.custom_data = _with_section(store_theme.custom_data, "header", values)
+                    store_theme.save(update_fields=["custom_data", "updated_at"])
+
+    # Done once. A header that does not match the known safe schema/loop shape is left alone.
+    theme.theme_data = {**(theme.theme_data or {}), "search_block_offered": 2}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 
@@ -1485,6 +1574,28 @@ def _add_footer_icon_setting(content):
     return patched
 
 
+_UTILITY_RENDER = "{% render 'utility-bar', settings: settings, utility_links: utility_links %}"
+_BODY_OPEN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+
+
+def _add_utility_bar(theme):
+    """
+    A layout that predates the utility bar (an edited copy, or one from a preset) never rendered it,
+    so its Theme settings did nothing. Render it right after <body>. Layouts that already do are left alone.
+    """
+    file = theme.files.filter(file_path="layout/theme.liquid").first()
+    if file is None or "utility-bar" in file.content:
+        return
+    match = _BODY_OPEN.search(file.content)
+    if match is None:
+        return
+    newline = "\r\n" if "\r\n" in file.content else "\n"
+    upgraded = file.content[: match.end()] + f"{newline}  {_UTILITY_RENDER}" + file.content[match.end():]
+    file.content = upgraded
+    file.file_size = len(upgraded.encode("utf-8"))
+    file.save(update_fields=["content", "file_size", "updated_at"])
+
+
 def _upgrade_footer_icon(theme):
     file = theme.files.filter(file_path="sections/footer.liquid").first()
     if file:
@@ -1591,6 +1702,8 @@ def _seed_header(s, store_name):
     blocks.append({"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True}})
     # New headers start with the cart icon (its options are the block's defaults)
     blocks.append({"type": "cart", "settings": {}})
+    # Keep the existing header blocks in their original order and append Search.
+    blocks.append({"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}})
     return {
         "settings": {
             "logo_text": s.get("header_logo_text", ""), "logo_image": s.get("header_logo_url", ""),
@@ -1710,16 +1823,25 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
     file = theme.files.filter(file_path=current["path"]).order_by("-updated_at").first()
     if file is None:
         raise exceptions.ValidationError({"sections": f"This theme has no {current['path']} file."})
+    original_code = file.content
     state = sync.section_state(theme, name)
     conflict = None
     if base_version is not None and base_version != state["version"] and state["source"] in ("code", "restore"):
         conflict = (f"The code editor changed the {_label(name)} at {_when(state['updated_at'])}. Your change here was saved on top; "
                     "the code editor's version is kept in its History.")
 
+    if name == "header":
+        was_search = any(b.get("type") == "search" for b in current["values"]["blocks"])
+        has_search = any(b.get("type") == "search" for b in values["blocks"])
+        if was_search != has_search:
+            patched = sync.add_search_block(file.content) if has_search else sync.remove_search_render_branch(file.content)
+            if patched is not None:
+                file.content = patched
+
     code = sync.write_values(file.content, values)
     version = state["version"]
-    if code != file.content:
-        version = sync.record_version(theme, name, file.content, "customizer")
+    if code != original_code:
+        version = sync.record_version(theme, name, original_code, "customizer")
         file.content = code
         file.file_size = len(code.encode("utf-8"))
         file.save(update_fields=["content", "file_size", "updated_at"])
@@ -1760,6 +1882,11 @@ def _save_section_code(store_theme, name, content, base_version=None, client="",
             old_schema = sync.parse(file.content, path)
         except sync.SectionCodeError:
             old_schema = None
+
+    # Removing Search's Liquid render branch must not erase its existing Add block option.
+    if name == "header" and old_schema:
+        content = sync.preserve_search_block_type(content, old_schema)
+        new_schema = sync.parse(content, path)
 
     state = sync.section_state(theme, name)
     conflict = None

@@ -94,6 +94,26 @@ class EnforcementTest(RbacTestBase):
         self.staff("support@example.com", "customer_support")
         self.ok("post", "/api/v1/payments/00000000-0000-0000-0000-000000000000/refund/", {}, expect=403)
 
+    def test_only_the_owner_can_see_or_start_stripe_connection(self):
+        url = "/api/v1/payments/stripe/connect/"
+        self.as_owner()
+        self.assertFalse(self.ok("get", url)["connected"])
+        self.staff("support@example.com", "customer_support")
+        self.ok("get", url, expect=403)
+        self.ok("post", url, {}, expect=403)
+        from rest_framework.test import APIClient
+        anonymous = APIClient()  # a fresh client: self.client still holds the login session cookie
+        self.assertEqual(anonymous.get(url, HTTP_X_STORE_ID=self.store_id).status_code, 401)
+        self.assertEqual(anonymous.post(url, {}, format="json", HTTP_X_STORE_ID=self.store_id).status_code, 401)
+
+    def test_recording_a_payment_cannot_pretend_to_be_stripe(self):
+        self.as_owner()
+        r = self.client.post("/api/v1/payments/", {
+            "order": "00000000-0000-0000-0000-000000000000", "amount": "1.00", "provider": "stripe",
+        }, format="json")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("provider", r.json())
+
     def test_themes_preview_only_needs_view(self):
         self.staff("viewer@example.com", "online_store_editor")
         self.ok("get", "/api/v1/themes/files/")
