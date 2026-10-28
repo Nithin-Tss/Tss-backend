@@ -49,6 +49,11 @@ class Discount(models.Model):
         verbose_name = "Discount"
         verbose_name_plural = "Discounts"
         constraints = [
+            models.UniqueConstraint(
+                fields=["store", "name"],
+                condition=models.Q(is_deleted=False),
+                name="uq_disc_store_name_active",
+            ),
             models.CheckConstraint(
                 condition=models.Q(value__gte=0),
                 name="ck_disc_value_nonneg",
@@ -151,6 +156,7 @@ class DiscountCode(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["discount", "code"],
+                condition=models.Q(is_deleted=False),
                 name="uq_discount_code",
             ),
         ]
