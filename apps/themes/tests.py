@@ -5,6 +5,7 @@ The header and the footer run the same checks through SyncedSectionMixin.
     python manage.py test apps.themes --settings=config.test_settings
 """
 import hashlib
+import copy
 import json
 import time
 import uuid
@@ -64,14 +65,19 @@ def wishlist_era_header():
     from .services import starter_files
 
     header = starter_files()["sections/header.liquid"]
+    loop_start = header.index("    {%- assign has_actions = false -%}")
+    loop_end = header.index("    {%- endif -%}\n  </div>\n</header>", loop_start) + len("    {%- endif -%}\n")
+    header_icons_loop = header[loop_start:loop_end]
     for new, old in (
         ("""  The "Cart icon" block shows the cart with the number of items. It opens the side drawer or the cart
   page: everything the cart does is in snippets/cart.liquid.
 """, ""),
         ("{%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}\n", ""),
-        (HEADER_ICONS_LOOP, sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1]),
+        (header_icons_loop, sync.WISHLIST_BLOCK_MARKUP.split("\n", 1)[1]),
         ("    },\n    " + sync.CART_BLOCK_SCHEMA + "\n  ],", "    }\n  ],"),
+        ("    " + sync.SEARCH_BLOCK_SCHEMA + ",\n", ""),
         (', {"type": "cart", "settings": {}}]}', "]}"),
+        ('"blocks": [{"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}}, ', '"blocks": ['),
     ):
         assert new in header, new[:60]
         header = header.replace(new, old, 1)
@@ -591,7 +597,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertEqual(block["name"], "Wishlist icon")
         self.assertEqual(block["settings"]["show_count"]["type"], "checkbox")
         self.assertNotIn("show_wishlist", header["spec"]["settings"])  # no more checkbox: it is a block now
-        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist", "cart"])
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["wishlist", "cart", "search"])
         styles = next(file["content"] for file in self.ok("get", "/api/v1/themes/files/")["files"]
                       if file["path"] == "snippets/styles.liquid")
         self.assertIn(".site-header__wishlist", styles)
@@ -670,7 +676,56 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         spec = self.section()["spec"]["blocks"]
         self.assertEqual(spec["wishlist"]["name"], "Wishlist icon")
         self.assertEqual(set(spec["wishlist"]["settings"]), {"label", "show_count"})
-        self.assertEqual(set(spec), {"link", "wishlist", "cart"})  # what "Add block" offers
+        self.assertEqual(set(spec), {"link", "search", "wishlist", "cart"})  # what "Add block" offers
+
+    def test_search_block_add_remove_reorder_and_two_way_code_sync(self):
+        header = self.section()
+        self.assertEqual(header["spec"]["blocks"]["search"]["name"], "Search")
+        values = header["values"]
+        search = next(block for block in values["blocks"] if block["type"] == "search")
+        search_index = values["blocks"].index(search)
+        search["settings"].update(label="Find products", placeholder="Type a product name")
+        _, preview = self.save_values(values, header["version"])
+        self.assertIn(f'data-tss-block="{search_index}" data-tss-label="Search"', preview)
+        self.assertIn('aria-label="Find products"', preview)
+        self.assertIn('placeholder="Type a product name"', preview)
+
+        values["blocks"] = [
+            next(block for block in values["blocks"] if block["type"] == "wishlist"),
+            search,
+            next(block for block in values["blocks"] if block["type"] == "cart"),
+        ]
+        _, preview = self.save_values(values)
+        self.assertEqual(self.default_block_types(), ["wishlist", "search", "cart"])
+        self.assertLess(preview.index('data-tss-label="Wishlist icon"'), preview.index('data-tss-label="Search"'))
+
+        # Edit code adds a schema field: the existing Search block remains in the sidebar with its saved values.
+        code = self.with_schema(self.code(), lambda schema: (
+            next(block for block in schema["blocks"] if block["type"] == "search").update(name="Header search"),
+            next(block for block in schema["blocks"] if block["type"] == "search")["settings"].append(
+                {"type": "text", "id": "hint", "label": "Input hint", "default": "Type to search"}),
+        ))
+        saved = self.save_code(code)
+        self.assertEqual(saved["sync"]["spec"]["blocks"]["search"]["name"], "Header search")
+        current = self.section()
+        block = next(item for item in current["values"]["blocks"] if item["type"] == "search")
+        self.assertEqual(block["settings"]["placeholder"], "Type a product name")
+        self.assertEqual(block["settings"]["hint"], "Type to search")
+
+        current["values"]["blocks"] = [item for item in current["values"]["blocks"] if item["type"] != "search"]
+        _, preview = self.save_values(current["values"], current["version"])
+        self.assertNotIn("data-header-search", preview)
+        self.assertNotIn('class="site-header__search"', preview)
+        self.assertNotIn('class="site-header__search"', self.home())
+        self.assertNotIn("search", self.default_block_types())
+
+    def test_search_block_schema_field_saved_in_customizer_updates_code(self):
+        header = self.section()
+        block = next(item for item in header["values"]["blocks"] if item["type"] == "search")
+        block["settings"]["placeholder"] = "Find something"
+        self.save_values(header["values"], header["version"])
+        default_search = next(item for item in self.schema_of(self.code())["default"]["blocks"] if item["type"] == "search")
+        self.assertEqual(default_search["settings"]["placeholder"], "Find something")
 
     def test_adding_hiding_reordering_and_removing_the_icon_in_the_customizer(self):
         header = self.section()
@@ -773,7 +828,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         values["blocks"] = [self.wishlist_block()]
         self.save_values(values)
         good = self.code()
-        bad = good.replace("{%- if block.type == 'wishlist' -%}", "{%- if block.type == 'wishlist' -%}{%- if -%}", 1)
+        bad = good.replace("{%- elsif block.type == 'wishlist' -%}", "{%- elsif block.type == 'wishlist' -%}{%- if -%}", 1)
         error = self.save_code(bad, expect=400)
         self.assertIn("Line", str(error["content"]))
         self.assertEqual(self.code(), good)  # the previous version keeps working
@@ -841,7 +896,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         values["blocks"].append(self.cart_block())
         _, preview = self.save_values(values)
         self.assertEqual(self.cart_icons(preview), 1)
-        self.assertEqual(self.default_block_types(), ["wishlist", "cart"])
+        self.assertEqual(self.default_block_types(), ["wishlist", "search", "cart"])
         self.assertEqual(self.cart_icons(self.header_html(self.home())), 1)
 
         values["blocks"] = [self.cart_block(), self.wishlist_block()]  # reorder: the cart first
@@ -933,7 +988,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         for name in ("Autumn", "Basics", "Coats"):
             self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
         values = self.section()["values"]
-        self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist", "cart"])  # only the icons: no menu links
+        self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist", "cart", "search"])  # only the icons: no menu links
         values["settings"]["collections"] = 2
         _, preview = self.save_values(values)
         nav = self.header_html(self.home())
@@ -975,8 +1030,8 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         store_theme.save()
 
         values = self.section()["values"]
-        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale", "Wishlist", "Cart"])
-        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "link", "wishlist", "cart"])
+        self.assertEqual([b["settings"]["label"] for b in values["blocks"]], ["About", "Sale", "Wishlist", "Cart", "Search"])
+        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "link", "wishlist", "cart", "search"])
         self.assertEqual(values["blocks"][1]["settings"]["url"], "/collections/sale")
         settings = values["settings"]
         self.assertEqual((settings["sticky"], settings["border"], settings["background"], settings["text_color"]),
@@ -2363,7 +2418,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 40)
+        self.assertEqual(theme.theme_data["starter_revision"], 41)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2527,6 +2582,195 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.theme()
         self.assertEqual(self.stored("sections/header.liquid"), broken)
         self.assertEqual(self.theme().theme.theme_data["cart_icon_offered"], 1)
+
+
+class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.token, self.store = self.sign_up("headersearchpatch@example.com", "Search Patch Store")
+
+    def theme(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        return get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+
+    def stored(self):
+        from .models import Theme
+
+        return Theme.objects.get(slug=f"store-{self.store['storeId']}").files.get(file_path="sections/header.liquid").content
+
+    def install(self, content, values=None):
+        store_theme = self.theme()
+        theme = store_theme.theme
+        theme.files.filter(file_path="sections/header.liquid").update(content=content, file_size=len(content.encode("utf-8")))
+        theme.theme_data = {k: v for k, v in theme.theme_data.items() if k != "search_block_offered"}
+        theme.save()
+        if values is not None:
+            store_theme.custom_data = {**store_theme.custom_data, "sections": {"header": values}}
+            store_theme.save(update_fields=["custom_data", "updated_at"])
+
+    def test_untouched_starter_hash_is_registered_and_search_is_default(self):
+        import hashlib
+
+        from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
+
+        self.assertEqual(STARTER_REVISION, 41)
+        self.assertIn(
+            "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
+            STARTER_UPGRADES["sections/header.liquid"],
+        )
+        schema = sync.parse(starter_files()["sections/header.liquid"])
+        self.assertIn("search", [block["type"] for block in schema["default"]["blocks"]])
+
+    def test_untouched_header_upgrade_replaces_code_and_appends_search_to_saved_values(self):
+        import hashlib
+        from unittest import mock
+
+        from . import services
+
+        store_theme = self.theme()
+        theme = store_theme.theme
+        old_header = edited_header()
+        saved_values = {
+            "settings": {"logo_text": "Keep this", "layout": "center"},
+            "blocks": [{"type": "link", "settings": {"label": "Old link", "url": "/pages/old"}}],
+        }
+        store_theme.custom_data = {**store_theme.custom_data, "sections": {"header": saved_values}}
+        store_theme.save(update_fields=["custom_data", "updated_at"])
+        theme.files.filter(file_path="sections/header.liquid").update(
+            content=old_header, file_size=len(old_header.encode("utf-8")),
+        )
+        theme.theme_data = {**theme.theme_data, "starter_revision": 40, "search_block_offered": 0}
+        theme.save()
+
+        current_header = services.starter_files()["sections/header.liquid"]
+        old_digest = hashlib.sha256(old_header.encode("utf-8")).hexdigest()
+        with mock.patch.object(services, "STARTER_UPGRADES", {"sections/header.liquid": {old_digest}}), \
+             mock.patch.object(services, "starter_files", return_value={"sections/header.liquid": current_header}):
+            services._upgrade_untouched_starter_files(theme)
+        self.assertEqual(self.stored(), current_header)
+        services._offer_search_block(store_theme)
+        self.assertEqual(store_theme.custom_data["sections"]["header"]["settings"], saved_values["settings"])
+        blocks = store_theme.custom_data["sections"]["header"]["blocks"]
+        self.assertEqual(blocks[0], saved_values["blocks"][0])
+        self.assertEqual([block["type"] for block in blocks], ["link", "search"])
+        self.assertEqual(sync.history_of(theme, "header")[0]["preview"], old_header[:160])
+
+    def test_edited_header_gets_search_by_insertion_and_keeps_saved_values_and_history(self):
+        header = edited_header()
+        values = {
+            "settings": {"logo_text": "My shop", "layout": "center"},
+            "blocks": [
+                {"type": "link", "settings": {"label": "About", "url": "/pages/about"}},
+                {"type": "profile", "settings": {"image": "", "size": 42, "url": "/account"}},
+            ],
+        }
+        self.install(header, values)
+        store_theme = self.theme()
+        patched = self.stored()
+        self.assertIn("owner note: keep this line", patched)
+        self.assertIn("site-header__account", patched)
+        self.assertIn("data-header-search", patched)
+        self.assertIn("{{ block.attrs }}", patched)
+        self.assertEqual(sync.history_of(store_theme.theme, "header")[0]["preview"], header[:160])
+        saved = store_theme.custom_data["sections"]["header"]
+        self.assertEqual(saved["settings"], values["settings"])
+        self.assertEqual(saved["blocks"][:2], values["blocks"])
+        self.assertEqual(saved["blocks"][2]["type"], "search")
+
+    def test_upgrade_removes_the_old_show_search_link_when_search_block_already_exists(self):
+        from . import services
+        from .services import starter_files
+
+        store_theme = self.theme()
+        theme = store_theme.theme
+        legacy_control = '''        {%- if s.show_search != false -%}
+          <a class="site-header__search" href="{{ shop.url }}/collections/all" aria-label="Search" title="Search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8" /></svg>
+          </a>
+        {%- endif -%}
+'''
+        before = starter_files()["sections/header.liquid"].replace(
+            '        {%- if s.show_account != false -%}', legacy_control + '        {%- if s.show_account != false -%}', 1
+        )
+        self.install(before, {"settings": {"show_search": True}, "blocks": [
+            {"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}},
+            {"type": "wishlist", "settings": {"label": "Wishlist", "show_count": True}},
+            {"type": "cart", "settings": {}},
+        ]})
+        theme.refresh_from_db()
+        services._offer_search_block(store_theme)
+        store_theme.theme.refresh_from_db()
+        services._offer_search_block(store_theme)  # a repeated upgrade is a no-op
+
+        upgraded = self.stored()
+        self.assertNotIn('href="{{ shop.url }}/collections/all" aria-label="Search"', upgraded)
+        self.assertEqual(upgraded.count('class="site-header__search"'), 1)
+        history = sync.history_of(theme, "header")
+        self.assertTrue(history)
+        self.assertIn("s.show_search", sync.history_content(theme, "header", 0))
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        storefront_header = response.content.decode().split("</header>", 1)[0]
+        self.assertEqual(storefront_header.count('class="site-header__search"'), 1)
+
+    def test_duplicate_search_blocks_in_defaults_and_saved_values_are_deduped_once(self):
+        from . import services
+        from .services import starter_files
+
+        store_theme = self.theme()
+        theme = store_theme.theme
+        header = starter_files()["sections/header.liquid"]
+        schema = sync.parse(header)
+        schema["default"]["blocks"].append(copy.deepcopy(schema["default"]["blocks"][0]))
+        header = sync.write_values(header, sync.defaults_of(sync.spec_of("header", schema), schema))
+        search = {"type": "search", "settings": {"label": "Find", "placeholder": "Find products"}}
+        saved = {"settings": {"logo_text": "Keep me"}, "blocks": [copy.deepcopy(search), copy.deepcopy(search)]}
+        self.install(header, saved)
+        theme.refresh_from_db()
+        store_theme.refresh_from_db()
+
+        services._offer_search_block(store_theme)
+        store_theme.theme.refresh_from_db()
+        services._offer_search_block(store_theme)
+        store_theme.refresh_from_db()
+
+        upgraded_schema = sync.parse(self.stored())
+        self.assertEqual([b["type"] for b in upgraded_schema["default"]["blocks"]].count("search"), 1)
+        self.assertEqual([b["type"] for b in store_theme.custom_data["sections"]["header"]["blocks"]].count("search"), 1)
+        response = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(response.status_code, 200)
+        storefront_header = response.content.decode().split("</header>", 1)[0]
+        self.assertEqual(storefront_header.count('class="site-header__search"'), 1)
+
+    def test_search_panel_positioning_is_anchored_and_viewport_clamped(self):
+        from . import rendering
+
+        self.assertIn("getBoundingClientRect()", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("desiredLeft = rect.right - width", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("window.innerWidth - width - 12", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("panel.style.right = shift < 0", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("input.focus()", sync.SEARCH_BLOCK_BRANCH)
+        self.assertIn("position:relative", rendering.SECTION_CSS)
+        self.assertIn("position:absolute;top:100%;right:0", rendering.SECTION_CSS)
+        self.assertIn("width:min(92vw,360px)", rendering.SECTION_CSS)
+        self.assertIn(".tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}", rendering.SECTION_CSS)
+
+    def test_custom_header_without_safe_insertion_points_is_left_untouched(self):
+        from .services import get_store_theme
+        from apps.tenancy.models import Store
+
+        custom = '''<header class="my-custom-header"><a class="site-header__search" href="/collections/all">Search</a><p>Keep my layout</p></header>
+{% schema %}
+{"name":"Header","settings":[],"blocks":[{"type":"link","name":"Menu link","settings":[]}],"default":{"blocks":[]}}
+{% endschema %}
+'''
+        self.install(custom, {"settings": {}, "blocks": [{"type": "link", "settings": {}}]})
+        store_theme = self.theme()
+        history_before = sync.history_of(store_theme.theme, "header")
+        self.assertEqual(self.stored(), custom)
+        self.assertEqual(store_theme.custom_data["sections"]["header"]["blocks"], [{"type": "link", "settings": {}}])
+        self.assertEqual(sync.history_of(store_theme.theme, "header"), history_before)
 
 
 class StorefrontWishlistTest(StoreClientMixin, APITestCase):
@@ -3071,7 +3315,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             content = content + "<!-- mine -->\n" if path in edited else content
             theme.files.filter(file_path=path).update(content=content, file_size=len(content.encode("utf-8")))
         theme.files.filter(file_path=self.SNIPPET).delete()
-        data = {k: v for k, v in theme.theme_data.items() if k != "wishlist_blocks"}
+        data = {k: v for k, v in theme.theme_data.items() if k not in {"wishlist_blocks", "search_block_offered"}}
         theme.theme_data = {**data, "starter_revision": 18}
         theme.save()
         store_theme.custom_data = {
@@ -3127,7 +3371,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 40)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 41)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -3136,10 +3380,10 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
 
         # the header keeps the owner's link and gets the heart as a block; "show_wishlist" is gone
         header = self.ok("get", "/api/v1/themes/sections/")["header"]
-        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["link", "wishlist"])
+        self.assertEqual([b["type"] for b in header["values"]["blocks"]], ["link", "wishlist", "search"])
         self.assertEqual(header["values"]["settings"]["logo_text"], "Old shop")
         self.assertEqual([b["type"] for b in sync.parse(self.file("sections/header.liquid"))["default"]["blocks"]],
-                         ["link", "wishlist"])
+                         ["link", "wishlist", "search"])
         self.assertIn('aria-label="Wishlist"', self.header_html())
         # the product page keeps its heart, now as a block
         product = self.ok("get", "/api/v1/themes/settings/")["templates"]["product"]["sections"]["main"]
@@ -3241,13 +3485,19 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         self.assertIn('class="product-card__wishlist-remove"', page)  # still removable from the wishlist page
 
     def test_a_header_and_product_section_the_owner_edited_are_left_alone(self):
+        from . import section_sync as sync
+
         self.make_store_from_before_the_wishlist_blocks(edited=("sections/header.liquid", "sections/main-product.liquid"))
         header, product = self.stored("sections/header.liquid"), self.stored("sections/main-product.liquid")
         store_theme = self.theme()
-        self.assertEqual(self.file("sections/header.liquid"), header)
+        upgraded_header = self.file("sections/header.liquid")
+        self.assertNotEqual(upgraded_header, header)
+        self.assertIn("<!-- mine -->", upgraded_header)
+        self.assertIn("data-header-search", upgraded_header)
+        self.assertTrue(sync.history_of(store_theme.theme, "header"))
         self.assertEqual(self.file("sections/main-product.liquid"), product)
         values = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
-        self.assertEqual([b["type"] for b in values["blocks"]], ["link"])  # no block the code can't show
+        self.assertEqual([b["type"] for b in values["blocks"]], ["link", "search"])
         self.assertIsNone(store_theme.custom_data["templates"]["product"]["sections"]["main"].get("blocks"))
         # and the heart still shows, from the owner's own markup
         self.assertIn('aria-label="Wishlist"', self.header_html())
@@ -4727,6 +4977,17 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertEqual(r.status_code, 200)
         html = r.content.decode()
         self.assertIn('class="site-header__search"', html)
+        header = html[html.index('<header class="site-header"'):html.index("</header>")]
+        self.assertEqual(header.count('class="site-header__search"'), 1)
+        self.assertNotIn('href="' + self.base + '/collections/all" aria-label="Search"', header)
+        self.assertIn('data-header-search', header)
+        self.assertIn('aria-expanded="false"', header)
+        self.assertIn(f'action="{self.base}/collections/all" method="get" role="search"', header)
+        self.assertIn('name="q"', header)
+        self.assertIn("requestAnimationFrame", header)
+        self.assertIn("input.focus()", header)
+        self.assertIn("!root.contains(event.target)", header)
+        self.assertIn("event.key === 'Escape'", header)
         self.assertIn(f'class="site-header__account" href="{self.base}/account/login"', html)
         self.assertIn('aria-label="Sign in or create account"', html)
         self.assertIn('class="site-header__wishlist"', html)

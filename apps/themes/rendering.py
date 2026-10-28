@@ -148,6 +148,14 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .site-header__search svg,.site-header__account svg,.site-header__cart svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .site-header__cart svg{width:24px;height:24px;stroke-width:1.8}
 .site-header__search:hover,.site-header__account:hover,.site-header__cart:hover{background:var(--soft)}
+.site-header__search-block{position:relative;display:inline-flex;align-items:center;order:-1;overflow:visible}
+.site-header__search{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}
+.site-header__search:focus-visible,.site-header__search-input:focus-visible,.site-header__search-submit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.site-header__search-panel{position:absolute;top:100%;right:0;left:auto;z-index:60;display:flex;gap:8px;width:min(92vw,360px);box-sizing:border-box;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.16)}
+.site-header__search-panel[hidden]{display:none}
+.tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}
+.site-header__search-input{flex:1;min-width:0;min-height:40px;padding:0 12px;border:0;border-radius:999px;background:transparent;color:inherit;font:inherit}
+.site-header__search-submit{min-height:40px;padding:0 16px;border:0;border-radius:999px;background:var(--accent);color:var(--bg);font:inherit;cursor:pointer}
 .site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
 .site-header__cart-count[hidden]{display:none}
 .site-header__actions+.site-header__actions{margin-left:0}
@@ -1420,9 +1428,21 @@ def _synced_html(store, store_theme, name, section, data, env, env_key, context,
         # Links from Admin > Menus fill the navbar while the header has no menu links of its own
         values = raw if raw is not None else section["values"]
         blocks = list(values.get("blocks") or [])
+        # Suppress stale or hand-edited duplicate Search entries while the upgrade
+        # cleans up their saved values.
+        unique_blocks, seen_search = [], False
+        for block in blocks:
+            if isinstance(block, dict) and block.get("type") == "search":
+                if seen_search:
+                    continue
+                seen_search = True
+            unique_blocks.append(block)
+        if unique_blocks != blocks:
+            values = dict(values, blocks=unique_blocks)
+            raw = values
         if not any(b.get("type") == "link" and not b.get("hidden") for b in blocks) and context.get("menu_links"):
             link = [{"type": "link", "settings": {"label": m["label"], "url": m["raw"]}} for m in context["menu_links"]]
-            raw = dict(values, blocks=link + blocks)
+            raw = dict(values, blocks=link + unique_blocks)
     return sync.render_section(
         name, theme_id=store_theme.theme_id, content=section["content"],
         values=raw if raw is not None else section["values"], env=env, env_key=env_key,

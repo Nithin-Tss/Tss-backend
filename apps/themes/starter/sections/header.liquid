@@ -15,6 +15,7 @@
 {%- assign link_blocks = section.blocks | where: 'type', 'link' -%}
 {%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
 {%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}
+{%- assign search_blocks = section.blocks | where: 'type', 'search' -%}
 {%- capture header_style -%}
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
@@ -50,16 +51,9 @@
       </nav>
     {%- endif -%}
     {%- assign has_actions = false -%}
-    {%- if s.show_search != false or s.show_account != false or wishlist_blocks.size > 0 or cart_blocks.size > 0 -%}{%- assign has_actions = true -%}{%- endif -%}
+    {%- if s.show_account != false or wishlist_blocks.size > 0 or cart_blocks.size > 0 or search_blocks.size > 0 -%}{%- assign has_actions = true -%}{%- endif -%}
     {%- if has_actions -%}
       <div class="site-header__actions">
-        {%- if s.show_search != false -%}
-          <a class="site-header__search" href="{{ shop.url }}/collections/all" aria-label="Search" title="Search">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-          </a>
-        {%- endif -%}
         {%- if s.show_account != false -%}
           <style>.site-header__account:hover { background: transparent; opacity: 1; }</style>
           {%- if customer_logged_in -%}
@@ -77,7 +71,56 @@
           {%- endif -%}
         {%- endif -%}
         {%- for block in section.blocks -%}
-          {%- if block.type == 'wishlist' -%}
+          {%- if block.type == 'search' -%}
+            <div class="site-header__search-block" data-header-search{{ block.attrs }}>
+              <button class="site-header__search" type="button" aria-label="{{ block.settings.label | default: 'Search' | escape }}" title="{{ block.settings.label | default: 'Search' | escape }}" aria-expanded="false" aria-controls="header-search-{{ section.id }}-{{ forloop.index }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+              </button>
+              <form class="site-header__search-panel" id="header-search-{{ section.id }}-{{ forloop.index }}" action="{{ shop.url }}/collections/all" method="get" role="search" hidden>
+                <input class="site-header__search-input" id="header-search-input-{{ section.id }}-{{ forloop.index }}" type="search" name="q" aria-label="{{ block.settings.label | default: 'Search' | escape }}" placeholder="{{ block.settings.placeholder | default: 'Search products' | escape }}" autocomplete="off">
+                <button class="site-header__search-submit" type="submit">Search</button>
+              </form>
+              <script>
+                (function () {
+                  var root = document.currentScript && document.currentScript.closest('[data-header-search]');
+                  if (!root) return;
+                  var toggle = root.querySelector('.site-header__search');
+                  var panel = root.querySelector('.site-header__search-panel');
+                  var input = root.querySelector('.site-header__search-input');
+                  function positionPanel() {
+                    var rect = toggle.getBoundingClientRect();
+                    var width = panel.offsetWidth;
+                    var desiredLeft = rect.right - width;
+                    var left = Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12));
+                    var shift = left - desiredLeft;
+                    panel.style.left = shift > 0 ? (root.clientWidth - width + shift) + 'px' : 'auto';
+                    panel.style.right = shift < 0 ? (-shift) + 'px' : '0';
+                  }
+                  function close(restoreFocus) {
+                    panel.hidden = true;
+                    toggle.setAttribute('aria-expanded', 'false');
+                    if (restoreFocus) toggle.focus();
+                  }
+                  toggle.addEventListener('click', function () {
+                    var opening = panel.hidden;
+                    panel.hidden = !opening;
+                    toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+                    if (opening) window.requestAnimationFrame(function () { positionPanel(); input.focus(); });
+                  });
+                  window.addEventListener('resize', function () { if (!panel.hidden) positionPanel(); });
+                  window.addEventListener('scroll', function () { if (!panel.hidden) positionPanel(); }, true);
+                  document.addEventListener('click', function (event) {
+                    if (!root.contains(event.target) && !panel.hidden) close(false);
+                  });
+                  document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && !panel.hidden && root.contains(document.activeElement)) {
+                      close(true);
+                    }
+                  });
+                })();
+              </script>
+            </div>
+          {%- elsif block.type == 'wishlist' -%}
             {% render 'wishlist', mode: 'icon', count: wishlist_count, label: block.settings.label, show_count: block.settings.show_count, attrs: block.attrs %}
           {%- elsif block.type == 'cart' -%}
             {% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: block.settings, attrs: block.attrs %}
@@ -116,6 +159,14 @@
       ]
     },
     {
+      "type": "search",
+      "name": "Search",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Search"},
+        {"type": "text", "id": "placeholder", "label": "Search field placeholder", "default": "Search products"}
+      ]
+    },
+    {
       "type": "wishlist",
       "name": "Wishlist icon",
       "settings": [
@@ -141,6 +192,6 @@
       ]
     }
   ],
-  "default": {"blocks": [{"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}, {"type": "cart", "settings": {}}]}
+  "default": {"blocks": [{"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}}, {"type": "wishlist", "settings": {"label": "Wishlist", "show_count": true}}, {"type": "cart", "settings": {}}]}
 }
 {% endschema %}

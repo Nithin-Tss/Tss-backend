@@ -413,6 +413,186 @@ def add_cart_block(content):
     return add_header_block(content, "cart")
 
 
+SEARCH_BLOCK_SCHEMA = """{
+      "type": "search",
+      "name": "Search",
+      "settings": [
+        {"type": "text", "id": "label", "label": "Label (for screen readers)", "default": "Search"},
+        {"type": "text", "id": "placeholder", "label": "Search field placeholder", "default": "Search products"}
+      ]
+    }"""
+SEARCH_BLOCK_BRANCH = """          {%- elsif block.type == 'search' -%}
+            <div class="site-header__search-block" data-header-search{{ block.attrs }}>
+              <button class="site-header__search" type="button" aria-label="{{ block.settings.label | default: 'Search' | escape }}" title="{{ block.settings.label | default: 'Search' | escape }}" aria-expanded="false" aria-controls="header-search-{{ section.id }}-{{ forloop.index }}">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+              </button>
+              <form class="site-header__search-panel" id="header-search-{{ section.id }}-{{ forloop.index }}" action="{{ shop.url }}/collections/all" method="get" role="search" hidden>
+                <input class="site-header__search-input" id="header-search-input-{{ section.id }}-{{ forloop.index }}" type="search" name="q" aria-label="{{ block.settings.label | default: 'Search' | escape }}" placeholder="{{ block.settings.placeholder | default: 'Search products' | escape }}" autocomplete="off">
+                <button class="site-header__search-submit" type="submit">Search</button>
+              </form>
+              <script>
+                (function () {
+                  var root = document.currentScript && document.currentScript.closest('[data-header-search]');
+                  if (!root) return;
+                  var toggle = root.querySelector('.site-header__search');
+                  var panel = root.querySelector('.site-header__search-panel');
+                  var input = root.querySelector('.site-header__search-input');
+              function positionPanel() {
+                var rect = toggle.getBoundingClientRect();
+                var width = panel.offsetWidth;
+                var desiredLeft = rect.right - width;
+                var left = Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12));
+                var shift = left - desiredLeft;
+                panel.style.left = shift > 0 ? (root.clientWidth - width + shift) + 'px' : 'auto';
+                panel.style.right = shift < 0 ? (-shift) + 'px' : '0';
+              }
+                  function close(restoreFocus) {
+                    panel.hidden = true;
+                    toggle.setAttribute('aria-expanded', 'false');
+                    if (restoreFocus) toggle.focus();
+                  }
+                  toggle.addEventListener('click', function () {
+                    var opening = panel.hidden;
+                    panel.hidden = !opening;
+                    toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+                  if (opening) window.requestAnimationFrame(function () { positionPanel(); input.focus(); });
+                  });
+                window.addEventListener('resize', function () { if (!panel.hidden) positionPanel(); });
+                window.addEventListener('scroll', function () { if (!panel.hidden) positionPanel(); }, true);
+                  document.addEventListener('click', function (event) {
+                    if (!root.contains(event.target) && !panel.hidden) close(false);
+                  });
+                  document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && !panel.hidden && root.contains(document.activeElement)) {
+                      close(true);
+                    }
+                  });
+                })();
+              </script>
+            </div>"""
+
+
+def add_search_block(content):
+    """Safely offer a Search block in an existing header, inserting only into its schema and block loop."""
+    markup, schema_text, start = split(content)
+    if schema_text is None:
+        return None
+    try:
+        schema = json.loads(schema_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(schema, dict):
+        return None
+    # Remove the old built-in anchor itself, even when a store edited the surrounding
+    # Liquid condition. Its dedicated class, collection URL and Search label identify it.
+    legacy_anchor = re.compile(
+        r"<a\b(?=[^>]*\bclass=['\"][^'\"]*\bsite-header__search\b[^'\"]*['\"])(?=[^>]*\bhref=['\"][^'\"]*collections/all[^'\"]*['\"])(?=[^>]*\b(?:aria-label|title)=['\"]Search['\"])[^>]*>(?:(?!</a>).)*?<svg\b.*?</svg>\s*</a>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    legacy_matches = list(legacy_anchor.finditer(markup))
+    has_old_search_link = bool(re.search(
+        r"<a\b[^>]*class=['\"][^'\"]*site-header__search[^'\"]*['\"][^>]*href=", markup, re.IGNORECASE
+    ))
+    if has_old_search_link and not legacy_matches:
+        return None
+    if legacy_matches:
+        # The old links are in the markup before the schema; remove from the end to preserve offsets.
+        for match in reversed(legacy_matches):
+            content = content[:match.start()] + content[match.end():]
+        markup, schema_text, start = split(content)
+    block_exists = any(
+        isinstance(block, dict) and block.get("type") == "search" for block in schema.get("blocks") or []
+    )
+    if block_exists and "data-header-search" in markup and not legacy_matches:
+        return None
+    span = None if block_exists else _top_level_blocks_array(schema_text)
+    if not block_exists and span is None:
+        return None
+
+    # Find the one unambiguous section.blocks loop whose branches test block.type.
+    tag_re = re.compile(r"{%-?\s*(for|endfor)\b.*?-?%}", re.DOTALL)
+    loops = []
+    for opening in re.finditer(r"{%-?\s*for\s+block\s+in\s+section\.blocks\s*-?%}", markup):
+        depth, closing = 1, None
+        for tag in tag_re.finditer(markup, opening.end()):
+            if tag.group(1) == "for":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    closing = tag
+                    break
+        if closing is None:
+            continue
+        body = markup[opening.end():closing.start()]
+        if re.search(r"block\.type\s*==", body):
+            if len(re.findall(r"{%-?\s*if\s+block\.type\b.*?-?%}", body)) != 1:
+                return None
+            if len(re.findall(r"{%-?\s*endif\s*-?%}", body)) != 1 or re.search(r"{%-?\s*case\b", body):
+                return None
+            if re.search(r"block\.type\s*==\s*['\"]search['\"]", body):
+                continue  # already rendered; a legacy static link may still need removal
+            endif = list(re.finditer(r"{%-?\s*endif\s*-?%}", body))[-1]
+            loops.append((opening.end() + endif.start(), closing.start()))
+    nl = "\r\n" if "\r\n" in content else "\n"
+    if block_exists:
+        patched = content
+    else:
+        open_at, close_at = span
+        inner = schema_text[open_at + 1:close_at]
+        block_schema = SEARCH_BLOCK_SCHEMA.replace("\n", nl)
+        if inner.strip():
+            last = open_at + 1 + len(inner.rstrip())
+            schema_new = schema_text[:last] + "," + nl + "    " + block_schema + schema_text[last:]
+        else:
+            schema_new = schema_text[:open_at + 1] + nl + "    " + block_schema + nl + "  " + schema_text[close_at:]
+        patched = content[:start] + schema_new + content[start + len(schema_text):]
+
+    has_search_markup = "data-header-search" in markup
+    if has_search_markup:
+        patched = content
+    elif len(loops) == 1:
+        insert_at, _ = loops[0]
+        patched = patched[:insert_at] + SEARCH_BLOCK_BRANCH.replace("\n", nl) + nl + patched[insert_at:]
+    elif not loops and not re.search(r"block\.type\s*==\s*['\"]search['\"]", markup):
+        # A standard header with no block-type loop can still accept a self-contained block loop
+        # at the end of its inner flex row. Unrecognized custom layouts are deliberately untouched.
+        if 'class="page-width site-header__inner"' not in markup:
+            return None
+        close = list(re.finditer(r"(?m)^(?P<indent>[ \t]*)</div>(?P<nl>\r?\n)(?P<header>[ \t]*)</header>", markup))
+        if not close or close[-1].group("indent") != "  ":
+            return None
+        tag = close[-1]
+        search_loop = "          {%- for block in section.blocks -%}" + nl
+        search_loop += SEARCH_BLOCK_BRANCH.replace("{%- elsif block.type", "{%- if block.type", 1).replace("\n", nl) + nl
+        search_loop += "          {%- endif -%}" + nl + "          {%- endfor -%}" + nl
+        insert_at = tag.start()
+        patched = patched[:insert_at] + search_loop + patched[insert_at:]
+    else:
+        return None
+    try:
+        schema = parse(patched, "sections/header.liquid")
+    except SectionCodeError:
+        return None
+
+    # Make the block available by default to stores without saved section data. Existing saved
+    # values are upgraded separately, by appending Search without replacing their block list.
+    spec = spec_of("header", schema)
+    defaults = defaults_of(spec, schema)
+    seen_search = False
+    unique_defaults = []
+    for block in defaults["blocks"]:
+        if block.get("type") == "search":
+            if seen_search:
+                continue
+            seen_search = True
+        unique_defaults.append(block)
+    defaults["blocks"] = unique_defaults
+    if not seen_search:
+        defaults["blocks"].append({"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}})
+    return write_values(patched, defaults)
+
+
 # ======================================================================= schema -> customizer options
 
 def _field(s):
