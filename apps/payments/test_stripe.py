@@ -95,6 +95,25 @@ class StripeTests(base_tests.CommerceTestBase):
         self.assertEqual(services.paid_total(first), Decimal("998.00"))
         self.assertEqual(sellable(self.variant), 8)
 
+    def test_paid_order_sends_one_confirmation_email(self):
+        from django.core import mail
+
+        checkout = self.checkout()
+        with self.captureOnCommitCallbacks(execute=True):
+            stripe_service.finalize(intent(checkout), ACCOUNT)
+            stripe_service.finalize(intent(checkout), ACCOUNT)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["a@b.com"])
+        self.assertIn("Total:", mail.outbox[0].body)
+
+    def test_refunded_payment_sends_no_confirmation(self):
+        from django.core import mail
+
+        checkout = self.checkout()
+        with self.captureOnCommitCallbacks(execute=True):
+            stripe_service.finalize(intent(checkout, amount=1), ACCOUNT)
+        self.assertEqual(mail.outbox, [])
+
     def test_unpaid_intent_places_nothing(self):
         checkout = self.checkout()
         self.assertIsNone(stripe_service.finalize(intent(checkout, status="processing"), ACCOUNT))
