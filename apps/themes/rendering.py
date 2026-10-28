@@ -441,6 +441,9 @@ body .auth-page.auth-page .auth-field-error{color:var(--accent)!important;font-s
 
 def customer_auth_content(content, mode):
     """Use the active theme variables for account pages, ignoring template-local fixed styling."""
+    if "data-auth-form" in str(content):
+        # The auth blocks (snippets/auth-*.liquid) bring their own theme-aware styles and the Sign in / Create account tabs
+        return Markup(content)
     markup = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", str(content), flags=re.IGNORECASE | re.DOTALL)
     if mode == "login":
         heading = re.search(r"<h1\b", markup, flags=re.IGNORECASE)
@@ -1947,6 +1950,55 @@ def _sample_customer_drop(base_url):
     }
 
 
+CUSTOMER_LINK_SCRIPT = r"""<script>
+(function () {
+  // The page is sandboxed and may not send the sign-in cookie: carry the signed-in token in the store's own links and forms
+  var token = %(token)s, base = %(base)s, here = new URL(location.href);
+  function ours(url) {
+    try {
+      var u = new URL(url, here);
+      return u.origin === here.origin && (u.pathname === base || u.pathname.indexOf(base + "/") === 0) ? u : null;
+    } catch (e) { return null; }
+  }
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest && event.target.closest("a[href]");
+    if (!link) return;
+    var href = link.getAttribute("href");
+    if (href.charAt(0) === "#") return;
+    var u = ours(href);
+    if (!u || u.searchParams.has("ct") || /\/account\/logout\/?$/.test(u.pathname)) return;
+    u.searchParams.set("ct", token);
+    link.setAttribute("href", u.pathname + u.search + u.hash);
+  }, true);
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!form || !form.getAttribute || (form.method || "get").toLowerCase() !== "post") return;
+    var u = ours(form.getAttribute("action") || here.href);
+    if (!u || form.querySelector('input[name="ct"]')) return;
+    var input = document.createElement("input");
+    input.type = "hidden"; input.name = "ct"; input.value = token;
+    form.appendChild(input);
+  }, true);
+  try {
+    if (here.searchParams.has("ct")) {
+      here.searchParams.delete("ct");
+      history.replaceState(null, "", here.pathname + here.search + here.hash);
+    }
+  } catch (e) { /* keep the token in the address bar */ }
+})();
+</script>"""
+
+
+def _with_customer_link(html, token, base_url):
+    """A signed-in shopper's token goes along in links and forms (see CUSTOMER_LINK_SCRIPT)."""
+    script = CUSTOMER_LINK_SCRIPT % {
+        "token": json.dumps(token).replace("</", "<\\/"),
+        "base": json.dumps(base_url).replace("</", "<\\/"),
+    }
+    index = html.lower().rfind("</body>")
+    return html + script if index < 0 else html[:index] + script + html[index:]
+
+
 def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
@@ -2469,7 +2521,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 ).render(**{**common, "mode": customer_page})
             else:
                 cust_content = env.from_string(
-                    "{% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success %}"
+                    "{% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success, wishlist_count: wishlist_count %}"
                 ).render(**common)
 
         if customer_page in ("login", "register"):
@@ -2515,4 +2567,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     )
     for name, html in synced_html.items():
         page_html = page_html.replace(SECTION_PLACEHOLDER.format(name), str(html))
+    if customer is not None and customer_user is not None and request is not None and not editor:
+        from .views import customer_link_token
+        page_html = _with_customer_link(page_html, customer_link_token(store, customer_user), base_url)
     return page_html

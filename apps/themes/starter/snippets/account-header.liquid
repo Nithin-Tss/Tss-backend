@@ -1,0 +1,31 @@
+{%- comment -%}
+  The top of the account page: messages, a back link and the welcome card with Edit profile, Wishlist and Logout.
+  Usage: {% render 'account-header', customer: customer, error: error, success: success, wishlist_count: wishlist_count %}
+{%- endcomment -%}
+{%- if error != blank -%}
+  <div class="acct-alert acct-alert--err" role="alert"><span>{{ error }}</span><button type="button" data-acct-dismiss aria-label="Dismiss">&times;</button></div>
+{%- endif -%}
+{%- if success != blank -%}
+  <div class="acct-alert acct-alert--ok" role="status"><span>{{ success }}</span><button type="button" data-acct-dismiss aria-label="Dismiss">&times;</button></div>
+{%- endif -%}
+<a class="acct-back" href="{{ shop.url }}/">&lsaquo; Back to home</a>
+<header class="acct-header acct-card">
+  <div class="acct-header__who">
+    <div>
+      <p class="acct-eyebrow">My account</p>
+      <h1 class="acct-welcome">Welcome, {{ customer.name | default: 'there' }}</h1>
+      <p class="acct-sub">Manage your personal details and account information.</p>
+    </div>
+  </div>
+  <div class="acct-header__actions">
+    <button type="button" class="acct-btn acct-btn--ghost acct-btn--sm" data-acct-toggle="profile-form">
+      <span>Edit profile</span>
+    </button>
+    <a class="acct-btn acct-btn--ghost acct-btn--sm" href="{{ shop.url }}/wishlist/">
+      <span>Wishlist{% if wishlist_count > 0 %} ({{ wishlist_count }}){% endif %}</span>
+    </a>
+    <a class="acct-btn acct-btn--sm" href="{{ shop.url }}/account/logout">
+      <span>Logout</span>
+    </a>
+  </div>
+</header>

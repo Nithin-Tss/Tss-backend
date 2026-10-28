@@ -1,0 +1,22 @@
+{%- comment -%}
+  The top of the sign-in and create-account card: the Sign in / Create account switch, the icon, the heading and the
+  error / success message. Usage: {% render 'auth-header', mode: 'login', return_url: return_url, error: error, success: success %}
+  (mode: login | register). Edit the text and icons here.
+{%- endcomment -%}
+<div class="auth-tabs" role="navigation" aria-label="Sign in or create account">
+  <a href="{{ shop.url }}/account/login{% if return_url != blank %}?return_to={{ return_url | url_encode }}{% endif %}"{% if mode != 'register' %} class="is-active" aria-current="page"{% endif %}>Sign in</a>
+  <a href="{{ shop.url }}/account/register{% if return_url != blank %}?return_to={{ return_url | url_encode }}{% endif %}"{% if mode == 'register' %} class="is-active" aria-current="page"{% endif %}>Create account</a>
+</div>
+
+<div class="auth-heading">
+  {%- if mode == 'register' -%}
+    <h1 class="auth-heading__title">Create your account</h1>
+    <p class="auth-heading__text">Track orders, save your details and check out faster.</p>
+  {%- else -%}
+    <h1 class="auth-heading__title">Welcome back</h1>
+    <p class="auth-heading__text">Sign in to view your orders and manage your account.</p>
+  {%- endif -%}
+</div>
+
+{%- if error != blank -%}<div class="auth-alert auth-alert--error" role="alert">{{ error }}</div>{%- endif -%}
+{%- if success != blank -%}<div class="auth-alert auth-alert--success" role="status">{{ success }}</div>{%- endif -%}

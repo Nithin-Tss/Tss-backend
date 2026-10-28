@@ -10,6 +10,7 @@ import json
 import re
 import time
 import uuid
+from urllib.parse import unquote
 
 from rest_framework.test import APITestCase
 
@@ -2489,7 +2490,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 41)
+        self.assertEqual(theme.theme_data["starter_revision"], 42)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2685,7 +2686,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 41)
+        self.assertEqual(STARTER_REVISION, 42)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3496,7 +3497,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 41)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 42)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -4989,24 +4990,31 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             response = self.client.get(f"{self.base}/account/{path}")
             self.assertEqual(response.status_code, 200)
             html = response.content.decode()
-            self.assertIn("var(--tss-heading-font)", html)
-            self.assertIn("var(--accent)", html)
-            self.assertIn("var(--b-r)", html)
-            self.assertIn('aria-label="Show or hide password"', html)
-            self.assertNotIn("#e5e7eb", html)  # page-local fixed-color CSS was omitted
+            # The auth blocks keep their own styles (they are not stripped) and follow the theme
+            self.assertIn(".auth-page .auth-tabs", html)
+            self.assertIn("var(--tss-heading-font", html)
+            self.assertIn("var(--accent", html)
+            self.assertIn("data-auth-toggle", html)
+            self.assertIn('aria-label="Show password"', html)
+            # Both tabs are there on both pages
+            self.assertIn(f'href="{self.base}/account/login', html)
+            self.assertIn(f'href="{self.base}/account/register', html)
+            self.assertIn(">Create account</a>", html)
             if path == "login":
-                self.assertRegex(html, r'id="login-email" class="form-input"')
-                self.assertRegex(html, r'id="login-password" class="form-input"')
-                self.assertNotIn('class="customer-card__icon"', html)
-                heading_start = html.lower().find("<h1")
-                self.assertGreaterEqual(heading_start, 0)
-                self.assertNotRegex(html[:heading_start], r'href=["\'][^"\']*/account/register')
+                self.assertRegex(html, r'id="login-email" class="auth-input"')
+                self.assertRegex(html, r'id="login-password" class="auth-input"')
                 self.assertIn("New here?", html)
-                self.assertIn(f'href="{self.base}/account/register', html)
             else:
                 for field in ("register-first-name", "register-last-name", "register-email",
                               "register-phone", "register-password", "register-confirm-password"):
-                    self.assertRegex(html, rf'id="{field}" class="form-input"')
+                    self.assertRegex(html, rf'id="{field}" class="auth-input"')
+
+        # Older themes with their own login markup still get the theme-variable cleanup
+        legacy = str(rendering.customer_auth_content(
+            '<style>.x{color:#fff}</style><a href="/s/x/account/register">Create account</a><h1>Hi</h1>', "login"))
+        self.assertNotIn("#fff", legacy)
+        self.assertNotIn("Create account</a>", legacy)
+        self.assertIn(".auth-page.auth-page", legacy)
 
         theme.refresh_from_db()
         self.assertEqual(theme.theme_data, theme_data_before)
@@ -5041,7 +5049,7 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             "newsletter": "true",
         })
         self.assertEqual(r.status_code, 302)
-        self.assertEqual(r.url, f"{self.base}/account")
+        self.assertTrue(r.url.startswith(f"{self.base}/account?ct="))
         cookie_name = f"tss_cust_{self.slug}"
         self.assertIn(cookie_name, r.cookies)
 
@@ -5076,8 +5084,74 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             "password": "SecretPassword123!",
         })
         self.assertEqual(ok.status_code, 302)
-        self.assertEqual(ok.url, f"{self.base}/account")
+        self.assertTrue(ok.url.startswith(f"{self.base}/account?ct="))
         self.assertIn(f"tss_cust_{self.slug}", ok.cookies)
+
+    def test_sign_in_works_without_the_cookie(self):
+        """The storefront is sandboxed: the redirect's token, not the cookie, signs the shopper in."""
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Sam", "last_name": "Cook", "email": "sam.cook@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        self.client.cookies.clear()
+        ok = self.client.post(f"{self.base}/account/login", {
+            "email": "sam.cook@example.com", "password": "Password123!",
+        })
+        self.assertEqual(ok.status_code, 302)
+        self.client.cookies.clear()  # what the sandboxed page really sends
+
+        account = self.client.get(ok.url)
+        self.assertEqual(account.status_code, 200)
+        html = account.content.decode()
+        self.assertIn("Welcome, Sam Cook", html)
+        self.assertIn('input.name = "ct"', html)  # forms and links pass the token on
+
+        # The profile and address forms post the token, not a cookie
+        token = unquote(ok.url.split("ct=", 1)[1])
+        saved = self.client.post(f"{self.base}/account/profile/", {
+            "first_name": "Samuel", "last_name": "Cook", "phone": "", "ct": token,
+        })
+        self.assertEqual(saved.status_code, 302)
+        self.assertIn("/account?notice=profile_saved&ct=", saved.url)
+        self.assertIn("Welcome, Samuel Cook", self.client.get(saved.url).content.decode())
+
+        # A wrong or foreign token does not sign anyone in
+        bad = self.client.get(f"{self.base}/account?ct=nonsense")
+        self.assertIn(f"{self.base}/account/login", bad.url)
+
+    def test_address_double_save_delete_and_customer_sync(self):
+        from apps.customers.models import Customer, CustomerAddress
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Dee", "last_name": "Lete", "email": "dee@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        address = {
+            "action": "add", "first_name": "Dee", "last_name": "Lete", "address_line_1": "1 Main St",
+            "city": "Pune", "state": "MH", "postal_code": "411001", "country": "India",
+        }
+        first = self.client.post(f"{self.base}/account/addresses/", address)
+        self.assertIn("notice=address_added", first.url)
+        # The same address saved again (a double click, any letter case) is not added twice
+        again = self.client.post(f"{self.base}/account/addresses/", {**address, "address_line_1": "1 MAIN ST "})
+        self.assertIn("notice=address_exists", again.url)
+        customer = Customer.objects.get(email="dee@example.com")
+        self.assertEqual(CustomerAddress.objects.filter(customer=customer).count(), 1)
+
+        # The customer row (what the admin Customers list shows) follows the default address
+        customer.refresh_from_db()
+        self.assertEqual((customer.city, customer.state, customer.country), ("Pune", "MH", "India"))
+
+        page = self.client.get(f"{self.base}/account/?notice=address_exists").content.decode()
+        self.assertIn("already in your address book", page)
+        self.assertIn("data-acct-ask", page)  # delete asks inline
+        self.assertNotIn("onsubmit=\"return confirm", page)  # the sandbox blocks the browser's confirm box
+
+        stored = CustomerAddress.objects.get(customer=customer)
+        gone = self.client.post(f"{self.base}/account/addresses/", {"action": "delete", "address_id": str(stored.pk)})
+        self.assertIn("notice=address_deleted", gone.url)
+        self.assertFalse(CustomerAddress.objects.filter(customer=customer).exists())
+        customer.refresh_from_db()
+        self.assertIsNone(customer.city)
 
     def test_account_page_requires_auth(self):
         # Unauthenticated redirects to login
@@ -5100,10 +5174,10 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         acc = self.client.get(f"{self.base}/account/")
         self.assertEqual(acc.status_code, 200)
         content = acc.content.decode()
-        self.assertIn("Hello, Alex", content)
+        self.assertIn("Welcome, Alex Rider", content)
         self.assertIn("alex.rider@example.com", content)
-        self.assertIn("Order History", content)
-        self.assertIn("Address Book", content)
+        self.assertIn("Order history", content)
+        self.assertIn("Saved addresses", content)
 
         # 3. Add an address
         add_res = self.client.post(f"{self.base}/account/addresses/", {
@@ -5177,7 +5251,7 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         r_auth = self.client.get(f"{self.base}/account/login")
         self.assertEqual(r_auth.status_code, 200)
         auth_html = r_auth.content.decode()
-        self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', auth_html)
+        self.assertIn('<h1 class="auth-heading__title">Welcome back</h1>', auth_html)
         self.assertIn('>Sign in</button>', auth_html)
         self.assertIn('Create an account', auth_html)
         self.assertIn(f'{self.base}/account/login', auth_html)
@@ -5248,7 +5322,7 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
             r_dest = self.client.get(f"{self.base}/account/login")
             self.assertEqual(r_dest.status_code, 200)
             dest_html = r_dest.content.decode()
-            self.assertIn('<h1 class="customer-card__title">Welcome back</h1>', dest_html)
+            self.assertIn('<h1 class="auth-heading__title">Welcome back</h1>', dest_html)
             self.assertIn('>Sign in</button>', dest_html)
             self.assertIn('Create an account', dest_html)
 

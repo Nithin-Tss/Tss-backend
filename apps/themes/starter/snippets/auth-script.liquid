@@ -1,0 +1,56 @@
+{%- comment -%} Show/hide password, messages under the fields, and one submit per form. Usage: {% render 'auth-script' %} {%- endcomment -%}
+<script>
+(function () {
+  if (window.tssAuthScript) return;
+  window.tssAuthScript = true;
+  function show(field, message) {
+    var box = field.querySelector("[data-auth-error]");
+    field.classList.toggle("has-error", !!message);
+    if (box) { box.textContent = message || ""; box.hidden = !message; }
+  }
+  function check(input) {
+    var field = input.closest("[data-auth-field]");
+    if (!field) return true;
+    var value = input.value.trim();
+    var label = (field.querySelector(".auth-label") || {}).textContent || "This field";
+    label = label.replace("(optional)", "").trim();
+    var message = "";
+    if (input.type === "checkbox") { if (input.required && !input.checked) message = "Please accept the Terms & Conditions."; }
+    else if (input.required && !value) message = label + " is required.";
+    else if (input.type === "email" && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) message = "Enter a valid email address.";
+    else if (input.minLength > 0 && value && input.value.length < input.minLength) message = "Use at least " + input.minLength + " characters.";
+    else if (input.getAttribute("data-match")) {
+      var other = document.getElementById(input.getAttribute("data-match"));
+      if (other && other.value !== input.value) message = "Passwords do not match.";
+    }
+    show(field, message);
+    return !message;
+  }
+  document.addEventListener("click", function (event) {
+    var toggle = event.target.closest && event.target.closest("[data-auth-toggle]");
+    if (!toggle) return;
+    var input = toggle.parentNode.querySelector("input");
+    var showing = input.type === "password";
+    input.type = showing ? "text" : "password";
+    toggle.setAttribute("aria-pressed", showing ? "true" : "false");
+    toggle.setAttribute("aria-label", showing ? "Hide password" : "Show password");
+  });
+  document.querySelectorAll("[data-auth-form]").forEach(function (form) {
+    form.querySelectorAll("input").forEach(function (input) {
+      input.addEventListener("blur", function () { if (input.type !== "hidden") check(input); });
+      input.addEventListener("input", function () { var f = input.closest("[data-auth-field]"); if (f && f.classList.contains("has-error")) check(input); });
+    });
+    form.addEventListener("submit", function (event) {
+      if (form.dataset.sending) { event.preventDefault(); return; }
+      var first = null;
+      form.querySelectorAll("input:not([type=hidden])").forEach(function (input) { if (!check(input) && !first) first = input; });
+      if (first) { event.preventDefault(); first.focus(); return; }
+      form.dataset.sending = "1";
+      setTimeout(function () {
+        var button = form.querySelector("[data-auth-submit]");
+        if (button) { button.disabled = true; button.textContent = button.getAttribute("data-busy"); }
+      }, 0);
+    });
+  });
+})();
+</script>

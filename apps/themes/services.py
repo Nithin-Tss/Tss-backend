@@ -59,6 +59,18 @@ REQUIRED_FILES = {
     "templates/account.liquid",
     "snippets/customer-auth.liquid",
     "snippets/customer-account.liquid",
+    "snippets/auth-styles.liquid",
+    "snippets/auth-header.liquid",
+    "snippets/auth-links.liquid",
+    "snippets/auth-login-form.liquid",
+    "snippets/auth-register-form.liquid",
+    "snippets/auth-script.liquid",
+    "snippets/account-styles.liquid",
+    "snippets/account-header.liquid",
+    "snippets/account-profile.liquid",
+    "snippets/account-addresses.liquid",
+    "snippets/account-orders.liquid",
+    "snippets/account-script.liquid",
     # Checkout
     "templates/checkout.liquid",
     "sections/main-checkout.liquid",
@@ -79,8 +91,37 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 41
+STARTER_REVISION = 42
 STARTER_UPGRADES = {
+    # Revision 42: the account page is built from blocks
+    "templates/account.liquid": {
+        "a52c2767aa520c9043cabf866f7407878fff7e3935cc74c84e7e7063e664822d",  # revision 42: before the account blocks (814f062)
+        "b203c7a1309345f0d22e22556ca4929ef54c525c8b684303fd57bb82d57c3e92",  # revision 42: before the account blocks (814f062 (CRLF))
+    },
+    # Revision 42: the account page is redesigned (sidebar, order cards, address cards) / sign-in pages follow the theme colors
+    "snippets/customer-account.liquid": {
+        "7041fe212de2e5d04be4bcba8f0b5e373a89dbdbb4be34db045ea2ee174c0373",  # revision 42: before the redesign (814f062)
+        "aae6026a602b5438e18943e80bd2838bbd5b23f3b843cc64ea3b1441c28f081d",  # revision 42: before the redesign (814f062 (CRLF))
+    },
+    # Revision 42: the account page is redesigned (sidebar, order cards, address cards) / sign-in pages follow the theme colors
+    "snippets/customer-auth.liquid": {
+        "b84db27b1f03df85937a47220b777f04eadc0385bce48011be5474d39fa0b718",  # revision 42: before the redesign (814f062)
+        "d1f648ba99a850284d02cf36afcd3d7511105cc33d1211b4686117c835d5d0af",  # revision 42: before the redesign (814f062 (CRLF))
+    },
+    # Revision 42: the account page is redesigned (sidebar, order cards, address cards) / sign-in pages follow the theme colors
+    "templates/login.liquid": {
+        "ec55159ed4ffbf789663b2925aa7eaf5d22e02c67828e9f715534e5f41b4f0bc",  # revision 42: before the redesign (96507bc)
+        "8fd5b0138ee0ae8c8f4ee4329c276a5f924d6c9995bc16f3359a7f934e809356",  # revision 42: before the redesign (96507bc (CRLF))
+        "839add7a0cd2e6909c02ebf3ed2c761cd59e8bd8910923e9c6a30cc53578f133",  # revision 42: before the redesign (814f062)
+        "7d9ba1a698f7d803e8a7564a8cac1bfdb3df1e18eaeb13c66b0b5b38e84b96fd",  # revision 42: before the redesign (814f062 (CRLF))
+    },
+    # Revision 42: the account page is redesigned (sidebar, order cards, address cards) / sign-in pages follow the theme colors
+    "templates/register.liquid": {
+        "1842702f2cd8ced80c9b59202c817d7b3f219a1c01e095c5e48e1d099e4020d4",  # revision 42: before the redesign (96507bc)
+        "68ff38b379a5e26175d08745f55fa2c8b9f4af2a56ba05b884e7dd7214c06dea",  # revision 42: before the redesign (96507bc (CRLF))
+        "35c1822760dfb327cb082f9bb473b0e5faaf44ade6f29bc0dcea5cd657762ba4",  # revision 42: before the redesign (814f062)
+        "c49eee1297c1efc439957e288b7d28f3c8558fa6733ae765b55852b5676deb19",  # revision 42: before the redesign (814f062 (CRLF))
+    },
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
         "bacf2337cd2d3e93a4ab383cb933621ab0d032e6e1dc8c7cd43355da5e06aff6",  # revision 35: before the heart script read form.getAttribute("action")

@@ -1,0 +1,117 @@
+{%- comment -%} Saved addresses: add, edit, make default, delete. Usage: {% render 'account-addresses', customer: customer %} {%- endcomment -%}
+<section class="acct-section acct-card" id="addresses" aria-labelledby="acct-addresses-title">
+  <div class="acct-head">
+    <div>
+      <h2 class="acct-title" id="acct-addresses-title">Saved addresses</h2>
+      <p class="acct-sub">Choose a default address or manage your saved delivery locations.</p>
+    </div>
+    <button type="button" class="acct-btn acct-btn--sm" data-acct-toggle="address-new">
+      
+      <span>Add new address</span>
+    </button>
+  </div>
+
+  <form class="acct-form acct-form--box" method="post" action="{{ shop.url }}/account/addresses/" id="address-new" data-acct-form hidden>
+    <input type="hidden" name="action" value="add">
+    <div class="acct-row">
+      <label class="acct-label" for="addr-first-name">First name<input id="addr-first-name" class="acct-input" type="text" name="first_name" value="{{ customer.first_name }}" required autocomplete="given-name"></label>
+      <label class="acct-label" for="addr-last-name">Last name<input id="addr-last-name" class="acct-input" type="text" name="last_name" value="{{ customer.last_name }}" required autocomplete="family-name"></label>
+    </div>
+    <label class="acct-label" for="addr-company">Company <small>(optional)</small><input id="addr-company" class="acct-input" type="text" name="company" autocomplete="organization"></label>
+    <label class="acct-label" for="addr-line1">Address<input id="addr-line1" class="acct-input" type="text" name="address_line_1" required placeholder="Street address" autocomplete="address-line1"></label>
+    <label class="acct-label" for="addr-line2">Apartment, suite, etc. <small>(optional)</small><input id="addr-line2" class="acct-input" type="text" name="address_line_2" autocomplete="address-line2"></label>
+    <div class="acct-row">
+      <label class="acct-label" for="addr-city">City / suburb<input id="addr-city" class="acct-input" type="text" name="city" required autocomplete="address-level2"></label>
+      <label class="acct-label" for="addr-state">State / province<input id="addr-state" class="acct-input" type="text" name="state" required autocomplete="address-level1"></label>
+    </div>
+    <div class="acct-row">
+      <label class="acct-label" for="addr-zip">Postcode<input id="addr-zip" class="acct-input" type="text" name="postal_code" required autocomplete="postal-code"></label>
+      <label class="acct-label" for="addr-country">Country<input id="addr-country" class="acct-input" type="text" name="country" required value="Australia" autocomplete="country-name"></label>
+    </div>
+    <label class="acct-label" for="addr-phone">Phone <small>(optional)</small><input id="addr-phone" class="acct-input" type="tel" name="phone" autocomplete="tel"></label>
+    <label class="acct-check" for="addr-default"><input id="addr-default" type="checkbox" name="is_default" value="true"><span>Set as default address</span></label>
+    <div class="acct-actions">
+      <button type="submit" class="acct-btn" data-acct-busy="Saving...">Save address</button>
+      <button type="button" class="acct-btn acct-btn--ghost" data-acct-toggle="address-new">Cancel</button>
+    </div>
+  </form>
+
+  {%- if customer.addresses.size > 0 -%}
+    <div class="acct-addresses">
+      {%- for addr in customer.addresses -%}
+        <article class="acct-address{% if addr.is_default %} acct-address--default{% endif %}">
+          <div class="acct-address__top">
+            <h3 class="acct-address__name">{{ addr.name | default: customer.name }}</h3>
+            {%- if addr.is_default -%}<span class="acct-pill">Default Address</span>{%- endif -%}
+          </div>
+          <div class="acct-address__lines" data-acct-view="address-{{ addr.id }}">
+            {%- if addr.company != blank -%}<span>{{ addr.company }}</span>{%- endif -%}
+            <span>{{ addr.address1 }}</span>
+            {%- if addr.address2 != blank -%}<span>{{ addr.address2 }}</span>{%- endif -%}
+            <span>{{ addr.city }}, {{ addr.state }} {{ addr.postal_code }}</span>
+            <span>{{ addr.country }}</span>
+            {%- if addr.phone != blank -%}<span class="acct-address__phone">{{ addr.phone }}</span>{%- endif -%}
+          </div>
+
+          <form class="acct-form" method="post" action="{{ shop.url }}/account/addresses/" id="address-{{ addr.id }}" data-acct-form hidden>
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="address_id" value="{{ addr.id }}">
+            <div class="acct-row">
+              <label class="acct-label" for="e{{ addr.id }}-first">First name<input id="e{{ addr.id }}-first" class="acct-input" type="text" name="first_name" value="{{ addr.first_name }}" required></label>
+              <label class="acct-label" for="e{{ addr.id }}-last">Last name<input id="e{{ addr.id }}-last" class="acct-input" type="text" name="last_name" value="{{ addr.last_name }}" required></label>
+            </div>
+            <label class="acct-label" for="e{{ addr.id }}-company">Company <small>(optional)</small><input id="e{{ addr.id }}-company" class="acct-input" type="text" name="company" value="{{ addr.company }}"></label>
+            <label class="acct-label" for="e{{ addr.id }}-line1">Address<input id="e{{ addr.id }}-line1" class="acct-input" type="text" name="address_line_1" value="{{ addr.address1 }}" required></label>
+            <label class="acct-label" for="e{{ addr.id }}-line2">Apartment, suite, etc.<input id="e{{ addr.id }}-line2" class="acct-input" type="text" name="address_line_2" value="{{ addr.address2 }}"></label>
+            <div class="acct-row">
+              <label class="acct-label" for="e{{ addr.id }}-city">City / suburb<input id="e{{ addr.id }}-city" class="acct-input" type="text" name="city" value="{{ addr.city }}" required></label>
+              <label class="acct-label" for="e{{ addr.id }}-state">State / province<input id="e{{ addr.id }}-state" class="acct-input" type="text" name="state" value="{{ addr.state }}" required></label>
+            </div>
+            <div class="acct-row">
+              <label class="acct-label" for="e{{ addr.id }}-zip">Postcode<input id="e{{ addr.id }}-zip" class="acct-input" type="text" name="postal_code" value="{{ addr.postal_code }}" required></label>
+              <label class="acct-label" for="e{{ addr.id }}-country">Country<input id="e{{ addr.id }}-country" class="acct-input" type="text" name="country" value="{{ addr.country }}" required></label>
+            </div>
+            <label class="acct-label" for="e{{ addr.id }}-phone">Phone<input id="e{{ addr.id }}-phone" class="acct-input" type="tel" name="phone" value="{{ addr.phone }}"></label>
+            {%- unless addr.is_default -%}
+              <label class="acct-check" for="e{{ addr.id }}-default"><input id="e{{ addr.id }}-default" type="checkbox" name="is_default" value="true"><span>Set as default address</span></label>
+            {%- endunless -%}
+            <div class="acct-actions">
+              <button type="submit" class="acct-btn acct-btn--sm" data-acct-busy="Saving...">Save changes</button>
+              <button type="button" class="acct-btn acct-btn--ghost acct-btn--sm" data-acct-toggle="address-{{ addr.id }}">Cancel</button>
+            </div>
+          </form>
+
+          <div class="acct-address__actions">
+            <button type="button" class="acct-link" data-acct-toggle="address-{{ addr.id }}">
+              Edit
+            </button>
+            {%- unless addr.is_default -%}
+              <form method="post" action="{{ shop.url }}/account/addresses/" data-acct-form>
+                <input type="hidden" name="action" value="set_default">
+                <input type="hidden" name="address_id" value="{{ addr.id }}">
+                <button type="submit" class="acct-link">Make default</button>
+              </form>
+            {%- endunless -%}
+            <form method="post" action="{{ shop.url }}/account/addresses/" data-acct-form data-acct-delete>
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="address_id" value="{{ addr.id }}">
+              <button type="button" class="acct-link acct-link--danger" data-acct-ask>
+                Delete
+              </button>
+              <span class="acct-confirm" data-acct-confirm hidden>
+                <span>Delete this address?</span>
+                <button type="submit" class="acct-link acct-link--danger">Yes, delete</button>
+                <button type="button" class="acct-link" data-acct-cancel>Keep</button>
+              </span>
+            </form>
+          </div>
+        </article>
+      {%- endfor -%}
+    </div>
+  {%- else -%}
+    <div class="acct-empty">
+      <h3>No saved addresses yet</h3>
+      <p>Add an address to check out faster next time.</p>
+    </div>
+  {%- endif -%}
+</section>

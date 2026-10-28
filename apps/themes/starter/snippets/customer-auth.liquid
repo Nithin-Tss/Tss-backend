@@ -281,8 +281,9 @@
       var confirm = form.querySelector("input[name='confirm_password']");
       if (confirm && pass && pass.value !== confirm.value) {
         e.preventDefault();
-        alert("Passwords do not match.");
-        confirm.focus();
+        confirm.setCustomValidity("Passwords do not match.");
+        confirm.reportValidity();
+        confirm.addEventListener("input", function() { confirm.setCustomValidity(""); }, { once: true });
         return;
       }
       var submitBtn = form.querySelector("[data-auth-submit]");

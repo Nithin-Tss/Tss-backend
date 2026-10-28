@@ -1,0 +1,85 @@
+{%- comment -%}
+  Customer account: the styles shared by the account blocks (account-header, account-profile, account-addresses,
+  account-orders, account-script). Plain on purpose. Colors follow the theme: --accent, --bg, --text.
+{%- endcomment -%}
+<style>
+  .customer-account { --acct-accent: var(--accent, #222); --acct-text: var(--text, #222); --acct-bg: var(--bg, #fff);
+    --acct-line: color-mix(in srgb, var(--acct-text) 18%, var(--acct-bg)); --acct-muted: color-mix(in srgb, var(--acct-text) 60%, var(--acct-bg));
+    box-sizing: border-box; display: grid; gap: 20px; width: 100%; max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; color: var(--acct-text); font-size: 15px; line-height: 1.5; }
+  .customer-account.customer-account.customer-account { border: 0; border-radius: 0; box-shadow: none; background: none; }
+  .customer-account *, .customer-account *::before, .customer-account *::after { box-sizing: border-box; }
+  .customer-account h1, .customer-account h2, .customer-account h3, .customer-account p { margin: 0; }
+  .acct-back { justify-self: start; font-size: 14px; color: var(--acct-muted); text-decoration: none; }
+  .acct-back:hover { text-decoration: underline; }
+  .acct-card { border: 1px solid var(--acct-line); border-radius: 4px; background: transparent; }
+  .acct-alert { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid var(--acct-line); border-radius: 4px; font-size: 14px; }
+  .acct-alert--ok { border-color: #2e7d32; color: #2e7d32; }
+  .acct-alert--err { border-color: #c62828; color: #c62828; }
+  .acct-alert button { border: 0; background: none; color: inherit; font-size: 18px; line-height: 1; cursor: pointer; padding: 0; }
+  .acct-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; }
+  .acct-header__who { min-width: 0; }
+  .acct-eyebrow { font-size: 12px; color: var(--acct-muted); }
+  .acct-welcome { font-size: clamp(22px, 3vw, 28px); line-height: 1.2; overflow-wrap: anywhere; }
+  .acct-sub { font-size: 14px; color: var(--acct-muted); }
+  .acct-header__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .acct-section { padding: 20px; }
+  .acct-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 16px; }
+  .acct-title { font-size: 20px; line-height: 1.25; }
+  .acct-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 16px; border: 1px solid var(--acct-accent); border-radius: 4px; font: inherit; font-size: 14px; text-decoration: none; cursor: pointer; color: var(--acct-bg); background: var(--acct-accent); }
+  .acct-btn:hover { opacity: .85; }
+  .acct-btn--ghost { color: var(--acct-accent); background: transparent; }
+  .acct-btn--ghost:hover { opacity: 1; background: color-mix(in srgb, var(--acct-text) 6%, transparent); }
+  .acct-btn--sm { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  .acct-btn[disabled] { opacity: .5; cursor: default; }
+  .acct-btn:focus-visible, .acct-link:focus-visible, .acct-input:focus-visible, .acct-back:focus-visible { outline: 2px solid var(--acct-accent); outline-offset: 2px; }
+  .acct-link { padding: 4px 0; border: 0; background: none; font: inherit; font-size: 14px; color: var(--acct-accent); text-decoration: underline; cursor: pointer; }
+  .acct-link--danger { color: #c62828; }
+  .acct-link[hidden], .acct-confirm[hidden] { display: none; }
+  .acct-empty { display: grid; gap: 6px; justify-items: start; padding: 4px 0; }
+  .acct-empty h3 { font-size: 16px; }
+  .acct-empty p { font-size: 14px; color: var(--acct-muted); }
+  .acct-empty .acct-btn { margin-top: 8px; }
+  .acct-fields { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; }
+  @media (min-width: 640px) { .acct-fields { grid-template-columns: repeat(3, 1fr); } .acct-field--wide { grid-column: 1 / -1; } }
+  .acct-fields[hidden] { display: none; }
+  .acct-field { min-width: 0; }
+  .acct-field dt { font-size: 13px; color: var(--acct-muted); }
+  .acct-field dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+  .acct-form { display: grid; gap: 14px; }
+  .acct-form[hidden], .acct-address__lines[hidden] { display: none; }
+  .acct-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 640px) { .acct-row { grid-template-columns: 1fr 1fr; } }
+  .acct-label { display: grid; gap: 4px; font-size: 14px; }
+  .acct-label small { color: var(--acct-muted); }
+  .acct-input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid var(--acct-line); border-radius: 4px; font: inherit; color: var(--acct-text); background: var(--acct-bg); }
+  .acct-input:focus { outline: none; border-color: var(--acct-accent); }
+  .acct-input:disabled { color: var(--acct-muted); }
+  .acct-check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+  .acct-check input { accent-color: var(--acct-accent); }
+  .acct-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .acct-form--box { margin-bottom: 16px; padding: 16px; border: 1px solid var(--acct-line); border-radius: 4px; }
+  .acct-addresses { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 700px) { .acct-addresses { grid-template-columns: 1fr 1fr; } }
+  .acct-address { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--acct-line); border-radius: 4px; }
+  .acct-address--default { border-color: var(--acct-accent); }
+  .acct-address__top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .acct-address__name { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  .acct-pill { font-size: 12px; color: var(--acct-muted); }
+  .acct-address__lines { display: grid; gap: 2px; font-size: 14px; color: var(--acct-muted); overflow-wrap: anywhere; }
+  .acct-address__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: auto; }
+  .acct-address__actions form { margin: 0; }
+  .acct-confirm { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; font-size: 14px; }
+  .acct-orders { display: grid; gap: 12px; }
+  .acct-order { padding: 16px; border: 1px solid var(--acct-line); border-radius: 4px; }
+  .acct-order__top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; }
+  .acct-order__num { font-weight: 600; }
+  .acct-order__date { display: block; font-size: 13px; color: var(--acct-muted); }
+  .acct-badges { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; color: var(--acct-muted); text-transform: capitalize; }
+  .acct-order__items { display: grid; gap: 4px; margin: 10px 0; padding: 10px 0; border-top: 1px solid var(--acct-line); border-bottom: 1px solid var(--acct-line); font-size: 14px; }
+  .acct-order__line { display: flex; justify-content: space-between; gap: 12px; }
+  .acct-order__line a { color: inherit; overflow-wrap: anywhere; }
+  .acct-order__line span { color: var(--acct-muted); white-space: nowrap; }
+  .acct-order__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+  .acct-order__total strong { margin-left: 6px; }
+  @media (max-width: 560px) { .acct-section, .acct-header { padding: 16px; } }
+</style>

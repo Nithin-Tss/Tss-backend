@@ -3,7 +3,7 @@ import re
 import time
 import uuid
 from functools import wraps
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
@@ -2366,6 +2366,8 @@ def storefront_page(store, request, params, handle):
 CUSTOMER_COOKIE_PREFIX = "tss_cust_"
 CUSTOMER_COOKIE_AGE = 30 * 24 * 60 * 60  # 30 days
 CUSTOMER_SALT = "tss_storefront_cust_session_v1"
+CUSTOMER_LINK_PARAM = "ct"
+CUSTOMER_LINK_AGE = 24 * 60 * 60  # the token a page passes along in its links and forms
 
 
 def customer_cookie_name(store):
@@ -2376,15 +2378,24 @@ def get_storefront_customer(store, request):
     """
     Returns (customer, user) if a customer session is active for this store, else (None, None).
     """
-    cookie_val = request.COOKIES.get(customer_cookie_name(store)) or request.headers.get("X-Customer-Token")
+    # The storefront is sandboxed, so its form posts and frames often cannot send the cookie: the page then
+    # carries a short-lived signed token in the link (?ct=) or the form (ct), like the cart id
+    sources = (
+        (request.COOKIES.get(customer_cookie_name(store)) or request.headers.get("X-Customer-Token"), CUSTOMER_COOKIE_AGE),
+        (request.GET.get(CUSTOMER_LINK_PARAM) or request.POST.get(CUSTOMER_LINK_PARAM), CUSTOMER_LINK_AGE),
+    )
     user = None
-    if cookie_val:
+    for token, max_age in sources:
+        if not token:
+            continue
         try:
-            data = signing.loads(cookie_val, salt=CUSTOMER_SALT, max_age=CUSTOMER_COOKIE_AGE)
+            data = signing.loads(token, salt=CUSTOMER_SALT, max_age=max_age)
             if data.get("store_id") == str(store.pk):
                 user = get_user_model().objects.filter(pk=data.get("user_id")).first()
         except Exception:
             user = None
+        if user is not None:
+            break
 
     if user is None:
         return None, None
@@ -2404,8 +2415,56 @@ def get_storefront_customer(store, request):
     return customer, user
 
 
+def customer_link_token(store, user):
+    return signing.dumps({"user_id": str(user.pk), "store_id": str(store.pk)}, salt=CUSTOMER_SALT)
+
+
+def signed_in_url(store, user, url):
+    """url with the signed-in customer's token, so the next page knows them without the cookie."""
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k != CUSTOMER_LINK_PARAM]
+    query.append((CUSTOMER_LINK_PARAM, customer_link_token(store, user)))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+ACCOUNT_NOTICES = {
+    "profile_saved": "Your details were saved.",
+    "address_added": "Address saved.",
+    "address_exists": "That address is already in your address book.",
+    "address_updated": "Address updated.",
+    "address_deleted": "Address deleted.",
+    "address_default": "Default address updated.",
+}
+
+
+def _account_redirect(store, request, user, notice=None):
+    """Back to the account page; a customer who came in by token (no cookie) keeps it."""
+    url = f"{shop_url(store)}/account"
+    if notice in ACCOUNT_NOTICES:
+        url += f"?notice={notice}"
+    if user is not None and (request.GET.get(CUSTOMER_LINK_PARAM) or request.POST.get(CUSTOMER_LINK_PARAM)):
+        url = signed_in_url(store, user, url)
+    return HttpResponseRedirect(url)
+
+
+def _sync_customer_location(customer):
+    """The customer's city, state and country follow their default address (what the admin Customers list shows)."""
+    addr = (
+        CustomerAddress.objects.filter(customer=customer).order_by("-is_default", "-created_at").first()
+    )
+    values = {"city": addr.city, "state": addr.state, "country": addr.country} if addr else {"city": None, "state": None, "country": None}
+    if any(getattr(customer, k) != v for k, v in values.items()):
+        for k, v in values.items():
+            setattr(customer, k, v)
+        customer.save(update_fields=[*values, "updated_at"])
+
+
+def _same_address(first, second):
+    return all((x or "").strip().lower() == (y or "").strip().lower() for x, y in zip(first, second))
+
+
 def set_storefront_customer_cookie(response, store, user):
-    token = signing.dumps({"user_id": str(user.pk), "store_id": str(store.pk)}, salt=CUSTOMER_SALT)
+    token = customer_link_token(store, user)
     response.set_cookie(
         customer_cookie_name(store),
         token,
@@ -2457,7 +2516,7 @@ def storefront_login(request, store_slug):
 
     customer, user = get_storefront_customer(store, request)
     if customer is not None and request.method == "GET":
-        return HttpResponseRedirect(f"{base}/account")
+        return _account_redirect(store, request, user)
 
     error = None
     if request.method == "POST":
@@ -2492,7 +2551,7 @@ def storefront_login(request, store_slug):
                         open_c.customer = customer
                         open_c.save(update_fields=["customer", "updated_at"])
 
-                response = HttpResponseRedirect(return_to)
+                response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                 set_storefront_customer_cookie(response, store, user)
                 return response
 
@@ -2517,7 +2576,7 @@ def storefront_register(request, store_slug):
 
     customer, user = get_storefront_customer(store, request)
     if customer is not None and request.method == "GET":
-        return HttpResponseRedirect(f"{base}/account")
+        return _account_redirect(store, request, user)
 
     error = None
     if request.method == "POST":
@@ -2564,7 +2623,7 @@ def storefront_register(request, store_slug):
                             open_c.customer = customer
                             open_c.save(update_fields=["customer", "updated_at"])
 
-                    response = HttpResponseRedirect(return_to)
+                    response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
                     return response
                 else:
@@ -2599,7 +2658,7 @@ def storefront_register(request, store_slug):
                             open_c.customer = customer
                             open_c.save(update_fields=["customer", "updated_at"])
 
-                    response = HttpResponseRedirect(return_to)
+                    response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
                     return response
                 except Exception as e:
@@ -2626,7 +2685,8 @@ def storefront_account(request, store_slug):
 
     html = render_page(
         store, "account", request=request, customer_page="account",
-        customer=customer, customer_user=user
+        customer=customer, customer_user=user,
+        auth_success=ACCOUNT_NOTICES.get(request.GET.get("notice", "")),
     )
     return _storefront_response(html, request=request, store=store)
 
@@ -2665,14 +2725,50 @@ def storefront_account_profile(request, store_slug):
                 user.last_name = last_name
                 user.phone = phone
                 user.save(update_fields=["first_name", "last_name", "phone", "updated_at"])
+            return _account_redirect(store, request, user, "profile_saved")
 
-    return HttpResponseRedirect(f"{base}/account")
+    return _account_redirect(store, request, user)
+
+
+def _customer_address(customer, raw_id):
+    """One of this customer's addresses by id, or None (unknown, someone else's, or not an id)."""
+    try:
+        return CustomerAddress.objects.filter(customer=customer, pk=raw_id).first()
+    except (ValueError, DjangoValidationError):
+        return None
+
+
+def _posted_address(post):
+    return {
+        "first_name": (post.get("first_name") or "").strip(),
+        "last_name": (post.get("last_name") or "").strip(),
+        "company": (post.get("company") or "").strip(),
+        "address_line_1": (post.get("address_line_1") or "").strip(),
+        "address_line_2": (post.get("address_line_2") or "").strip(),
+        "city": (post.get("city") or "").strip(),
+        "state": (post.get("state") or "").strip(),
+        "postal_code": (post.get("postal_code") or "").strip(),
+        "country": (post.get("country") or "Australia").strip(),
+        "phone": (post.get("phone") or "").strip(),
+    }
+
+
+_ADDRESS_KEY = ("address_line_1", "address_line_2", "city", "state", "postal_code", "country")
+
+
+def _duplicate_address(customer, fields, exclude=None):
+    """The customer's other address with the same street, city, state, postcode and country, if any."""
+    wanted = tuple(fields[k] for k in _ADDRESS_KEY)
+    for existing in CustomerAddress.objects.filter(customer=customer).exclude(pk=getattr(exclude, "pk", None)):
+        if _same_address(wanted, tuple(getattr(existing, k) for k in _ADDRESS_KEY)):
+            return existing
+    return None
 
 
 @xframe_options_exempt
 @csrf_exempt
 def storefront_account_address(request, store_slug):
-    """Storefront Customer Address action: add, delete, or set default address."""
+    """Storefront Customer Address action: add, edit, delete, or set default address."""
     store = get_object_or_404(Store, store_slug=store_slug)
     base = shop_url(store)
     customer, user = get_storefront_customer(store, request)
@@ -2681,51 +2777,53 @@ def storefront_account_address(request, store_slug):
 
     if request.method == "POST":
         action = request.POST.get("action", "add")
-        if action == "add":
-            first_name = (request.POST.get("first_name") or "").strip()
-            last_name = (request.POST.get("last_name") or "").strip()
-            company = (request.POST.get("company") or "").strip()
-            line1 = (request.POST.get("address_line_1") or "").strip()
-            line2 = (request.POST.get("address_line_2") or "").strip()
-            city = (request.POST.get("city") or "").strip()
-            state = (request.POST.get("state") or "").strip()
-            postal_code = (request.POST.get("postal_code") or "").strip()
-            country = (request.POST.get("country") or "Australia").strip()
-            phone = (request.POST.get("phone") or "").strip()
-            is_default = bool(request.POST.get("is_default"))
+        fields = _posted_address(request.POST)
+        is_default = bool(request.POST.get("is_default"))
+        complete = all(fields[k] for k in ("address_line_1", "city", "state", "postal_code"))
+        notice = None
 
-            if line1 and city and state and postal_code:
-                addr = CustomerAddress.objects.create(
-                    customer=customer,
-                    address_type="shipping",
-                    first_name=first_name,
-                    last_name=last_name,
-                    company=company,
-                    address_line_1=line1,
-                    address_line_2=line2,
-                    city=city,
-                    state=state,
-                    postal_code=postal_code,
-                    country=country,
-                    phone=phone,
-                    is_default=is_default,
-                )
+        if action == "add" and complete:
+            duplicate = _duplicate_address(customer, fields)
+            if duplicate is not None:
+                # Saving the same address twice (a double click) does not add it again
+                if is_default and not duplicate.is_default:
+                    customer_services.set_default_address(duplicate)
+                notice = "address_exists"
+            else:
+                addr = CustomerAddress.objects.create(customer=customer, address_type="shipping", is_default=is_default, **fields)
                 if is_default:
                     customer_services.set_default_address(addr)
                 elif CustomerAddress.objects.filter(customer=customer).count() == 1:
                     addr.is_default = True
                     addr.save(update_fields=["is_default", "updated_at"])
+                notice = "address_added"
+
+        elif action == "edit" and complete:
+            addr = _customer_address(customer, request.POST.get("address_id"))
+            if addr is not None:
+                if _duplicate_address(customer, fields, exclude=addr) is not None:
+                    notice = "address_exists"
+                else:
+                    for key, value in fields.items():
+                        setattr(addr, key, value)
+                    addr.save()
+                    if is_default and not addr.is_default:
+                        customer_services.set_default_address(addr)
+                    notice = "address_updated"
 
         elif action == "delete":
-            addr_id = request.POST.get("address_id")
-            addr = CustomerAddress.objects.filter(customer=customer, pk=addr_id).first()
-            if addr:
+            addr = _customer_address(customer, request.POST.get("address_id"))
+            if addr is not None:
                 customer_services.delete_address(addr)
+                notice = "address_deleted"
 
         elif action == "set_default":
-            addr_id = request.POST.get("address_id")
-            addr = CustomerAddress.objects.filter(customer=customer, pk=addr_id).first()
-            if addr:
+            addr = _customer_address(customer, request.POST.get("address_id"))
+            if addr is not None:
                 customer_services.set_default_address(addr)
+                notice = "address_default"
 
-    return HttpResponseRedirect(f"{base}/account")
+        _sync_customer_location(customer)
+        return _account_redirect(store, request, user, notice)
+
+    return _account_redirect(store, request, user)

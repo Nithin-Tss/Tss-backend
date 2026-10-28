@@ -1,0 +1,39 @@
+{%- comment -%} Personal information, with an inline edit form (posts to /account/profile/). Usage: {% render 'account-profile', customer: customer %} {%- endcomment -%}
+<section class="acct-section acct-card" id="profile" aria-labelledby="acct-profile-title">
+  <div class="acct-head">
+    <div>
+      <h2 class="acct-title" id="acct-profile-title">Personal information</h2>
+      <p class="acct-sub">Your account details and contact information.</p>
+    </div>
+  </div>
+
+  <dl class="acct-fields" data-acct-view="profile-form">
+    <div class="acct-field"><dt>First name</dt><dd>{{ customer.first_name | default: '—' }}</dd></div>
+    <div class="acct-field"><dt>Last name</dt><dd>{{ customer.last_name | default: '—' }}</dd></div>
+    <div class="acct-field"><dt>Mobile</dt><dd>{{ customer.phone | default: 'Not specified' }}</dd></div>
+    <div class="acct-field acct-field--wide"><dt>Email</dt><dd>{{ customer.email }}</dd></div>
+  </dl>
+
+  <form class="acct-form" method="post" action="{{ shop.url }}/account/profile/" id="profile-form" data-acct-form hidden>
+    <div class="acct-row">
+      <label class="acct-label" for="profile-first-name">First name
+        <input id="profile-first-name" class="acct-input" type="text" name="first_name" value="{{ customer.first_name }}" required autocomplete="given-name">
+      </label>
+      <label class="acct-label" for="profile-last-name">Last name
+        <input id="profile-last-name" class="acct-input" type="text" name="last_name" value="{{ customer.last_name }}" required autocomplete="family-name">
+      </label>
+    </div>
+    <div class="acct-row">
+      <label class="acct-label" for="profile-email">Email <small>(your sign-in email)</small>
+        <input id="profile-email" class="acct-input" type="email" value="{{ customer.email }}" disabled>
+      </label>
+      <label class="acct-label" for="profile-phone">Mobile
+        <input id="profile-phone" class="acct-input" type="tel" name="phone" value="{{ customer.phone }}" autocomplete="tel">
+      </label>
+    </div>
+    <div class="acct-actions">
+      <button type="submit" class="acct-btn" data-acct-busy="Saving...">Save changes</button>
+      <button type="button" class="acct-btn acct-btn--ghost" data-acct-toggle="profile-form">Cancel</button>
+    </div>
+  </form>
+</section>

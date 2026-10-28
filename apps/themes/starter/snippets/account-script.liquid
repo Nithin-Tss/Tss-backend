@@ -1,0 +1,50 @@
+{%- comment -%} Edit panels, inline delete confirmation, one submit per form. Usage: {% render 'account-script' %} {%- endcomment -%}
+<script>
+(function() {
+  var root = document.querySelector(".customer-account");
+  if (!root || root.dataset.acctReady) return;
+  root.dataset.acctReady = "1";
+
+  // Edit / add panels: the button swaps the details for the form (and back)
+  root.querySelectorAll("[data-acct-toggle]").forEach(function(button) {
+    button.addEventListener("click", function() {
+      var form = document.getElementById(button.getAttribute("data-acct-toggle"));
+      if (!form) return;
+      var opening = form.hidden;
+      form.hidden = !opening;
+      var view = root.querySelector('[data-acct-view="' + form.id + '"]');
+      if (view) view.hidden = opening;
+      if (opening) { var first = form.querySelector("input:not([type=hidden]):not([disabled])"); if (first) first.focus(); }
+    });
+  });
+
+  // Delete asks inline: the storefront is sandboxed, so the browser's confirm box never opens
+  root.querySelectorAll("[data-acct-delete]").forEach(function(form) {
+    var ask = form.querySelector("[data-acct-ask]");
+    var box = form.querySelector("[data-acct-confirm]");
+    var cancel = form.querySelector("[data-acct-cancel]");
+    if (!ask || !box) return;
+    ask.addEventListener("click", function() { ask.hidden = true; box.hidden = false; });
+    if (cancel) cancel.addEventListener("click", function() { box.hidden = true; ask.hidden = false; ask.focus(); });
+  });
+
+  // One submit per form: a double click does not save (or delete) twice
+  root.querySelectorAll("[data-acct-form]").forEach(function(form) {
+    form.addEventListener("submit", function(event) {
+      if (form.dataset.sending) { event.preventDefault(); return; }
+      form.dataset.sending = "1";
+      setTimeout(function() {
+        form.querySelectorAll("button[type='submit']").forEach(function(button) {
+          button.disabled = true;
+          var text = button.getAttribute("data-acct-busy");
+          if (text) button.textContent = text;
+        });
+      }, 0);
+    });
+  });
+
+  root.querySelectorAll("[data-acct-dismiss]").forEach(function(button) {
+    button.addEventListener("click", function() { button.parentNode.remove(); });
+  });
+})();
+</script>

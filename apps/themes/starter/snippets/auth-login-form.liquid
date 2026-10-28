@@ -1,0 +1,22 @@
+{%- comment -%}
+  The sign-in form (posts email + password to /account/login). Edit the labels, placeholders and fields here.
+  Usage: {% render 'auth-login-form', return_url: return_url, customer: customer %}
+{%- endcomment -%}
+<form class="auth-form" method="post" action="{{ shop.url }}/account/login" novalidate data-auth-form>
+  <input type="hidden" name="return_to" value="{{ return_url | default: '' }}">
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="login-email">Email</label>
+    <input id="login-email" class="auth-input" type="email" name="email" required autocomplete="email" placeholder="name@example.com" value="{{ customer.email }}">
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="login-password">Password</label>
+    <div class="auth-password">
+      <input id="login-password" class="auth-input" type="password" name="password" required autocomplete="current-password" placeholder="Enter your password">
+      <button type="button" class="auth-password__toggle" data-auth-toggle aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <label class="auth-check" for="login-remember"><input id="login-remember" type="checkbox" name="remember_me" value="true"><span>Remember me</span></label>
+  <button type="submit" class="auth-submit" data-auth-submit data-busy="Signing in...">Sign in</button>
+</form>

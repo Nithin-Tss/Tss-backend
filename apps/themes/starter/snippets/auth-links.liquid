@@ -1,0 +1,9 @@
+{%- comment -%} The links under the form. Usage: {% render 'auth-links', mode: 'login', return_url: return_url %} (mode: login | register) {%- endcomment -%}
+<div class="auth-links">
+  {%- if mode == 'register' -%}
+    <p>Already have an account? <a href="{{ shop.url }}/account/login{% if return_url != blank %}?return_to={{ return_url | url_encode }}{% endif %}">Sign in</a></p>
+  {%- else -%}
+    <p>New here? <a href="{{ shop.url }}/account/register{% if return_url != blank %}?return_to={{ return_url | url_encode }}{% endif %}">Create an account</a></p>
+  {%- endif -%}
+  <p><a class="auth-links__subtle" href="{{ shop.url }}/">&larr; Return to store</a></p>
+</div>

@@ -219,6 +219,11 @@
   .customer-account__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 32px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
   .customer-account__title { font-size: clamp(26px, 3.5vw, 36px); margin: 0 0 6px; }
   .customer-account__email { margin: 0; color: var(--muted); font-size: 15px; }
+  .customer-account__identity { display: flex; align-items: center; gap: 16px; }
+  .customer-account__avatar { flex: none; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; font-size: 22px; font-weight: 700; color: #fff; background: var(--accent); }
+  .customer-account__intro .customer-account__title { margin-bottom: 2px; }
+  .account-card { box-shadow: 0 8px 24px -16px color-mix(in srgb, var(--text) 30%, transparent); }
+  .order-item__number { letter-spacing: .01em; }
   .customer-account__grid { display: grid; grid-template-columns: 1fr; gap: 32px; }
   @media (min-width: 960px) { .customer-account__grid { grid-template-columns: 1.4fr 1fr; align-items: start; } }
   .account-card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; margin-bottom: 24px; }
@@ -258,6 +263,18 @@
   .address-item__actions { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
   .action-link-btn { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
   .action-link-btn--danger { color: #dc2626; }
+  .address-delete, .address-default { display: inline; margin: 0; }
+  .delete-confirm { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .delete-confirm[hidden] { display: none; }
+  .address-item { transition: border-color .15s, box-shadow .15s; }
+  .address-item:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 6px 18px -12px color-mix(in srgb, var(--text) 40%, transparent); }
+  .address-item__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .address-item__actions .action-sep { display: none; }
+  .address-item__name { font-size: 14px; }
+  .badge--default { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); color: var(--accent); border-radius: 999px; padding: 2px 10px; font-size: 11px; font-weight: 700; }
+  .empty-state-subtle { padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: calc(var(--radius) / 2); color: var(--muted); font-size: 13px; }
+  .empty-state-subtle p { margin: 0; }
+  .customer-account .form-actions .button[disabled], .customer-account .button[disabled] { opacity: .6; cursor: default; }
   .action-sep { margin: 0 6px; color: var(--muted); }
   .badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .02em; }
   .badge--paid, .badge--fulfilled { background: #dcfce7; color: #15803d; }

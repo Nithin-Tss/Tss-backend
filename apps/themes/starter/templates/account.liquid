@@ -1,8 +1,14 @@
 {%- comment -%}
-  Customer Account Dashboard template. Displays order history, customer profile, and saved addresses.
+  Customer account page, built from blocks (snippets/account-*.liquid). Reorder, remove or edit the lines below.
+  Available: shop.url, customer (name, email, phone, addresses, orders), wishlist_count, error, success.
 {%- endcomment -%}
 <section class="section customer-account-section">
-  <div class="page-width">
-    {% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success %}
+  <div class="customer-account">
+    {% render 'account-styles' %}
+    {% render 'account-header', customer: customer, error: error, success: success, wishlist_count: wishlist_count %}
+    {% render 'account-profile', customer: customer %}
+    {% render 'account-addresses', customer: customer %}
+    {% render 'account-orders', customer: customer %}
+    {% render 'account-script' %}
   </div>
 </section>

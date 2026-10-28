@@ -1,0 +1,50 @@
+{%- comment -%}
+  The create-account form (posts first_name, last_name, email, phone, password, confirm_password, agree_terms, newsletter
+  to /account/register). Edit the labels, placeholders and fields here.
+  Usage: {% render 'auth-register-form', return_url: return_url %}
+{%- endcomment -%}
+<form class="auth-form" method="post" action="{{ shop.url }}/account/register" novalidate data-auth-form>
+  <input type="hidden" name="return_to" value="{{ return_url | default: '' }}">
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-first-name">First name</label>
+    <input id="register-first-name" class="auth-input" type="text" name="first_name" required autocomplete="given-name" placeholder="First name">
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-last-name">Last name</label>
+    <input id="register-last-name" class="auth-input" type="text" name="last_name" required autocomplete="family-name" placeholder="Last name">
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-email">Email</label>
+    <input id="register-email" class="auth-input" type="email" name="email" required autocomplete="email" placeholder="name@example.com">
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-phone">Mobile number <span class="auth-optional">(optional)</span></label>
+    <input id="register-phone" class="auth-input" type="tel" name="phone" autocomplete="tel" placeholder="+1 555-0199">
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-password">Password</label>
+    <div class="auth-password">
+      <input id="register-password" class="auth-input" type="password" name="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters">
+      <button type="button" class="auth-password__toggle" data-auth-toggle aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-label" for="register-confirm-password">Confirm password</label>
+    <div class="auth-password">
+      <input id="register-confirm-password" class="auth-input" type="password" name="confirm_password" required minlength="8" data-match="register-password" autocomplete="new-password" placeholder="Re-enter password">
+      <button type="button" class="auth-password__toggle" data-auth-toggle aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    </div>
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <div class="auth-field" data-auth-field>
+    <label class="auth-check" for="register-terms"><input id="register-terms" type="checkbox" name="agree_terms" value="true" required><span>I agree to the <a href="{{ shop.url }}/pages/terms" target="_blank" rel="noopener">Terms &amp; Conditions</a></span></label>
+    <p class="auth-error" data-auth-error hidden></p>
+  </div>
+  <label class="auth-check" for="register-newsletter"><input id="register-newsletter" type="checkbox" name="newsletter" value="true"><span>Subscribe to updates and promotions</span></label>
+  <button type="submit" class="auth-submit" data-auth-submit data-busy="Creating account...">Create account</button>
+</form>

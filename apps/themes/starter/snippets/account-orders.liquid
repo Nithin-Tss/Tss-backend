@@ -1,0 +1,54 @@
+{%- comment -%} Order history, from the customer's real orders. Usage: {% render 'account-orders', customer: customer %} {%- endcomment -%}
+<section class="acct-section acct-card" id="orders" aria-labelledby="acct-orders-title">
+  <div class="acct-head">
+    <div>
+      <h2 class="acct-title" id="acct-orders-title">Order history</h2>
+      <p class="acct-sub">View previous purchases and open individual order details.</p>
+    </div>
+  </div>
+
+  {%- if customer.orders.size > 0 -%}
+    <div class="acct-orders">
+      {%- for order in customer.orders -%}
+        {%- assign p_status = order.status | downcase -%}
+        {%- assign f_status = order.fulfillment_status | downcase -%}
+        <article class="acct-order">
+          <div class="acct-order__top">
+            <div>
+              <span class="acct-order__num">Order {{ order.order_number }}</span>
+              <span class="acct-order__date">{{ order.date }}</span>
+            </div>
+            <div class="acct-badges">
+              <span class="acct-badge{% if p_status == 'paid' or p_status == 'completed' %} acct-badge--good{% elsif p_status == 'pending' or p_status == 'open' or p_status == 'partially_paid' %} acct-badge--wait{% elsif p_status == 'cancelled' or p_status == 'refunded' or p_status == 'failed' or p_status == 'voided' %} acct-badge--bad{% endif %}">{{ order.status | replace: '_', ' ' }}</span>
+              <span class="acct-badge{% if f_status == 'fulfilled' or f_status == 'delivered' %} acct-badge--good{% elsif f_status == 'unfulfilled' or f_status == 'partial' or f_status == 'partially_fulfilled' or f_status == 'shipped' %} acct-badge--wait{% elsif f_status == 'cancelled' or f_status == 'returned' %} acct-badge--bad{% endif %}">{{ order.fulfillment_status | replace: '_', ' ' }}</span>
+            </div>
+          </div>
+          {%- if order.items.size > 0 -%}
+            <div class="acct-order__items">
+              {%- for item in order.items limit: 3 -%}
+                <div class="acct-order__line">
+                  <a href="{{ item.product_url }}">{{ item.title }}</a>
+                  <span>&times; {{ item.quantity }} &middot; {{ item.total_price | money }}</span>
+                </div>
+              {%- endfor -%}
+              {%- if order.items.size > 3 -%}
+                {%- assign more = order.items.size | minus: 3 -%}
+                <div class="acct-order__line"><span>+ {{ more }} more {% if more == 1 %}item{% else %}items{% endif %}</span></div>
+              {%- endif -%}
+            </div>
+          {%- endif -%}
+          <div class="acct-order__foot">
+            <span class="acct-order__total">Total<strong>{{ order.total | money }}</strong></span>
+            <a class="acct-btn acct-btn--ghost acct-btn--sm" href="{{ shop.url }}/checkout/order/{{ order.id }}/">View order</a>
+          </div>
+        </article>
+      {%- endfor -%}
+    </div>
+  {%- else -%}
+    <div class="acct-empty">
+      <h3>No orders yet</h3>
+      <p>Your orders will appear here once you make your first purchase.</p>
+      <a href="{{ shop.url }}/collections/all" class="acct-btn">Explore products</a>
+    </div>
+  {%- endif -%}
+</section>
