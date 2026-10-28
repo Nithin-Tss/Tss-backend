@@ -86,6 +86,19 @@ class StripeTests(base_tests.CommerceTestBase):
         r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
         self.assertEqual(r.status_code, 400)
 
+    def test_payment_session_rejects_insufficient_stock_without_creating_payment(self):
+        checkout = self.checkout(quantity=2)
+        self.client_mock.v1.payment_intents.create.return_value = intent(checkout, status="requires_payment_method")
+        from apps.inventory.services import set_available
+        set_available(self.variant, self.location, 1)
+
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Only 1 of Tee left", str(r.data))
+        self.client_mock.v1.payment_intents.create.assert_not_called()
+        self.assertEqual(Payment.objects.count(), 0)
+
     def test_paid_intent_places_one_captured_order_even_if_finalized_twice(self):
         checkout = self.checkout()
         paid = intent(checkout)

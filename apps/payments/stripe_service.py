@@ -115,6 +115,9 @@ def payment_session(checkout):
     if checkout.total_amount <= 0:
         raise ValidationError("There is nothing to pay for.")
 
+    for item in checkout.items.filter(is_deleted=False).select_related("product", "variant"):
+        commerce._check_stock(item.product, item.variant, item.quantity)
+
     store = checkout.store
     options = {"stripe_account": store.stripe_account_id}
     amount = to_minor_units(checkout.total_amount, checkout.currency)

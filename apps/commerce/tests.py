@@ -126,6 +126,38 @@ class StorefrontApiTests(CommerceTestBase):
         other = self.client.get(f"{self.base}/checkout/{r.data['id']}/", HTTP_X_CART_SESSION="someone-else-aaaaaaaa")
         self.assertEqual(other.status_code, 404)
 
+    def test_checkout_start_rejects_stock_reduced_after_add_to_cart(self):
+        h = {"HTTP_X_CART_SESSION": "sess-1-aaaaaaaaaaaa"}
+        added = self.client.post(
+            f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 2}, format="json", **h
+        )
+        self.assertEqual(added.status_code, 201, added.data)
+        set_available(self.variant, self.location, 1)
+
+        checkout = self.client.post(f"{self.base}/checkout/", {"email": "a@b.com"}, format="json", **h)
+
+        self.assertEqual(checkout.status_code, 400)
+        self.assertIn("Only 1 of Tee left", str(checkout.data))
+
+    def test_untracked_variant_is_sold_out_at_checkout_unless_continue_selling(self):
+        from apps.inventory.models import InventoryItem
+
+        h = {"HTTP_X_CART_SESSION": "sess-1-aaaaaaaaaaaa"}
+        added = self.client.post(
+            f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 1}, format="json", **h
+        )
+        self.assertEqual(added.status_code, 201, added.data)
+        InventoryItem.objects.filter(variant=self.variant).delete()
+
+        sold_out = self.client.post(f"{self.base}/checkout/", {}, format="json", **h)
+        self.assertEqual(sold_out.status_code, 400)
+        self.assertIn("Tee is sold out", str(sold_out.data))
+
+        self.variant.continue_selling = True
+        self.variant.save(update_fields=["continue_selling"])
+        allowed = self.client.post(f"{self.base}/checkout/", {}, format="json", **h)
+        self.assertEqual(allowed.status_code, 201, allowed.data)
+
     def test_requires_session_header(self):
         self.assertEqual(self.client.get(f"{self.base}/cart/").status_code, 400)
 

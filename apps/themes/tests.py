@@ -5009,6 +5009,42 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.assertEqual(order.items.first().product.title, "Minimalist Lamp")
         self.assertEqual(order.items.first().quantity, 2)
 
+    def test_checkout_renders_stock_error_if_stock_runs_out_before_order_placement(self):
+        import re
+        from unittest import mock
+
+        from apps.commerce import services as commerce_services
+        from apps.inventory.models import InventoryItem
+
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        added = self.shopper.post(
+            f"{self.base}/cart/add",
+            data=json.dumps({"product": self.product["id"], "quantity": 2}),
+            content_type="application/json",
+            HTTP_X_CART_SESSION=session_id,
+        )
+        self.assertEqual(added.status_code, 200, added.content[:300])
+
+        place_order = commerce_services.place_order
+
+        def run_out_then_place(checkout, payment_method="cod"):
+            InventoryItem.objects.filter(variant_id=self.product["variants"][0]["id"]).update(available=1)
+            return place_order(checkout, payment_method=payment_method)
+
+        with mock.patch("apps.themes.views.commerce_services.place_order", side_effect=run_out_then_place):
+            response = self.shopper.post(
+                f"{self.base}/checkout?cart={session_id}",
+                data={
+                    "email": "buyer@example.com", "first_name": "Buyer", "last_name": "One",
+                    "address1": "1 Main St", "city": "Pune", "postal_code": "411001",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Only 1 of Minimalist Lamp left", response.content.decode())
+
     def test_sandboxed_checkout_json_places_order(self):
         """The sandboxed page (origin null) preflights, then POSTs JSON: both must work and the order must exist."""
         import re
