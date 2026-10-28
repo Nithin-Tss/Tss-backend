@@ -1,5 +1,5 @@
 {%- comment -%}
-  Header and navigation. Its options and menu links are edited in the customizer's
+  Header and navigation, with the announcement banner above it. Its options and menu links are edited in the customizer's
   left sidebar (Header) or here, in the schema at the end of this file: the two stay in step.
   Read values only through section.settings and block.settings.
   {{ section.attrs }} and {{ block.attrs }} let the customizer's Edit mode select the header
@@ -20,6 +20,17 @@
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
 {%- endcapture -%}
+{%- if s.announcement_text != blank -%}
+  {%- capture announcement_style -%}
+    {% if s.announcement_bg != blank %}background:{{ s.announcement_bg }};{% endif %}
+    {% if s.announcement_color != blank %}color:{{ s.announcement_color }};{% endif %}
+  {%- endcapture -%}
+  {%- if s.announcement_link != blank -%}
+    <a class="announcement announcement--link" href="{{ s.announcement_link | link }}" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</a>
+  {%- else -%}
+    <div class="announcement" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</div>
+  {%- endif -%}
+{%- endif -%}
 <header class="site-header"{{ section.attrs }}
   data-sticky="{% if s.sticky %}true{% else %}false{% endif %}"
   data-border="{% if s.border %}true{% else %}false{% endif %}"
@@ -143,6 +154,10 @@
   "name": "Header",
   "max_blocks": 12,
   "settings": [
+    {"type": "text", "id": "announcement_text", "label": "Announcement text", "default": "", "info": "A banner above the header. Empty hides it."},
+    {"type": "url", "id": "announcement_link", "label": "Announcement link", "default": "", "info": "Optional. Makes the whole banner a link."},
+    {"type": "color", "id": "announcement_bg", "label": "Announcement colour", "default": "", "info": "None uses the accent colour."},
+    {"type": "color", "id": "announcement_color", "label": "Announcement text colour", "default": ""},
     {"type": "text", "id": "logo_text", "label": "Logo text", "default": "", "info": "Empty uses the store name."},
     {"type": "image", "id": "logo_image", "label": "Logo image", "default": "", "info": "Optional. Shown instead of the logo text."},
     {"type": "range", "id": "logo_height", "label": "Logo image height", "min": 16, "max": 96, "step": 2, "unit": "px", "default": 36},
