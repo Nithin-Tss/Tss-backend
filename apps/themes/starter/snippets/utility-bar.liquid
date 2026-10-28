@@ -1,0 +1,34 @@
+{%- comment -%}
+  Utility bar: a thin strip above the announcement bar and header with a short message,
+  contact details and quick links. Theme settings > Utility bar.
+{%- endcomment -%}
+{%- if settings.utility_show -%}
+  {%- capture utility_style -%}
+    {% if settings.utility_bg != blank %}background:{{ settings.utility_bg }};{% endif %}
+    {% if settings.utility_text != blank %}color:{{ settings.utility_text }};{% endif %}
+  {%- endcapture -%}
+  <div class="utility-bar" style="{{ utility_style | strip }}">
+    <div class="page-width utility-bar__inner">
+      <span class="utility-bar__message">{{ settings.utility_left }}</span>
+      <nav class="utility-bar__links" aria-label="Utility">
+        {%- if settings.utility_phone != blank -%}
+          <a href="tel:{{ settings.utility_phone | replace: ' ', '' }}">{{ settings.utility_phone }}</a>
+        {%- endif -%}
+        {%- if settings.utility_email != blank -%}
+          <a href="mailto:{{ settings.utility_email }}">{{ settings.utility_email }}</a>
+        {%- endif -%}
+        {%- for link in utility_links -%}
+          <a href="{{ link.url }}">{{ link.label }}</a>
+        {%- endfor -%}
+      </nav>
+    </div>
+  </div>
+  <style>
+    .utility-bar { background: var(--soft); color: var(--text); font-size: 13px; }
+    .utility-bar__inner { display: flex; align-items: center; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; min-height: 34px; padding-top: 4px; padding-bottom: 4px; }
+    .utility-bar__links { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+    .utility-bar a { color: inherit; text-decoration: none; }
+    .utility-bar a:hover { text-decoration: underline; }
+    @media (max-width: 640px) { .utility-bar__inner { justify-content: center; text-align: center; } }
+  </style>
+{%- endif -%}

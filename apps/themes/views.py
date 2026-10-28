@@ -2055,6 +2055,27 @@ def storefront_cart_add(request, store, cart_id):
 
 
 @_cart_api
+def storefront_newsletter(request, store, cart_id):
+    """The "Newsletter" section's form: subscribes an email address to the store's marketing emails."""
+    if request.method != "POST":
+        raise ValidationError("Use POST.")
+    body = _json_body(request)
+    email = str(body.get("email") or "").strip().lower()
+    if not email or len(email) > 320 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValidationError("Enter a valid email address.")
+    customer = Customer.objects.filter(store=store, email__iexact=email).first()
+    if customer is None:
+        try:
+            Customer.objects.create(store=store, email=email, email_subscription_status="subscribed")
+        except IntegrityError:
+            customer = Customer.objects.filter(store=store, email__iexact=email).first()
+    if customer is not None and customer.email_subscription_status != "subscribed":
+        customer.email_subscription_status = "subscribed"
+        customer.save(update_fields=["email_subscription_status", "updated_at"])
+    return JsonResponse({"ok": True})
+
+
+@_cart_api
 def storefront_cart_change(request, store, cart_id):
     if request.method != "POST":
         raise ValidationError("Use POST.")

@@ -64,6 +64,12 @@ REQUIRED_FILES = {
     "sections/main-checkout.liquid",
     # Promotions is available in the customizer for existing private starter themes too
     "sections/promotions.liquid",
+    # Newsletter sign-up, notice box and product quiz
+    "sections/newsletter.liquid",
+    "sections/static-text.liquid",
+    "sections/quiz.liquid",
+    # Utility bar (rendered by layout/theme.liquid)
+    "snippets/utility-bar.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -73,7 +79,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 39
+STARTER_REVISION = 40
 STARTER_UPGRADES = {
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
@@ -137,6 +143,8 @@ STARTER_UPGRADES = {
         "1a5b5ca920bb489f2047302eda3da0179b9b5b270c26e4b0a4d693f4afc61746",  # revision 12: before image description
     },
     "snippets/product-card.liquid": {
+        "398d8d724bab5ad97065bd9b16a31145d181518600b8ed553b1e0011c47f6cf7",  # revision 40: before product badges
+        "c44ea98c359fa9e3b1b9ae047ed460245c9b095042fb0b6579524ef3a157b762",  # revision 40: before product badges (CRLF)
         "341a3a0163521377c7875e8a3cfdf8e08fd9dd62706e571f1694fb92b5904a55",  # revision 34: before the heart was always visible
         "a2e09794890de06e1db5a67c118dd86cef2c18272f7dded78e128a7bc238eea3",  # revision 34: before the heart was always visible (CRLF)
         "329dd5b842b8f6f8abdd9889a6decda78ab452d10163e330becf5ddf6564cde7",  # revision 33: before the heart block has a label
@@ -167,6 +175,8 @@ STARTER_UPGRADES = {
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
     "sections/main-product.liquid": {
+        "a06239b4053ab69f9e0b19ca518ad3d1f6980250da33e609b95648dbb6317b19",  # revision 40: before tier cards, image zoom and badges
+        "f683ef5ba444617bc7095bbee0a9cdf06cc5fb8a5064020ecf5492fd80c606e2",  # revision 40: before tier cards, image zoom and badges (CRLF)
         "2685ec1e87b5219e6e06820aa4ae289a5535386e223a2224b03bf6fe4908eb44",  # revision 28: before the cart icon block on the product page
         "9ce1235a40d399e6785771e625150423c6d0a63d360fb557fc23f4c45a575ac2",  # revision 28: before the cart icon block on the product page (CRLF)
         "a7e5eb025dc28325a5b321a418da4f4fe0ec60105e4d9b683752a2c53f1b90ce",  # revision 21: before the cart snippet
@@ -200,7 +210,11 @@ STARTER_UPGRADES = {
         "c2f6ce7b1f7ace894ce3e08c7db7e2c04fb23e510cd2af90918140d223d994dd",  # same, with CRLF line endings
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
-    "layout/theme.liquid": {"5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9"},
+    "layout/theme.liquid": {
+        "5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9",
+        "1e15fb022e606f4564860490a7b4e62843f4cbba02475d210af15c77e8ca7c3f",  # revision 40: before the utility bar
+        "4dba4b04f36e6b14a9b43dc8ced1387eda1d44a0c78d6dd4d86d9f89df15cc2d",  # revision 40: before the utility bar (CRLF)
+    },
     "snippets/header.liquid": {"6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1"},
     "snippets/footer.liquid": {"46998966bcd74dab088da530528ad25f6fac556a3cd7d2224bcdb728e6bf3573"},
     "snippets/styles.liquid": {
@@ -212,6 +226,8 @@ STARTER_UPGRADES = {
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
+        "ccf3d4833be7820ed1c60e86ecc807f3ba8b4350e61ffed9eb29d1106ea33c00",  # revision 40: before search results
+        "bb1b45933761020191e633f0e635976d989c272c95c23653bdbb8c2fae6501f0",  # revision 40: before search results (CRLF)
         "2e2ebeacc9f1e9d175ff16ba6ab53cf5b9633838bf3a4532988d300fa8f215d7",  # revision 31: before the wishlist heart became a block
         "a6e33d8e535ba95094934f457f49dbe769020c86a41342f2ba1ea60a6232d2d2",  # revision 31: before the wishlist heart became a block (CRLF)
         "7230ca87ff484930cf8b845da2c3edf6cf6c17ee2d73fd25e7e0f24378559a5b",  # revision 27: before the cart icon became a block

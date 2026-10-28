@@ -1,0 +1,35 @@
+{%- comment -%}
+  Notice box: a short static message such as "Please drink responsibly", an age notice
+  or a shipping note.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+<section id="section-{{ section.id }}" class="section">
+  <div class="page-width">
+    <div class="notice notice--{{ s.box_style }} notice--size-{{ s.text_size }} align-{{ s.text_alignment }}" role="note"{% if s.border_color != blank %} style="--notice-border: {{ s.border_color }}"{% endif %}>
+      {%- if s.icon != 'none' -%}
+        <svg class="notice__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          {%- case s.icon -%}
+            {%- when 'info' -%}<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>
+            {%- when 'shield' -%}<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>
+            {%- when 'check' -%}<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>
+            {%- else -%}<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>
+          {%- endcase -%}
+        </svg>
+      {%- endif -%}
+      {%- if s.heading != blank -%}<h2 class="notice__heading">{{ s.heading }}</h2>{%- endif -%}
+      {%- if s.text != blank -%}<div class="notice__text">{{ s.text }}</div>{%- endif -%}
+    </div>
+  </div>
+</section>
+<style>
+  .notice { padding: 20px 24px; border-radius: 12px; display: grid; gap: 8px; justify-items: center; }
+  .notice.align-left { justify-items: start; }
+  .notice.align-right { justify-items: end; }
+  .notice--bordered { border: 1px solid var(--notice-border, var(--line)); }
+  .notice--filled { background: var(--soft); }
+  .notice__heading { margin: 0; font-size: 1.1em; }
+  .notice__text > :first-child { margin-top: 0; }
+  .notice__text > :last-child { margin-bottom: 0; }
+  .notice--size-small { font-size: 14px; }
+  .notice--size-large { font-size: 18px; }
+</style>

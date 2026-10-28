@@ -13,8 +13,14 @@
 <div class="product-card-shell">
 <a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
   <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}">
-    {%- comment -%} Quantity 0: still listed and clickable, marked "Sold out" {%- endcomment -%}
-    {%- if product.is_sold_out -%}<span class="product-card__badge">Sold out</span>{%- endif -%}
+    {%- comment -%} Badges over the image: "Sold out", "Few left", a "badge:..." tag, "New". Quantity 0 is still listed and clickable {%- endcomment -%}
+    {%- if product.badges.size > 0 -%}
+      <span class="product-card__badges">
+        {%- for badge in product.badges -%}
+          <span class="product-card__badge{% if badge == 'New' %} product-card__badge--new{% endif %}">{{ badge }}</span>
+        {%- endfor -%}
+      </span>
+    {%- endif -%}
     {%- if product.featured_image -%}
       <img src="{{ product.featured_image }}" alt="{{ product.title }}" loading="lazy">
     {%- else -%}

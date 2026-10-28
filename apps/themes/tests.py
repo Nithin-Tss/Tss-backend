@@ -2363,7 +2363,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 39)
+        self.assertEqual(theme.theme_data["starter_revision"], 40)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2963,9 +2963,11 @@ class WishlistHeartBlockTest(StoreClientMixin, APITestCase):
 
 def wishlist_era_main_product():
     """The starter product section from before the cart: add to cart only said "coming soon"."""
-    from .services import starter_files
+    from pathlib import Path
 
-    product = starter_files()["sections/main-product.liquid"]
+    # The starter's product section as of revision 39 (before tier cards, image zoom and badges): the
+    # edits below undo what the cart and the heart block added to that version
+    product = (Path(__file__).parent / "test_fixtures" / "main-product.rev39.liquid").read_text(encoding="utf-8")
     for new, old in (
         # the "Cart icon" block, added to the product page after the cart
         ("""      {%- comment -%} The "Cart icon" block: add, hide or move it in the customizer {%- endcomment -%}
@@ -3125,7 +3127,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 39)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 40)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5092,3 +5094,120 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.assertIn("Cash on Delivery (COD)", checkout_html)
         self.assertIn("Place order", checkout_html)
 
+
+
+class StorefrontBlocksTest(StoreClientMixin, APITestCase):
+    """Newsletter, notice box, quiz, utility bar, search, badges and the product page's tier cards and zoom."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("blocks@example.com", "Blocks Store")
+        self.base = f"/s/{self.store['storeSlug']}"
+        self.mug = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Blue mug", "sku": "SKU-MUG", "status": "active", "price": "12.50",
+        }, expect=201)
+        self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Red scarf", "sku": "SKU-SCARF", "status": "active", "price": "30.00",
+        }, expect=201)
+
+    def add_sections(self, page, sections):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        template = data["templates"][page]
+        template["sections"].update(sections)
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {page: {
+            "order": template["order"] + list(sections), "sections": template["sections"]}}})
+
+    def test_newsletter_notice_and_quiz_render_on_the_home_page(self):
+        self.add_sections("index", {
+            "news": {"type": "newsletter", "settings": {"heading": "Stay in touch"}},
+            "notice": {"type": "static-text", "settings": {"heading": "Please drink responsibly"}},
+            "quiz": {"type": "quiz", "settings": {"heading": "Find your match"}, "blocks": [
+                {"type": "question", "settings": {
+                    "question": "Hot or cold?", "option_1": "Hot", "tag_1": "hot", "option_2": "Cold", "tag_2": "cold"}},
+            ]},
+        })
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn("Stay in touch", html)
+        self.assertIn(f'action="{self.base}/newsletter"', html)
+        self.assertIn("Please drink responsibly", html)
+        self.assertIn('role="note"', html)
+        self.assertIn("Find your match", html)
+        self.assertIn('data-tag="hot"', html)
+        self.assertIn("Question 1 of 1", html)
+        self.assertNotIn("Cold hot", html)
+
+    def test_newsletter_subscribes_an_email_once_and_rejects_a_bad_one(self):
+        from apps.customers.models import Customer
+
+        url = f"{self.base}/newsletter"
+        bad = self.client.post(url, {"email": "nope"}, format="json")
+        self.assertEqual(bad.status_code, 400)
+        for _ in range(2):
+            ok = self.client.post(url, {"email": "Fan@Example.com"}, format="json")
+            self.assertEqual(ok.status_code, 200)
+        customers = Customer.objects.filter(store__store_slug=self.store["storeSlug"], email="fan@example.com")
+        self.assertEqual(customers.count(), 1)
+        self.assertEqual(customers.first().email_subscription_status, "subscribed")
+
+    def test_newsletter_resubscribes_a_customer_who_had_unsubscribed(self):
+        from apps.customers.models import Customer
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_slug=self.store["storeSlug"])
+        Customer.objects.create(store=store, email="back@example.com", email_subscription_status="unsubscribed")
+        self.assertEqual(self.client.post(f"{self.base}/newsletter", {"email": "back@example.com"}, format="json").status_code, 200)
+        self.assertEqual(Customer.objects.get(store=store, email="back@example.com").email_subscription_status, "subscribed")
+
+    def test_utility_bar_follows_the_theme_settings(self):
+        self.assertNotIn("utility-bar__inner", self.client.get(f"{self.base}/").content.decode())
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {
+            "utility_show": True, "utility_left": "Free delivery over 999", "utility_phone": "+91 99999 00000",
+            "utility_menu": "Track order | /account",
+        }})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn("Free delivery over 999", html)
+        self.assertIn('href="tel:+9199999' + '00000"', html)
+        self.assertIn(f'href="{self.base}/account">Track order</a>', html)
+
+    def test_search_lists_only_matching_products(self):
+        html = self.client.get(f"{self.base}/collections/all?q=mug").content.decode()
+        self.assertIn("Search results for &ldquo;mug&rdquo;", html)
+        self.assertIn("Blue mug", html)
+        self.assertNotIn("Red scarf", html)
+        none = self.client.get(f"{self.base}/collections/all?q=zzzz").content.decode()
+        self.assertIn("No products match these filters", none)
+
+    def test_product_cards_carry_badges(self):
+        html = self.client.get(f"{self.base}/collections/all").content.decode()
+        self.assertIn('product-card__badge product-card__badge--new">New</span>', html)
+
+    def test_product_badges_order_and_limit(self):
+        from .rendering import product_badges
+
+        self.assertEqual(product_badges(["badge:Best seller", "badge:Organic"], False, True, True), ["Few left", "Best seller"])
+        self.assertEqual(product_badges(["x"], True, False, True), ["Sold out", "New"])
+        self.assertEqual(product_badges(["badge:"], False, False, False), [])
+
+    def test_product_page_has_zoom_and_tier_cards(self):
+        from apps.catalog.models import ProductVariant
+
+        page = f"{self.base}/products/{self.mug['id']}"
+        html = self.client.get(page).content.decode()
+        self.assertIn('data-zoom="hover"', html)
+        self.assertIn("product__main-image--zoom-hover", html)
+        self.assertNotIn("data-tiers", html)  # one option: nothing to choose
+
+        ProductVariant.objects.create(product_id=self.mug["id"], sku="Gold tier", price="25.00")
+        html = self.client.get(page).content.decode()
+        self.assertIn("data-tiers", html)
+        self.assertIn('<span class="product__tier-name">Gold tier</span>', html)
+        self.assertIn("25.00", html)
+        self.assertIn("<select name=\"variant\" data-variant>", html)  # the form still posts the select
+
+        data = self.ok("get", "/api/v1/themes/settings/")
+        main = next(s for s in data["templates"]["product"]["sections"].values() if s["type"] == "main-product")
+        main["settings"].update(variant_style="dropdown", image_zoom="lightbox")
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"product": {
+            "order": data["templates"]["product"]["order"], "sections": data["templates"]["product"]["sections"]}}})
+        html = self.client.get(page).content.decode()
+        self.assertNotIn("data-tiers", html)
+        self.assertIn('data-zoom="lightbox"', html)
