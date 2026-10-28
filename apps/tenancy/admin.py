@@ -37,9 +37,10 @@ class StoreAddForm(forms.ModelForm):
 
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
-    list_display = ("store_name", "store_slug", "owner_emails", "status", "created_at")
+    list_display = ("store_name", "store_slug", "owner_emails", "created_by", "status", "created_at")
     list_filter = ("status",)
     search_fields = ("store_name", "store_slug")
+    readonly_fields = ("created_by",)
 
     def get_form(self, request, obj=None, **kwargs):
         if obj is None:
@@ -47,6 +48,8 @@ class StoreAdmin(admin.ModelAdmin):
         return super().get_form(request, obj, **kwargs)
 
     def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user.email
         super().save_model(request, obj, form, change)
         if not change:
             # Same as the API's create_store; the admin already runs this in one transaction

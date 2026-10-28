@@ -11,4 +11,5 @@ admin.site.register(ThemeFile)
 
 @admin.register(StoreTheme)
 class StoreThemeAdmin(StoreGuardAdmin):
-    list_display = ("__str__", "store_name", "theme", "is_active")
+    list_display = ("__str__", "store_name", "theme", "is_active", "created_by")
+    readonly_fields = ("created_by",)

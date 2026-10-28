@@ -11,7 +11,7 @@ from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.themes.models import StoreTheme, Theme, ThemeFile
-from apps.themes.services import get_store_theme
+from apps.themes.services import create_theme, duplicate_theme, get_store_theme
 
 from .models import Store, StoreMembership, StoreRole
 from .services import close_store, create_store, delete_store, reopen_store
@@ -537,6 +537,18 @@ class StoreAdminOwnerTest(TestCase):
         store = create_store(self.alice, "Via API path")
         owner = store.memberships.get(role="owner")
         self.assertEqual((owner.user.email, owner.status), ("alice@example.com", "active"))
+
+    def test_created_by_is_the_creators_email(self):
+        self.assertEqual(self.store_a.created_by, "alice@example.com")
+        self.add_store(owner_email="bob@example.com")  # the admin who added it, not the owner
+        self.assertEqual(Store.objects.get(store_slug="admin-made").created_by, "root@example.com")
+
+        theme = get_store_theme(self.store_a)  # installed on first use: the store's creator
+        self.assertEqual(theme.created_by, "alice@example.com")
+        draft = create_theme(self.store_a, "Draft", {}, {}, created_by="bob@example.com")
+        self.assertEqual(draft.created_by, "bob@example.com")
+        self.assertEqual(duplicate_theme(self.store_a, draft.theme_id, "Copy", created_by="x@example.com").created_by,
+                         "x@example.com")
 
 
 class PurgeStoreWithStockAndCartsTest(StoreClientMixin, APITestCase):
