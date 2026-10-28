@@ -22,6 +22,7 @@ class DeliveryGateway(models.Model):
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=50)
     is_active = models.BooleanField()
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField()
@@ -77,6 +78,7 @@ class Shipment(models.Model):
         null=True,
         blank=True,
     )
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

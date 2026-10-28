@@ -81,6 +81,7 @@ class Order(models.Model):
         null=True,
         blank=True,
     )
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -171,6 +172,7 @@ class OrderItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     is_deleted = models.BooleanField()
     deleted_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = '"orders"."order_items"'
@@ -254,6 +256,7 @@ class DraftOrder(models.Model):
         db_column="created_by_user_id",
         related_name="draft_orders_created",
     )
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

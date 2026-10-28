@@ -271,6 +271,7 @@ class ProductVariant(models.Model):
     # Keep selling when out of stock: available may go below 0 and the store shows "Add to cart"
     continue_selling = models.BooleanField(default=False)
 
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
