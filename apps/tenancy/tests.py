@@ -490,6 +490,54 @@ class StoreAdminOwnerTest(TestCase):
         close_store(self.store_b)  # its owner membership becomes store_closed but it is still Bob's
         self.assertEqual(self.rows()[self.store_b.pk], "bob@example.com")
 
+    def add_store(self, **fields):
+        data = {"store_name": "Admin made", "store_slug": "admin-made", "status": "active",
+                "currency": "INR", "unit_system": "metric", "weight_unit": "kg", "timezone": "Asia/Kolkata",
+                "auto_fulfill": "gift_cards", "tax_rate": "0", "shipping_flat_rate": "0", **fields}
+        return self.client.post(self.URL + "add/", data)
+
+    def test_admin_add_store_makes_the_owner(self):
+        r = self.add_store(owner_email="BOB@example.com")
+        self.assertEqual(r.status_code, 302, getattr(r, "context", None) and r.context["adminform"].form.errors)
+        store = Store.objects.get(store_slug="admin-made")
+        self.assertTrue(store.memberships.filter(user=self.bob, role="owner", status="active").exists())
+        self.assertTrue(StoreRole.objects.filter(store=store).exists())
+        self.assertEqual(self.rows()[store.pk], "bob@example.com")
+
+    def test_admin_cannot_add_a_store_without_a_valid_owner(self):
+        for email in ("", "not-an-email", "nobody@example.com"):
+            r = self.add_store(owner_email=email)
+            self.assertEqual(r.status_code, 200, email)
+            self.assertIn("owner_email", r.context["adminform"].form.errors)
+        self.assertFalse(Store.objects.filter(store_slug="admin-made").exists())
+
+    def test_admin_change_form_does_not_ask_for_an_owner(self):
+        r = self.client.get(f"{self.URL}{self.store_a.pk}/change/")
+        self.assertNotContains(r, "owner_email")
+
+    def test_admin_cannot_delete_or_demote_the_last_owner(self):
+        url = "/admin/tenancy/storemembership/"
+        owner = self.store_a.memberships.get(user=self.alice)
+        r = self.client.post(f"{url}{owner.pk}/delete/", {"post": "yes"})
+        self.assertEqual(r.status_code, 200)  # the "cannot delete" page
+        r = self.client.post(url, {"action": "delete_selected", "_selected_action": [owner.pk], "post": "yes"})
+        r = self.client.post(f"{url}{owner.pk}/change/", {"user": self.alice.pk, "role": "staff", "status": "active"})
+        self.assertEqual(r.status_code, 200)
+        owner.refresh_from_db()
+        self.assertEqual((owner.role, owner.status), ("owner", "active"))
+        self.assertEqual(self.rows()[self.store_a.pk], "alice@example.com")
+
+        # With a second owner the first one may go
+        StoreMembership.objects.create(user=self.bob, store=self.store_a, role="owner", status="active")
+        self.client.post(f"{url}{owner.pk}/delete/", {"post": "yes"})
+        self.assertFalse(StoreMembership.objects.filter(pk=owner.pk).exists())
+
+    def test_api_store_creation_always_has_an_active_owner(self):
+        self.client.logout()
+        store = create_store(self.alice, "Via API path")
+        owner = store.memberships.get(role="owner")
+        self.assertEqual((owner.user.email, owner.status), ("alice@example.com", "active"))
+
 
 class PurgeStoreWithStockAndCartsTest(StoreClientMixin, APITestCase):
     def test_purge_removes_variants_held_by_carts_and_stock_history(self):

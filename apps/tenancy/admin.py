@@ -1,11 +1,13 @@
 import logging
 
+from django import forms
 from django.contrib import admin, messages
+from django.contrib.auth import get_user_model
 from django.db.models import Prefetch
 
-from apps.core.admin_guards import StoreGuardAdmin
+from apps.core.admin_guards import SameStoreForm, StoreGuardAdmin
 from .models import Store, StoreMembership
-from .services import OWNER, REMOVED, purge_store
+from .services import ACTIVE, OWNER, REMOVED, purge_store
 
 
 logger = logging.getLogger(__name__)
@@ -16,11 +18,41 @@ def owner_memberships():
     return StoreMembership.objects.filter(role=OWNER).exclude(status=REMOVED)
 
 
+class StoreAddForm(forms.ModelForm):
+    """Adding a store in Django Admin: it needs an owner, an existing account picked by email."""
+
+    owner_email = forms.EmailField(help_text="Email of an existing account; it becomes the store's owner.")
+
+    class Meta:
+        model = Store
+        fields = "__all__"
+
+    def clean_owner_email(self):
+        email = self.cleaned_data["owner_email"].strip()
+        self.owner = get_user_model().objects.filter(email__iexact=email).first()
+        if self.owner is None:
+            raise forms.ValidationError("No account has this email.")
+        return email
+
+
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
     list_display = ("store_name", "store_slug", "owner_emails", "status", "created_at")
     list_filter = ("status",)
     search_fields = ("store_name", "store_slug")
+
+    def get_form(self, request, obj=None, **kwargs):
+        if obj is None:
+            kwargs["form"] = StoreAddForm
+        return super().get_form(request, obj, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if not change:
+            # Same as the API's create_store; the admin already runs this in one transaction
+            from .access import ensure_built_in_roles
+            StoreMembership.objects.create(user=form.owner, store=obj, role=OWNER, status=ACTIVE)
+            ensure_built_in_roles(obj)
 
     def get_queryset(self, request):
         owners = owner_memberships().select_related("user").order_by("created_at")
@@ -64,7 +96,36 @@ class StoreAdmin(admin.ModelAdmin):
             messages.error(request, f'Could not delete store "{store}": {type(error).__name__}: {error}')
 
 
+LAST_OWNER = "the last owner of {store}; make someone else its owner first"
+
+
+def leaves_no_owner(store_id, without_pks):
+    """True when the store has no owner left once these memberships are gone or no longer owners."""
+    return not owner_memberships().filter(store_id=store_id).exclude(pk__in=without_pks).exists()
+
+
+class StoreMembershipForm(SameStoreForm):
+    def clean(self):
+        cleaned = super().clean()
+        old = StoreMembership.objects.filter(pk=self.instance.pk).first()
+        stops_owning = cleaned.get("role") != OWNER or cleaned.get("status") == REMOVED
+        if old and old.role == OWNER and old.status != REMOVED and stops_owning \
+                and leaves_no_owner(old.store_id, [old.pk]):
+            raise forms.ValidationError(f"This is {LAST_OWNER.format(store=old.store)}.")
+        return cleaned
+
+
 @admin.register(StoreMembership)
 class StoreMembershipAdmin(StoreGuardAdmin):
+    form = StoreMembershipForm
     list_display = ("user", "store_name", "role", "status")
     search_fields = ("user__email", "store__store_name")
+
+    def get_deleted_objects(self, objs, request):
+        # Listed as protected, so both the delete page and the bulk action refuse
+        to_delete, counts, perms_needed, protected = super().get_deleted_objects(objs, request)
+        pks = [o.pk for o in objs]
+        for m in objs:
+            if m.role == OWNER and m.status != REMOVED and leaves_no_owner(m.store_id, pks):
+                protected.append(f"{m}: {LAST_OWNER.format(store=m.store)}")
+        return to_delete, counts, perms_needed, protected
