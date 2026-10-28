@@ -4959,6 +4959,61 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertIn('name="password"', content)
         self.assertIn(f"{self.base}/account/register", content)
 
+    def test_login_and_register_styles_read_active_theme_without_changing_it(self):
+        import copy
+        import re
+
+        from apps.themes.models import StoreTheme
+        from apps.tenancy.models import Store
+        from . import rendering
+        from .services import get_store_theme
+
+        store = Store.objects.get(store_id=self.store["storeId"])
+        assignment = get_store_theme(store)  # finish normal first-request theme installation before taking the snapshot
+        assignment = StoreTheme.objects.select_related("theme").get(pk=assignment.pk)
+        theme = assignment.theme
+        theme_data_before = copy.deepcopy(theme.theme_data)
+        files_before = list(theme.files.order_by("file_path").values_list(
+            "file_path", "content", "file_size", "updated_at",
+        ))
+        auth_css = str(rendering.CUSTOMER_AUTH_CSS)
+
+        self.assertNotRegex(auth_css, r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
+        for theme_var in ("--text", "--accent", "--bg", "--line", "--muted", "--soft",
+                          "--tss-body-font", "--tss-heading-font", "--b-r", "--b-bg", "--b-tx"):
+            self.assertIn(f"var({theme_var}", auth_css)
+        self.assertIn(":focus-visible", auth_css)
+        self.assertIn("customer-card__header svg", auth_css)  # decorative lock badge is hidden
+
+        for path in ("login", "register"):
+            response = self.client.get(f"{self.base}/account/{path}")
+            self.assertEqual(response.status_code, 200)
+            html = response.content.decode()
+            self.assertIn("var(--tss-heading-font)", html)
+            self.assertIn("var(--accent)", html)
+            self.assertIn("var(--b-r)", html)
+            self.assertIn('aria-label="Show or hide password"', html)
+            self.assertNotIn("#e5e7eb", html)  # page-local fixed-color CSS was omitted
+            if path == "login":
+                self.assertRegex(html, r'id="login-email" class="form-input"')
+                self.assertRegex(html, r'id="login-password" class="form-input"')
+                self.assertNotIn('class="customer-card__icon"', html)
+                heading_start = html.lower().find("<h1")
+                self.assertGreaterEqual(heading_start, 0)
+                self.assertNotRegex(html[:heading_start], r'href=["\'][^"\']*/account/register')
+                self.assertIn("New here?", html)
+                self.assertIn(f'href="{self.base}/account/register', html)
+            else:
+                for field in ("register-first-name", "register-last-name", "register-email",
+                              "register-phone", "register-password", "register-confirm-password"):
+                    self.assertRegex(html, rf'id="{field}" class="form-input"')
+
+        theme.refresh_from_db()
+        self.assertEqual(theme.theme_data, theme_data_before)
+        self.assertEqual(list(theme.files.order_by("file_path").values_list(
+            "file_path", "content", "file_size", "updated_at",
+        )), files_before)
+
     def test_register_page_renders_cleanly(self):
         r = self.client.get(f"{self.base}/account/register")
         self.assertEqual(r.status_code, 200)

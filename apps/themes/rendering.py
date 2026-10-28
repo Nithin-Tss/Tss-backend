@@ -397,6 +397,63 @@ def theme_css(settings, tokens=None):
     return Markup(f"<style>:root{{{_style_attr(root)}}}</style>")
 
 
+CUSTOMER_AUTH_CSS = Markup("""<style>
+body .auth-page.auth-page{display:flex;justify-content:center;align-items:center;padding:40px 0 56px;color:var(--text);font-family:var(--tss-body-font);}
+body .auth-page.auth-page .page-width{width:100%;}
+body .auth-page.auth-page .customer-auth{width:100%;max-width:420px;margin:0 auto;text-align:left;}
+body .auth-page.auth-page .customer-card{box-sizing:border-box;width:100%;padding:32px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:var(--b-r);box-shadow:none;font:inherit;line-height:1.5;letter-spacing:normal;text-transform:none;}
+body .auth-page.auth-page .customer-card__header{margin:0 0 22px;text-align:left;}
+body .auth-page.auth-page .customer-card__header svg,body .auth-page.auth-page .customer-card__icon,body .auth-page.auth-page .customer-card__badge,body .auth-page.auth-page .auth-icon-badge{display:none!important;}
+body .auth-page.auth-page .customer-card__title{margin:0 0 6px;color:var(--text);font-family:var(--tss-heading-font);font-size:clamp(24px,3vw,30px);font-weight:600;line-height:1.2;letter-spacing:normal;text-transform:none;}
+body .auth-page.auth-page .customer-card__subtitle{margin:0;color:var(--muted);font:inherit;font-size:14px;}
+body .auth-page.auth-page .customer-auth-tabs{display:flex;gap:22px;margin:0 0 22px;border-bottom:1px solid var(--line);}
+body .auth-page.auth-page .customer-auth-tab{flex:0 0 auto;min-height:40px;margin:0;padding:8px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font:inherit;font-size:14px;text-decoration:none;}
+body .auth-page.auth-page .customer-auth-tab.is-active{border-bottom-color:var(--accent);color:var(--text);}
+body .auth-page.auth-page .customer-form{display:grid;gap:16px;}
+body .auth-page.auth-page .form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+body .auth-page.auth-page .form-group{display:grid;gap:6px;margin:0;min-width:0;}
+body .auth-page.auth-page .form-group--checkbox{display:flex;align-items:center;}
+body .auth-page.auth-page .form-label{color:var(--text);font:inherit;font-size:14px;font-weight:500;letter-spacing:normal;text-transform:none;}
+body .auth-page.auth-page .form-label-opt{color:var(--muted);font-weight:400;}
+body .auth-page.auth-page .form-input{box-sizing:border-box;display:block;width:100%;min-width:0;height:46px;margin:0;padding:0 12px;border:1px solid var(--line);border-radius:var(--b-r);background:var(--bg);box-shadow:none;color:var(--text);font:inherit;font-size:15px;font-weight:400;letter-spacing:normal;text-transform:none;}
+body .auth-page.auth-page .form-input::placeholder{color:var(--muted);opacity:1;}
+body .auth-page.auth-page .form-input:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-color:var(--accent);box-shadow:none;}
+body .auth-page.auth-page .password-wrapper{position:relative;display:flex;align-items:center;width:100%;}
+body .auth-page.auth-page .password-wrapper .form-input{padding-right:44px;}
+body .auth-page.auth-page .password-toggle{position:absolute;right:6px;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:6px;border:0;border-radius:0;background:transparent;color:var(--muted);cursor:pointer;}
+body .auth-page.auth-page .password-toggle:hover{background:transparent;color:var(--text);}
+body .auth-page.auth-page .password-toggle:focus-visible,body .auth-page.auth-page .auth-link:focus-visible,body .auth-page.auth-page .auth-link-subtle:focus-visible,body .auth-page.auth-page .customer-auth-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+body .auth-page.auth-page .checkbox-label{display:inline-flex;align-items:center;gap:8px;color:var(--text);font:inherit;font-size:14px;cursor:pointer;}
+body .auth-page.auth-page .checkbox-label input[type=checkbox]{flex:none;width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer;}
+body .auth-page.auth-page .button.customer-card__submit{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;margin:2px 0 0;padding:0 18px;border:var(--b-bw) solid var(--b-bd);border-radius:var(--b-r);background:var(--b-bg);box-shadow:none;color:var(--b-tx);font:inherit;font-weight:600;letter-spacing:normal;text-transform:none;cursor:pointer;}
+body .auth-page.auth-page .button.customer-card__submit:hover{background:var(--b-hbg);border-color:var(--b-hbd);color:var(--b-htx);}
+body .auth-page.auth-page .button.customer-card__submit:disabled{opacity:.6;cursor:default;}
+body .auth-page.auth-page .customer-card__footer{display:grid;gap:10px;margin:22px 0 0;padding:16px 0 0;border-top:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:13px;text-align:left;}
+body .auth-page.auth-page .customer-card__footer p{margin:0;}
+body .auth-page.auth-page .auth-link{color:var(--accent);font:inherit;font-weight:500;text-decoration:underline;text-underline-offset:2px;}
+body .auth-page.auth-page .auth-link-subtle{color:var(--muted);font:inherit;font-size:13px;}
+body .auth-page.auth-page .alert{display:block;margin:0 0 16px;padding:12px;border:1px solid var(--line);border-radius:var(--b-r);background:var(--soft);color:var(--text);font:inherit;font-size:14px;line-height:1.45;}
+body .auth-page.auth-page .alert--error,body .auth-page.auth-page .alert--success{border-color:var(--accent);background:var(--soft);color:var(--text);}
+body .auth-page.auth-page .auth-field-error{color:var(--accent)!important;font-size:13px;}
+@media(max-width:520px){body .auth-page.auth-page{padding:24px 0 36px;}body .auth-page.auth-page .customer-card{padding:24px 20px;}body .auth-page.auth-page .form-row{grid-template-columns:minmax(0,1fr);gap:16px;}}
+</style>""")
+
+
+def customer_auth_content(content, mode):
+    """Use the active theme variables for account pages, ignoring template-local fixed styling."""
+    markup = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", str(content), flags=re.IGNORECASE | re.DOTALL)
+    if mode == "login":
+        heading = re.search(r"<h1\b", markup, flags=re.IGNORECASE)
+        if heading:
+            before_heading = markup[:heading.start()]
+            before_heading = re.sub(
+                r'''<a\b(?=[^>]*\bhref=["'][^"']*/account/register(?:[/?#][^"']*)?["'])[^>]*>\s*Create\s+account\s*</a\s*>''',
+                "", before_heading, count=1, flags=re.IGNORECASE | re.DOTALL,
+            )
+            markup = before_heading + markup[heading.start():]
+    return Markup(markup + str(CUSTOMER_AUTH_CSS))
+
+
 def _collect_fonts(data):
     keys = {data["settings"].get("heading_font"), data["settings"].get("body_font")}
     for page in data["templates"].values():
@@ -2414,6 +2471,9 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
                 cust_content = env.from_string(
                     "{% render 'customer-account', customer: customer, orders: customer.orders, addresses: customer.addresses, error: error, success: success %}"
                 ).render(**common)
+
+        if customer_page in ("login", "register"):
+            cust_content = customer_auth_content(cust_content, customer_page)
 
         content = Markup("".join((
             str(theme_css(settings, tokens)),
