@@ -67,7 +67,9 @@ class InventoryTests(StoreClientMixin, APITestCase):
         self.set_stock(5)
         base = {"variant": self.variant, "location": self.warehouse}
         self.ok("post", f"{ITEMS}set/", {**base, "available": -1}, expect=400)
-        self.ok("post", f"{ITEMS}set/", {**base, "available": "lots"}, expect=400)
+        non_integer = self.client.post(f"{ITEMS}set/", {**base, "available": "lots"}, format="json")
+        self.assertEqual(non_integer.status_code, 400)
+        self.assertIn("available", str(non_integer.json()).lower())
         self.ok("post", f"{ITEMS}adjust/", {**base, "delta": -6}, expect=400)  # more than available
         self.ok("post", f"{ITEMS}adjust/", {**base, "delta": 0}, expect=400)
         self.ok("post", f"{ITEMS}adjust/", {**base, "available": 5, "delta": 1}, expect=400)
@@ -326,20 +328,43 @@ class InventoryResourceApiTests(StoreClientMixin, APITestCase):
         row = self.ok("post", f"{ITEMS}set/", {
             "variant": self.variant, "location": self.location, "available": 4,
         })
+        destination = self.ok("post", "/api/v1/inventory/locations/", {"name": "Transfer target"}, expect=201)["id"]
+        transfer = self.ok("post", "/api/v1/inventory/transfers/", {
+            "source_location": self.location, "destination_location": destination,
+            "items": [{"variant": self.variant, "quantity": 1}],
+        }, expect=201)
         role = self.ok("post", "/api/v1/roles/", {"name": "No inventory", "permissions": []}, expect=201)
         member_token, _ = self.sign_up("inventory-member@example.com", "Member shop")
         self.use(self.token, self.store_id)
         self.ok("post", "/api/v1/members/", {"email": "inventory-member@example.com", "roleIds": [role["id"]]}, expect=201)
         self.use(member_token, self.store_id)
         self.ok("get", "/api/v1/inventory/locations/", expect=403)
+        self.ok("get", ITEMS, expect=403)
+        self.ok("post", "/api/v1/inventory/locations/", {"name": "Denied"}, expect=403)
+        self.ok("post", f"{ITEMS}set/", {
+            "variant": self.variant, "location": self.location, "available": 4,
+        }, expect=403)
         self.ok("post", f"{ITEMS}adjust/", {
             "variant": self.variant, "location": self.location, "delta": 1,
         }, expect=403)
+        self.ok("post", f"{ITEMS}unavailable/", {
+            "variant": self.variant, "location": self.location, "quantity": 1, "reason": "damaged",
+        }, expect=403)
+        self.ok("get", f"{ITEMS}history/?variant={self.variant}", expect=403)
+        self.ok("get", f"{ITEMS}{row['id']}/breakdown/", expect=403)
         self.ok("get", "/api/v1/inventory/transfers/", expect=403)
+        self.ok("post", "/api/v1/inventory/transfers/", {
+            "source_location": self.location, "destination_location": self.location,
+            "items": [],
+        }, expect=403)
+        self.ok("post", "/api/v1/inventory/transfers/00000000-0000-0000-0000-000000000001/complete/", expect=403)
+        self.ok("post", f"/api/v1/inventory/transfers/{transfer['id']}/cancel/", expect=403)
         self.use(self.token, self.store_id)
         other_token, other_store = self.sign_up("inventory-other@example.com", "Other shop")
         self.use(other_token, other_store["storeId"])
         self.assertEqual(self.ok("get", "/api/v1/inventory/locations/"), [])
+        self.ok("get", f"/api/v1/inventory/locations/{self.location}/", expect=404)
+        self.ok("patch", f"/api/v1/inventory/locations/{self.location}/", {"name": "Hijacked"}, expect=404)
         self.assertEqual(self.ok("get", ITEMS), [])
         self.ok("get", f"{ITEMS}{row['id']}/", expect=404)
         self.ok("post", f"{ITEMS}set/", {
@@ -347,8 +372,25 @@ class InventoryResourceApiTests(StoreClientMixin, APITestCase):
         }, expect=400)
         self.client.credentials()
         self.client.cookies.clear()
-        for url in ("/api/v1/inventory/locations/", ITEMS, "/api/v1/inventory/transfers/"):
-            self.assertIn(self.client.get(url).status_code, (401, 403))
+        for url, body in (
+            (f"{ITEMS}set/", {"variant": self.variant, "location": self.location, "available": 1}),
+            (f"{ITEMS}adjust/", {"variant": self.variant, "location": self.location, "delta": 1}),
+            (f"{ITEMS}unavailable/", {
+                "variant": self.variant, "location": self.location, "quantity": 1, "reason": "damaged",
+            }),
+        ):
+            self.assertEqual(self.client.post(url, body, format="json").status_code, 401, url)
+        for url in (
+            f"{ITEMS}history/?variant={self.variant}",
+            f"{ITEMS}{row['id']}/breakdown/",
+            "/api/v1/inventory/locations/",
+            ITEMS,
+            "/api/v1/inventory/transfers/",
+        ):
+            self.assertEqual(self.client.get(url).status_code, 401, url)
+        for action in ("complete", "cancel"):
+            url = f"/api/v1/inventory/transfers/{transfer['id']}/{action}/"
+            self.assertEqual(self.client.post(url, {}, format="json").status_code, 401, url)
 
     def test_transfer_isolation_and_unknown_ids(self):
         dest = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]
