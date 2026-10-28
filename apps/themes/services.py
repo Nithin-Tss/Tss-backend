@@ -287,7 +287,7 @@ def reset_editing_theme(token):
     _editing_theme.reset(token)
 
 
-def _install(store, files, custom_data, name=None, publish=True, theme_data=None):
+def _install(store, files, custom_data, name=None, publish=True, theme_data=None, created_by=""):
     """A new private copy of a theme for the store. Published, or kept as a draft next to the live theme."""
     base = private_slug(store)
     slug = base if not Theme.objects.filter(slug=base).exists() else f"{base}-{secrets.token_hex(4)}"
@@ -316,6 +316,7 @@ def _install(store, files, custom_data, name=None, publish=True, theme_data=None
         installed_version=theme.version,
         custom_data=custom_data,
         is_active=publish,
+        created_by=created_by,
     )
 
 
@@ -389,7 +390,8 @@ def get_store_theme(store):
 
     try:
         with transaction.atomic():
-            installed = _install(store, files, custom_data)
+            # Installed on first use (maybe by a shopper's visit): credited to the store's creator
+            installed = _install(store, files, custom_data, created_by=store.created_by)
     except IntegrityError:
         # Another request installed it at the same moment.
         installed = StoreTheme.objects.select_related("theme").get(store=store, is_active=True)
@@ -426,7 +428,7 @@ def _clean_name(name):
 
 
 @transaction.atomic
-def create_theme(store, name, files, custom_data, theme_data=None):
+def create_theme(store, name, files, custom_data, theme_data=None, created_by=""):
     """
     Add a theme to the store's library. The store's first theme is published (nothing is live yet);
     every later one is a draft: the published theme is not touched.
@@ -435,17 +437,19 @@ def create_theme(store, name, files, custom_data, theme_data=None):
     if len(store_themes(store)) >= MAX_THEMES:
         raise exceptions.ValidationError({"detail": f"A store can have at most {MAX_THEMES} themes. Delete one first."})
     first = not StoreTheme.objects.filter(store=store, is_active=True).exists()
-    created = _install(store, files, custom_data, name=name, publish=first, theme_data=theme_data)
+    created = _install(store, files, custom_data, name=name, publish=first, theme_data=theme_data,
+                       created_by=created_by)
     _prepare(created, new_store=True)
     return created
 
 
-def duplicate_theme(store, theme_id, name):
+def duplicate_theme(store, theme_id, name, created_by=""):
     source = _theme_of(store, theme_id)
     _prepare(source)
     files = {f.file_path: f.content for f in source.theme.files.all()}
     data = {k: v for k, v in (source.theme.theme_data or {}).items() if k == "preset"}
-    return create_theme(store, name, files, copy.deepcopy(source.custom_data), theme_data=data)
+    return create_theme(store, name, files, copy.deepcopy(source.custom_data), theme_data=data,
+                        created_by=created_by)
 
 
 @transaction.atomic

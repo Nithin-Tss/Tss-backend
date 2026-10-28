@@ -85,6 +85,8 @@ class StoreTheme(models.Model):
     installed_version = models.CharField(max_length=20)
     custom_data = models.JSONField(default=dict)
     is_active = models.BooleanField(default=True)
+    # Email of the account that added this theme to the store (blank for older rows)
+    created_by = models.EmailField(blank=True, default="", editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

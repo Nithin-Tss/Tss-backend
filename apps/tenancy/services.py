@@ -70,6 +70,7 @@ def create_store(owner, store_name, store_slug=None):
         store_name=store_name,
         store_slug=store_slug or _unique_slug(store_name),
         status=ACTIVE,
+        created_by=owner.email,
     )
 
     StoreMembership.objects.create(

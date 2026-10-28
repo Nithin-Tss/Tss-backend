@@ -368,14 +368,16 @@ class ThemeLibraryView(APIView):
         data = request.data if isinstance(request.data, dict) else {}
         source = data.get("source") or "blank"
         store = request.store
+        by = request.user.email
         if source == "blank":
-            created = create_theme(store, data.get("name"), starter_files(), {})
+            created = create_theme(store, data.get("name"), starter_files(), {}, created_by=by)
         elif isinstance(source, str) and re.fullmatch(r"[0-9a-fA-F-]{32,36}", source):
-            created = duplicate_theme(store, source, data.get("name"))
+            created = duplicate_theme(store, source, data.get("name"), created_by=by)
         else:
             preset = presets.get_preset(source)
             files, custom_data, theme_data = presets.build(source)
-            created = create_theme(store, data.get("name") or preset["name"], files, custom_data, theme_data)
+            created = create_theme(store, data.get("name") or preset["name"], files, custom_data, theme_data,
+                                   created_by=by)
         return Response(_library_item(created), status=status.HTTP_201_CREATED)
 
 

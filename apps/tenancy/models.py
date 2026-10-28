@@ -47,6 +47,9 @@ class Store(models.Model):
     stripe_charges_enabled = models.BooleanField(default=False)
     stripe_details_submitted = models.BooleanField(default=False)
 
+    # Email of the account that created the store (blank for stores made before this was kept)
+    created_by = models.EmailField(blank=True, default="", editable=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
