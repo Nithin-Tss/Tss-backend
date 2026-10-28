@@ -87,6 +87,12 @@ class Payment(models.Model):
         db_table = '"payments"."payments"'
         verbose_name = "Payment"
         verbose_name_plural = "Payments"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(amount__gte=0),
+                name="ck_payment_amount_nonneg",
+            ),
+        ]
 
     def __str__(self):
         return str(self.id)
@@ -162,6 +168,12 @@ class PaymentTransaction(models.Model):
         db_table = '"payments"."payment_transactions"'
         verbose_name = "Payment Transaction"
         verbose_name_plural = "Payment Transactions"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(amount__gte=0),
+                name="ck_payment_tx_amount_nonneg",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if not self._state.adding:

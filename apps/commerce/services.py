@@ -498,6 +498,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
         discount_amount=checkout.discount_amount,
         tax_amount=checkout.tax_amount,
         shipping_amount=checkout.shipping_amount,
+        checkout=checkout,
     )
 
     if match is not None:

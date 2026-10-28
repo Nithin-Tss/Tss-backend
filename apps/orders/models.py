@@ -58,6 +58,15 @@ class Order(models.Model):
         null=True,
         blank=True,
     )
+    # The storefront checkout this order was placed from; null for staff and draft orders.
+    checkout = models.OneToOneField(
+        "commerce.Checkout",
+        on_delete=models.PROTECT,
+        db_column="checkout_id",
+        related_name="order",
+        null=True,
+        blank=True,
+    )
     # Snapshots taken when the order is placed; null on orders created before these existed.
     shipping_address = models.JSONField(
         null=True,

@@ -69,6 +69,18 @@ class Discount(models.Model):
                 condition=models.Q(per_customer_limit__isnull=True) | models.Q(per_customer_limit__gte=1),
                 name="ck_disc_per_customer_limit_positive",
             ),
+            models.CheckConstraint(
+                condition=models.Q(discount_type__in=["percentage", "fixed_amount"]),
+                name="ck_disc_type_valid",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(discount_type="percentage") | models.Q(value__lte=100),
+                name="ck_disc_percentage_lte_100",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(ends_at__isnull=True) | models.Q(ends_at__gt=models.F("starts_at")),
+                name="ck_disc_ends_after_starts",
+            ),
         ]
 
     def __str__(self):
@@ -186,6 +198,12 @@ class OrderDiscount(models.Model):
         db_table = '"discounts"."order_discounts"'
         verbose_name = "Order Discount"
         verbose_name_plural = "Order Discounts"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(discount_amount__gte=0),
+                name="ck_order_disc_amount_nonneg",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.order} - {self.discount}"

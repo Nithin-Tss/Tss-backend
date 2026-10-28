@@ -102,6 +102,26 @@ class ShopperToStaffJourneyTests(CommerceIntegrationBase):
         # A returning session starts from an empty cart
         self.assertEqual(self.shopper.get(f"{self.base}/cart/").data["items"], [])
 
+    def test_order_links_its_checkout_and_keeps_email_and_addresses(self):
+        billing = {**ADDRESS, "city": "Madurai"}
+        cid = self.checkout(email="a@b.com", shipping_address=ADDRESS, billing_address=billing)
+        self.assertEqual(self.place(cid).status_code, 201)
+
+        order = Order.objects.get()
+        self.assertEqual(str(order.checkout_id), cid)
+        self.assertEqual(order.customer_email, "a@b.com")
+        self.assertEqual(order.shipping_address, ADDRESS)
+        self.assertEqual(order.billing_address, billing)
+
+        # Staff orders have no checkout, so nothing to link or copy
+        r = self.staff.post("/api/v1/orders/", {"items": [{"product": str(self.product.pk), "quantity": 1}]}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        staff_order = Order.objects.get(pk=r.data["id"])
+        self.assertEqual(
+            (staff_order.checkout, staff_order.customer_email, staff_order.shipping_address, staff_order.billing_address),
+            (None, None, None, None),
+        )
+
     def test_staff_api_requires_sign_in_and_membership(self):
         anonymous = APIClient()
         self.assertIn(anonymous.get("/api/v1/carts/").status_code, (401, 403))

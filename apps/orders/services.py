@@ -48,11 +48,14 @@ def create_order(
     sales_channel=None,
     delivery_method=None,
     user=None,
+    checkout=None,
 ):
     """
     lines: [{"product", "variant", "quantity", "unit_price" (optional),
              "discount_amount" (optional)}]
     Prices default to the variant's current price. Stock is committed.
+    checkout: the storefront checkout being placed; the order links to it and
+    keeps a copy of its email and addresses.
     """
     if not lines:
         raise ValidationError({"items": "An order needs at least one item."})
@@ -63,6 +66,8 @@ def create_order(
         raise ValidationError({"customer": "Customer does not belong to this store."})
     if sales_channel is not None and sales_channel.store_id != store.pk:
         raise ValidationError({"sales_channel": "Sales channel does not belong to this store."})
+    if checkout is not None and checkout.store_id != store.pk:
+        raise ValidationError({"checkout": "Checkout does not belong to this store."})
 
     tax_amount = _money(tax_amount)
     shipping_amount = _money(shipping_amount)
@@ -86,6 +91,10 @@ def create_order(
         status=OPEN,
         fulfillment_status=UNFULFILLED,
         delivery_method=delivery_method,
+        checkout=checkout,
+        shipping_address=checkout.shipping_address if checkout else None,
+        billing_address=checkout.billing_address if checkout else None,
+        customer_email=(checkout.email or None) if checkout else None,
     )
 
     subtotal = line_discounts = ZERO

@@ -9,10 +9,11 @@ from django.urls import reverse
 from apps.catalog.models import Product, ProductVariant
 from apps.customers.models import Customer
 from apps.discounts.models import Discount, DiscountCode
+from apps.gift_cards.models import GiftCard, GiftCardTransaction
 from apps.identity.models import User
-from apps.inventory.models import InventoryItem, Location, Transfer
+from apps.inventory.models import InventoryHistory, InventoryItem, Location, Transfer
 from apps.orders.models import Order, OrderItem
-from apps.payments.models import Payment
+from apps.payments.models import Payment, PaymentTransaction
 from apps.tenancy.models import Store, StoreMembership
 from apps.wishlist.models import Wishlist
 
@@ -93,6 +94,29 @@ class AdminStoreGuardTests(TestCase):
         r = self.client.get(self.url(OrderItem, "changelist") + f"?order__store__store_id__exact={self.b.pk}")
         self.assertEqual(r.context["cl"].result_count, 1)
         self.assertContains(r, "Beta Shop")
+
+    def test_ledgers_can_be_viewed_but_not_added_edited_or_deleted(self):
+        payment = Payment.objects.create(store=self.a, order=self.a.order, currency="INR", amount=5,
+                                         status="captured", provider="manual", is_deleted=False)
+        card = GiftCard.objects.create(store=self.a, code="GC-1", initial_balance=5, current_balance=4,
+                                       currency_code="INR", status="active", is_deleted=False)
+        rows = [
+            PaymentTransaction.objects.create(payment=payment, transaction_type="capture", amount=5, status="success"),
+            GiftCardTransaction.objects.create(gift_card=card, transaction_type="debit", amount=-1,
+                                               balance_before=5, balance_after=4),
+            InventoryHistory.objects.create(store=self.a, variant=self.a.variant, location=self.a.location,
+                                            reason="cycle_count", source="admin", before=0, after=1, change=1,
+                                            committed=0, unavailable=0, on_hand=1, incoming=0),
+        ]
+        for row in rows:
+            model = type(row)
+            with self.subTest(model=model._meta.label):
+                self.assertEqual(self.client.get(self.url(model, "changelist")).status_code, 200)
+                self.assertEqual(self.client.get(self.url(model, "change", row)).status_code, 200)
+                self.assertEqual(self.client.get(self.url(model, "add")).status_code, 403)
+                self.assertEqual(self.client.post(self.url(model, "change", row), {}).status_code, 403)
+                self.assertEqual(self.client.post(self.url(model, "delete", row), {"post": "yes"}).status_code, 403)
+                self.assertTrue(model.objects.filter(pk=row.pk).exists())
 
     def test_store_owner_cannot_enter_admin(self):
         owner = User.objects.create_user(email="owner@example.com", password="Owner-pass-123",
