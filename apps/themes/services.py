@@ -351,6 +351,7 @@ def _prepare(store_theme, new_store=False):
     _add_page_templates(store_theme)
     sync_card_cart_icon(store_theme)
     _upgrade_footer_icon(store_theme.theme)
+    _add_utility_bar(store_theme.theme)
 
 
 def get_store_theme(store):
@@ -1571,6 +1572,28 @@ def _add_footer_icon_setting(content):
     except sync.SectionCodeError:
         return None
     return patched
+
+
+_UTILITY_RENDER = "{% render 'utility-bar', settings: settings, utility_links: utility_links %}"
+_BODY_OPEN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+
+
+def _add_utility_bar(theme):
+    """
+    A layout that predates the utility bar (an edited copy, or one from a preset) never rendered it,
+    so its Theme settings did nothing. Render it right after <body>. Layouts that already do are left alone.
+    """
+    file = theme.files.filter(file_path="layout/theme.liquid").first()
+    if file is None or "utility-bar" in file.content:
+        return
+    match = _BODY_OPEN.search(file.content)
+    if match is None:
+        return
+    newline = "\r\n" if "\r\n" in file.content else "\n"
+    upgraded = file.content[: match.end()] + f"{newline}  {_UTILITY_RENDER}" + file.content[match.end():]
+    file.content = upgraded
+    file.file_size = len(upgraded.encode("utf-8"))
+    file.save(update_fields=["content", "file_size", "updated_at"])
 
 
 def _upgrade_footer_icon(theme):
