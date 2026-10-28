@@ -244,6 +244,33 @@ def set_available(variant, location, available, user_id=None, source="admin", re
                  source=source, reference_id=reference_id, note=note)
 
 
+def import_stock(entries, user_id=None, source="import", reason="import"):
+    """
+    Starting stock for brand-new variants, in a few queries instead of a set_available() per variant.
+    entries: [(variant, location, quantity)]. The variants have no stock rows yet, so each gets one,
+    with a history line when quantity is above 0 (as set_available would write).
+    """
+    now = timezone.now()
+    items, history = [], []
+    for variant, location, quantity in entries:
+        quantity = int(quantity or 0)
+        if quantity < 0:
+            raise ValidationError({"available": "Must be 0 or more."})
+        items.append(InventoryItem(
+            variant=variant, location=location, available=quantity, committed=0,
+            unavailable=0, on_hand=quantity, incoming=0, created_at=now, updated_at=now,
+        ))
+        if quantity:
+            history.append(InventoryHistory(
+                store_id=variant.product.store_id, variant=variant, location=location, reason=reason, source=source,
+                reference_id=str(variant.product_id), user_id=user_id, before=0, after=quantity,
+                change=quantity, committed_change=0, unavailable_change=0, committed=0,
+                unavailable=0, on_hand=quantity, incoming=0,
+            ))
+    InventoryItem.objects.bulk_create(items, batch_size=500)
+    InventoryHistory.objects.bulk_create(history, batch_size=500)
+
+
 def adjust(variant, location, delta, user_id=None, source="admin", reason="correction",
            reference_id=None, note=""):
     """Change available (and on hand) by `delta`, + or -."""

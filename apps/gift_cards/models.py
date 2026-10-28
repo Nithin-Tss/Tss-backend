@@ -8,6 +8,7 @@ from apps.orders.models import Order
 from apps.payments.models import Payment
 from apps.tenancy.models import Store
 from apps.identity.models import User
+from django.core.exceptions import ValidationError
 
 
 class GiftCard(models.Model):
@@ -76,7 +77,16 @@ class GiftCard(models.Model):
 
     def __str__(self):
         return self.code
+class GiftCardTransactionQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError(
+            "Gift card transactions cannot be edited."
+        )
 
+    def delete(self):
+        raise ValidationError(
+            "Gift card transactions cannot be deleted."
+        )
 
 class GiftCardTransaction(models.Model):
     id = models.UUIDField(
@@ -141,6 +151,19 @@ class GiftCardTransaction(models.Model):
         blank=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    objects = GiftCardTransactionQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError(
+                "Gift card transactions cannot be edited."
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError(
+            "Gift card transactions cannot be deleted."
+        )
 
     class Meta:
         db_table = '"gift_cards"."gift_card_transactions"'

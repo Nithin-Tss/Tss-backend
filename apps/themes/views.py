@@ -2,6 +2,7 @@ import json
 import re
 import time
 import uuid
+from functools import wraps
 from urllib.parse import quote, urlencode, urlsplit
 
 from django.conf import settings
@@ -9,7 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core import signing
 from django.core.cache import cache
 from django.core.files.storage import default_storage
-from django.db import connection
+from django.db import IntegrityError, connection
 from django.db.models import F
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -1476,8 +1477,9 @@ class ThemePreviewView(StoreThemeView):
 
     def post(self, request):
         preview_data = request.data
-        if request.query_params.get("page") == "cart" and isinstance(request.data, dict):
-            # The customizer may attach an empty, temporary cart entry while switching preview pages.
+        if isinstance(request.data, dict):
+            # The customizer may attach an empty, temporary cart entry while switching preview pages
+            # (and keeps it when moving on to another page, e.g. checkout).
             # Cart markup is a shared snippet, not an editable/saved template, so omit that entry
             # before validating the theme data.
             templates = request.data.get("templates")
@@ -2087,8 +2089,23 @@ def storefront_cart(store, request, params):
     return render_page(store, "index", request=request, cart_page=True)
 
 
+def _with_cart_cors(view):
+    """The checkout page's script runs sandboxed too: answer its preflight and tag every reply, as the cart API does."""
+
+    @wraps(view)
+    def wrapper(request, *args, **kwargs):
+        response = HttpResponse(status=204) if request.method == "OPTIONS" else view(request, *args, **kwargs)
+        for name, value in CART_API_HEADERS.items():
+            if name != "Cache-Control":
+                response[name] = value
+        return response
+
+    return wrapper
+
+
 @xframe_options_exempt
 @csrf_exempt
+@_with_cart_cors
 def storefront_checkout(request, store_slug):
     store = get_object_or_404(Store, store_slug=store_slug)
     cart_session, cart_new = cart_data.session_for_page(store, request)
@@ -2322,21 +2339,21 @@ def get_storefront_customer(store, request):
         except Exception:
             user = None
 
-    if user is None and getattr(request, "user", None) and request.user.is_authenticated:
-        user = request.user
-
     if user is None:
         return None, None
 
     customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
     if customer is None:
-        customer = Customer.objects.create(
-            store=store,
-            email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            email_subscription_status="not_subscribed",
-        )
+        try:
+            customer = Customer.objects.create(
+                store=store,
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email_subscription_status="not_subscribed",
+            )
+        except IntegrityError:
+            customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
     return customer, user
 
 
@@ -2407,15 +2424,18 @@ def storefront_login(request, store_slug):
             if user is None:
                 error = "Invalid email or password."
             else:
-                customer, _ = get_storefront_customer(store, request)
+                customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
                 if customer is None:
-                    customer = Customer.objects.create(
-                        store=store,
-                        email=user.email,
-                        first_name=user.first_name,
-                        last_name=user.last_name,
-                        email_subscription_status="not_subscribed",
-                    )
+                    try:
+                        customer = Customer.objects.create(
+                            store=store,
+                            email=user.email,
+                            first_name=user.first_name,
+                            last_name=user.last_name,
+                            email_subscription_status="not_subscribed",
+                        )
+                    except IntegrityError:
+                        customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
                 # Link cart if open
                 pending = getattr(request, "_cart_session", None)
                 cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
@@ -2470,29 +2490,73 @@ def storefront_register(request, store_slug):
             error = "Password must be at least 8 characters long."
         elif password != confirm_password:
             error = "Passwords do not match."
-        elif get_user_model().objects.filter(email__iexact=email).exists():
-            error = "An account with this email already exists."
         else:
-            try:
-                user = get_user_model().objects.create_user(
-                    email=email,
-                    password=password,
-                    first_name=first_name,
-                    last_name=last_name,
-                    phone=phone,
-                )
-                customer = Customer.objects.create(
-                    store=store,
-                    email=email,
-                    first_name=first_name,
-                    last_name=last_name,
-                    email_subscription_status="subscribed" if newsletter else "not_subscribed",
-                )
-                response = HttpResponseRedirect(return_to)
-                set_storefront_customer_cookie(response, store, user)
-                return response
-            except Exception as e:
-                error = str(e) or "Unable to create account. Please try again."
+            User = get_user_model()
+            existing_user = User.objects.filter(email__iexact=email).first()
+            if existing_user:
+                if existing_user.check_password(password):
+                    user = existing_user
+                    customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    if customer is None:
+                        try:
+                            customer = Customer.objects.create(
+                                store=store,
+                                email=email,
+                                first_name=user.first_name or first_name,
+                                last_name=user.last_name or last_name,
+                                email_subscription_status="subscribed" if newsletter else "not_subscribed",
+                            )
+                        except IntegrityError:
+                            customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    # Link cart if open
+                    pending = getattr(request, "_cart_session", None)
+                    cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
+                    if cart_id:
+                        open_c = cart_data.open_cart(store, cart_id)
+                        if open_c and not open_c.customer:
+                            open_c.customer = customer
+                            open_c.save(update_fields=["customer", "updated_at"])
+
+                    response = HttpResponseRedirect(return_to)
+                    set_storefront_customer_cookie(response, store, user)
+                    return response
+                else:
+                    error = "An account with this email already exists."
+            else:
+                try:
+                    user = User.objects.create_user(
+                        email=email,
+                        password=password,
+                        first_name=first_name,
+                        last_name=last_name,
+                        phone=phone,
+                    )
+                    customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    if customer is None:
+                        try:
+                            customer = Customer.objects.create(
+                                store=store,
+                                email=email,
+                                first_name=first_name,
+                                last_name=last_name,
+                                email_subscription_status="subscribed" if newsletter else "not_subscribed",
+                            )
+                        except IntegrityError:
+                            customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    # Link cart if open
+                    pending = getattr(request, "_cart_session", None)
+                    cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
+                    if cart_id:
+                        open_c = cart_data.open_cart(store, cart_id)
+                        if open_c and not open_c.customer:
+                            open_c.customer = customer
+                            open_c.save(update_fields=["customer", "updated_at"])
+
+                    response = HttpResponseRedirect(return_to)
+                    set_storefront_customer_cookie(response, store, user)
+                    return response
+                except Exception as e:
+                    error = str(e) or "Unable to create account. Please try again."
 
     html = render_page(
         store, "register", request=request, customer_page="register",

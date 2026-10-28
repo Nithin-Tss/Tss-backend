@@ -18,9 +18,6 @@ from .models import Customer, CustomerAddress
 from .serializers import CustomerAddressSerializer, CustomerSerializer
 
 
-_last_user_sync = {}
-
-
 class CustomerViewSet(StoreScopedViewSet):
     """/api/v1/customers/  ?search=name or email"""
 
@@ -32,66 +29,6 @@ class CustomerViewSet(StoreScopedViewSet):
     serializer_class = CustomerSerializer
 
     def get_queryset(self):
-        store = getattr(self.request, "store", None)
-        if store:
-            import time
-            now_time = time.time()
-            # Only scan and sync users once every 15 seconds per store to avoid massive overhead
-            if now_time - _last_user_sync.get(str(store.pk), 0) > 15:
-                _last_user_sync[str(store.pk)] = now_time
-                import sys
-                import uuid
-                from django.conf import settings
-                from django.contrib.auth import get_user_model
-                from django.utils import timezone
-
-                User = get_user_model()
-                existing_emails = {
-                    e.lower()
-                    for e in Customer.objects.filter(store=store).values_list("email", flat=True)
-                    if e
-                }
-                is_testing = (
-                    "test" in sys.argv
-                    or getattr(settings, "DATABASES", {}).get("default", {}).get("ENGINE") == "apps.core.testdb"
-                )
-                if is_testing:
-                    users = (
-                        User.objects.filter(store_memberships__store=store)
-                        .exclude(email="")
-                        .exclude(email__isnull=True)
-                        .only("email", "first_name", "last_name")
-                        .distinct()
-                    )
-                else:
-                    users = (
-                        User.objects.exclude(email="")
-                        .exclude(email__isnull=True)
-                        .only("email", "first_name", "last_name")
-                        .distinct()
-                    )
-
-                to_create = []
-                now = timezone.now()
-                for u in users:
-                    if u.email and u.email.lower() not in existing_emails:
-                        existing_emails.add(u.email.lower())
-                        to_create.append(
-                            Customer(
-                                id=uuid.uuid4(),
-                                store=store,
-                                email=u.email.lower(),
-                                first_name=u.first_name or "",
-                                last_name=u.last_name or "",
-                                email_subscription_status="subscribed",
-                                country="Australia",
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                if to_create:
-                    Customer.objects.bulk_create(to_create, ignore_conflicts=True)
-
         qs = super().get_queryset()
 
         # Database-side aggregation for orders_count and amount_spent to eliminate N+1 queries

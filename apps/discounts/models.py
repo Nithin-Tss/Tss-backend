@@ -48,6 +48,28 @@ class Discount(models.Model):
         db_table = '"discounts"."discounts"'
         verbose_name = "Discount"
         verbose_name_plural = "Discounts"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(value__gte=0),
+                name="ck_disc_value_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(minimum_order_amount__isnull=True) | models.Q(minimum_order_amount__gte=0),
+                name="ck_disc_min_order_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(maximum_discount_amount__isnull=True) | models.Q(maximum_discount_amount__gte=0),
+                name="ck_disc_max_discount_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(usage_limit__isnull=True) | models.Q(usage_limit__gte=1),
+                name="ck_disc_usage_limit_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(per_customer_limit__isnull=True) | models.Q(per_customer_limit__gte=1),
+                name="ck_disc_per_customer_limit_positive",
+            ),
+        ]
 
     def __str__(self):
         return self.name

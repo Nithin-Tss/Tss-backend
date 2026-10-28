@@ -26,6 +26,7 @@ CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "ab
 ZERO = Decimal("0.00")
 PAYMENT_METHODS = ("cod",)
 MAX_OPEN_COD_ORDERS = 5
+MAX_LINE_QUANTITY = 999  # per cart line: stops absurd orders, even where the store sells past stock
 
 
 def _money(value):
@@ -145,6 +146,11 @@ def _check_stock(product, variant, quantity):
         raise ValidationError({"quantity": f"Only {in_stock} of {product.title} left."})
 
 
+def _check_line_limit(product, quantity):
+    if quantity > MAX_LINE_QUANTITY:
+        raise ValidationError({"quantity": f"You can buy at most {MAX_LINE_QUANTITY} of {product.title} at a time."})
+
+
 def _check_available(store, product):
     """Same rule as the storefront: Active and on the Online Store."""
     if product.store_id != store.pk or not published_products(store).filter(pk=product.pk).exists():
@@ -167,7 +173,9 @@ def add_item(cart, product, quantity, variant=None):
         raise ValidationError({"product": "This product isn't available."})
 
     item = CartItem.objects.filter(cart=cart, product=product, variant=variant, is_deleted=False).first()
-    _check_stock(product, variant, quantity + (item.quantity if item else 0))
+    wanted = quantity + (item.quantity if item else 0)
+    _check_line_limit(product, wanted)
+    _check_stock(product, variant, wanted)
 
     if item:
         item.quantity += quantity
@@ -202,6 +210,7 @@ def set_quantity(cart, item_id, quantity):
     else:
         # Only asking for more needs stock: a shopper can always lower a line, even if stock fell below it since
         if quantity > item.quantity:
+            _check_line_limit(item.product, quantity)
             _check_stock(item.product, item.variant, quantity)
         item.quantity = quantity
         item.save(update_fields=["quantity", "updated_at"])

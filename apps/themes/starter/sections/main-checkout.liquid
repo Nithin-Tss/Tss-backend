@@ -9,6 +9,9 @@
 {%- assign cur = settings.currency_symbol | default: '₹' -%}
 
 <style>
+  .checkout-container, .checkout-container *, .checkout-container *::before, .checkout-container *::after {
+    box-sizing: border-box;
+  }
   .checkout-container {
     max-width: 1180px;
     margin: 0 auto;
@@ -46,9 +49,19 @@
   }
   .checkout-grid {
     display: grid;
-    grid-template-columns: 1.2fr 0.8fr;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
     gap: 40px;
     align-items: start;
+  }
+  .checkout-form-col, .checkout-summary-col {
+    min-width: 0;
+  }
+  .checkout-summary-card {
+    position: sticky;
+    top: 24px;
+  }
+  .checkout-form-col .checkout-card:last-of-type {
+    margin-bottom: 0;
   }
   @media (max-width: 900px) {
     .checkout-grid {
@@ -57,6 +70,18 @@
     }
     .checkout-summary-col {
       order: -1;
+    }
+    .checkout-summary-card {
+      position: static;
+    }
+    .checkout-container {
+      padding: 20px 16px 56px;
+    }
+    .checkout-card {
+      padding: 18px;
+    }
+    .checkout-items {
+      max-height: none;
     }
   }
   .checkout-card {
@@ -100,6 +125,8 @@
     color: #374151;
   }
   .checkout-field input, .checkout-field select, .checkout-field textarea {
+    width: 100%;
+    min-width: 0;
     height: 44px;
     padding: 0 12px;
     font-size: 14px;
@@ -127,7 +154,7 @@
     margin-bottom: 20px;
     max-height: 380px;
     overflow-y: auto;
-    padding-right: 4px;
+    padding: 8px 8px 0 0;
   }
   .checkout-item {
     display: flex;
@@ -186,6 +213,8 @@
     font-size: 14px;
     font-weight: 600;
     text-align: right;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .checkout-discount-box {
     display: flex;
@@ -194,6 +223,7 @@
   }
   .checkout-discount-box input {
     flex: 1;
+    min-width: 0;
     height: 42px;
     padding: 0 12px;
     border: 1px solid #D1D5DB;
@@ -203,6 +233,7 @@
   }
   .checkout-discount-box button {
     height: 42px;
+    flex-shrink: 0;
     padding: 0 16px;
     font-size: 13px;
     font-weight: 600;
@@ -239,6 +270,7 @@
   .checkout-totals-row {
     display: flex;
     justify-content: space-between;
+    gap: 12px;
     font-size: 14px;
     margin-bottom: 10px;
     color: #4B5563;
@@ -253,6 +285,7 @@
     margin-bottom: 0;
   }
   .checkout-submit-btn {
+    box-sizing: border-box;
     width: 100%;
     min-height: 50px;
     background: var(--button-bg, #111827);
@@ -303,6 +336,13 @@
     border-radius: var(--button-radius, 6px);
     cursor: pointer;
     transition: border-color .15s, background .15s;
+  }
+  .checkout-radio-option input[type="radio"] {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    flex-shrink: 0;
+    accent-color: var(--accent-color, #111827);
   }
   .checkout-radio-option:hover {
     background: #F9FAFB;
@@ -392,7 +432,6 @@
   </div>
 
   {%- if order_completed -%}
-    {# Confirmation view when order has just been placed #}
     <div class="checkout-confirmation">
       <div class="checkout-confirmation__icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -439,13 +478,11 @@
 
   {%- else -%}
     <div class="checkout-grid" id="checkout-main-grid">
-      {# LEFT COLUMN: Customer and Delivery Forms #}
       <div class="checkout-form-col">
         <form id="checkout-form" method="post" action="{{ shop.url }}/checkout/">
           <input type="hidden" name="cart_session" value="{{ cart_session }}">
           <input type="hidden" name="discount_code" id="hidden_discount_code" value="">
 
-          {# 1. Contact Information #}
           <div class="checkout-card">
             <h2 class="checkout-card__title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -459,7 +496,6 @@
             </div>
           </div>
 
-          {# 2. Shipping Address #}
           <div class="checkout-card">
             <h2 class="checkout-card__title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
@@ -525,7 +561,6 @@
             </div>
           </div>
 
-          {# 3. Payment Method #}
           <div class="checkout-card">
             <h2 class="checkout-card__title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
@@ -542,7 +577,6 @@
             </div>
           </div>
 
-          {# 4. Optional Order Notes #}
           {%- if s.show_notes != false -%}
             <div class="checkout-card">
               <h2 class="checkout-card__title">Order notes (optional)</h2>
@@ -558,10 +592,9 @@
         </form>
       </div>
 
-      {# RIGHT COLUMN: Order Summary #}
       {%- if s.show_order_summary != false -%}
         <div class="checkout-summary-col">
-          <div class="checkout-card" style="position: sticky; top: 24px;">
+          <div class="checkout-card checkout-summary-card">
             <h2 class="checkout-card__title">Order summary</h2>
 
             <div class="checkout-items" id="checkout-summary-items">

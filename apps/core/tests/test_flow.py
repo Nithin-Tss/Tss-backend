@@ -182,8 +182,8 @@ class StoreIsolationTest(StoreClientMixin, APITestCase):
         token_b, store_b = self.sign_up("b@example.com", "Store B")
 
         # B can't list or read A's records
-        # (B's own owner is listed as a customer; nobody from store A is)
-        self.assertEqual([c["email"] for c in self.ok("get", "/api/v1/customers/")], ["b@example.com"])
+        # (store B has no customers yet; nobody from store A is visible)
+        self.assertEqual(self.ok("get", "/api/v1/customers/"), [])
         self.ok("get", f"/api/v1/customers/{customer_a['id']}/", expect=404)
         self.ok("get", f"/api/v1/catalog/products/{product_a['id']}/", expect=404)
 
@@ -290,9 +290,27 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
     def test_custom_blocks_are_validated(self):
         self.sign_up("valid@example.com", "Valid Shop")
         bad_block = self.index(["c"], {"c": {"type": "custom", "settings": {}, "blocks": [
-            {"type": "marquee", "settings": {}},
+            {"type": "not_a_block", "settings": {}},
         ]}})
         self.ok("put", "/api/v1/themes/settings/", bad_block, expect=400)
+
+    def test_horizon_blocks_and_groups(self):
+        _, store = self.sign_up("group@example.com", "Group Shop")
+        self.ok("put", "/api/v1/themes/settings/", self.index(["g"], {"g": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "marquee", "settings": {"text": "Marquee words"}},
+            {"type": "jumbo_text", "settings": {"text": "Jumbo words"}},
+            {"type": "menu", "settings": {"links": "Shop | /collections/all"}},
+            {"type": "group", "settings": {"direction": "horizontal"}, "children": [
+                {"type": "heading", "settings": {"text": "Inside group"}},
+            ]},
+        ]}}))
+        html = self.home(store["storeSlug"])
+        for text in ("Marquee words", "Jumbo words", "tss-menu", "tss-group", "Inside group"):
+            self.assertIn(text, html)
+        nested = self.index(["g"], {"g": {"type": "custom", "settings": {}, "blocks": [
+            {"type": "group", "settings": {}, "children": [{"type": "group", "settings": {}}]},
+        ]}})
+        self.ok("put", "/api/v1/themes/settings/", nested, expect=400)
 
     def test_preview_renders_draft_without_saving(self):
         _, store = self.sign_up("draft@example.com", "Draft Shop")

@@ -38,6 +38,11 @@ STORE_ACTIVE = "active"
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
+# Digits with the usual separators, at least 7 of them: 9876543210, +91 98765-43210, (044) 2345 6789
+PHONE_PATTERN = re.compile(r"^[+(]?[0-9][0-9 ()./-]{5,28}[0-9]$")
+# Letters, digits, spaces and hyphens: 600001, SW1A 1AA, 10001-1234
+POSTAL_CODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 -]{1,19}$")
+
 
 class StorefrontView(APIView):
     authentication_classes = []
@@ -67,11 +72,11 @@ class StorefrontView(APIView):
 class AddItemSerializer(serializers.Serializer):
     product = serializers.UUIDField()
     variant = serializers.UUIDField(required=False, allow_null=True)
-    quantity = serializers.IntegerField(min_value=1, default=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=services.MAX_LINE_QUANTITY, default=1)
 
 
 class QuantitySerializer(serializers.Serializer):
-    quantity = serializers.IntegerField(min_value=0)
+    quantity = serializers.IntegerField(min_value=0, max_value=services.MAX_LINE_QUANTITY)
 
 
 class CompleteSerializer(serializers.Serializer):
@@ -90,6 +95,16 @@ class AddressSerializer(serializers.Serializer):
     country = serializers.CharField(max_length=100)
     phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
 
+    def validate_postal_code(self, value):
+        if not POSTAL_CODE_PATTERN.match(value):
+            raise serializers.ValidationError("Enter a valid postal code.")
+        return value
+
+    def validate_phone(self, value):
+        if value and not PHONE_PATTERN.match(value):
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return value
+
     def to_representation(self, instance):
         return dict(super().to_representation(instance))
 
@@ -98,10 +113,14 @@ class AddressSerializer(serializers.Serializer):
 
 
 class CheckoutInputSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False)
+    email = serializers.EmailField(required=False, max_length=320)
     shipping_address = AddressSerializer(required=False)
     billing_address = AddressSerializer(required=False)
     discount_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
+
+    def validate_email(self, value):
+        # Customers are matched by email, so store it the way the rest of the app does
+        return value.strip().lower()
 
 
 class CartView(StorefrontView):

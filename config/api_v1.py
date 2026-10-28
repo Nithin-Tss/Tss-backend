@@ -5,6 +5,7 @@ v1 keeps working unchanged.
 """
 from django.urls import include, path
 
+from apps.core.reports import OverviewView, ReportListView
 from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 
 urlpatterns = [
@@ -23,6 +24,8 @@ urlpatterns = [
     path("fulfillments/", include("apps.fulfillment.urls")),
     path("delivery/", include("apps.delivery.urls")),
     path("wishlists/", include("apps.wishlist.urls")),
+    path("reports/overview/", OverviewView.as_view(), name="reports-overview"),
+    path("reports/", ReportListView.as_view(), name="reports"),
     path("purchase-orders/", include("apps.purchasing.urls")),
     # Commerce: /api/v1/carts/, /api/v1/checkouts/ (staff, read-only)
     path("", include("apps.commerce.urls")),

@@ -5007,6 +5007,40 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.assertEqual(order.items.first().product.title, "Minimalist Lamp")
         self.assertEqual(order.items.first().quantity, 2)
 
+    def test_sandboxed_checkout_json_places_order(self):
+        """The sandboxed page (origin null) preflights, then POSTs JSON: both must work and the order must exist."""
+        import re
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+
+        preflight = self.shopper.options(
+            f"{self.base}/checkout/", HTTP_ORIGIN="null",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-cart-session",
+        )
+        self.assertEqual(preflight.status_code, 204)
+        self.assertEqual(preflight["Access-Control-Allow-Origin"], "*")
+        self.assertIn("X-Cart-Session", preflight["Access-Control-Allow-Headers"])
+
+        r = self.shopper.post(
+            f"{self.base}/checkout/", data=json.dumps({
+                "email": "sam@example.com", "first_name": "Sam", "last_name": "Lee",
+                "address1": "1 Main St", "city": "Pune", "postal_code": "411001", "payment_method": "cod",
+            }),
+            content_type="application/json", HTTP_ACCEPT="application/json",
+            HTTP_ORIGIN="null", HTTP_X_CART_SESSION=session_id,
+        )
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+        self.assertTrue(r.json()["success"])
+        from apps.orders.models import Order
+        self.assertTrue(Order.objects.filter(customer__email="sam@example.com").exists())
+
     def test_cart_drawer_checkout_button_navigation_and_rendering(self):
         """Test complete flow: add product -> cart drawer -> checkout button -> checkout page rendering."""
         import re
