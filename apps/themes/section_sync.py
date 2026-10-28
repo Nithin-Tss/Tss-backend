@@ -312,6 +312,41 @@ def _top_level_blocks_array(text):
     return None
 
 
+def preserve_search_block_type(content, old_schema):
+    """Keep an existing Search option in an edited header with no Search renderer."""
+    markup, schema_text, start = split(content)
+    if schema_text is None or "data-header-search" in markup:
+        return content
+    old_search = next((b for b in (old_schema or {}).get("blocks", [])
+                       if isinstance(b, dict) and b.get("type") == "search"), None)
+    if old_search is None:
+        return content
+    try:
+        schema = json.loads(schema_text)
+    except json.JSONDecodeError:
+        return content
+    old_other_types = {b.get("type") for b in (old_schema or {}).get("blocks", [])
+                       if isinstance(b, dict) and b.get("type") != "search"}
+    new_types = {b.get("type") for b in schema.get("blocks", []) if isinstance(b, dict)}
+    if old_other_types != new_types:
+        return content
+    if any(isinstance(b, dict) and b.get("type") == "search" for b in schema.get("blocks", [])):
+        return content
+    span = _top_level_blocks_array(schema_text)
+    if span is None:
+        return content
+    open_at, close_at = span
+    inner = schema_text[open_at + 1:close_at]
+    nl = "\r\n" if "\r\n" in content else "\n"
+    block_json = json.dumps(old_search, ensure_ascii=False, indent=2).replace("\n", nl + "    ")
+    if inner.strip():
+        last = open_at + 1 + len(inner.rstrip())
+        updated = schema_text[:last] + "," + nl + "    " + block_json + schema_text[last:]
+    else:
+        updated = schema_text[:open_at + 1] + nl + "    " + block_json + nl + "  " + schema_text[close_at:]
+    return content[:start] + updated + content[start + len(schema_text):]
+
+
 CART_BLOCK_SCHEMA = """{
       "type": "cart",
       "name": "Cart icon",
@@ -791,7 +826,15 @@ def merge_for_new_code(old_schema, new_schema, saved, name):
 
     old_default = (old_schema.get("default") or {}).get("blocks")
     new_default = (new_schema.get("default") or {}).get("blocks")
-    if json.dumps(old_default, sort_keys=True) != json.dumps(new_default, sort_keys=True):
+    old_search_defaults = [b for b in (old_default or []) if isinstance(b, dict) and b.get("type") == "search"]
+    new_search_defaults = [b for b in (new_default or []) if isinstance(b, dict) and b.get("type") == "search"]
+    only_search_default_was_removed = (
+        name == "header" and old_search_defaults and not new_search_defaults
+        and [b for b in (old_default or []) if not (isinstance(b, dict) and b.get("type") == "search")] == (new_default or [])
+    )
+    if only_search_default_was_removed:
+        blocks = clean_blocks(new_spec, (saved or {}).get("blocks") or [], strict=False)
+    elif json.dumps(old_default, sort_keys=True) != json.dumps(new_default, sort_keys=True):
         blocks = clean_blocks(new_spec, new_default or [], strict=False)
     else:
         blocks = clean_blocks(new_spec, (saved or {}).get("blocks") or [], strict=False)

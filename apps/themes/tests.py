@@ -744,6 +744,34 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertNotIn("data-header-search", self.home())
         self.assertNotIn('class="site-header__search"', self.home())
 
+    def test_pasted_branchless_header_keeps_search_schema_and_saved_block(self):
+        original = self.section()
+        original_blocks = original["values"]["blocks"]
+        branchless = sync.remove_search_render_branch(self.code())
+        pasted = self.with_schema(branchless, lambda schema: (
+            schema.update(blocks=[b for b in schema["blocks"] if b["type"] != "search"]),
+            schema["default"].update(
+                blocks=[b for b in schema["default"]["blocks"] if b["type"] != "search"]),
+        ))
+
+        saved = self.save_code(pasted)
+        self.assertIn("search", saved["sync"]["spec"]["blocks"])
+        self.assertTrue(any(b["type"] == "search" for b in self.schema_of(self.code())["blocks"]))
+        self.assertEqual(self.section()["values"]["blocks"], original_blocks)
+        self.assertNotIn("data-header-search", self.code())
+        self.assertNotIn('class="site-header__search"', self.header_html(self.home()))
+
+        values = self.section()["values"]
+        values["blocks"] = [b for b in values["blocks"] if b["type"] != "search"]
+        _, _ = self.save_values(values)
+        self.assertFalse(any(b["type"] == "search" for b in self.section()["values"]["blocks"]))
+        values = self.section()["values"]
+        values["blocks"].append({"type": "search", "settings": {"label": "Search", "placeholder": "Search products"}})
+        _, preview = self.save_values(values)
+        self.assertTrue(any(b["type"] == "search" for b in self.section()["values"]["blocks"]))
+        self.assertIn("data-header-search", self.code())
+        self.assertEqual(preview.count('class="site-header__search"'), 1)
+
     def test_customizer_add_restores_missing_search_render_branch_once(self):
         values = self.section()["values"]
         values["blocks"] = [block for block in values["blocks"] if block["type"] != "search"]

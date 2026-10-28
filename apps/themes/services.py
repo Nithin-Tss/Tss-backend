@@ -1800,6 +1800,7 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
     file = theme.files.filter(file_path=current["path"]).order_by("-updated_at").first()
     if file is None:
         raise exceptions.ValidationError({"sections": f"This theme has no {current['path']} file."})
+    original_code = file.content
     state = sync.section_state(theme, name)
     conflict = None
     if base_version is not None and base_version != state["version"] and state["source"] in ("code", "restore"):
@@ -1816,8 +1817,8 @@ def save_section_values(store_theme, name, raw, client="", base_version=None, st
 
     code = sync.write_values(file.content, values)
     version = state["version"]
-    if code != file.content:
-        version = sync.record_version(theme, name, file.content, "customizer")
+    if code != original_code:
+        version = sync.record_version(theme, name, original_code, "customizer")
         file.content = code
         file.file_size = len(code.encode("utf-8"))
         file.save(update_fields=["content", "file_size", "updated_at"])
@@ -1858,6 +1859,11 @@ def _save_section_code(store_theme, name, content, base_version=None, client="",
             old_schema = sync.parse(file.content, path)
         except sync.SectionCodeError:
             old_schema = None
+
+    # Removing Search's Liquid render branch must not erase its existing Add block option.
+    if name == "header" and old_schema:
+        content = sync.preserve_search_block_type(content, old_schema)
+        new_schema = sync.parse(content, path)
 
     state = sync.section_state(theme, name)
     conflict = None
