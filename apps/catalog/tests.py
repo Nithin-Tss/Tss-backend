@@ -239,6 +239,102 @@ class VariantApiTests(APITestCase):
         self.assertEqual(bad.status_code, 400)
 
 
+class CatalogResourceApiTests(StoreClientMixin, APITestCase):
+    """The remaining store scoped catalog resources and their API access rules."""
+
+    def setUp(self):
+        self.token, store = self.sign_up("catalog-resources@example.com", "Catalog resources")
+        self.store_id = store["storeId"]
+
+    def product(self, title="Shirt", sku="R-1"):
+        return self.ok("post", URL, {"title": title, "sku": sku, "price": "10"}, expect=201)
+
+    def test_categories_create_update_list_and_reject_unknown_parent(self):
+        parent = self.ok("post", "/api/v1/catalog/categories/", {"name": " Apparel "}, expect=201)
+        child = self.ok("post", "/api/v1/catalog/categories/", {
+            "name": " Tops ", "parent": parent["id"],
+        }, expect=201)
+        self.assertEqual((parent["name"], child["name"], child["parent"]), ("Apparel", "Tops", parent["id"]))
+        self.assertEqual([row["id"] for row in self.ok("get", "/api/v1/catalog/categories/")],
+                         [parent["id"], child["id"]])
+        self.assertEqual(self.ok("patch", f"/api/v1/catalog/categories/{child['id']}/", {"name": "Tees"})["name"], "Tees")
+        self.ok("post", "/api/v1/catalog/categories/", {
+            "name": "Bad", "parent": "11111111-1111-1111-1111-111111111111",
+        }, expect=400)
+
+    def test_collections_crud_products_and_preview(self):
+        item = self.product()
+        created = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": " Summer ", "products": [item["id"]],
+        }, expect=201)
+        self.assertEqual(created["name"], "Summer")
+        self.assertEqual(created["products_count"], 1)
+        self.assertEqual(self.ok("get", f"/api/v1/catalog/collections/{created['id']}/")["products_count"], 1)
+        self.assertEqual(self.ok("patch", f"/api/v1/catalog/collections/{created['id']}/", {"description": "Seasonal"})["description"], "Seasonal")
+        preview = self.ok("post", "/api/v1/catalog/collections/preview/", {
+            "rules": [{"field": "title", "operator": "contains", "value": "Shirt"}],
+        })
+        self.assertEqual(preview["count"], 1)
+        self.assertEqual(preview["products"][0]["id"], item["id"])
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Bad", "products": ["11111111-1111-1111-1111-111111111111"]}, expect=400)
+        self.assertEqual(self.ok("delete", f"/api/v1/catalog/collections/{created['id']}/", expect=204), None)
+
+    def test_catalog_resources_are_store_isolated_and_members_need_permissions(self):
+        category = self.ok("post", "/api/v1/catalog/categories/", {"name": "Tops"}, expect=201)
+        collection = self.ok("post", "/api/v1/catalog/collections/", {"name": "Featured"}, expect=201)
+        self.use(self.token, self.store_id)
+        role = self.ok("post", "/api/v1/roles/", {"name": "No catalog", "permissions": []}, expect=201)
+        member_token, _ = self.sign_up("catalog-member@example.com", "Member own shop")
+        self.use(self.token, self.store_id)
+        self.ok("post", "/api/v1/members/", {"email": "catalog-member@example.com", "roleIds": [role["id"]]}, expect=201)
+        self.use(member_token, self.store_id)
+        for method, path, body in (
+            ("get", "/api/v1/catalog/categories/", None),
+            ("post", "/api/v1/catalog/categories/", {"name": "Denied"}),
+            ("get", "/api/v1/catalog/collections/", None),
+            ("post", "/api/v1/catalog/collections/", {"name": "Denied"}),
+            ("get", "/api/v1/catalog/sales-channels/", None),
+        ):
+            self.ok(method, path, body, expect=403)
+        self.use(self.token, self.store_id)
+        _, second = self.sign_up("catalog-second@example.com", "Second shop")
+        self.assertEqual(self.ok("get", "/api/v1/catalog/categories/"), [])
+        self.assertEqual(self.ok("get", "/api/v1/catalog/collections/"), [])
+        self.ok("get", f"/api/v1/catalog/categories/{category['id']}/", expect=404)
+        self.ok("patch", f"/api/v1/catalog/collections/{collection['id']}/", {"name": "Changed"}, expect=404)
+        self.use(self.token, self.store_id)
+        self.client.credentials()
+        self.client.cookies.clear()
+        self.assertIn(self.client.get("/api/v1/catalog/categories/").status_code, (401, 403))
+        self.assertIn(self.client.get("/api/v1/catalog/collections/").status_code, (401, 403))
+        self.assertNotEqual(second["storeId"], self.store_id)
+
+    def test_products_validate_price_sku_and_bulk_limit_with_messages(self):
+        missing = self.client.post(URL, {"price": "10", "sku": "NO-TITLE"}, format="json")
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("title", str(missing.json()).lower())
+        negative = self.client.post(URL, {"title": "Negative", "sku": "NEG", "price": "-1"}, format="json")
+        self.assertEqual(negative.status_code, 400)
+        self.assertIn("price", str(negative.json()).lower())
+        self.product(title="First", sku="DUP")
+        duplicate = self.client.post(URL, {"title": "Second", "sku": "DUP", "price": "1"}, format="json")
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertIn("sku", str(duplicate.json()).lower())
+        too_many = self.client.post(URL + "bulk/", {"products": [{"title": "T"}] * 501}, format="json")
+        self.assertEqual(too_many.status_code, 400)
+        self.assertIn("500", str(too_many.json()))
+
+    def test_product_list_supports_filters_and_pagination(self):
+        self.product("Alpha", "P-A")
+        self.product("Beta", "P-B")
+        self.product("Gamma", "P-C")
+        response = self.client.get(URL + "?search=Beta")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(row["title"] == "Beta" for row in response.json()))
+        paged = self.client.get(URL + "?page=1&page_size=1")
+        self.assertEqual(paged.status_code, 200)
+
+
 class CatalogStockDeletionIntegrationTests(StoreClientMixin, APITestCase):
     def setUp(self):
         self.sign_up(f"catalog-integration-{self._testMethodName}@example.com", "Catalog Integration")
