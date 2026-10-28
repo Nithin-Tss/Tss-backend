@@ -3,7 +3,10 @@ Stripe Connect payments, with Stripe itself mocked.
 
     python manage.py test apps.payments.test_stripe --settings=config.test_settings
 """
+import hashlib
+import hmac
 import json
+import time
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
@@ -271,6 +274,181 @@ class StripeTests(base_tests.CommerceTestBase):
         self.client_mock.v1.refunds.create.side_effect = RuntimeError("stripe down")
         with self.assertRaises(RuntimeError), self.assertLogs("apps.payments.stripe_service", "ERROR"):
             stripe_service.finalize(intent(checkout, amount=1), ACCOUNT)
+
+    # Real signature checking: nothing mocked, signed the way Stripe signs (t=<ts>,v1=HMAC-SHA256("<ts>.<body>")).
+    # The mocked tests above hand the view plain dicts; the real library hands it Stripe objects (no .get()).
+
+    def signed(self, payload, secret="whsec", timestamp=None):
+        timestamp = int(time.time()) if timestamp is None else timestamp
+        digest = hmac.new(secret.encode(), f"{timestamp}.{payload}".encode(), hashlib.sha256).hexdigest()
+        return f"t={timestamp},v1={digest}"
+
+    def post_signed(self, payload, header):
+        extra = {"HTTP_STRIPE_SIGNATURE": header} if header is not None else {}
+        return self.client.generic(
+            "POST", "/api/v1/payments/stripe/webhook/", payload.encode(), content_type="application/json", **extra
+        )
+
+    def real_event(self, type, obj, account=ACCOUNT):
+        return json.dumps({"id": "evt_1", "object": "event", "type": type, "account": account, "data": {"object": obj}})
+
+    def paid_intent_object(self, checkout):
+        paid = intent(checkout)
+        return {"id": paid.id, "object": "payment_intent", "status": "succeeded", "amount": paid.amount,
+                "currency": paid.currency, "metadata": paid.metadata}
+
+    def test_webhook_accepts_a_genuinely_signed_event_and_places_the_order(self):
+        payload = self.real_event("payment_intent.succeeded", self.paid_intent_object(self.checkout()))
+        r = self.post_signed(payload, self.signed(payload))
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Order.objects.count(), 1)
+        self.assertEqual(self.post_signed(payload, self.signed(payload)).status_code, 200)  # Stripe retries
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (1, 1))
+
+    def test_webhook_rejects_wrong_secret_tampered_body_missing_and_stale_signatures(self):
+        payload = self.real_event("payment_intent.succeeded", self.paid_intent_object(self.checkout()))
+        cases = {
+            "wrong secret": (payload, self.signed(payload, secret="whsec_other")),
+            "tampered body": (payload.replace("99800", "1"), self.signed(payload)),
+            "no header": (payload, None),
+            "garbage header": (payload, "nonsense"),
+            "stale timestamp": (payload, self.signed(payload, timestamp=int(time.time()) - 3600)),
+        }
+        for name, (body, header) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.post_signed(body, header).status_code, 400)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_webhook_refuses_everything_when_no_secret_is_configured(self):
+        with override_settings(STRIPE_WEBHOOK_SECRET=""):
+            r = self.post_signed("{}", self.signed("{}", secret=""))
+        self.assertEqual(r.status_code, 503)
+
+    def test_every_handled_event_type_survives_a_real_signed_delivery(self):
+        payment = self.paid()
+        events = [
+            ("charge.refunded", {"id": "ch_1", "payment_intent": "pi_1", "currency": "inr", "amount_refunded": 10000}),
+            ("charge.dispute.created", {"id": "dp_1", "payment_intent": "pi_1", "amount": 5000, "currency": "inr",
+                                        "status": "needs_response", "reason": "fraudulent"}),
+            ("charge.dispute.closed", {"id": "dp_1", "payment_intent": "pi_1", "amount": 5000, "currency": "inr",
+                                       "status": "lost", "reason": "fraudulent"}),
+            ("payment_intent.payment_failed", {"id": "pi_9", "status": "requires_payment_method",
+                                               "last_payment_error": {"message": "declined"}}),
+            ("payment_intent.canceled", {"id": "pi_9", "status": "canceled"}),
+            ("account.updated", {"id": ACCOUNT, "charges_enabled": True, "details_submitted": True}),
+        ]
+        for type, obj in events:
+            with self.subTest(type):
+                payload = self.real_event(type, obj)
+                r = self.post_signed(payload, self.signed(payload))
+                self.assertEqual(r.status_code, 200, r.content)
+        payment.refresh_from_db()
+        self.assertEqual(services.refunded_total(payment), Decimal("100.00"))
+        self.assertEqual(payment.metadata["dispute"], {"id": "dp_1", "status": "lost"})
+
+        payload = self.real_event("account.application.deauthorized", {"id": "ca_1"})
+        self.assertEqual(self.post_signed(payload, self.signed(payload)).status_code, 200)
+        self.store.refresh_from_db()
+        self.assertEqual(self.store.stripe_account_id, "")
+
+    # ------------------------------------------------ checkout security and idempotency
+
+    STRANGER = {"HTTP_X_CART_SESSION": "someone-elses-session-0000"}
+
+    def test_stranger_session_cannot_start_or_confirm_my_stripe_payment(self):
+        checkout = self.checkout()
+        for suffix in ("stripe/", "stripe/confirm/"):
+            r = self.client.post(f"{self.base}/checkout/{checkout.pk}/{suffix}", **self.STRANGER)
+            self.assertEqual(r.status_code, 404, suffix)
+            self.assertEqual(self.client.post(f"{self.base}/checkout/{checkout.pk}/{suffix}").status_code, 400, suffix)
+        self.client_mock.v1.payment_intents.create.assert_not_called()
+        self.client_mock.v1.payment_intents.retrieve.assert_not_called()
+
+    def test_stripe_checkout_routes_accept_post_only(self):
+        checkout = self.checkout()
+        for suffix in ("stripe/", "stripe/confirm/"):
+            for method in ("get", "patch", "put", "delete"):
+                r = getattr(self.client, method)(f"{self.base}/checkout/{checkout.pk}/{suffix}", **self.h)
+                self.assertEqual(r.status_code, 405, f"{method} {suffix}")
+
+    def test_confirm_without_a_started_payment_or_before_paying_places_nothing(self):
+        checkout = self.checkout()
+        url = f"{self.base}/checkout/{checkout.pk}/stripe/confirm/"
+        self.assertEqual(self.client.post(url, **self.h).status_code, 400)
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        intents.retrieve.return_value = intent(checkout, status="requires_payment_method")
+        self.assertEqual(self.client.post(url, **self.h).status_code, 409)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_confirm_twice_then_webhook_still_makes_exactly_one_order(self):
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        intents.retrieve.return_value = intent(checkout)
+        url = f"{self.base}/checkout/{checkout.pk}/stripe/confirm/"
+        first, second = self.client.post(url, **self.h), self.client.post(url, **self.h)
+        self.assertEqual((first.status_code, second.status_code), (200, 200))
+        self.assertEqual(first.data["id"], second.data["id"])
+        self.assertEqual(self.send("payment_intent.succeeded", intent(checkout)).status_code, 200)
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (1, 1))
+        self.assertEqual(sellable(self.variant), 8)
+        self.client_mock.v1.refunds.create.assert_not_called()
+
+    def test_money_paid_for_an_already_completed_checkout_is_refunded_not_double_ordered(self):
+        checkout = self.checkout()
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/complete/", {"payment_method": "cod"}, format="json", **self.h)
+        self.assertEqual(Order.objects.count(), 1)
+        self.assertIsNone(stripe_service.finalize(intent(checkout), ACCOUNT))
+        self.assertEqual(Order.objects.count(), 1)
+        self.client_mock.v1.refunds.create.assert_called_once()
+
+    def test_stripe_outage_is_a_clean_502_and_places_nothing(self):
+        import stripe
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.side_effect = stripe.APIConnectionError("secret internal detail")
+        with self.assertLogs("apps.payments.stripe_views", "ERROR"):
+            r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("secret internal detail", r.content.decode())
+
+        intents.create.side_effect = None
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        intents.retrieve.side_effect = stripe.APIConnectionError("down")
+        with self.assertLogs("apps.payments.stripe_views", "ERROR"):
+            r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/confirm/", **self.h)
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_stripe_requests_carry_stable_idempotency_keys(self):
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertIn(str(checkout.pk), intents.create.call_args.kwargs["options"]["idempotency_key"])
+
+        refunds = self.client_mock.v1.refunds
+        refunds.create.return_value = SimpleNamespace(id="re_1")
+        stripe_service.finalize(intent(checkout, amount=100), ACCOUNT)  # mismatch: refunded
+        stripe_service.finalize(intent(checkout, amount=100), ACCOUNT)  # webhook retry: same refund key
+        keys = [c.kwargs["options"]["idempotency_key"] for c in refunds.create.call_args_list]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], keys[1])
+
+    def test_partial_refunds_use_distinct_keys_and_a_repeat_of_one_reuses_its_key(self):
+        payment = self.paid()
+        refunds = self.client_mock.v1.refunds
+        refunds.create.return_value = SimpleNamespace(id="re_1")
+        stripe_service.refund_payment(payment, Decimal("100.00"), Decimal("0.00"))
+        stripe_service.refund_payment(payment, Decimal("100.00"), Decimal("0.00"))  # the same request retried
+        stripe_service.refund_payment(payment, Decimal("100.00"), Decimal("100.00"))  # a second, later refund
+        keys = [c.kwargs["options"]["idempotency_key"] for c in refunds.create.call_args_list]
+        self.assertEqual(keys[0], keys[1])
+        self.assertNotEqual(keys[1], keys[2])
 
     def test_confirm_endpoint_asks_stripe_and_places_the_order(self):
         checkout = self.checkout()

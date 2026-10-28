@@ -11,7 +11,7 @@ import logging
 import stripe
 from django.conf import settings
 from django.http import HttpResponse
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,6 +27,22 @@ from . import stripe_service
 logger = logging.getLogger(__name__)
 
 
+class PaymentProviderUnavailable(APIException):
+    status_code = 502
+    default_detail = "We couldn't reach the card payment provider. Please try again in a moment."
+    default_code = "payment_provider_unavailable"
+
+
+class StripeErrorsMixin:
+    """A Stripe API failure is a clean 502 with a safe message, never a crash that leaks details."""
+
+    def handle_exception(self, exc):
+        if isinstance(exc, stripe.StripeError):
+            logger.error("Stripe call failed in %s: %s", type(self).__name__, exc, exc_info=exc)
+            exc = PaymentProviderUnavailable()
+        return super().handle_exception(exc)
+
+
 def _status(store):
     return {
         "connected": bool(store.stripe_account_id),
@@ -35,7 +51,7 @@ def _status(store):
     }
 
 
-class StripeConnectView(APIView):
+class StripeConnectView(StripeErrorsMixin, APIView):
     """Only the store's owner connects or inspects Stripe; the page URLs come from our own FRONTEND_URL."""
 
     # store.manage is held by owners only (no role can grant it), for reading and connecting alike
@@ -72,7 +88,8 @@ class StripeWebhookView(APIView):
         except (ValueError, stripe.SignatureVerificationError):
             return HttpResponse(status=400)
 
-        account_id = event.get("account")
+        # construct_event returns a Stripe object, not a dict: no .get()
+        account_id = event["account"] if "account" in event else None
         obj = event["data"]["object"]
         # An error here answers 5xx so Stripe retries; a payment we can't place is refunded inside finalize
         if event["type"] == "payment_intent.succeeded" and account_id:
@@ -92,7 +109,7 @@ class StripeWebhookView(APIView):
         return HttpResponse(status=200)
 
 
-class CheckoutStripeView(CheckoutDetailView):
+class CheckoutStripeView(StripeErrorsMixin, CheckoutDetailView):
     throttle_scope = "storefront_checkout"
     http_method_names = ["post", "options"]
 
@@ -100,7 +117,7 @@ class CheckoutStripeView(CheckoutDetailView):
         return Response(stripe_service.payment_session(self._checkout(request, checkout_id)))
 
 
-class CheckoutStripeConfirmView(CheckoutDetailView):
+class CheckoutStripeConfirmView(StripeErrorsMixin, CheckoutDetailView):
     """The shopper came back from paying. Asks Stripe itself, so it never trusts the browser."""
 
     throttle_scope = "storefront_checkout"
