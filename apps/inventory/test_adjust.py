@@ -119,6 +119,32 @@ class AdjustInventoryTests(StockBase):
             InventoryHistory.objects.all().delete()
         self.assertEqual(InventoryHistory.objects.get().note, "")
 
+    def test_sqlite_guard_blocks_direct_history_sql_edits(self):
+        _, variant = self.variant_with_stock(5)
+        self.adjust(variant, delta=1)
+        entry = InventoryHistory.objects.get()
+
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'UPDATE "inventory"."inventory_history" '
+                        'SET note = %s WHERE id = %s',
+                        ["tampered", str(entry.pk)],
+                    )
+
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        'DELETE FROM "inventory"."inventory_history" '
+                        'WHERE id = %s',
+                        [str(entry.pk)],
+                    )
+        entry.refresh_from_db()
+        self.assertEqual(entry.note, "")
+        self.assertTrue(InventoryHistory.objects.filter(pk=entry.pk).exists())
+
     @unittest.skipUnless(
         connection.vendor == "postgresql",
         "The append-only trigger lives in migration 0004 (PostgreSQL only); "

@@ -37,3 +37,44 @@ class PurchaseOrderReceiveTests(StoreClientMixin, APITestCase):
 
         self.assertEqual(self.stock(self.variant)["available"], 10)
         self.assertEqual(PurchaseOrder.objects.get(pk=po["id"]).status, "received")
+
+
+class PurchaseOrderPermissionTests(StoreClientMixin, APITestCase):
+    def setUp(self):
+        self.token, store = self.sign_up("po-permissions@example.com", "PO permissions")
+        self.store_id = store["storeId"]
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Tee", "status": "active", "price": "500", "sku": "TEE-PERM-1",
+        }, expect=201)
+        self.variant = product["variants"][0]["id"]
+        self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)["id"]
+        self.po_body = {"supplier_name": "Acme", "items": [{"variant": self.variant, "quantity": 2}]}
+        po = self.ok("post", "/api/v1/purchase-orders/", self.po_body, expect=201)
+        self.po_id = po["id"]
+
+    def test_purchase_order_endpoints_require_auth_and_purchasing_permission(self):
+        actions = (
+            ("get", "/api/v1/purchase-orders/", None),
+            ("post", "/api/v1/purchase-orders/", self.po_body),
+            ("post", f"/api/v1/purchase-orders/{self.po_id}/order/", {}),
+            ("post", f"/api/v1/purchase-orders/{self.po_id}/cancel/", {}),
+            ("post", f"/api/v1/purchase-orders/{self.po_id}/receive/", {"location": self.location}),
+        )
+
+        role = self.ok("post", "/api/v1/roles/", {
+            "name": "No purchasing permissions", "permissions": [],
+        }, expect=201)
+        member_token, _ = self.sign_up("po-no-permissions@example.com", "PO member shop")
+        self.use(self.token, self.store_id)
+        self.ok("post", "/api/v1/members/", {
+            "email": "po-no-permissions@example.com", "roleIds": [role["id"]],
+        }, expect=201)
+        self.use(member_token, self.store_id)
+        for method, url, body in actions:
+            self.ok(method, url, body, expect=403)
+
+        self.client.credentials()
+        self.client.cookies.clear()
+        for method, url, body in actions:
+            response = getattr(self.client, method)(url, body, format="json")
+            self.assertEqual(response.status_code, 401, f"{method.upper()} {url}: {response.content[:300]}")

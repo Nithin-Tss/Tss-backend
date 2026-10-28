@@ -153,6 +153,15 @@ class VariantApiTests(APITestCase):
         self.product = r.json()
         self.first = self.product["variants"][0]["id"]
 
+    def test_signed_out_requests_cannot_access_variants(self):
+        self.client.credentials()
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get(VARIANTS).status_code, 401)
+        response = self.client.post(VARIANTS, {
+            "product": self.product["id"], "sku": "SIGNED-OUT", "price": "1",
+        }, format="json")
+        self.assertEqual(response.status_code, 401)
+
     def test_add_list_update_delete(self):
         r = self.client.post(VARIANTS, {"product": self.product["id"], "sku": "S2", "price": "12"}, format="json")
         self.assertEqual(r.status_code, 201, r.content)
@@ -289,6 +298,7 @@ class CatalogResourceApiTests(StoreClientMixin, APITestCase):
         self.assertEqual(self.ok("delete", f"/api/v1/catalog/collections/{created['id']}/", expect=204), None)
 
     def test_catalog_resources_are_store_isolated_and_members_need_permissions(self):
+        product = self.product("Permission target", "PERM-1")
         category = self.ok("post", "/api/v1/catalog/categories/", {"name": "Tops"}, expect=201)
         collection = self.ok("post", "/api/v1/catalog/collections/", {"name": "Featured"}, expect=201)
         self.use(self.token, self.store_id)
@@ -298,11 +308,16 @@ class CatalogResourceApiTests(StoreClientMixin, APITestCase):
         self.ok("post", "/api/v1/members/", {"email": "catalog-member@example.com", "roleIds": [role["id"]]}, expect=201)
         self.use(member_token, self.store_id)
         for method, path, body in (
+            ("get", URL, None),
+            ("post", URL, {"title": "Denied", "sku": "DENIED", "price": "1"}),
+            ("get", VARIANTS, None),
+            ("post", VARIANTS, {"product": product["id"], "sku": "DENIED-V", "price": "1"}),
             ("get", "/api/v1/catalog/categories/", None),
             ("post", "/api/v1/catalog/categories/", {"name": "Denied"}),
             ("get", "/api/v1/catalog/collections/", None),
             ("post", "/api/v1/catalog/collections/", {"name": "Denied"}),
             ("get", "/api/v1/catalog/sales-channels/", None),
+            ("post", URL + "bulk/", {"products": [{"title": "Denied", "sku": "DENIED-B"}]}),
         ):
             self.ok(method, path, body, expect=403)
         self.use(self.token, self.store_id)
@@ -314,9 +329,35 @@ class CatalogResourceApiTests(StoreClientMixin, APITestCase):
         self.use(self.token, self.store_id)
         self.client.credentials()
         self.client.cookies.clear()
-        self.assertIn(self.client.get("/api/v1/catalog/categories/").status_code, (401, 403))
-        self.assertIn(self.client.get("/api/v1/catalog/collections/").status_code, (401, 403))
+        self.assertEqual(self.client.get("/api/v1/catalog/categories/").status_code, 401)
+        self.assertEqual(self.client.get("/api/v1/catalog/collections/").status_code, 401)
+        self.assertEqual(self.client.get(URL).status_code, 401)
         self.assertNotEqual(second["storeId"], self.store_id)
+
+    def test_product_bulk_actions_reject_signed_out_and_wrong_role_requests(self):
+        product = self.product("Bulk permission target", "BULK-PERM-1")
+        bulk_actions = (
+            ("bulk-status/", {"ids": [product["id"]], "status": "active"}),
+            ("bulk-delete/", {"ids": [product["id"]]}),
+            ("delete-all/", {"confirm": True}),
+        )
+
+        self.client.credentials()
+        self.client.cookies.clear()
+        for action, body in bulk_actions:
+            response = self.client.post(URL + action, body, format="json")
+            self.assertEqual(response.status_code, 401, action)
+
+        self.use(self.token, self.store_id)
+        role = self.ok("post", "/api/v1/roles/", {"name": "No bulk permissions", "permissions": []}, expect=201)
+        member_token, _ = self.sign_up("catalog-bulk-member@example.com", "Bulk member shop")
+        self.use(self.token, self.store_id)
+        self.ok("post", "/api/v1/members/", {
+            "email": "catalog-bulk-member@example.com", "roleIds": [role["id"]],
+        }, expect=201)
+        self.use(member_token, self.store_id)
+        for action, body in bulk_actions:
+            self.ok("post", URL + action, body, expect=403)
 
     def test_products_validate_price_sku_and_bulk_limit_with_messages(self):
         missing = self.client.post(URL, {"price": "10", "sku": "NO-TITLE"}, format="json")
