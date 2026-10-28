@@ -376,6 +376,8 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         self.assertNotIn("<img src=x", html)
 
     def test_theme_image_upload(self):
+        from urllib.parse import urlsplit
+
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         self.sign_up("img@example.com", "Image Shop")
@@ -388,6 +390,16 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         served = self.client.get(url.split("testserver", 1)[-1])
         self.assertEqual(served.status_code, 200)
         self.assertEqual(served["Content-Type"], "image/png")
+
+        # The picture is stored in the store's media assets, bytes included
+        from apps.media.models import MediaAsset
+        from apps.themes.models import ThemeImage
+        asset = MediaAsset.objects.get()
+        self.assertEqual((asset.original_name, asset.mime_type, asset.file_size), ("banner.png", "image/png", 40))
+        self.assertEqual(bytes(asset.data), b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        self.assertTrue(asset.uploaded_by_id)
+        self.assertEqual(asset.url, urlsplit(url).path)
+        self.assertFalse(ThemeImage.objects.exists())
 
         bad = SimpleUploadedFile("banner.png", b"plain text")
         self.assertEqual(self.client.post("/api/v1/themes/images/", {"image": bad}, format="multipart").status_code, 400)

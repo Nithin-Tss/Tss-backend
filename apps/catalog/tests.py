@@ -530,12 +530,14 @@ class ProductFormSchemaTests(APITestCase):
     def test_uploaded_photo_lives_in_the_database_and_is_served(self):
         from urllib.parse import urlsplit
 
+        from apps.media.models import MediaAsset
         from apps.themes.models import ThemeImage
 
         url = self.upload(self.PNG).json()["url"]
         stored = ThemeImage.objects.get()
         self.assertEqual((str(stored.store_id), stored.content_type), (self.store_id, "image/png"))
         self.assertEqual(bytes(stored.data), self.PNG)
+        self.assertFalse(MediaAsset.objects.exists())  # product photos are not media assets
 
         public = APIClient()  # shoppers aren't signed in
         r = public.get(urlsplit(url).path)

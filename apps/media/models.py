@@ -32,10 +32,15 @@ class MediaAsset(models.Model):
         db_column="store_id",
     )
 
+    # The picture itself is kept in the database (`data`), because the server's disk is wiped on deploy.
+    # It is served publicly at /s/_img/<id>. `file` is only for assets saved on disk.
+    data = models.BinaryField(blank=True, null=True)
+
     file = models.FileField(
         upload_to=media_upload_path,
         max_length=500,
-        unique=True,
+        blank=True,
+        null=True,
     )
 
     original_name = models.CharField(max_length=255)
@@ -78,6 +83,13 @@ class MediaAsset(models.Model):
                 name="media_store_created_idx",
             ),
         ]
+
+    @property
+    def url(self):
+        """Public address of the picture, relative to the site root."""
+        if self.file:
+            return self.file.url
+        return f"/s/_img/{self.id}"
 
     def __str__(self):
         return self.original_name

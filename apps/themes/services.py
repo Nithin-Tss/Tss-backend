@@ -916,23 +916,32 @@ IMAGES_FILE = "assets/images.json"
 
 def images_file(store_theme):
     """The pictures uploaded in the customizer (stored in the database), listed as read-only JSON."""
+    from apps.media.models import MediaAsset
+
     from .models import ThemeImage
 
     used = _dump(store_theme.custom_data)
+    rows = [
+        (asset.id, asset.mime_type, asset.file_size, asset.created_at)
+        for asset in MediaAsset.objects.filter(store_id=store_theme.store_id, data__isnull=False).defer("data")
+    ] + [  # product photos and older pictures, kept in the older table
+        (image.id, image.content_type, image.size, image.created_at)
+        for image in ThemeImage.objects.filter(store_id=store_theme.store_id).defer("data")
+    ]
     images = []
-    for image in ThemeImage.objects.filter(store_id=store_theme.store_id).order_by("-created_at"):
-        key = str(image.id)
+    for image_id, content_type, size, created_at in sorted(rows, key=lambda row: row[3], reverse=True):
+        key = str(image_id)
         images.append({
             "id": key,
             "url": f"/s/_img/{key}",
-            "type": image.content_type,
-            "bytes": image.size,
-            "uploaded": image.created_at.isoformat(timespec="seconds"),
+            "type": content_type,
+            "bytes": size,
+            "uploaded": created_at.isoformat(timespec="seconds"),
             "in_use": key in used,
         })
     return _dump({
-        "_note": "Pictures uploaded in the customizer. They are stored in the database; use the url in a Liquid file "
-                 "or pick the picture in the customizer. This file is read-only.",
+        "_note": "Pictures uploaded in the customizer (see Media assets). They are stored in the database; use the url in a "
+                 "Liquid file or pick the picture in the customizer. This file is read-only.",
         "images": images,
     })
 
