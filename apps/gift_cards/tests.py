@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest import skipUnless
 
 from django.core.exceptions import ValidationError
 from rest_framework.test import APITestCase
@@ -34,6 +35,11 @@ class GiftCardTransactionProtectionTests(StoreClientMixin, APITestCase):
             balance_before=Decimal("100.00"),
             balance_after=Decimal("90.00"),
         )
+    @skipUnless(
+        connection.vendor == "postgresql",
+        "The append-only trigger is created by a PostgreSQL-only migration; "
+        "config.test_settings uses SQLite without migrations.",
+    )
     def test_database_trigger_blocks_gift_card_transaction_updates_and_deletes(self):
         record = self.transaction_record
 

@@ -42,6 +42,11 @@ class Store(models.Model):
     shipping_flat_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_shipping_threshold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
+    # Stripe Connect (Standard account the store connected to take card payments)
+    stripe_account_id = models.CharField(max_length=64, blank=True, default="")
+    stripe_charges_enabled = models.BooleanField(default=False)
+    stripe_details_submitted = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

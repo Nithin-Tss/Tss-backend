@@ -3,6 +3,7 @@ adjust_inventory(): the one function behind every stock change.
 
     python manage.py test apps.inventory.test_adjust --settings=config.test_settings
 """
+import unittest
 from unittest import mock
 # from django.db import transaction
 from django.db import DatabaseError, connection, transaction
@@ -118,6 +119,11 @@ class AdjustInventoryTests(StockBase):
             InventoryHistory.objects.all().delete()
         self.assertEqual(InventoryHistory.objects.get().note, "")
 
+    @unittest.skipUnless(
+        connection.vendor == "postgresql",
+        "The append-only trigger lives in migration 0004 (PostgreSQL only); "
+        "test settings use SQLite without migrations.",
+    )
     def test_database_trigger_blocks_history_updates_and_deletes(self):
         _, variant = self.variant_with_stock(5)
         self.adjust(variant, delta=1)

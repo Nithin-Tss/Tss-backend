@@ -2,8 +2,8 @@
 Payments. A Payment is money received for an order; each capture or refund
 is a PaymentTransaction. Refunds can never exceed what was captured.
 
-Only the "manual" provider (cash, bank transfer, cash on delivery) exists
-for now. An online provider (Razorpay, Stripe, ...) plugs in here later.
+Providers: "manual" (cash, bank transfer, cash on delivery) and "stripe"
+(see stripe_service.py), whose refunds are sent to Stripe before they are recorded.
 """
 from decimal import Decimal
 
@@ -104,12 +104,19 @@ def refund(payment, amount, reason=None):
     if amount > left:
         raise ValidationError({"amount": f"Only {left} can still be refunded."})
 
+    refund_id = None
+    if payment.provider == "stripe":
+        from . import stripe_service
+
+        refund_id = stripe_service.refund_payment(payment, amount, refunded_total(payment))
+
     PaymentTransaction.objects.create(
         payment=payment,
         transaction_type=REFUND,
         amount=amount,
         status=SUCCESS,
         reason=reason,
+        provider_refund_id=refund_id,
     )
     payment.status = REFUNDED if amount == left else PARTIALLY_REFUNDED
     payment.save(update_fields=["status", "updated_at"])

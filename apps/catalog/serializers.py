@@ -364,6 +364,16 @@ class CollectionSerializer(serializers.ModelSerializer):
     def validate_excluded_products(self, value):
         return [str(pk) for pk in dict.fromkeys(value)]
 
+    def validate_products(self, value):
+        request = self.context.get("request")
+        store = getattr(request, "store", None) or getattr(self.instance, "store", None)
+        ids = list(dict.fromkeys(value))
+        if store is not None:
+            found = set(Product.objects.filter(store=store, pk__in=ids).values_list("pk", flat=True))
+            if any(pk not in found for pk in ids):
+                raise serializers.ValidationError("One or more products don't exist in this store.")
+        return ids
+
     def validate(self, attrs):
         request = self.context.get("request")
         store = getattr(request, "store", None) or getattr(self.instance, "store", None)

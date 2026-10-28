@@ -24,7 +24,8 @@ CART_OPEN, CART_CHECKED_OUT, CART_MERGED, CART_EXPIRED = "open", "checked_out", 
 CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "abandoned"
 
 ZERO = Decimal("0.00")
-PAYMENT_METHODS = ("cod",)
+PAYMENT_METHODS = ("cod",)  # what a shopper may pick at /complete/
+ONLINE_METHODS = ("stripe",)  # placed only by the payment provider once money is confirmed
 MAX_OPEN_COD_ORDERS = 5
 MAX_LINE_QUANTITY = 999  # per cart line: stops absurd orders, even where the store sells past stock
 
@@ -436,16 +437,19 @@ def place_order(checkout, payment_method="cod"):
 
 
 @transaction.atomic
-def _place_order(checkout, payment_method):
+def _place_order(checkout, payment_method, payment_reference=None):
     """
     Commits stock, records the discount, closes the checkout and its cart.
     Safe to repeat: a completed checkout returns the order it already produced.
 
-    payment_method: only "cod" (cash on delivery) for now; it leaves a pending
-    payment for the order total, to be captured when the money arrives.
+    payment_method: "cod" (cash on delivery) leaves a pending payment for the order
+    total, to be captured when the money arrives. An online method ("stripe") is
+    only passed once the provider confirmed the money, with its reference, and
+    records the payment as captured.
     """
-    if payment_method not in PAYMENT_METHODS:
+    if payment_method not in PAYMENT_METHODS + ONLINE_METHODS:
         raise ValidationError({"payment_method": f"Choose one of: {', '.join(PAYMENT_METHODS)}."})
+    online = payment_method in ONLINE_METHODS
     checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
 
     if checkout.status == CHECKOUT_COMPLETED:
@@ -471,7 +475,8 @@ def _place_order(checkout, payment_method):
         _check_stock(item.product, item.variant, item.quantity)
 
     customer = checkout.customer or _guest_customer(checkout)
-    _check_open_order_cap(customer)
+    if not online:
+        _check_open_order_cap(customer)
 
     # Lock the discount so concurrent orders can't both take its last use
     code = (checkout.metadata or {}).get("discount_code")
@@ -504,7 +509,11 @@ def _place_order(checkout, payment_method):
             is_deleted=False,
         )
 
-    if order.total > ZERO:
+    if online:
+        payments.record_payment(
+            checkout.store, order, order.total, provider=payment_method, reference=payment_reference
+        )
+    elif order.total > ZERO:
         payments.record_pending_payment(
             checkout.store, order, checkout, order.total, provider=payment_method, customer=customer
         )

@@ -9,6 +9,8 @@ from apps.payments.models import PaymentTransaction
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
+from unittest import skipUnless
+
 from django.db import DatabaseError, connection, transaction
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -97,6 +99,11 @@ class PaidTotalTests(StoreClientMixin, APITestCase):
             ).exists()
         )
 
+    @skipUnless(
+        connection.vendor == "postgresql",
+        "The append-only trigger is created by a PostgreSQL-only migration; "
+        "config.test_settings uses SQLite without migrations.",
+    )
     def test_database_trigger_blocks_payment_transaction_updates_and_deletes(self):
         payment = record_payment(
             store=self.store,

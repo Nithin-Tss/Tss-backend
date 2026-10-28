@@ -633,6 +633,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "PasswordResetRequestView", "PasswordResetValidateView", "PasswordResetConfirmView", "VerifyEmailView",
         "CartView", "CartItemsView", "CartItemView", "CheckoutStartView", "CheckoutDetailView",
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
+        "CheckoutStripeView", "CheckoutStripeConfirmView",
+        "StripeWebhookView",  # Stripe calls it; the signature is the credential
     }
     # Sign-in only: they are about the account itself, or do their own store resolution
     ACCOUNT_ONLY = {
