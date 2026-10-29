@@ -1,3 +1,4 @@
+{{ product_json_ld }}
 {%- assign s = section.settings -%}
 {%- assign low_stock = s.low_stock_threshold | default: 5 -%}
 {%- comment -%} Start on the first option that is in stock, so a sold-out first option doesn't block the product {%- endcomment -%}
@@ -22,7 +23,7 @@
           </span>
         {%- endif -%}
         {%- if product.featured_image -%}
-          <img src="{{ product.featured_image }}" alt="{{ product.title }}" data-main-image>
+          <img src="{{ product.featured_image }}" alt="{{ product.title | escape }}" data-main-image>
         {%- else -%}
           <div class="placeholder" style="width:100%;height:100%">No image</div>
         {%- endif -%}
@@ -33,7 +34,7 @@
           {%- for image in product.images -%}
             <button class="product__thumb" type="button" data-src="{{ image }}"
               aria-label="Show image {{ forloop.index }}" aria-current="{% if forloop.first %}true{% else %}false{% endif %}">
-              <img src="{{ image }}" alt="" loading="lazy">
+              <img src="{{ image }}" alt="{{ product.title | escape }} - Image {{ forloop.index }}" loading="lazy">
             </button>
           {%- endfor -%}
         </div>

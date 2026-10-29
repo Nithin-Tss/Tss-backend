@@ -3,7 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ page_title }}{% if page_title != shop.name %} · {{ shop.name }}{% endif %}</title>
+  <title>{{ page_title }}{% unless page_title contains shop.name %} · {{ shop.name }}{% endunless %}</title>
+  {%- if page_description != blank -%}
+    <meta name="description" content="{{ page_description | escape }}">
+  {%- endif -%}
+  {%- if canonical_url != blank -%}
+    <link rel="canonical" href="{{ canonical_url }}">
+  {%- endif -%}
   {% render 'styles', settings: settings %}
   {%- comment -%} Fresh design styles {%- endcomment -%}
   {% render 'theme-styles' %}

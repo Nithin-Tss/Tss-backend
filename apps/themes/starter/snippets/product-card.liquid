@@ -22,7 +22,7 @@
       </span>
     {%- endif -%}
     {%- if product.featured_image -%}
-      <img src="{{ product.featured_image }}" alt="{{ product.title }}" loading="lazy">
+      <img src="{{ product.featured_image }}" alt="{{ product.title | escape }}" loading="lazy">
     {%- else -%}
       <div class="placeholder" style="width:100%;height:100%">No image</div>
     {%- endif -%}

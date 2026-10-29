@@ -6,6 +6,7 @@ Page = layout/theme.liquid
              └ sections/<type>.liquid for each section, in the store's order
 """
 import hashlib
+import html
 import json
 from contextvars import ContextVar
 import re
@@ -22,6 +23,7 @@ from markupsafe import Markup, escape
 from django.db.models import Avg, Count, Exists, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from django.utils.html import strip_tags
 from django.utils.text import slugify
 
 from apps.catalog.models import EXTRA_FIELDS, ProductCollection
@@ -1119,6 +1121,85 @@ def product_details(product, field_labels):
         if text and label:
             details.append({"key": key, "label": label, "text": text})
     return details
+
+
+def _clean_text(html_text, max_len=None):
+    """Strip HTML tags safely, unescape HTML entities, and collapse whitespace."""
+    if not html_text:
+        return ""
+    text = re.sub(r"<(br|p|div|li)[^>]*>", " ", str(html_text), flags=re.IGNORECASE)
+    cleaned = " ".join(html.unescape(strip_tags(text)).split())
+    if max_len and len(cleaned) > max_len:
+        return cleaned[:max_len]
+    return cleaned
+
+
+def _product_json_ld(product, product_drop_, store, canonical_url, request=None):
+    """Schema.org Product JSON-LD structured data."""
+    if not product or not product_drop_:
+        return Markup("")
+
+    data = {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": product.title,
+    }
+
+    desc = (product.seo_description or "").strip()
+    if not desc and product.description:
+        desc = _clean_text(product.description, 5000)
+    else:
+        desc = _clean_text(desc, 5000)
+    if desc:
+        data["description"] = desc
+
+    images = []
+    for img_url in product_drop_.get("images", []):
+        if img_url:
+            if img_url.startswith(("http://", "https://")):
+                images.append(img_url)
+            elif request:
+                images.append(request.build_absolute_uri(img_url))
+            else:
+                images.append(img_url)
+    if images:
+        data["image"] = images
+
+    if product.vendor:
+        data["brand"] = {
+            "@type": "Brand",
+            "name": product.vendor,
+        }
+
+    first_variant = product.variants.order_by("created_at").first()
+    if first_variant and first_variant.sku:
+        data["sku"] = first_variant.sku
+
+    if product_drop_.get("price") is not None:
+        data["offers"] = {
+            "@type": "Offer",
+            "price": str(product_drop_["price"]),
+            "priceCurrency": (getattr(store, "currency", None) or "USD").upper(),
+            "availability": (
+                "https://schema.org/OutOfStock"
+                if product_drop_.get("is_sold_out")
+                else "https://schema.org/InStock"
+            ),
+            "url": canonical_url,
+        }
+
+    avg_rating = getattr(product, "avg_rating", None)
+    review_count = getattr(product, "review_count", 0)
+    if avg_rating and review_count:
+        data["aggregateRating"] = {
+            "@type": "AggregateRating",
+            "ratingValue": str(round(float(avg_rating), 1)),
+            "reviewCount": str(review_count),
+        }
+
+    json_str = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    return Markup(f'<script type="application/ld+json">{json_str}</script>')
+
 
 
 _CHEVRON = (
@@ -2352,6 +2433,26 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         article_drop = _article_drop(posts, index)
     page_drop = page_content(store, base_url, page_handle, editor, page) if base_page(page) == "page" else None
 
+    canonical_url = ""
+    if product:
+        prod_path = f"{base_url}/products/{product.id}"
+        canonical_url = request.build_absolute_uri(prod_path) if request else prod_path
+    elif collection_drop and collection_drop.get("url"):
+        col_url = collection_drop["url"]
+        canonical_url = request.build_absolute_uri(col_url) if request else col_url
+    elif page_drop and page_drop.get("url"):
+        p_url = page_drop["url"]
+        canonical_url = request.build_absolute_uri(p_url) if request else p_url
+    elif page == "index":
+        home_path = f"{base_url}/"
+        canonical_url = request.build_absolute_uri(home_path) if request else home_path
+    elif request and request.path:
+        canonical_url = request.build_absolute_uri(request.path)
+
+    product_json_ld = _product_json_ld(product, product_drop_, store, canonical_url, request) if product else Markup("")
+    if product_drop_:
+        product_drop_["json_ld"] = product_json_ld
+
     if customer is None and request is not None and not editor:
         from .views import get_storefront_customer
         customer, customer_user = get_storefront_customer(store, request)
@@ -2381,9 +2482,11 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
     menu_links = navbar_menu_links(store, base_url)
     common = {
-        "shop": dict(shop, blog_url=f"{base_url}/blog", slug=store.store_slug),
+        "shop": dict(shop, blog_url=f"{base_url}/blog", slug=store.store_slug, currency=(getattr(store, "currency", None) or "USD").upper()),
         "settings": settings,
         "product": product_drop_,
+        "product_json_ld": product_json_ld,
+        "canonical_url": canonical_url,
         "collection": collection_drop,
         "collections": nav,
         "blog": blog_drop,
@@ -2671,8 +2774,11 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             cust_content,
         )))
 
+    description = ""
     if product:
-        title = product.seo_title or product.title
+        title = (product.seo_title or "").strip() or product.title
+        raw_desc = (product.seo_description or "").strip() or (product.description or "")
+        description = _clean_text(raw_desc, 160)
     elif cart_page:
         title = "Cart"
     elif page == "checkout":
@@ -2687,18 +2793,25 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         title = "My Account"
     elif collection_drop:
         title = (collection["obj"].seo_title if collection["obj"] else "") or collection_drop["name"]
+        raw_desc = (collection["obj"].seo_description if collection["obj"] else "") or (collection["obj"].description if collection["obj"] else "")
+        description = _clean_text(raw_desc, 160)
     elif page_drop:
         title = page_drop["seo_title"] or page_drop["title"]
+        description = _clean_text(page_drop.get("seo_description"), 160)
     elif article_drop:
         title = article_drop["title"]
+        raw_desc = article_drop.get("excerpt") or article_drop.get("body") or ""
+        description = _clean_text(raw_desc, 160)
     elif blog_drop:
         title = blog_drop["title"]
+        description = _clean_text(blog_drop.get("description"), 160)
     else:
         title = store.store_name
 
     page_html = env.get_template("layout/theme.liquid").render(
         content_for_layout=Markup(content),
         page_title=title,
+        page_description=description,
         **common,
     )
     for name, html in synced_html.items():

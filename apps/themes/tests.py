@@ -6000,6 +6000,9 @@ class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
 
     # (new text, the text it replaced): undoing them gives the file stores had before
     CHANGES = (
+        ('''{{ product_json_ld }}\n''', ''''''),
+        ('''alt="{{ product.title | escape }}"''', '''alt="{{ product.title }}"'''),
+        ('''alt="{{ product.title | escape }} - Image {{ forloop.index }}"''', '''alt=""'''),
         ('''{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock %} product__stock--few''',
          '''{% elsif shown_variant.available_total <= low_stock %} product__stock--few'''),
         ('''{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock %}Only a few left''',
@@ -6079,3 +6082,120 @@ class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.stored(theme), edited)
         theme.refresh_from_db()
         self.assertEqual(theme.theme_data["starter_revision"], services.STARTER_REVISION)  # checked once, left alone
+
+
+class ProductSEOTest(StoreClientMixin, APITestCase):
+    """Product SEO templates: title, meta description, canonical URL, alt text, and JSON-LD structured data."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("productseo@example.com", "SEO Store")
+
+    def page(self, path, query=""):
+        suffix = f"?{query}" if query else ""
+        r = self.client.get(f"/s/{self.store['storeSlug']}/{path}{suffix}")
+        self.assertEqual(r.status_code, 200, f"GET {path} failed: {r.status_code}")
+        return r.content.decode("utf-8")
+
+    def test_product_with_custom_seo_title_and_description(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Canvas Shoes",
+            "sku": "CS-1",
+            "status": "active",
+            "price": "89.99",
+            "continue_selling": True,
+            "vendor": "ShoeCo",
+            "description": "<p>Comfortable shoes for daily walking.</p>",
+            "seo_title": "Best Canvas Walking Shoes",
+            "seo_description": "Shop our top-rated canvas shoes with all-day comfort and durable soles.",
+            "images": [
+                "https://images.example.com/shoe1.jpg",
+                "https://images.example.com/shoe2.jpg",
+            ],
+        }, expect=201)
+
+        html = self.page(f"products/{product['id']}")
+
+        # 1. Title tag uses seo_title and includes shop name without duplicate
+        self.assertIn("<title>Best Canvas Walking Shoes · SEO Store</title>", html)
+
+        # 2. Meta description is rendered with custom seo_description
+        self.assertIn(
+            '<meta name="description" content="Shop our top-rated canvas shoes with all-day comfort and durable soles.">',
+            html,
+        )
+
+        # 3. Canonical URL is present and clean
+        self.assertIn(f'<link rel="canonical" href="http://testserver/s/{self.store["storeSlug"]}/products/{product["id"]}">', html)
+
+        # 4. Canonical URL ignores tracking query parameters
+        html_with_params = self.page(f"products/{product['id']}", query="utm_source=google&ref=campaign")
+        self.assertIn(f'<link rel="canonical" href="http://testserver/s/{self.store["storeSlug"]}/products/{product["id"]}">', html_with_params)
+        self.assertNotIn("utm_source", html_with_params.split("<link rel=\"canonical\"")[1].split(">")[0])
+
+        # 5. Image alt attributes
+        self.assertIn('alt="Canvas Shoes"', html)
+        self.assertIn('alt="Canvas Shoes - Image 1"', html)
+        self.assertIn('alt="Canvas Shoes - Image 2"', html)
+
+        # 6. Schema.org Product JSON-LD structured data
+        self.assertIn('<script type="application/ld+json">', html)
+        json_match = re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
+        self.assertIsNotNone(json_match)
+        data = json.loads(json_match.group(1))
+
+        self.assertEqual(data["@context"], "https://schema.org")
+        self.assertEqual(data["@type"], "Product")
+        self.assertEqual(data["name"], "Canvas Shoes")
+        self.assertEqual(data["description"], "Shop our top-rated canvas shoes with all-day comfort and durable soles.")
+        self.assertEqual(data["brand"]["name"], "ShoeCo")
+        self.assertEqual(data["image"], [
+            "https://images.example.com/shoe1.jpg",
+            "https://images.example.com/shoe2.jpg",
+        ])
+        self.assertEqual(data["offers"]["@type"], "Offer")
+        self.assertEqual(data["offers"]["price"], "89.99")
+        self.assertEqual(data["offers"]["priceCurrency"], "INR")
+        self.assertEqual(data["offers"]["availability"], "https://schema.org/InStock")
+
+    def test_product_seo_fallbacks_when_seo_fields_empty(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Minimal Watch",
+            "sku": "MW-1",
+            "status": "active",
+            "price": "149.00",
+            "description": "<p>A sleek watch with a <b>leather strap</b>.<br>Water resistant to 50m.</p>",
+            "seo_title": "",
+            "seo_description": "",
+        }, expect=201)
+
+        html = self.page(f"products/{product['id']}")
+
+        # Title falls back to product.title
+        self.assertIn("<title>Minimal Watch · SEO Store</title>", html)
+
+        # Meta description falls back to HTML-stripped product.description
+        self.assertIn(
+            '<meta name="description" content="A sleek watch with a leather strap. Water resistant to 50m.">',
+            html,
+        )
+
+        # JSON-LD description also strips HTML tags
+        json_match = re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
+        self.assertIsNotNone(json_match)
+        data = json.loads(json_match.group(1))
+        self.assertEqual(data["description"], "A sleek watch with a leather strap. Water resistant to 50m.")
+        self.assertEqual(data["offers"]["availability"], "https://schema.org/OutOfStock")
+
+    def test_product_title_not_duplicated_if_brand_already_included(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Backpack",
+            "sku": "BP-1",
+            "status": "active",
+            "seo_title": "Backpack · SEO Store",
+        }, expect=201)
+
+        html = self.page(f"products/{product['id']}")
+        # Store name should not be appended a second time
+        self.assertIn("<title>Backpack · SEO Store</title>", html)
+        self.assertNotIn("SEO Store · SEO Store", html)
+
