@@ -125,6 +125,54 @@ class StripeTests(base_tests.CommerceTestBase):
         self.assertIn("Tee isn't available.", str(r.data))
         intents.create.assert_not_called()  # no payment was started for it
 
+    def test_payment_session_holds_stock_until_the_order_is_placed(self):
+        from apps.inventory.models import StockReservation
+        from apps.inventory.services import reserved, sellable_for
+        checkout = self.checkout(quantity=2)
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(reserved(self.variant), 2)
+        self.assertEqual(sellable(self.variant), 10)  # holds never touch the stock numbers
+        self.assertEqual(sellable_for(self.variant), 8)
+        self.assertEqual(sellable_for(self.variant, checkout.pk), 10)  # its own hold doesn't count against it
+
+        stripe_service.finalize(intent(checkout), ACCOUNT)
+        self.assertEqual(StockReservation.objects.get().status, "converted")
+        self.assertEqual(reserved(self.variant), 0)
+        self.assertEqual(sellable(self.variant), 8)
+
+    def test_held_stock_blocks_another_checkout_until_released_or_expired(self):
+        import uuid
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.inventory import services as inv
+        from apps.inventory.models import StockReservation
+        mine = self.checkout(quantity=5)
+        # Another shopper's checkout then holds 8 of the 10
+        inv.reserve(uuid.uuid4(), self.store.pk, [(self.variant, 8)], timedelta(minutes=15))
+        self.client_mock.v1.payment_intents.create.return_value = intent(mine, status="requires_payment_method")
+
+        r = self.client.post(f"{self.base}/checkout/{mine.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertIn("Only 2 of Tee left", str(r.data))
+        self.client_mock.v1.payment_intents.create.assert_not_called()
+
+        StockReservation.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+        self.assertEqual(inv.expire_reservations(), 1)
+        r = self.client.post(f"{self.base}/checkout/{mine.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 200, r.data)
+
+    def test_cancelled_intent_releases_the_hold(self):
+        from apps.inventory.services import reserved
+        checkout = self.checkout(quantity=2)
+        self.client_mock.v1.payment_intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(reserved(self.variant), 2)
+        stripe_service.note_unpaid({"id": "pi_1", "status": "canceled", "metadata": {"checkout_id": str(checkout.pk)}}, ACCOUNT)
+        self.assertEqual(reserved(self.variant), 0)
+
     def test_paid_intent_places_one_captured_order_even_if_finalized_twice(self):
         checkout = self.checkout()
         paid = intent(checkout)

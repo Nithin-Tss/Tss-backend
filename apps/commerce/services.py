@@ -13,7 +13,7 @@ from apps.catalog.services import published_products
 from apps.discounts import services as discounts
 from apps.discounts.models import Discount, OrderDiscount
 from apps.customers.models import Customer
-from apps.inventory.services import sellable
+from apps.inventory.services import sellable, sellable_for, convert_reservations
 from apps.orders import services as orders
 from apps.orders.models import Order
 from apps.payments import services as payments
@@ -148,11 +148,14 @@ def _open_cart(cart):
     return cart
 
 
-def _check_stock(product, variant, quantity):
-    """Quantity 0 (or no stock record) is sold out; never sell more than is available."""
+def _check_stock(product, variant, quantity, checkout_id=None):
+    """
+    Quantity 0 (or no stock record) is sold out; never sell more than is available. With a checkout id,
+    stock held for OTHER checkouts doesn't count as available (this checkout's own hold does).
+    """
     if variant is not None and variant.continue_selling:
         return  # the store keeps selling when out of stock
-    in_stock = sellable(variant) if variant is not None else 0
+    in_stock = sellable_for(variant, checkout_id) if variant is not None else 0
     if in_stock <= 0:
         raise ValidationError({"product": f"{product.title} is sold out."})
     if quantity > in_stock:
@@ -526,7 +529,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
     # Catalogue prices may have moved since the cart was frozen
     for item in items:
         _check_available(checkout.store, item.product)
-        _check_stock(item.product, item.variant, item.quantity)
+        _check_stock(item.product, item.variant, item.quantity, checkout.pk)
 
     customer = checkout.customer or _guest_customer(checkout)
     if not online:
@@ -577,6 +580,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
     checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk), "payment_method": payment_method}
     checkout.save(update_fields=["customer", "metadata", "updated_at"])
     complete_checkout(checkout)
+    convert_reservations(checkout.pk)
     return order
 
 
