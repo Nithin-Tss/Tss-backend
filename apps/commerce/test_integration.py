@@ -652,3 +652,283 @@ class ConcurrentStockTests(TransactionTestCase):
             item = InventoryItem.objects.get(variant=variant)
             self.assertEqual((item.available, item.committed), (30, 20))
         self.assertEqual(Order.objects.count(), 20)
+
+
+class CustomerCancelWindowTests(CommerceIntegrationBase):
+    """A shopper can cancel their own order for ORDER_CUSTOMER_CANCEL_MINUTES (default 60); staff have no limit."""
+
+    NEW_MESSAGE = "Orders can only be cancelled within 1 hour of ordering. Please contact the store."
+
+    def placed(self, minutes_ago=0):
+        order = self.place(self.checkout(email="a@b.com", shipping_address=ADDRESS)).data
+        if minutes_ago:
+            Order.objects.filter(pk=order["id"]).update(created_at=timezone.now() - timedelta(minutes=minutes_ago))
+        return order
+
+    def cancel(self, order):
+        return self.shopper.post(f"{self.base}/orders/{order['id']}/cancel/")
+
+    def receive_money(self, order):
+        from apps.payments import services as payments
+        from apps.payments.models import Payment
+
+        payments.capture_payment(Payment.objects.get(order=order["id"]))
+
+    def test_within_the_hour_the_shopper_can_cancel_as_before(self):
+        order = self.placed(minutes_ago=59)
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data["status"], "cancelled")
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_after_the_hour_the_shopper_is_refused_with_the_new_message_and_nothing_changes(self):
+        order = self.placed(minutes_ago=61)
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn(self.NEW_MESSAGE, str(r.data))
+        self.assertEqual(Order.objects.get(pk=order["id"]).status, "open")
+        self.assertEqual(sellable(self.variant), 8)  # still committed
+
+    def test_a_paid_order_inside_the_hour_still_gets_the_existing_message(self):
+        order = self.placed(minutes_ago=5)
+        self.receive_money(order)
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("This order has been paid. Please contact the store to cancel it.", str(r.data))
+        self.assertNotIn("within 1 hour", str(r.data))
+
+    def test_a_paid_order_after_the_hour_gets_the_new_message(self):
+        order = self.placed(minutes_ago=90)
+        self.receive_money(order)
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn(self.NEW_MESSAGE, str(r.data))
+
+    def test_staff_can_cancel_after_the_hour(self):
+        order = self.placed(minutes_ago=300)
+        r = self.staff.post(f"/api/v1/orders/{order['id']}/cancel/")
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.json()["status"], "cancelled")
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_staff_still_cannot_cancel_once_items_have_shipped(self):
+        order = self.placed(minutes_ago=300)
+        Order.objects.filter(pk=order["id"]).update(fulfillment_status="partial")
+        r = self.staff.post(f"/api/v1/orders/{order['id']}/cancel/")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Orders with shipped items can't be cancelled.", str(r.json()))
+
+    def test_the_window_is_a_setting_and_the_message_follows_it(self):
+        from django.test import override_settings
+
+        order = self.placed(minutes_ago=100)
+        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=30):
+            r = self.cancel(order)
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("within 30 minutes of ordering", str(r.data))
+        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=120):
+            self.assertEqual(self.cancel(order).status_code, 200)
+        other = self.placed(minutes_ago=100)
+        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=60 * 24):
+            self.assertEqual(self.cancel(other).status_code, 200)
+        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=120):
+            self.assertEqual(orders_services.customer_cancel_window_text(), "2 hours")
+        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=60):
+            self.assertEqual(orders_services.customer_cancel_window_text(), "1 hour")
+
+    def test_the_order_tells_the_storefront_until_when_it_can_be_cancelled(self):
+        order = self.placed()
+        created = Order.objects.get(pk=order["id"]).created_at
+        until = self.shopper.get(f"{self.base}/orders/{order['id']}/").data["customer_cancel_until"]
+        self.assertIsNotNone(until)
+        from django.utils.dateparse import parse_datetime
+
+        self.assertEqual(parse_datetime(until), created + timedelta(minutes=60))
+
+    def test_it_is_empty_when_the_shopper_can_not_cancel(self):
+        late = self.placed(minutes_ago=61)
+        self.assertIsNone(self.shopper.get(f"{self.base}/orders/{late['id']}/").data["customer_cancel_until"])
+
+        paid = self.placed()
+        self.receive_money(paid)
+        self.assertIsNone(self.shopper.get(f"{self.base}/orders/{paid['id']}/").data["customer_cancel_until"])
+
+        shipped = self.placed()
+        Order.objects.filter(pk=shipped["id"]).update(fulfillment_status="partial")
+        self.assertIsNone(self.shopper.get(f"{self.base}/orders/{shipped['id']}/").data["customer_cancel_until"])
+
+        cancelled = self.placed()
+        self.cancel(cancelled)
+        self.assertIsNone(self.shopper.get(f"{self.base}/orders/{cancelled['id']}/").data["customer_cancel_until"])
+
+
+class OrderReturnTests(CommerceIntegrationBase):
+    """Staff mark shipped items as returned: the stock comes back, each unit once."""
+
+    def placed(self, quantity=2):
+        order = self.place(self.checkout(quantity=quantity, email="a@b.com", shipping_address=ADDRESS)).data
+        return order, order["items"][0]["id"]
+
+    def ship(self, order, quantity=None):
+        body = {"order": order["id"]}
+        if quantity:
+            body["items"] = [{"order_item": order["items"][0]["id"], "quantity": quantity}]
+        r = self.staff.post("/api/v1/fulfillments/", body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def give_back(self, order, item, quantity, expect=200, **extra):
+        r = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/",
+            {"items": [{"order_item": item, "quantity": quantity, **extra}]}, format="json",
+        )
+        self.assertEqual(r.status_code, expect, r.content)
+        return r.json()
+
+    def receive_money(self, order):
+        from apps.payments import services as payments
+        from apps.payments.models import Payment
+
+        payments.capture_payment(Payment.objects.get(order=order["id"]))
+
+    def stock(self):
+        item = InventoryItem.objects.get(variant=self.variant)
+        return item.available, item.committed
+
+    def test_a_failed_cash_on_delivery_order_comes_back_cancelled_with_its_stock(self):
+        from apps.inventory.models import InventoryHistory
+        from apps.payments.models import Payment
+
+        order, item = self.placed()
+        self.ship(order)
+        self.assertEqual(self.stock(), (8, 0))
+
+        body = self.give_back(order, item, 2)
+
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(body["status"], "cancelled")
+        self.assertIsNotNone(body["returned_at"])
+        self.assertEqual(body["items"][0]["returned_quantity"], 2)
+        self.assertEqual(Payment.objects.get(order=order["id"]).status, "cancelled")  # the pending payment is voided
+        row = InventoryHistory.objects.get(reason="refund_restock")
+        self.assertEqual((row.source, row.reference_id), ("return", order["id"]))
+
+    def test_the_same_units_cannot_be_returned_twice(self):
+        order, item = self.placed()
+        self.ship(order)
+        self.give_back(order, item, 2)
+
+        again = self.give_back(order, item, 1, expect=400)  # the order is cancelled now
+        self.assertIn("cancelled", str(again))
+        self.assertEqual(self.stock(), (10, 0))
+
+    def test_a_partial_return_keeps_the_order_open_and_the_rest_can_follow_once(self):
+        order, item = self.placed()
+        self.ship(order)
+
+        body = self.give_back(order, item, 1)
+        self.assertEqual((body["status"], body["returned_at"]), ("open", None))
+        self.assertEqual(self.stock(), (9, 0))
+
+        too_many = self.give_back(order, item, 2, expect=400)
+        self.assertIn("Only 1 of Tee can still be returned.", str(too_many))
+        self.assertEqual(self.stock(), (9, 0))
+
+        body = self.give_back(order, item, 1)
+        self.assertEqual((body["status"], self.stock()), ("cancelled", (10, 0)))
+
+    def test_units_that_have_not_shipped_cannot_be_returned(self):
+        order, item = self.placed()
+        refused = self.give_back(order, item, 1, expect=400)
+        self.assertIn("has not shipped", str(refused))
+        self.ship(order, quantity=1)
+        self.give_back(order, item, 2, expect=400)  # only one shipped
+        self.assertEqual(self.stock(), (8, 1))
+
+    def test_a_paid_order_keeps_its_status_and_is_flagged_and_the_refund_stays_with_staff(self):
+        from apps.payments.models import Payment
+
+        order, item = self.placed()
+        self.receive_money(order)
+        self.ship(order)
+
+        body = self.give_back(order, item, 2)
+
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(body["status"], "open")
+        self.assertIsNotNone(body["returned_at"])
+        self.assertEqual(Payment.objects.get(order=order["id"]).status, "captured")  # no automatic refund
+
+    def test_refunding_after_the_return_does_not_put_the_stock_back_a_second_time(self):
+        from apps.payments import services as payments
+        from apps.payments.models import Payment
+
+        order, item = self.placed()
+        self.receive_money(order)
+        self.ship(order)
+        self.give_back(order, item, 2)
+
+        payments.refund(Payment.objects.get(order=order["id"]), Decimal("998.00"))
+
+        self.assertEqual(self.stock(), (10, 0))  # not 12
+        self.assertEqual(Order.objects.get(pk=order["id"]).status, "open")
+
+    def test_returning_after_a_full_refund_puts_the_shipped_units_back_once(self):
+        from apps.payments import services as payments
+        from apps.payments.models import Payment
+
+        order, item = self.placed()
+        self.receive_money(order)
+        self.ship(order)
+        payments.refund(Payment.objects.get(order=order["id"]), Decimal("998.00"))
+        self.assertEqual(self.stock(), (8, 0))  # a refund alone does not restock shipped goods
+
+        self.give_back(order, item, 2)
+
+        self.assertEqual(self.stock(), (10, 0))
+        self.give_back(order, item, 1, expect=400)
+
+    def test_a_partly_shipped_unpaid_order_returned_in_full_is_cancelled_and_its_unshipped_unit_released(self):
+        order, item = self.placed()
+        self.ship(order, quantity=1)
+        self.assertEqual(self.stock(), (8, 1))
+
+        body = self.give_back(order, item, 1)
+
+        self.assertEqual(body["status"], "cancelled")
+        self.assertEqual(self.stock(), (10, 0))
+
+    def test_staff_can_choose_the_location_and_only_one_of_their_own_store(self):
+        elsewhere = Location.objects.create(store=self.store, name="Shop floor")
+        order, item = self.placed()
+        self.ship(order)
+
+        self.give_back(order, item, 1, location=str(elsewhere.pk))
+
+        self.assertEqual(InventoryItem.objects.get(variant=self.variant, location=elsewhere).available, 1)
+        self.assertEqual(InventoryItem.objects.get(variant=self.variant, location=self.location).available, 8)
+
+        other_client, other_store = sign_up_with_store("returns-other@example.com")
+        foreign = Location.objects.create(store=other_store, name="Not ours")
+        refused = self.give_back(order, item, 1, expect=400, location=str(foreign.pk))
+        self.assertIn("That location isn't in this store.", str(refused))
+
+    def test_another_stores_order_cannot_be_returned(self):
+        order, item = self.placed()
+        self.ship(order)
+        other_client, _ = sign_up_with_store("returns-rival@example.com")
+        r = other_client.post(
+            f"/api/v1/orders/{order['id']}/return/", {"items": [{"order_item": item, "quantity": 1}]}, format="json"
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.stock(), (8, 0))
+
+    def test_nothing_to_return_and_bad_input_are_refused(self):
+        order, item = self.placed()
+        self.ship(order)
+        r = self.staff.post(f"/api/v1/orders/{order['id']}/return/", {"items": []}, format="json")
+        self.assertEqual(r.status_code, 400)
+        r = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/", {"items": [{"order_item": item, "quantity": 0}]}, format="json"
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.stock(), (8, 0))

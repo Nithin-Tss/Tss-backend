@@ -16,8 +16,8 @@ from apps.tenancy.models import Store
 
 from apps.commerce import tax as tax_rules
 
-from .models import DraftOrder, DraftOrderDetail, Order, OrderIdempotencyKey
-from .serializers import DraftOrderSerializer, OrderCreateSerializer, OrderSerializer
+from .models import DraftOrder, DraftOrderDetail, Order, OrderIdempotencyKey, OrderItem
+from .serializers import DraftOrderSerializer, OrderCreateSerializer, OrderReturnSerializer, OrderSerializer
 
 OPEN_DRAFT, COMPLETED_DRAFT = "open", "completed"
 
@@ -100,6 +100,31 @@ class OrderViewSet(
     def cancel(self, request, pk=None):
         order = services.cancel_order(self.get_object(), user=request.user)
         return Response(OrderSerializer(order).data)
+
+    @action(detail=True, methods=["post"], url_path="return")
+    def return_items(self, request, pk=None):
+        """
+        {items: [{order_item, quantity, location?}]}: shipped items came back (a failed delivery or a customer
+        return) and go back in stock. Each unit can be returned once. See orders.services.return_items.
+        """
+        from apps.inventory.models import Location
+
+        order = self.get_object()
+        data = OrderReturnSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        lines = []
+        for line in data.validated_data["items"]:
+            item = OrderItem.objects.filter(pk=line["order_item"], order=order, is_deleted=False).first()
+            if item is None:
+                raise ValidationError({"items": "One of the items is not in this order."})
+            location = None
+            if line.get("location"):
+                location = Location.objects.filter(pk=line["location"], store=request.store).first()
+                if location is None:
+                    raise ValidationError({"location": "That location isn't in this store."})
+            lines.append({"order_item": item, "quantity": line["quantity"], "location": location})
+        order = services.return_items(order, lines, user=request.user)
+        return Response(OrderSerializer(Order.objects.get(pk=order.pk)).data)
 
 
 class DraftOrderViewSet(StoreScopedViewSet):

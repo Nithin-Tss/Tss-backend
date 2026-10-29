@@ -16,7 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.orders.serializers import OrderSerializer
+from apps.orders.serializers import ShopperOrderSerializer
 from apps.commerce.storefront_views import CheckoutDetailView
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.core.rbac import PAYMENTS_MANAGE, PAYMENTS_VIEW
@@ -134,4 +134,4 @@ class CheckoutStripeConfirmView(StripeErrorsMixin, CheckoutDetailView):
         order = stripe_service.finalize(intent, account_id)
         if order is None:
             raise ValidationError("Your payment was refunded because the order could not be placed.")
-        return Response(OrderSerializer(order).data)
+        return Response(ShopperOrderSerializer(order).data)

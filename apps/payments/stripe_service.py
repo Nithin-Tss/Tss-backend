@@ -192,13 +192,47 @@ def finalize(intent, account_id):
             return order
     except ValidationError as exc:
         logger.warning("Refunding Stripe payment %s, order not placed: %s", intent.id, exc.detail)
+        why = str(exc.detail)[:300]
         try:
-            refund_intent(intent.id, account_id, reason="order_not_placed")
-        except Exception:
+            refund = refund_intent(intent.id, account_id, reason="order_not_placed")
+        except Exception as failure:
             # Raised on so Stripe retries the webhook (the refund key makes that safe), but say loudly that money is unplaced
             logger.exception("REFUND FAILED for Stripe payment %s on account %s: no order and money not returned", intent.id, account_id)
+            _note_auto_refund(checkout.pk, intent, "failed", why, error=str(failure)[:300])
             raise
+        _note_auto_refund(checkout.pk, intent, "refunded", why, refund_id=getattr(refund, "id", None))
         return None
+
+
+def _note_auto_refund(checkout_id, intent, state, why, refund_id=None, error=None):
+    """
+    Keep a visible record, on the checkout, of money taken for an order that could not be placed:
+    Checkout.metadata["auto_refunds"], one entry per payment (a retry updates it). Staff read it from the
+    checkouts API; a "failed" entry means money is held with no order and needs someone's attention.
+    Never allowed to hide the real outcome: a problem in here is only logged.
+    """
+    from django.utils import timezone
+
+    try:
+        with transaction.atomic():
+            checkout = Checkout.objects.select_for_update().get(pk=checkout_id)
+            entries = [e for e in (checkout.metadata or {}).get("auto_refunds", []) if e.get("payment_intent") != intent.id]
+            before = next((e for e in (checkout.metadata or {}).get("auto_refunds", []) if e.get("payment_intent") == intent.id), {})
+            entries.append({
+                "payment_intent": intent.id,
+                "amount": str(Decimal(from_minor_units(intent.amount, intent.currency)).quantize(Decimal("0.01"))),
+                "currency": str(intent.currency).upper(),
+                "status": state,
+                "reason": why,
+                "refund_id": refund_id,
+                "error": error,
+                "attempts": before.get("attempts", 0) + 1,
+                "at": timezone.now().isoformat(),
+            })
+            checkout.metadata = {**(checkout.metadata or {}), "auto_refunds": entries}
+            checkout.save(update_fields=["metadata", "updated_at"])
+    except Exception:
+        logger.exception("Could not record the automatic refund of Stripe payment %s on checkout %s", intent.id, checkout_id)
 
 
 def refund_intent(intent_id, account_id, amount=None, reason=None):
@@ -259,6 +293,7 @@ def record_dispute(dispute, account_id):
         return None
     status = dispute.get("status") or "unknown"
     with transaction.atomic():
+        order = payments._lock_order_of(payment)  # the order first, then the payment: the order every path locks in
         payment = Payment.objects.select_for_update().get(pk=payment.pk)
         txn = payment.transactions.filter(
             transaction_type=DISPUTE, provider_transaction_id=dispute["id"], status=status
@@ -274,8 +309,38 @@ def record_dispute(dispute, account_id):
             )
         payment.metadata = {**(payment.metadata or {}), "dispute": {"id": dispute["id"], "status": status}}
         payment.save(update_fields=["metadata", "updated_at"])
+        if order is not None:
+            _flag_order_dispute(order, dispute, status, payment)
     logger.warning("Stripe dispute %s on payment %s is now %s", dispute["id"], payment.pk, status)
     return payment
+
+
+def _flag_order_dispute(order, dispute, status, payment):
+    """
+    Mark the order so staff see the chargeback: Order.metadata["disputes"] (one entry per dispute, updated as it
+    moves: needs_response, under_review, won, lost, ...). Nothing else changes: no stock, no order status, no
+    refund. That is staff's decision. Repeats of the same event change nothing.
+    """
+    from django.utils import timezone
+
+    entries = list((order.metadata or {}).get("disputes", []))
+    current = next((e for e in entries if e.get("id") == dispute["id"]), None)
+    if current is not None and current.get("status") == status:
+        return
+    now = timezone.now().isoformat()
+    entry = {
+        "id": dispute["id"],
+        "status": status,
+        "reason": dispute.get("reason"),
+        "amount": str(Decimal(from_minor_units(dispute.get("amount") or 0, dispute.get("currency") or payment.currency)).quantize(Decimal("0.01"))),
+        "currency": str(dispute.get("currency") or payment.currency).upper(),
+        "payment": str(payment.pk),
+        "opened_at": (current or {}).get("opened_at", now),
+        "updated_at": now,
+    }
+    entries = [e for e in entries if e.get("id") != dispute["id"]] + [entry]
+    order.metadata = {**(order.metadata or {}), "disputes": entries}
+    order.save(update_fields=["metadata", "updated_at"])
 
 
 def disconnect(account_id):

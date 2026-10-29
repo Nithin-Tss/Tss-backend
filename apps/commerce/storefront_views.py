@@ -15,6 +15,7 @@ Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 import re
 
 from django.http import Http404
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
@@ -25,7 +26,7 @@ from rest_framework.views import APIView
 from apps.catalog.models import Product, ProductVariant
 from apps.orders import services as orders_services
 from apps.orders.models import Order
-from apps.orders.serializers import OrderSerializer
+from apps.orders.serializers import ShopperOrderSerializer
 from apps.tenancy.models import Store
 
 from . import services
@@ -207,7 +208,7 @@ class CheckoutCompleteView(CheckoutDetailView):
         data = CompleteSerializer(data=request.data)
         data.is_valid(raise_exception=True)
         order = services.place_order(self._checkout(request, checkout_id), **data.validated_data)
-        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+        return Response(ShopperOrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
 class SessionOrdersMixin:
@@ -232,12 +233,12 @@ class SessionOrdersMixin:
 class OrderListView(SessionOrdersMixin, StorefrontView):
     def get(self, request, store_slug):
         orders = self.session_orders(request).order_by("-created_at")
-        return Response(OrderSerializer(orders, many=True).data)
+        return Response(ShopperOrderSerializer(orders, many=True).data)
 
 
 class OrderDetailView(SessionOrdersMixin, StorefrontView):
     def get(self, request, store_slug, order_id):
-        return Response(OrderSerializer(self.session_order(request, order_id)).data)
+        return Response(ShopperOrderSerializer(self.session_order(request, order_id)).data)
 
 
 class OrderCancelView(SessionOrdersMixin, StorefrontView):
@@ -245,5 +246,11 @@ class OrderCancelView(SessionOrdersMixin, StorefrontView):
         # Puts the stock back; refused once items have shipped or money has been received
         # (the shopper's session id is the only proof here, so refunds go through staff).
         order = self.session_order(request, order_id)
+        # Shoppers only: staff cancel without a time limit (orders.services.cancel_order does not check it)
+        if timezone.now() > orders_services.customer_cancel_deadline(order):
+            raise ValidationError(
+                f"Orders can only be cancelled within {orders_services.customer_cancel_window_text()} of ordering. "
+                "Please contact the store."
+            )
         order = orders_services.cancel_order(order, refuse_if_paid=True)
-        return Response(OrderSerializer(order).data)
+        return Response(ShopperOrderSerializer(order).data)

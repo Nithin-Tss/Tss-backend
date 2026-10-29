@@ -3,7 +3,7 @@ from rest_framework import mixins
 from apps.core.viewsets import StoreScopedGenericViewSet
 
 from .models import Cart, Checkout
-from .serializers import CartSerializer, CheckoutSerializer
+from .serializers import CartSerializer, StaffCheckoutSerializer
 
 
 class CartViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreScopedGenericViewSet):
@@ -29,7 +29,7 @@ class CheckoutViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, StoreSco
 
     permission_resource = "orders"
     queryset = Checkout.objects.prefetch_related("items").order_by("-updated_at")
-    serializer_class = CheckoutSerializer
+    serializer_class = StaffCheckoutSerializer
     http_method_names = ["get", "head", "options"]
 
     def get_queryset(self):
