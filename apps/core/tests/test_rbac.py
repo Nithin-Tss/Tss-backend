@@ -150,7 +150,7 @@ class TeamRulesTest(RbacTestBase):
     def test_built_in_roles_are_listed(self):
         self.assertEqual(
             {"administrator", "store_user_administrator", "online_store_editor",
-             "customer_support", "merchandiser", "marketer"},
+             "customer_support", "shipping_coordinator", "merchandiser", "marketer"},
             {k for k, r in self.roles.items() if r["key"]},
         )
         admin = self.roles["administrator"]
