@@ -460,6 +460,62 @@ class CancelPaidOrderTests(base_tests.CommerceTestBase):
         self.assertEqual(services.paid_total(order), Decimal("0.00"))
         self.assertEqual(sellable(self.variant), 10)
 
+    # ------------------------------------------------- capture vs cancellation
+
+    def test_capture_locks_the_order_before_the_payment(self):
+        from .models import Payment as PaymentModel
+
+        order, payment = self.cod_order()
+        calls = []
+        real_lock_order = services._lock_order_of
+        real_select = PaymentModel.objects.select_for_update
+
+        def lock_order(p):
+            calls.append("order")
+            return real_lock_order(p)
+
+        def select(*args, **kwargs):
+            calls.append("payment")
+            return real_select(*args, **kwargs)
+
+        with mock.patch.object(services, "_lock_order_of", side_effect=lock_order), \
+             mock.patch.object(PaymentModel.objects, "select_for_update", side_effect=select):
+            services.capture_payment(payment)
+        self.assertEqual(calls[:2], ["order", "payment"])
+
+    def test_a_cancelled_order_cannot_have_its_payment_captured(self):
+        order, payment = self.cod_order()
+        stale = Payment.objects.get(pk=payment.pk)  # what a capture request that started before the cancel holds
+        orders_services.cancel_order(order)
+
+        # Even if the payment row still looks pending, the order decides
+        Payment.objects.filter(pk=payment.pk).update(status="pending")
+        with self.assertRaises(ValidationError):
+            services.capture_payment(stale)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "pending")
+        self.assertEqual(payment.transactions.count(), 0)
+        self.assertEqual(services.paid_total(order), Decimal("0.00"))
+
+    def test_capture_after_the_voided_payment_is_refused_and_statuses_agree(self):
+        order, payment = self.cod_order()
+        orders_services.cancel_order(order)
+        with self.assertRaises(ValidationError):
+            services.capture_payment(payment)
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("cancelled", "cancelled"))
+
+    def test_a_capture_cannot_take_the_order_past_its_total(self):
+        order, pending = self.cod_order()
+        services.record_payment(self.store, order, order.total)  # paid in full another way meanwhile
+        with self.assertRaises(ValidationError):
+            services.capture_payment(pending)
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, "pending")
+        self.assertEqual(services.paid_total(order), order.total)
+
 
 @override_settings(ROOT_URLCONF="apps.payments.test_stripe", STRIPE_SECRET_KEY="sk_test", STRIPE_PUBLISHABLE_KEY="pk_test", STRIPE_WEBHOOK_SECRET="whsec")
 class RefundRestockTests(base_tests.CommerceTestBase):

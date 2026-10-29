@@ -76,10 +76,22 @@ def record_pending_payment(store, order, checkout, amount, provider="cod", custo
 
 @transaction.atomic
 def capture_payment(payment, reference=None):
-    """Mark a pending payment (e.g. cash on delivery) as received."""
+    """
+    Mark a pending payment (e.g. cash on delivery) as received.
+    Locks the order before the payment, like cancel_order and refund, so a capture and a cancellation
+    of the same order run one after the other. Under that lock the order must still be open and the
+    capture must not take the order past its total.
+    """
+    order = _lock_order_of(payment)
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
     if payment.status != PENDING:
         raise ValidationError("Only a pending payment can be captured.")
+    if order is not None:
+        if order.status == CANCELLED:
+            raise ValidationError({"order": "This order is cancelled, so its payment can't be captured."})
+        due = order.total - paid_total(order)
+        if payment.amount > due:
+            raise ValidationError({"amount": f"Only {max(due, Decimal('0.00'))} is still due on this order."})
 
     PaymentTransaction.objects.create(
         payment=payment,
