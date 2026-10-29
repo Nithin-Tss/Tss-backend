@@ -11,7 +11,7 @@ paid (stock ran out, the total moved), the payment is refunded straight away.
 """
 import logging
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import stripe
 from django.conf import settings
@@ -59,7 +59,8 @@ def from_minor_units(amount, currency):
 
 def to_minor_units(amount, currency):
     amount = Decimal(amount)
-    return int(amount) if currency.upper() in ZERO_DECIMAL else int(amount * 100)
+    # Rounded, never truncated: a stray fraction must not charge less than the order total
+    return int(amount.to_integral_value(ROUND_HALF_UP)) if currency.upper() in ZERO_DECIMAL else int((amount * 100).to_integral_value(ROUND_HALF_UP))
 
 
 def _require_connected(store):
@@ -136,6 +137,9 @@ def payment_session(checkout):
         intent = intents.retrieve(intent_id, options=options)
         if intent.status == SUCCEEDED:
             raise ValidationError("This checkout has already been paid.")
+        if intent.status == "processing":
+            # A payment is in flight: its amount can't change, and a second attempt could double charge
+            raise ValidationError("Your payment is still being processed. Please wait a moment.")
         if intent.status == "canceled" or intent.currency != checkout.currency.lower():
             intent = None
         elif intent.amount != amount:

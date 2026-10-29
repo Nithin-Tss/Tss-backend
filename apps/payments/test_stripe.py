@@ -79,6 +79,21 @@ class StripeTests(base_tests.CommerceTestBase):
         self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
         self.assertEqual(intents.create.call_count, 1)
 
+    def test_minor_units_are_rounded_not_truncated(self):
+        self.assertEqual(stripe_service.to_minor_units(Decimal("19.995"), "USD"), 2000)
+        self.assertEqual(stripe_service.to_minor_units(Decimal("0.29"), "USD"), 29)
+        self.assertEqual(stripe_service.to_minor_units(Decimal("500.4"), "JPY"), 500)
+
+    def test_session_refuses_while_a_payment_is_processing(self):
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        intents.retrieve.return_value = intent(checkout, status="processing")
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 400)
+        intents.update.assert_not_called()
+
     def test_store_without_stripe_cannot_start_a_payment(self):
         self.store.stripe_charges_enabled = False
         self.store.save()
