@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from rest_framework import serializers
 
 from apps.catalog.models import EXTRA_FIELDS
+from apps.core.rbac import TAX_VIEW
 
 from .access import member_roles, membership_permissions
 from .models import Store
@@ -55,6 +56,14 @@ class StoreSerializer(serializers.ModelSerializer):
             "role", "roles", "permissions",
         ]
         read_only_fields = ["status"]
+
+    def to_representation(self, store):
+        data = super().to_representation(store)
+        # The tax rate is only shown to people who may view tax configuration
+        if "taxRate" in data and self.context.get("request") is not None:
+            if TAX_VIEW not in data["permissions"]:
+                del data["taxRate"]
+        return data
 
     def validate_currency(self, value):
         value = value.strip().upper()

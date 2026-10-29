@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from apps.orders.serializers import OrderSerializer
 from apps.commerce.storefront_views import CheckoutDetailView
 from apps.core.permissions import HasStorePermission, IsStoreMember
-from apps.core.rbac import STORE_MANAGE
+from apps.core.rbac import PAYMENTS_MANAGE, PAYMENTS_VIEW
 from apps.tenancy.models import Store
 
 from . import stripe_service
@@ -52,12 +52,11 @@ def _status(store):
 
 
 class StripeConnectView(StripeErrorsMixin, APIView):
-    """Only the store's owner connects or inspects Stripe; the page URLs come from our own FRONTEND_URL."""
+    """Connect or inspect Stripe (owners, or roles with the payments permissions); the page URLs come from our own FRONTEND_URL."""
 
-    # store.manage is held by owners only (no role can grant it), for reading and connecting alike
     permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
-    permission_resource = "orders"
-    action_permissions = {"GET": STORE_MANAGE, "POST": STORE_MANAGE}
+    permission_resource = "payments"
+    action_permissions = {"GET": PAYMENTS_VIEW, "POST": PAYMENTS_MANAGE}
 
     def get(self, request):
         store = request.store

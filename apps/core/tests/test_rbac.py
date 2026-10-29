@@ -34,9 +34,9 @@ class RbacTestBase(StoreClientMixin, APITestCase):
 
 
 class PermissionCatalogTest(RbacTestBase):
-    def test_there_are_29_permissions_in_13_areas(self):
-        self.assertEqual(len(rbac.ALL_PERMISSIONS), 29)
-        self.assertEqual(len(rbac.AREAS), 13)
+    def test_there_are_31_permissions_in_14_areas(self):
+        self.assertEqual(len(rbac.ALL_PERMISSIONS), 41)
+        self.assertEqual(len(rbac.AREAS), 22)
 
     def test_every_store_view_declares_an_area(self):
         missing = []
@@ -139,7 +139,7 @@ class EnforcementTest(RbacTestBase):
 
         owner = next(s for s in self.owner_me() if s["storeId"] == self.store_id)
         self.assertIn("store.manage", owner["permissions"])
-        self.assertEqual(len(owner["permissions"]), 30)
+        self.assertEqual(len(owner["permissions"]), 42)
 
     def owner_me(self):
         self.as_owner()
@@ -156,7 +156,7 @@ class TeamRulesTest(RbacTestBase):
         admin = self.roles["administrator"]
         self.assertEqual(admin["kind"], "system")
         self.assertEqual(admin["memberCount"], 0)
-        self.assertEqual(len(admin["permissions"]), 29)
+        self.assertEqual(len(admin["permissions"]), 41)
 
     def test_system_roles_are_locked(self):
         rid = self.roles["administrator"]["id"]
@@ -238,6 +238,80 @@ class TeamRulesTest(RbacTestBase):
         self.ok("post", "/api/v1/roles/", {"name": "X", "permissions": []}, expect=403)
         self.ok("get", "/api/v1/members/", expect=403)
 
-    def test_only_owner_renames_store(self):
-        self.staff("ua@example.com", "administrator")
+    def test_renaming_store_needs_settings_manage(self):
+        self.staff("ua@example.com", "store_user_administrator")
         self.ok("patch", f"/api/v1/stores/{self.store_id}/", {"storeName": "Hijacked"}, expect=403)
+        self.as_owner()
+        self.staff("admin@example.com", "administrator")
+        self.ok("patch", f"/api/v1/stores/{self.store_id}/", {"storeName": "Renamed"})
+
+    def test_closing_store_stays_owner_only(self):
+        self.staff("admin@example.com", "administrator")
+        self.ok("delete", f"/api/v1/stores/{self.store_id}/", expect=403)
+
+
+class TaxConfigurationAccessTest(RbacTestBase):
+    def _tax_role(self, *permissions):
+        self.as_owner()
+        role = self.ok("post", "/api/v1/roles/", {"name": "Tax clerk", "permissions": list(permissions)}, expect=201)
+        self.roles["Tax clerk"] = role
+
+    def test_tax_manager_can_change_only_the_tax_rate(self):
+        self._tax_role("tax.view", "tax.manage")
+        self.staff("tax@example.com", "Tax clerk")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.assertEqual(self.ok("patch", url, {"taxRate": "12"})["taxRate"], "12.00")
+        self.ok("patch", url, {"taxRate": "12", "storeName": "Hijacked"}, expect=403)
+        self.ok("patch", url, {"storeName": "Hijacked"}, expect=403)
+
+    def test_tax_viewer_cannot_change_the_rate(self):
+        self._tax_role("tax.view")
+        self.staff("view@example.com", "Tax clerk")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.assertIn("taxRate", self.ok("get", url))
+        self.ok("patch", url, {"taxRate": "5"}, expect=403)
+
+    def test_staff_without_tax_access_neither_see_nor_change_the_rate(self):
+        self.staff("support@example.com", "customer_support")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.assertNotIn("taxRate", self.ok("get", url))
+        self.ok("patch", url, {"taxRate": "5"}, expect=403)
+
+    def test_settings_and_shipping_permissions_cover_their_own_fields(self):
+        self._tax_role("settings.manage", "shipping.manage")
+        self.staff("ops@example.com", "Tax clerk")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.ok("patch", url, {"storeName": "Renamed", "shippingFlatRate": "40"})
+        self.ok("patch", url, {"taxRate": "5"}, expect=403)
+        self.ok("patch", url, {"storeName": "X", "taxRate": "5"}, expect=403)
+
+    def test_shipping_rates_need_shipping_manage(self):
+        self._tax_role("settings.manage")
+        self.staff("gen@example.com", "Tax clerk")
+        self.ok("patch", f"/api/v1/stores/{self.store_id}/", {"shippingFlatRate": "40"}, expect=403)
+
+    def test_owner_keeps_full_access(self):
+        self.as_owner()
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.assertEqual(self.ok("patch", url, {"taxRate": "7"})["taxRate"], "7.00")
+
+    def test_checkout_and_domain_settings_need_their_own_permissions(self):
+        self._tax_role("settings.manage")
+        self.staff("gen2@example.com", "Tax clerk")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.ok("patch", url, {"autoFulfill": "none"}, expect=403)
+        self.ok("patch", url, {"storeSlug": "new-slug"}, expect=403)
+
+    def test_checkout_and_domain_permissions_allow_their_settings(self):
+        self._tax_role("checkout.manage", "domains.manage")
+        self.staff("gen3@example.com", "Tax clerk")
+        url = f"/api/v1/stores/{self.store_id}/"
+        self.ok("patch", url, {"autoFulfill": "none", "autoArchive": False})
+        self.ok("patch", url, {"storeSlug": "new-slug"})
+        self.ok("patch", url, {"storeName": "Nope"}, expect=403)
+
+    def test_locations_need_the_locations_permission(self):
+        self.staff("stock@example.com", "customer_support")
+        self.ok("get", "/api/v1/inventory/locations/", expect=403)
+        self.as_owner()
+        self.ok("get", "/api/v1/inventory/locations/")

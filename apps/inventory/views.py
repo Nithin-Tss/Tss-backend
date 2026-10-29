@@ -37,7 +37,7 @@ def stock_status(quantity):
 class LocationViewSet(StoreScopedViewSet):
     """/api/v1/inventory/locations/  warehouses, shops, ..."""
 
-    permission_resource = "inventory"
+    permission_resource = "locations"
     queryset = Location.objects.order_by("name")
     serializer_class = LocationSerializer
 

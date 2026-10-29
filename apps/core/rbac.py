@@ -55,11 +55,41 @@ AREAS = {
     ]),
     "shipping": ("Shipping and delivery", [
         (VIEW, "View delivery partners"),
-        (MANAGE, "Manage delivery partners"),
+        (MANAGE, "Manage delivery partners and shipping rates"),
     ]),
     "themes": ("Online store", [
         (VIEW, "View themes and preview them"),
         (MANAGE, "Edit themes, theme code and the customizer"),
+    ]),
+    "settings": ("Store settings", [
+        (MANAGE, "Edit store details, order numbering and other general settings"),
+    ]),
+    "payments": ("Payments", [
+        (VIEW, "View the payment provider connection"),
+        (MANAGE, "Connect and manage the payment provider"),
+    ]),
+    "checkout": ("Checkout", [
+        (MANAGE, "Edit order processing settings such as auto-fulfill and auto-archive"),
+    ]),
+    "locations": ("Locations", [
+        (VIEW, "View locations"),
+        (MANAGE, "Create, edit and delete locations"),
+    ]),
+    "notifications": ("Notifications", [
+        (MANAGE, "Edit customer and staff notification settings"),
+    ]),
+    "domains": ("Domains", [
+        (MANAGE, "Change the store's web address"),
+    ]),
+    "policies": ("Policies", [
+        (MANAGE, "Edit store policies"),
+    ]),
+    "billing": ("Plan and billing", [
+        (MANAGE, "View and change the store's plan and billing"),
+    ]),
+    "tax": ("Taxes and duties", [
+        (VIEW, "View the store's tax rate"),
+        (MANAGE, "Change the store's tax rate"),
     ]),
     "reports": ("Reports and analytics", [
         (VIEW, "View overview, reports and analytics"),
@@ -89,6 +119,15 @@ ALL_PERMISSIONS = frozenset(PERMISSIONS)
 
 # Held by owners only; no role can grant it.
 STORE_MANAGE = "store.manage"
+
+TAX_VIEW = "tax.view"
+TAX_MANAGE = "tax.manage"
+SETTINGS_MANAGE = "settings.manage"
+SHIPPING_MANAGE = "shipping.manage"
+CHECKOUT_MANAGE = "checkout.manage"
+DOMAINS_MANAGE = "domains.manage"
+PAYMENTS_VIEW = "payments.view"
+PAYMENTS_MANAGE = "payments.manage"
 
 SYSTEM = "system"
 PREDEFINED = "predefined"
@@ -143,7 +182,7 @@ BUILT_IN_ROLES = {
         PREDEFINED,
         "Merchandiser",
         "Looks after the catalog and stock.",
-        _view_and_manage("products", "inventory") + ["products.delete"],
+        _view_and_manage("products", "inventory", "locations") + ["products.delete"],
     ),
     "marketer": (
         PREDEFINED,
