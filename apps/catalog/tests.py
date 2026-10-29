@@ -174,6 +174,16 @@ class VariantApiTests(APITestCase):
         self.assertEqual(self.client.delete(f"{VARIANTS}{vid}/").status_code, 204)
         self.assertEqual(self.client.get(f"{VARIANTS}{vid}/").status_code, 404)
 
+    def test_weight_is_saved_through_product_and_variant_endpoints(self):
+        self.assertEqual(self.product["variants"][0]["weight"], "0.000")
+        r = self.client.patch(f"{URL}{self.product['id']}/", {"weight": "1.250"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["variants"][0]["weight"], "1.250")
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"weight": "2"}, format="json")
+        self.assertEqual(r.json()["weight"], "2.000")
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"weight": "-1"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
     def test_cannot_delete_last_variant(self):
         self.assertEqual(self.client.delete(f"{VARIANTS}{self.first}/").status_code, 400)
 
@@ -1119,7 +1129,7 @@ class CatalogAdminStoreGuardTests(TestCase):
         p_b = Product.objects.create(store=self.b, title="Cap", status="active")
         v = ProductVariant.objects.create(product=p_a, price="5")
         r = self.client.post(f"/admin/catalog/productvariant/{v.pk}/change/",
-                             {"product": p_b.pk, "price": "6", "sku": ""})
+                             {"product": p_b.pk, "price": "6", "weight": "0", "sku": ""})
         self.assertEqual(r.status_code, 302)
         v.refresh_from_db()
         self.assertEqual((v.product_id, str(v.price)), (p_a.pk, "6.00"))

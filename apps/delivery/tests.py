@@ -237,3 +237,37 @@ class ShippingFullFlowTest(CommerceIntegrationBase):
         s = self.ship(f["id"]).data
         r = self.staff.post(f"{SHIPMENTS}{s['id']}/events/", {}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+RATES = "/api/v1/delivery/rates/"
+
+
+class ShippingRateApiTest(RbacTestBase):
+    def test_coordinator_manages_rates(self):
+        self.staff("ship@example.com", "shipping_coordinator")
+        rate = self.ok("post", RATES, {"country": " India ", "min_weight": "1", "max_weight": "5", "price": "60"}, expect=201)
+        self.assertEqual((rate["country"], rate["price"], rate["max_weight"]), ("India", "60.00", "5.000"))
+        self.ok("patch", f"{RATES}{rate['id']}/", {"price": "75"})
+        self.assertEqual(len(self.ok("get", RATES)), 1)
+        self.ok("delete", f"{RATES}{rate['id']}/", expect=204)
+        self.assertEqual(self.ok("get", RATES), [])
+
+    def test_open_ended_band_and_validation(self):
+        self.as_owner()
+        rate = self.ok("post", RATES, {"price": "10", "min_weight": "2"}, expect=201)
+        self.assertIsNone(rate["max_weight"])
+        self.ok("post", RATES, {"price": "10", "min_weight": "5", "max_weight": "5"}, expect=400)
+        self.ok("post", RATES, {"price": "-1"}, expect=400)
+        self.ok("patch", f"{RATES}{rate['id']}/", {"max_weight": "1"}, expect=400)
+
+    def test_view_permission_is_read_only(self):
+        self.as_owner()
+        role = self.ok("post", "/api/v1/roles/", {"name": "Rate viewer", "permissions": ["shipping.view"]}, expect=201)
+        self.roles["Rate viewer"] = role
+        self.staff("viewer@example.com", "Rate viewer")
+        self.ok("get", RATES)
+        self.ok("post", RATES, {"price": "10"}, expect=403)
+
+    def test_unrelated_role_is_refused(self):
+        self.staff("merch@example.com", "merchandiser")
+        self.ok("get", RATES, expect=403)

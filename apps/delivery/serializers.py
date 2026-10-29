@@ -3,6 +3,8 @@ from rest_framework import serializers
 from apps.core.viewsets import StoreScopedSerializerMixin
 from apps.fulfillment.models import Fulfillment
 
+from apps.tenancy.models import ShippingRate
+
 from .models import DeliveryGateway, Shipment, ShipmentItem, TrackingEvent
 
 
@@ -69,3 +71,31 @@ class ShipSerializer(StoreScopedSerializerMixin, serializers.Serializer):
     fulfillment = serializers.PrimaryKeyRelatedField(queryset=Fulfillment.objects.all())
     delivery_gateway = serializers.PrimaryKeyRelatedField(queryset=DeliveryGateway.objects.all())
     tracking_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+
+class ShippingRateSerializer(serializers.ModelSerializer):
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+    min_weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False, default=0)
+    max_weight = serializers.DecimalField(
+        max_digits=10, decimal_places=3, min_value=0, required=False, allow_null=True, default=None
+    )
+
+    class Meta:
+        model = ShippingRate
+        fields = ["id", "name", "country", "min_weight", "max_weight", "price", "created_at"]
+        read_only_fields = ["created_at"]
+
+    id = serializers.UUIDField(source="rate_id", read_only=True)
+
+    def validate_name(self, value):
+        return value.strip()
+
+    def validate_country(self, value):
+        return value.strip()
+
+    def validate(self, attrs):
+        low = attrs.get("min_weight", getattr(self.instance, "min_weight", 0))
+        high = attrs.get("max_weight", getattr(self.instance, "max_weight", None))
+        if high is not None and high <= low:
+            raise serializers.ValidationError({"max_weight": "Must be greater than the minimum weight."})
+        return attrs

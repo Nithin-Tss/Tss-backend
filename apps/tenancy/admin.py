@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Prefetch
 
 from apps.core.admin_guards import SameStoreForm, StoreGuardAdmin
-from .models import Store, StoreMembership
+from .models import ShippingRate, Store, StoreMembership
 from .services import ACTIVE, OWNER, REMOVED, purge_store
 
 
@@ -132,3 +132,9 @@ class StoreMembershipAdmin(StoreGuardAdmin):
             if m.role == OWNER and m.status != REMOVED and leaves_no_owner(m.store_id, pks):
                 protected.append(f"{m}: {LAST_OWNER.format(store=m.store)}")
         return to_delete, counts, perms_needed, protected
+
+
+@admin.register(ShippingRate)
+class ShippingRateAdmin(StoreGuardAdmin):
+    list_display = ("__str__", "store_name", "country", "min_weight", "max_weight", "price")
+    search_fields = ("name", "country", "store__store_name")

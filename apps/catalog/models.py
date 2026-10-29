@@ -268,6 +268,9 @@ class ProductVariant(models.Model):
         decimal_places=2,
     )
 
+    # Per unit, in the store's weight_unit; used for weight-based shipping rates
+    weight = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+
     # Keep selling when out of stock: available may go below 0 and the store shows "Add to cart"
     continue_selling = models.BooleanField(default=False)
 

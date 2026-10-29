@@ -347,7 +347,7 @@ def save_product(store, data, product=None, user=None):
             [ProductSalesChannel(product=product, sales_channel=c) for c in online_channels(store)]
         )
 
-    if "variants" in data or "price" in data or not product.variants.exists():
+    if "variants" in data or "price" in data or "weight" in data or not product.variants.exists():
         original_skus = set(product.variants.values_list("sku", flat=True)) if product.pk else set()
         try:
             _replace_variants(product, data)
@@ -451,6 +451,8 @@ def _apply_variant(variant, row, default_price=None):
     variant.price = _price(row.get("price") or default_price)
     if "continue_selling" in row:
         variant.continue_selling = bool(row["continue_selling"])
+    if row.get("weight") is not None:
+        variant.weight = row["weight"]
     if "sku" in row:
         variant.sku = (row["sku"] or "").strip() or None
     variant.save()
@@ -470,6 +472,7 @@ def _replace_variants(product, data):
         {
             "price": data.get("price"),
             **({"sku": data["sku"]} if "sku" in data else {}),
+            **({"weight": data["weight"]} if "weight" in data else {}),
             **({"continue_selling": data["continue_selling"]} if "continue_selling" in data else {}),
         }
     ]
@@ -506,7 +509,8 @@ def create_variant(product, data):
 
 
 def update_variant(variant, data):
-    row = {"price": data.get("price", variant.price), "sku": data.get("sku", variant.sku)}
+    row = {"price": data.get("price", variant.price), "sku": data.get("sku", variant.sku),
+           "weight": data.get("weight", variant.weight)}
     return _apply_variant(variant, row)
 
 

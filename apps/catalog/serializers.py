@@ -27,6 +27,7 @@ class VariantInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+    weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
     continue_selling = serializers.BooleanField(required=False)
 
     def validate_sku(self, value):
@@ -61,6 +62,7 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         allow_null=True,
     )
     sku = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
     collections = serializers.ListField(
         child=serializers.CharField(max_length=255),
         required=False,
@@ -188,6 +190,7 @@ class ProductSerializer(serializers.ModelSerializer):
                 "id": str(v.id),
                 "sku": v.sku or "",
                 "price": str(v.price),
+                "weight": str(v.weight),
                 "continue_selling": v.continue_selling,
                 "quantity": sum(i.available for i in v.inventory_items.all()),
             }
@@ -473,10 +476,11 @@ class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer)
 
     price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
     sku = serializers.CharField(max_length=100)
+    weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
 
     class Meta:
         model = ProductVariant
-        fields = ["id", "product", "sku", "price", "created_at", "updated_at"]
+        fields = ["id", "product", "sku", "price", "weight", "created_at", "updated_at"]
         read_only_fields = ["created_at", "updated_at"]
 
     def validate_sku(self, value):

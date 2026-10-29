@@ -16,7 +16,7 @@ from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.inventory.models import Location
 from apps.inventory.services import set_available
 from apps.orders.models import Order
-from apps.tenancy.models import Store
+from apps.tenancy.models import ShippingRate, Store
 
 from . import services
 from .models import Cart
@@ -464,3 +464,76 @@ class OrderCreationGapTests(CommerceTestBase):
             self.client.post(f"{self.base}/checkout/", {}, format="json", **self.h).status_code for _ in range(25)
         ]
         self.assertIn(429, statuses)
+
+
+class ShippingCalculationTests(CommerceTestBase):
+    """Flat fee, free-shipping threshold, and weight/country rates."""
+
+    def _checkout(self, qty=2, country=None, discount_code=None):
+        cart = services.get_or_create_cart(self.store, session_id="ship")
+        services.add_item(cart, self.product, qty)
+        address = {"city": "X"} if country is None else {"city": "X", "country": country}
+        return services.start_checkout(cart, email="a@b.com", shipping_address=address, discount_code=discount_code)
+
+    def _rate(self, price, country="", min_weight="0", max_weight=None):
+        return ShippingRate.objects.create(
+            store=self.store, country=country, price=Decimal(price),
+            min_weight=Decimal(min_weight), max_weight=None if max_weight is None else Decimal(max_weight),
+        )
+
+    def test_flat_rate_when_no_rates_defined(self):
+        self.store.shipping_flat_rate = Decimal("40.00")
+        self.store.save()
+        self.assertEqual(self._checkout().shipping_amount, Decimal("40.00"))
+
+    def test_threshold_met_waives_shipping(self):
+        self.store.shipping_flat_rate, self.store.free_shipping_threshold = Decimal("40.00"), Decimal("998.00")
+        self.store.save()
+        self.assertEqual(self._checkout().shipping_amount, Decimal("0.00"))
+
+    def test_threshold_checked_after_discount(self):
+        self.store.shipping_flat_rate, self.store.free_shipping_threshold = Decimal("40.00"), Decimal("998.00")
+        self.store.save()
+        discount = Discount.objects.create(
+            store=self.store, name="Ten off", discount_type="fixed_amount", value=Decimal("10.00"),
+            starts_at=timezone.now() - timedelta(days=1), is_active=True, is_deleted=False,
+        )
+        DiscountCode.objects.create(discount=discount, code="TEN", is_active=True, is_deleted=False)
+        checkout = self._checkout(discount_code="TEN")
+        self.assertEqual(checkout.discount_amount, Decimal("10.00"))
+        self.assertEqual(checkout.shipping_amount, Decimal("40.00"))
+
+    def test_weight_band_picks_matching_rate(self):
+        self.variant.weight = Decimal("1.500")
+        self.variant.save()
+        self._rate("30.00", min_weight="0", max_weight="3")
+        self._rate("80.00", min_weight="3")
+        self.assertEqual(self._checkout(qty=1).shipping_amount, Decimal("30.00"))  # 1.5 kg
+        self.assertEqual(self._checkout(qty=2).shipping_amount, Decimal("80.00"))  # 3 kg: upper bound is exclusive
+
+    def test_country_rate_beats_anywhere_rate(self):
+        self._rate("100.00")
+        self._rate("60.00", country="India")
+        self.assertEqual(self._checkout(country="india").shipping_amount, Decimal("60.00"))
+        self.assertEqual(self._checkout(country="France").shipping_amount, Decimal("100.00"))
+        self.assertEqual(self._checkout().shipping_amount, Decimal("100.00"))  # no country given
+
+    def test_falls_back_to_flat_rate_when_no_rate_fits(self):
+        self.store.shipping_flat_rate = Decimal("25.00")
+        self.store.save()
+        self._rate("60.00", country="India")
+        self.assertEqual(self._checkout(country="France").shipping_amount, Decimal("25.00"))
+
+    def test_free_shipping_overrides_rates(self):
+        self.store.free_shipping_threshold = Decimal("500.00")
+        self.store.save()
+        self._rate("60.00")
+        self.assertEqual(self._checkout().shipping_amount, Decimal("0.00"))
+
+    def test_tax_ignores_shipping_and_total_adds_it(self):
+        self.store.tax_rate = Decimal("10.00")
+        self.store.shipping_flat_rate = Decimal("50.00")
+        self.store.save()
+        checkout = self._checkout()
+        self.assertEqual(checkout.tax_amount, Decimal("99.80"))
+        self.assertEqual(checkout.total_amount, Decimal("1147.80"))

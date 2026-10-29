@@ -3,11 +3,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
+from apps.tenancy.models import ShippingRate
 
 from . import services
 from .models import DeliveryGateway, Shipment
 from .serializers import (
     DeliveryGatewaySerializer,
+    ShippingRateSerializer,
     ShipmentSerializer,
     ShipSerializer,
     TrackingEventSerializer,
@@ -20,6 +22,14 @@ class DeliveryGatewayViewSet(StoreScopedViewSet):
     permission_resource = "shipping"
     queryset = DeliveryGateway.objects.order_by("name")
     serializer_class = DeliveryGatewaySerializer
+
+
+class ShippingRateViewSet(StoreScopedViewSet):
+    """/api/v1/delivery/rates/  checkout shipping fees by destination country and cart weight"""
+
+    permission_resource = "shipping"
+    queryset = ShippingRate.objects.order_by("country", "min_weight")
+    serializer_class = ShippingRateSerializer
 
 
 class ShipmentViewSet(

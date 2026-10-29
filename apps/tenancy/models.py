@@ -37,7 +37,8 @@ class Store(models.Model):
     auto_archive = models.BooleanField(default=True)
 
     # Checkout pricing: tax is a percentage of (subtotal - discount); shipping is
-    # a flat fee, waived once the subtotal reaches free_shipping_threshold.
+    # a flat fee, waived once the discounted subtotal reaches free_shipping_threshold.
+    # ShippingRate rows (by destination country and cart weight) override the flat fee.
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     shipping_flat_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_shipping_threshold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -60,6 +61,39 @@ class Store(models.Model):
 
     def __str__(self):
         return self.store_name
+
+
+class ShippingRate(models.Model):
+    """
+    A shipping fee for carts within a weight band, to one country or (blank
+    country) anywhere. Weights are in the store's weight_unit; the band is
+    min_weight <= cart weight < max_weight, with no upper limit when max_weight is blank.
+    """
+
+    rate_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="shipping_rates")
+    name = models.CharField(max_length=100, blank=True, default="")
+    country = models.CharField(max_length=100, blank=True, default="")
+    min_weight = models.DecimalField(max_digits=10, decimal_places=3, default=0)
+    max_weight = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"tenancy"."shipping_rates"'
+        verbose_name = "Shipping rate"
+        verbose_name_plural = "Shipping rates"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(price__gte=0), name="shiprate_price_nonneg"),
+            models.CheckConstraint(condition=models.Q(min_weight__gte=0), name="shiprate_minw_nonneg"),
+            models.CheckConstraint(
+                condition=models.Q(max_weight__isnull=True) | models.Q(max_weight__gt=models.F("min_weight")),
+                name="shiprate_max_gt_min",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name or f"{self.country or 'Anywhere'} {self.min_weight}+"
 
 
 class StoreMembership(models.Model):

@@ -311,16 +311,45 @@ def _price_discount(checkout, new_code):
     checkout.metadata = metadata
 
 
-def _tax_and_shipping(store, subtotal, discount_amount):
-    """Tax on the discounted subtotal; flat shipping unless the free-shipping threshold is met."""
+def _shipping_rate(store, country, weight):
+    """
+    Fee of the best ShippingRate for this destination and cart weight, or None
+    if the store has none that fit. A rate for the shopper's country beats an
+    anywhere rate; then the band with the highest minimum weight wins.
+    """
+    country = (country or "").strip().lower()
+    best = None
+    for rate in store.shipping_rates.all():
+        rate_country = rate.country.strip().lower()
+        if rate_country and rate_country != country:
+            continue
+        if weight < rate.min_weight or (rate.max_weight is not None and weight >= rate.max_weight):
+            continue
+        key = (bool(rate_country), rate.min_weight)
+        if best is None or key > best[0]:
+            best = (key, rate)
+    return None if best is None else _money(best[1].price)
+
+
+def _tax_and_shipping(store, subtotal, discount_amount, country=None, weight=ZERO):
+    """
+    Tax on the discounted subtotal. Shipping is the matching weight/country rate,
+    else the flat fee; free once the discounted subtotal meets the threshold.
+    """
     taxable = max(subtotal - discount_amount, ZERO)
     tax = (taxable * Decimal(store.tax_rate or 0) / Decimal(100)).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
-    shipping = _money(store.shipping_flat_rate)
+    shipping = _shipping_rate(store, country, weight)
+    if shipping is None:
+        shipping = _money(store.shipping_flat_rate)
     threshold = store.free_shipping_threshold
-    if subtotal <= ZERO or (threshold is not None and subtotal >= threshold):
+    if subtotal <= ZERO or (threshold is not None and taxable >= threshold):
         shipping = ZERO
     return tax, shipping
+
+
+def _cart_weight(items):
+    return sum(((i.variant.weight or 0) * i.quantity for i in items if i.variant is not None), ZERO)
 
 
 @transaction.atomic
@@ -343,8 +372,11 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
 
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
+    lines = checkout.items.filter(is_deleted=False).select_related("variant")
+    address = checkout.shipping_address if isinstance(checkout.shipping_address, dict) else {}
     checkout.tax_amount, checkout.shipping_amount = _tax_and_shipping(
-        checkout.store, checkout.subtotal, checkout.discount_amount
+        checkout.store, checkout.subtotal, checkout.discount_amount,
+        country=address.get("country"), weight=_cart_weight(lines),
     )
     checkout.total_amount = max(
         checkout.subtotal - checkout.discount_amount + checkout.tax_amount + checkout.shipping_amount, ZERO
