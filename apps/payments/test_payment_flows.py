@@ -389,6 +389,16 @@ class CancelPaidOrderTests(base_tests.CommerceTestBase):
         order.refresh_from_db()
         self.assertEqual(order.status, "cancelled")
 
+    def test_a_refund_made_at_stripe_announces_payment_refunded(self):
+        order, payment = self.stripe_order()
+        seen = []
+        receiver = lambda sender, payment, refunded, **kw: seen.append(refunded)
+        services.payment_refunded.connect(receiver)
+        self.addCleanup(services.payment_refunded.disconnect, receiver)
+        with self.captureOnCommitCallbacks(execute=True):
+            services.record_external_refund(payment, Decimal("100.00"))
+        self.assertEqual(seen, [Decimal("100.00")])
+
     def test_if_the_refund_was_already_recorded_by_the_webhook_a_retry_does_not_ask_stripe_again(self):
         order, payment = self.stripe_order()
         with mock.patch.object(orders_services.inventory, "release", side_effect=ValidationError("stock problem")):

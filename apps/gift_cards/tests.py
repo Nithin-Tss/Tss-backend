@@ -1,7 +1,10 @@
+from datetime import timedelta
 from decimal import Decimal
 from unittest import skipUnless
 
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -114,3 +117,32 @@ class GiftCardTransactionProtectionTests(StoreClientMixin, APITestCase):
                 pk=self.transaction_record.pk
             ).exists()
         )
+
+class GiftCardRulesTests(StoreClientMixin, APITestCase):
+    def setUp(self):
+        token, store_data = self.sign_up("gift-card-rules@example.com", "Gift Card Rules Store")
+        self.store = Store.objects.get(pk=store_data["storeId"])
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}", HTTP_X_STORE_ID=str(self.store.pk))
+
+    def test_issued_card_takes_the_store_currency(self):
+        r = self.client.post("/api/v1/gift-cards/", {"initial_balance": "50.00"}, format="json")
+        self.assertEqual(r.status_code, 201, r.data)
+        self.assertEqual(r.data["currency_code"], self.store.currency)
+
+    def test_card_in_another_currency_is_refused(self):
+        other = "USD" if self.store.currency != "USD" else "EUR"
+        r = self.client.post(
+            "/api/v1/gift-cards/", {"initial_balance": "50.00", "currency_code": other}, format="json"
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("currency_code", r.data)
+
+    def test_expired_card_cannot_be_spent_but_can_be_credited(self):
+        card = GiftCard.objects.create(
+            store=self.store, code="OLD-1", initial_balance=Decimal("100.00"), current_balance=Decimal("50.00"),
+            currency_code=self.store.currency, status="active", is_deleted=False,
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+        with self.assertRaises(DRFValidationError):
+            change_balance(card, Decimal("-10.00"), "debit")
+        self.assertEqual(change_balance(card, Decimal("10.00"), "credit").current_balance, Decimal("60.00"))

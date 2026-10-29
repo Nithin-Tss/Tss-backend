@@ -6,6 +6,7 @@ import secrets
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import GiftCard, GiftCardTransaction
@@ -33,6 +34,8 @@ def change_balance(gift_card, amount, kind, user=None, reason=None, order=None, 
 
     if card.status != ACTIVE:
         raise ValidationError("This gift card is disabled.")
+    if amount < 0 and card.expires_at and card.expires_at <= timezone.now():
+        raise ValidationError("This gift card has expired.")
 
     before = card.current_balance
     after = before + amount

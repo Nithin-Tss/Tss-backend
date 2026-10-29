@@ -32,7 +32,7 @@ class GiftCardSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
         extra_kwargs = {
             "code": {"required": False, "allow_blank": True},
             "initial_balance": {"min_value": 1},
-            "currency_code": {"default": "INR"},
+            "currency_code": {"required": False},
         }
 
     def validate_code(self, value):
@@ -47,7 +47,15 @@ class GiftCardSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
             raise serializers.ValidationError("A gift card with this code already exists.")
         return value
 
+    def validate_currency_code(self, value):
+        store = self.context["request"].store
+        if value.upper() != store.currency:
+            raise serializers.ValidationError(f"This store sells in {store.currency}.")
+        return value.upper()
+
     def validate(self, data):
+        if not self.instance:
+            data.setdefault("currency_code", self.context["request"].store.currency)
         # The value of an issued card can't be rewritten; use /adjust/ instead.
         if self.instance and "initial_balance" in data and data["initial_balance"] != self.instance.initial_balance:
             raise serializers.ValidationError({"initial_balance": "Can't be changed after the card is issued."})

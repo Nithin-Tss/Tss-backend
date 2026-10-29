@@ -218,6 +218,7 @@ def record_external_refund(payment, total_refunded, reason="refunded_at_provider
     )
     payment.status = REFUNDED if already + new >= payment.amount else PARTIALLY_REFUNDED
     payment.save(update_fields=["status", "updated_at"])
+    transaction.on_commit(lambda: payment_refunded.send(sender=Payment, payment=payment, refunded=refunded_total(payment)))
     if order is not None:
         from apps.orders import services as orders
 
