@@ -1394,3 +1394,353 @@ class ProductPriceRequiredTests(APITestCase):
             {"title": "Priced", "status": "active", "sku": "IMP-1", "quantity": 3},
         ]}, format="json")
         self.assertEqual(r.json()["errors"], [], r.content)
+
+
+class CatalogNavigationTests(APITestCase):
+    """Collections, categories, menus, redirects and the header: they follow the catalog as it changes."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "navigation@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.slug = self.store.store_slug
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    # ------------------------------------------------------------------ helpers
+    def product(self, title, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"NAV-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def collection(self, name, products=(), **extra):
+        r = self.client.post("/api/v1/catalog/collections/", {"name": name, "products": list(products), **extra}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def edit_collection(self, collection, **body):
+        r = self.client.patch(f"/api/v1/catalog/collections/{collection['id']}/", body, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def get(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}")
+
+    def header(self):
+        import re
+
+        return re.search(r"<header.*?</header>", self.get("").content.decode(), re.S).group(0)
+
+    def make_menu(self, items, name="Main menu"):
+        r = self.client.post("/api/v1/themes/menus/", {"name": name, "items": items}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def redirect(self, path, target, store=None):
+        from apps.themes.models import UrlRedirect
+
+        return UrlRedirect.objects.create(store=store or self.store, path=path, target=target)
+
+    # ------------------------------------------------------------------ problem 3: a collection's handle
+    def test_an_edit_that_sends_the_handle_empty_keeps_the_address(self):
+        summer = self.collection("Summer sale")
+        self.assertEqual(summer["handle"], "summer-sale")  # a new collection's handle comes from its title
+
+        edited = self.edit_collection(summer, name="Winter sale", handle="")
+
+        self.assertEqual((edited["name"], edited["handle"]), ("Winter sale", "summer-sale"))
+        self.assertEqual(self.collection("Autumn")["handle"], "autumn")  # and so does the next new one
+
+    def test_changing_a_handle_adds_a_redirect_from_the_old_address(self):
+        from apps.themes.models import UrlRedirect
+
+        summer = self.collection("Summer sale")
+        self.edit_collection(summer, name="Summer clearance")  # a new title alone: same address, nothing to redirect
+        self.assertEqual(UrlRedirect.objects.count(), 0)
+
+        self.edit_collection(summer, handle="winter")
+        row = UrlRedirect.objects.get()
+        self.assertEqual((row.store_id, row.path, row.target), (self.store.pk, "/collections/summer-sale", "/collections/winter"))
+        listed = self.client.get("/api/v1/themes/redirects/").json()
+        self.assertEqual([(r["path"], r["target"]) for r in listed], [("/collections/summer-sale", "/collections/winter")])
+
+        self.edit_collection(summer, handle="summer-sale")  # back again: the old address is live, the new one redirects
+        self.assertEqual(
+            sorted(UrlRedirect.objects.values_list("path", "target")), [("/collections/winter", "/collections/summer-sale")]
+        )
+
+    def test_an_existing_redirect_for_the_old_address_is_kept(self):
+        from apps.themes.models import UrlRedirect
+
+        autumn = self.collection("Autumn")
+        self.redirect("/collections/autumn", "/collections/somewhere-else")
+
+        self.edit_collection(autumn, handle="fall")
+
+        self.assertEqual(
+            list(UrlRedirect.objects.values_list("path", "target")), [("/collections/autumn", "/collections/somewhere-else")]
+        )
+
+    # ------------------------------------------------------------------ problem 1: redirects on the storefront
+    def test_a_renamed_collection_address_sends_shoppers_to_the_new_one(self):
+        summer = self.collection("Summer sale")
+        self.edit_collection(summer, handle="winter")
+
+        r = self.get("collections/summer-sale?page=2")
+
+        self.assertEqual(r.status_code, 301)
+        self.assertEqual(r["Location"], f"/s/{self.slug}/collections/winter?page=2")
+        self.assertEqual(self.get("collections/winter").status_code, 200)  # the new address itself is not redirected
+
+    def test_redirects_work_whichever_way_the_path_was_saved_and_follow_a_chain(self):
+        self.redirect("/old-page", "/collections/all")
+        self.redirect(f"/s/{self.slug}/other-old-page/", f"/s/{self.slug}/collections/all")
+        self.redirect("/first", "/second")
+        self.redirect("/second", "/third")
+        self.redirect("/third", "/collections/all")
+
+        for path in ("old-page", "old-page/", "other-old-page", "first"):
+            r = self.get(path)
+            self.assertEqual((r.status_code, r["Location"]), (301, f"/s/{self.slug}/collections/all"), path)
+
+    def test_a_missing_page_without_a_redirect_is_still_not_found(self):
+        self.assertEqual(self.get("no-such-page").status_code, 404)
+        self.assertEqual(self.get("collections/no-such-collection").status_code, 404)
+        self.assertEqual(self.get("products/11111111-1111-1111-1111-111111111111").status_code, 404)
+
+    def test_a_removed_product_can_be_sent_to_a_collection(self):
+        product = self.product("Gone soon", location=None, quantity=None)
+        self.client.delete(f"{URL}{product['id']}/")
+        self.redirect(f"/products/{product['id']}", "/collections/all")
+
+        r = self.get(f"products/{product['id']}")
+
+        self.assertEqual((r.status_code, r["Location"]), (301, f"/s/{self.slug}/collections/all"))
+
+    def test_a_redirect_never_replaces_a_page_that_exists(self):
+        winter = self.collection("Winter")
+        self.redirect(f"/collections/{winter['handle']}", "/collections/all")
+        self.assertEqual(self.get(f"collections/{winter['handle']}").status_code, 200)
+
+    def test_only_this_stores_redirects_are_used(self):
+        from apps.tenancy.models import Store
+
+        other_client = type(self.client)()
+        token, other_id = signup(other_client, "other-nav@example.com")
+        other = Store.objects.get(pk=other_id)
+        self.redirect("/collections/summer-sale", "/collections/theirs", store=other)
+
+        self.assertEqual(self.get("collections/summer-sale").status_code, 404)
+
+    def test_loops_long_chains_and_unsafe_targets_are_not_followed(self):
+        self.redirect("/ping", "/pong")
+        self.redirect("/pong", "/ping")
+        for number in range(6):  # six redirects in a row: one more than is followed
+            self.redirect(f"/hop-{number}", f"/hop-{number + 1}" if number < 5 else "/collections/all")
+        self.redirect("/protocol-relative", "//evil.example/steal")
+        self.redirect("/script", "javascript:alert(1)")
+        self.redirect("/split", "/collections/all\nSet-Cookie: x=1")
+
+        for path in ("ping", "pong", "hop-0", "protocol-relative", "script", "split"):
+            self.assertEqual(self.get(path).status_code, 404, path)
+        self.assertEqual(self.get("hop-1").status_code, 301)  # five in a row are followed
+
+    def test_a_redirect_can_leave_the_store_for_an_http_address(self):
+        self.redirect("/moved", "https://example.org/new-home")
+        r = self.get("moved")
+        self.assertEqual((r.status_code, r["Location"]), (301, "https://example.org/new-home"))
+
+    # ------------------------------------------------------------------ problem 2: menus and dead links
+    def dead_and_live(self):
+        """A menu with live links and every kind of dead one."""
+        from .models import Product, ProductSalesChannel
+
+        live = self.product("Live product")
+        draft = self.product("Draft product", status="draft")
+        archived = self.product("Archived product")
+        Product.objects.filter(pk=archived["id"]).update(status="archived")
+        offline = self.product("Offline product")
+        ProductSalesChannel.objects.filter(product_id=offline["id"]).delete()
+        gone = self.product("Gone product", location=None, quantity=None)  # no stock, so it can be deleted
+        self.client.delete(f"{URL}{gone['id']}/")
+        live_shelf = self.collection("Live shelf", [live["id"]])
+        draft_shelf = self.collection("Draft shelf", [live["id"]], status="draft")
+        offline_shelf = self.collection("Offline shelf", [live["id"]])
+        from .models import CollectionSalesChannel
+
+        CollectionSalesChannel.objects.filter(collection_id=offline_shelf["id"]).delete()
+        links = {
+            "Live product": f"/products/{live['id']}",
+            "Draft product": f"/products/{draft['id']}",
+            "Archived product": f"/products/{archived['id']}",
+            "Offline product": f"/products/{offline['id']}",
+            "Gone product": f"/products/{gone['id']}",
+            "No such product": "/products/not-an-id",
+            "Prefixed draft": f"/s/{self.slug}/products/{draft['id']}",
+            "Live shelf": "/collections/live-shelf",
+            "Shelf by id": f"/collections/{live_shelf['id']}/?sort=newest",
+            "Draft shelf": "/collections/draft-shelf",
+            "Offline shelf": "/collections/offline-shelf",
+            "Missing shelf": "/collections/never-made",
+            "All products": "/collections/all",
+            "Blog": "/blog",
+            "Elsewhere": "https://example.org",
+        }
+        return links, draft
+
+    def test_the_storefront_hides_menu_links_to_things_shoppers_cannot_open(self):
+        links, draft = self.dead_and_live()
+        self.make_menu([{"title": title, "url": url} for title, url in links.items()])
+        live = {"Live product", "Live shelf", "Shelf by id", "All products", "Blog", "Elsewhere"}
+
+        header = self.header()
+
+        for title in links:
+            self.assertEqual(f">{title}</a>" in header, title in live, title)
+
+        # Publishing the draft product brings its link back: nothing was removed from the menu
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        header = self.header()
+        self.assertIn(">Draft product</a>", header)
+        self.assertIn(">Prefixed draft</a>", header)
+
+    def test_the_menu_text_lines_in_the_theme_settings_hide_dead_links_too(self):
+        from apps.themes.rendering import _menu_lines, dead_menu_urls, layout_data
+
+        settings = {
+            "header_menu": "Missing shelf | /collections/never-made\nAll products | /collections/all",
+            "footer_menu": "Gone | /products/11111111-1111-1111-1111-111111111111\nBlog | /blog",
+            "header_collections": 0,
+        }
+        urls = [u for _, u in _menu_lines(settings["header_menu"])] + [u for _, u in _menu_lines(settings["footer_menu"])]
+
+        data = layout_data(settings, "/s/x", [], [], dead=dead_menu_urls(self.store, urls))
+
+        self.assertEqual([l["label"] for l in data["header_links"]], ["All products"])
+        self.assertEqual([l["label"] for l in data["footer_links"]], ["Blog"])
+
+    def test_the_admin_menu_api_marks_broken_links_and_keeps_every_item(self):
+        from apps.themes.models import MenuItem
+
+        links, draft = self.dead_and_live()
+        items = [{"title": title, "url": url} for title, url in links.items()]
+        items[-1]["children"] = [{"title": "Dead child", "url": links["Draft product"]}, {"title": "Fine child", "url": "/blog"}]
+        created = self.make_menu(items)
+        broken = {"Draft product", "Archived product", "Offline product", "Gone product", "No such product",
+                  "Prefixed draft", "Draft shelf", "Offline shelf", "Missing shelf"}
+
+        listed = self.client.get("/api/v1/themes/menus/").json()[0]
+        fetched = self.client.get(f"/api/v1/themes/menus/{created['id']}/").json()
+
+        for menu in (created, listed, fetched):
+            by_title = {item["title"]: item["broken"] for item in menu["items"]}
+            self.assertEqual({t for t, flag in by_title.items() if flag}, broken)
+            self.assertEqual(len(menu["items"]), len(links))  # none removed
+            children = {c["title"]: c["broken"] for c in menu["items"][-1]["children"]}
+            self.assertEqual(children, {"Dead child": True, "Fine child": False})
+        self.assertEqual(MenuItem.objects.count(), len(links) + 2)  # what was saved is untouched
+
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        again = {i["title"]: i["broken"] for i in self.client.get("/api/v1/themes/menus/").json()[0]["items"]}
+        self.assertFalse(again["Draft product"])
+        self.assertTrue(again["Missing shelf"])
+
+    def test_checking_a_menu_costs_the_same_queries_for_any_number_of_links(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes.rendering import dead_menu_urls
+
+        links, _ = self.dead_and_live()
+        few = ["/blog", f"/products/{self.product('One')['id']}", "/collections/live-shelf"]
+        many = list(links.values())
+
+        counts = []
+        for urls in (few, many):
+            with CaptureQueriesContext(connection) as queries:
+                dead_menu_urls(self.store, urls)
+            counts.append(len(queries))
+        self.assertEqual(counts[0], counts[1])
+        self.assertLessEqual(counts[0], 2)
+        with CaptureQueriesContext(connection) as queries:
+            dead_menu_urls(self.store, ["/blog", "https://example.org"])
+        self.assertEqual(len(queries), 0)  # nothing to look up
+
+    # ------------------------------------------------------------------ problem 4: category links
+    def test_a_category_filter_by_name_still_works_and_its_links_use_the_id(self):
+        from unittest import mock
+
+        from apps.themes import rendering
+
+        category = self.client.post("/api/v1/catalog/categories/", {"name": "Shoes"}, format="json").json()
+        self.product("Boot A", category_id=category["id"])
+        self.product("Boot B", category_id=category["id"])
+        self.product("A hat")
+
+        with mock.patch.object(rendering, "PAGE_SIZE", 1):
+            by_name = self.get("collections/all?category=Shoes").content.decode()
+            self.assertIn("Boot", by_name)
+            self.assertNotIn("A hat", by_name)  # the old, name based link still filters
+            self.assertIn(f"category={category['id']}", by_name)  # the links on the page now carry the id...
+            self.assertNotIn("category=Shoes", by_name)  # ...not the name
+
+            self.client.patch(f"/api/v1/catalog/categories/{category['id']}/", {"name": "Boots"}, format="json")
+
+            by_id = self.get(f"collections/all?category={category['id']}").content.decode()
+            self.assertIn("Boot", by_id)  # a renamed category keeps working by id
+            self.assertNotIn("A hat", by_id)
+            renamed = self.get("collections/all?category=Boots").content.decode()
+            self.assertIn("Boot", renamed)
+            self.assertIn(f"category={category['id']}", renamed)
+            self.assertNotIn("Boot A", self.get("collections/all?category=Shoes").content.decode())  # the old name is gone
+
+    # ------------------------------------------------------------------ problem 5: the automatic header collections
+    def test_the_automatic_header_list_skips_collections_with_nothing_to_buy(self):
+        from .models import Product, ProductSalesChannel
+
+        live = self.product("In stock thing")
+        draft = self.product("Hidden thing", status="draft")
+        offline = self.product("Pos only thing")
+        ProductSalesChannel.objects.filter(product_id=offline["id"]).delete()
+        self.collection("Full shelf", [live["id"]])
+        self.collection("Empty shelf")
+        self.collection("Draft products shelf", [draft["id"]])
+        self.collection("Offline products shelf", [offline["id"]])
+
+        header = self.header()
+
+        self.assertIn(">Full shelf</a>", header)
+        for name in ("Empty shelf", "Draft products shelf", "Offline products shelf"):
+            self.assertNotIn(f">{name}</a>", header, name)
+
+        # A menu the owner built is theirs: it keeps its link to the empty collection
+        self.make_menu([{"title": "Empty shelf", "url": "/collections/empty-shelf"}])
+        self.assertIn(">Empty shelf</a>", self.header())
+
+        # the product comes back (made Active): its collection joins the automatic list when there is no owner menu
+        self.client.delete(f"/api/v1/themes/menus/{self.client.get('/api/v1/themes/menus/').json()[0]['id']}/")
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        self.assertIn(">Draft products shelf</a>", self.header())
+        self.assertEqual(Product.objects.filter(status="active").count(), 3)
+
+    def test_the_header_collections_are_read_in_one_query(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes.rendering import _nav
+
+        counts = []
+        for shelves in (1, 5):
+            for number in range(shelves):
+                self.collection(f"Shelf {shelves}-{number}", [self.product(f"Thing {shelves}-{number}")["id"]])
+            with CaptureQueriesContext(connection) as queries:
+                nav = _nav(self.store, "/s/x")
+            counts.append(len(queries))
+        self.assertEqual(counts, [1, 1])
+        self.assertTrue(all(entry["has_products"] for entry in nav))

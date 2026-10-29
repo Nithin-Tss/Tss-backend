@@ -1057,8 +1057,13 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn("e.preventDefault();", page)
 
     def test_automatic_menu_when_there_are_no_links(self):
-        for name in ("Autumn", "Basics", "Coats"):
-            self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
+        for name in ("Autumn", "Basics", "Coats"):  # each has a product to buy: the automatic menu skips empty ones
+            product = self.ok("post", "/api/v1/catalog/products/", {
+                "title": f"{name} thing", "status": "active", "price": "10", "sku": f"AUTO-{name.upper()}",
+            }, expect=201)
+            self.ok("post", "/api/v1/catalog/collections/",
+                    {"name": name, "status": "active", "products": [product["id"]]}, expect=201)
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Barely there", "status": "active"}, expect=201)
         values = self.section()["values"]
         self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist", "cart", "search"])  # only the icons: no menu links
         values["settings"]["collections"] = 2
@@ -1068,12 +1073,13 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn(">Shop all</a>", nav)
         shown = [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in nav]
         self.assertEqual(shown, ["Autumn", "Basics"])
+        self.assertNotIn(">Barely there</a>", nav)  # no products in it
         # The fast preview path reads the collections the same way
         self.assertEqual(shown, [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in preview])
 
     def test_menu_from_admin_menus_shows_on_the_navbar(self):
         self.ok("post", "/api/v1/themes/menus/", {"name": "Main menu", "items": [
-            {"title": "Sale", "url": "/collections/sale"}, {"title": "Journal", "url": "/blog"}]}, expect=201)
+            {"title": "Sale", "url": "/collections/all"}, {"title": "Journal", "url": "/blog"}]}, expect=201)
         nav = self.header_html(self.home())
         self.assertIn(">Sale</a>", nav)
         self.assertIn(">Journal</a>", nav)

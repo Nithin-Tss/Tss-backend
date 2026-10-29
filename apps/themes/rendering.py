@@ -19,12 +19,12 @@ from liquid import DictLoader, Environment
 from liquid.exceptions import LiquidError
 from markupsafe import Markup, escape
 
-from django.db.models import Avg, Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Avg, Count, Exists, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.text import slugify
 
-from apps.catalog.models import EXTRA_FIELDS
+from apps.catalog.models import EXTRA_FIELDS, ProductCollection
 from apps.catalog.services import published_collections, published_products
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
@@ -689,17 +689,72 @@ def _resolve_link(base_url, value):
     return base_url + value if value.startswith("/") and not value.startswith("//") else value
 
 
-def _menu_links(text, base_url):
-    """[{"label", "url"}] from "Label | /page" lines (already validated by the menu setting)."""
-    links = []
+def _menu_lines(text):
+    """[(label, url)] from "Label | /page" lines (already validated by the menu setting)."""
+    lines = []
     for line in str(text or "").splitlines():
         label, _, url = line.partition("|")
         label, url = label.strip(), url.strip()
         if label and not url:  # a bare link is its own label
             url = label
         if label and url:
-            links.append({"label": label, "url": _resolve_link(base_url, url)})
-    return links
+            lines.append((label, url))
+    return lines
+
+
+def _menu_links(text, base_url, dead=()):
+    """[{"label", "url"}] from "Label | /page" lines, without the links in `dead`."""
+    return [
+        {"label": label, "url": _resolve_link(base_url, url)} for label, url in _menu_lines(text) if url not in dead
+    ]
+
+
+_PRODUCT_LINK = re.compile(r"^/products/([^/?#]+)/?(?:[?#].*)?$")
+_COLLECTION_LINK = re.compile(r"^/collections/([^/?#]+)/?(?:[?#].*)?$")
+
+
+def dead_menu_urls(store, urls):
+    """
+    The links among `urls` (as saved in a menu) that go to a product or collection of this store that shoppers
+    can't open: deleted, Draft, Archived or off the Online Store. Other links are never judged. Two queries for
+    any number of links.
+    """
+    base = shop_url(store)
+    products, collections = {}, {}
+    for url in set(urls):
+        path = str(url or "").strip()
+        path = path[len(base):] if path.startswith(base + "/") else path
+        found = _PRODUCT_LINK.match(path)
+        if found:
+            products[url] = found.group(1)
+            continue
+        found = _COLLECTION_LINK.match(path)
+        if found and found.group(1) not in ("all", "promotions"):  # the built-in pages are always there
+            collections[url] = found.group(1)
+
+    def as_uuid(value):
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            return None
+
+    dead = set()
+    ids = {as_uuid(v) for v in products.values()} - {None}
+    live = set(published_products(store).prefetch_related(None).filter(pk__in=ids).values_list("pk", flat=True)) if ids else set()
+    dead.update(url for url, value in products.items() if as_uuid(value) not in live)
+
+    if collections:
+        ids = {as_uuid(v) for v in collections.values()} - {None}
+        handles = {v for v in collections.values() if as_uuid(v) is None}
+        rows = list(
+            published_collections(store).filter(Q(pk__in=ids) | Q(handle__in=handles)).values_list("pk", "handle")
+        )
+        live_ids, live_handles = {pk for pk, _ in rows}, {handle for _, handle in rows}
+        for url, value in collections.items():
+            number = as_uuid(value)
+            if (number not in live_ids) if number is not None else (value not in live_handles):
+                dead.add(url)
+    return dead
 
 
 NAVBAR_MENU_HANDLES = ("main-menu", "header", "navbar", "main")
@@ -719,17 +774,21 @@ def navbar_menu_links(store, base_url):
     if menu is None:
         return []
     items = sorted((i for i in menu.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
-    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.title and i.url]
+    items = [i for i in items if i.title and i.url]
+    dead = dead_menu_urls(store, [i.url for i in items])  # links to products and collections shoppers can't open are hidden
+    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.url not in dead]
 
 
-def layout_data(settings, base_url, nav, menu_links=None):
+def layout_data(settings, base_url, nav, menu_links=None, dead=()):
     """Header links, footer links and footer social links for layout/theme.liquid."""
-    header = _menu_links(settings.get("header_menu"), base_url) or list(menu_links or [])
+    header = _menu_links(settings.get("header_menu"), base_url, dead) or list(menu_links or [])
     if not header:
         header = [{"label": "Home", "url": f"{base_url}/"}, {"label": "Shop all", "url": f"{base_url}/collections/all"}]
-        header += [{"label": c["name"], "url": c["url"]} for c in nav[: int(settings.get("header_collections") or 0)]]
+        # The automatic list: collections with something to buy in them
+        filled = [c for c in nav if c.get("has_products", True)]
+        header += [{"label": c["name"], "url": c["url"]} for c in filled[: int(settings.get("header_collections") or 0)]]
 
-    footer = _menu_links(settings.get("footer_menu"), base_url) or [
+    footer = _menu_links(settings.get("footer_menu"), base_url, dead) or [
         {"label": "Home", "url": f"{base_url}/"},
         {"label": "Shop all", "url": f"{base_url}/collections/all"},
     ]
@@ -824,6 +883,24 @@ def _number(value):
     except (InvalidOperation, ValueError):
         return None
     return number if number.is_finite() and number >= 0 else None
+
+
+def _with_category_ids(store, filters):
+    """Category filters given by name (older links) are turned into ids: the links built from them then keep working."""
+    wanted = filters.get("category") or []
+    if not wanted:
+        return filters
+    from apps.catalog.models import Category
+
+    by_name = {}
+    for pk, name in Category.objects.filter(store=store).values_list("pk", "name"):
+        by_name.setdefault(name.strip().lower(), []).append(str(pk))
+    ids = []
+    for value in wanted:
+        for found in by_name.get(value.strip().lower(), [value]):
+            if found not in ids:
+                ids.append(found)
+    return {**filters, "category": ids}
 
 
 def parse_collection_filters(params):
@@ -1505,7 +1582,17 @@ class _LazyList(Sequence):
 
 
 def _nav(store, base_url):
-    return [{"name": c.name, "url": collection_url(base_url, c)} for c in published_collections(store)[:20]]
+    """
+    The store's published collections that have at least one published product in them (one query). This is the
+    `collections` the header's automatic menu lists; a menu the owner built is not affected by it.
+    """
+    filled = ProductCollection.objects.filter(
+        collection=OuterRef("pk"), product__in=published_products(store).prefetch_related(None).order_by().values("pk")
+    )
+    return [
+        {"name": c.name, "url": collection_url(base_url, c), "has_products": True}
+        for c in published_collections(store).filter(Exists(filled))[:20]
+    ]
 
 
 def _env_key(files, base_url, currency):
@@ -2125,7 +2212,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     if page == "collection":
         sort = sort if sort in SORTS else "newest"
         all_products = _products(store, base_url, collection=collection["obj"])
-        filters = filters or parse_collection_filters({})
+        filters = _with_category_ids(store, filters or parse_collection_filters({}))
         products = [p for p in all_products if _matches_filters(p, filters)]
         if SORTS[sort]:
             products.sort(key=SORTS[sort])
@@ -2325,7 +2412,11 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         "menu_links": menu_links,
-        **layout_data(settings, base_url, nav, menu_links),
+        **layout_data(
+            settings, base_url, nav, menu_links,
+            dead=dead_menu_urls(store, [u for _, u in _menu_lines(settings.get("header_menu"))]
+                                + [u for _, u in _menu_lines(settings.get("footer_menu"))]),
+        ),
     }
 
     # The synced sections, rendered from their saved (or, in the preview, unsaved) values

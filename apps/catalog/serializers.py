@@ -17,6 +17,16 @@ from .services import (
 )
 
 
+def _redirect_old_handle(store, old, new):
+    """A collection's address changed: the old one sends shoppers to the new one (unless a redirect already exists)."""
+    from apps.themes.models import UrlRedirect
+
+    UrlRedirect.objects.filter(store=store, path=f"/collections/{new}").delete()  # the new address is live again
+    UrlRedirect.objects.get_or_create(
+        store=store, path=f"/collections/{old}", defaults={"target": f"/collections/{new}"}
+    )
+
+
 class VariantInputSerializer(serializers.Serializer):
     id = serializers.UUIDField(required=False)
     sku = serializers.CharField(required=False, allow_blank=True, max_length=100)
@@ -393,9 +403,11 @@ class CollectionSerializer(serializers.ModelSerializer):
                 taken = taken.exclude(pk=current.pk)
             if taken.exists():
                 raise serializers.ValidationError({"handle": "Another collection already uses this URL handle."})
-        elif "handle" in attrs or current is None:
+        elif current is None or not current.handle:
             name = attrs.get("name") or (current.name if current else "")
             attrs["handle"] = unique_handle(store, name, exclude_pk=current.pk if current else None)
+        elif "handle" in attrs:
+            attrs["handle"] = current.handle  # sent empty on an edit: its address stays as it is
 
         kind = attrs.get("type", current.type if current else Collection.MANUAL)
         if kind == Collection.AUTOMATED:
@@ -417,7 +429,10 @@ class CollectionSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         rules, products = validated_data.pop("rules", None), validated_data.pop("products", None)
         sales_channels_data = self.initial_data.get("sales_channels", None)
+        old_handle = instance.handle
         instance = super().update(instance, validated_data)
+        if old_handle and instance.handle != old_handle:
+            _redirect_old_handle(instance.store, old_handle, instance.handle)
         if sales_channels_data is not None:
             self._sync_sales_channels(instance, sales_channels_data, creating=False)
         self._save_items(instance, rules, products)
