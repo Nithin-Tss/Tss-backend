@@ -12,6 +12,15 @@ from django.conf import settings
 from django.http import JsonResponse
 
 API_PREFIX = "/api/"
+# Swagger UI and ReDoc load scripts and styles from a CDN and run inline code, so the
+# strict "nothing may load" policy would leave them blank. Only these two pages get this.
+DOCS_PATHS = ("/api/v1/docs/", "/api/v1/redoc/")
+DOCS_CSP = (
+    "default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+    "img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; "
+    "connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'"
+)
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
@@ -60,7 +69,10 @@ class SecurityHeadersMiddleware:
         response = self.get_response(request)
         if _is_api(request):
             # The API only returns JSON/streams: never render, frame or embed it.
-            response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+            if request.path_info in DOCS_PATHS:
+                response.headers["Content-Security-Policy"] = DOCS_CSP
+            else:
+                response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
             response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
             response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
             # Responses carry account and order data: keep them out of shared caches.
