@@ -5800,3 +5800,87 @@ class ThemeImageUrlTest(StoreClientMixin, APITestCase):
         from django.test import override_settings
         with override_settings(DEBUG=False):
             self.assertTrue(self.upload().startswith("https://"))
+
+
+class MenusApiTest(StoreClientMixin, APITestCase):
+    URL = "/api/v1/themes/menus/"
+
+    def setUp(self):
+        self.sign_up("menus@example.com", "Menu Store")
+
+    def test_crud_with_nested_items(self):
+        menu = self.ok("post", self.URL, {
+            "name": "Main menu",
+            "items": [
+                {"title": "Shop", "url": "/collections/all", "children": [{"title": "New", "url": "/collections/new"}]},
+                {"title": "About", "url": "/pages/about"},
+                {"title": "", "url": "/blank-rows-are-dropped"},
+            ],
+        }, expect=201)
+        self.assertEqual(menu["handle"], "main-menu")
+        self.assertEqual(menu["items_summary"], "Shop, About")
+        self.assertEqual(menu["items_count"], 3)
+        self.assertEqual(menu["items"][0]["children"][0]["title"], "New")
+
+        # PUT replaces the items; a PATCH without items leaves them alone
+        url = f"{self.URL}{menu['id']}/"
+        self.ok("patch", url, {"name": "Header"})
+        self.assertEqual(self.ok("get", url)["items_count"], 3)
+        updated = self.ok("put", url, {"name": "Header", "items": [{"title": "Home", "url": "/"}]})
+        self.assertEqual(updated["items_summary"], "Home")
+        self.assertEqual(len(self.ok("get", self.URL)), 1)
+
+        self.ok("delete", url, expect=204)
+        self.assertEqual(self.ok("get", self.URL), [])
+
+    def test_item_order_is_kept(self):
+        menu = self.ok("post", self.URL, {"name": "Order", "items": [
+            {"title": "B", "url": "/b", "order": 1}, {"title": "A", "url": "/a", "order": 0},
+        ]}, expect=201)
+        self.assertEqual([i["title"] for i in menu["items"]], ["A", "B"])
+
+    def test_unsafe_links_are_rejected(self):
+        for bad in ("javascript:alert(1)", "data:text/html,x", "//evil.example"):
+            r = self.client.post(self.URL, {"name": "Evil", "items": [{"title": "x", "url": bad}]}, format="json")
+            self.assertEqual(r.status_code, 400, bad)
+        r = self.client.post(self.URL, {"name": "Evil", "items": [
+            {"title": "ok", "url": "/", "children": [{"title": "x", "url": "javascript:1"}]}]}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.ok("get", self.URL), [])  # nothing half-saved
+
+    def test_malformed_items_are_a_400_not_a_500(self):
+        for items in ("nope", [1], [{"title": "x", "children": "no"}]):
+            r = self.client.post(self.URL, {"name": "Bad", "items": items}, format="json")
+            self.assertEqual(r.status_code, 400, items)
+        # null url and mailto/tel/external links are fine
+        self.ok("post", self.URL, {"name": "Fine", "items": [
+            {"title": "a", "url": None}, {"title": "b", "url": "mailto:a@b.co"},
+            {"title": "c", "url": "https://example.com"}]}, expect=201)
+
+    def test_names_and_handles_are_unique_per_store(self):
+        self.ok("post", self.URL, {"name": "Footer", "handle": "footer"}, expect=201)
+        self.assertEqual(self.client.post(self.URL, {"name": "footer"}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(self.URL, {"name": "Other", "handle": "footer"}, format="json").status_code, 400)
+
+    def test_menus_are_private_to_their_store(self):
+        menu = self.ok("post", self.URL, {"name": "Mine"}, expect=201)
+        self.sign_up("other@example.com", "Other Store")
+        self.assertEqual(self.ok("get", self.URL), [])
+        self.assertEqual(self.client.get(f"{self.URL}{menu['id']}/").status_code, 404)
+        self.assertEqual(self.client.delete(f"{self.URL}{menu['id']}/").status_code, 404)
+
+    def test_list_query_count_does_not_grow_with_items(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def list_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                self.ok("get", self.URL)
+            return len(ctx)
+
+        self.ok("post", self.URL, {"name": "M0", "items": [{"title": "t", "url": "/"}]}, expect=201)
+        small = list_queries()
+        for n in range(1, 4):
+            self.ok("post", self.URL, {"name": f"M{n}", "items": [
+                {"title": f"t{i}", "url": "/", "children": [{"title": "c", "url": "/"}]} for i in range(5)]}, expect=201)
+        self.assertEqual(list_queries(), small)

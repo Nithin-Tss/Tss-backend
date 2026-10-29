@@ -1163,40 +1163,69 @@ class MenuItemSerializer(serializers.ModelSerializer):
         fields = ["id", "title", "url", "order", "parent", "children"]
 
     def get_children(self, obj):
-        children = obj.children.all().order_by("order", "created_at")
-        if not children.exists():
+        if obj.parent_id is not None:  # menus nest one level deep
             return []
+        children = sorted(obj.children.all(), key=lambda c: (c.order, c.created_at))
         return MenuItemSerializer(children, many=True).data
 
 
-def _sync_menu_items(menu, items_data):
-    """Replaces or syncs menu items with given array: [{ title, url, order?, children? }]"""
-    menu.items.all().delete()
-    for idx, item in enumerate(items_data):
-        title = item.get("title", "").strip() if isinstance(item, dict) else ""
-        if not title:
+MAX_MENU_ITEMS = 100
+
+
+def _clean_menu_link(raw, field):
+    """One {title, url, order?} entry as stored; None when it has no title (the admin drops blank rows)."""
+    if not isinstance(raw, dict):
+        raise ValidationError({field: "Each menu item must be an object."})
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        return None
+    url = str(raw.get("url") or "").strip()
+    if url and not sync._SAFE_URL.match(url):
+        # javascript:, data: and other schemes never reach the storefront
+        raise ValidationError({field: f'Link "{title}" must start with /, #, http(s)://, mailto: or tel:.'})
+    if len(title) > 255 or len(url) > 500:
+        raise ValidationError({field: f'Link "{title[:40]}" is too long.'})
+    return {"title": title, "url": url, "order": raw.get("order")}
+
+
+def _clean_menu_items(items_data):
+    """Validated [{title, url, order, children: [...]}] from the request; menus nest one level deep."""
+    if items_data is None:
+        return []
+    if not isinstance(items_data, list):
+        raise ValidationError({"items": "Items must be a list."})
+    cleaned, total = [], 0
+    for item in items_data:
+        link = _clean_menu_link(item, "items")
+        if link is None:
             continue
-        url = item.get("url", "").strip()
-        order = item.get("order", idx)
-        parent_item = MenuItem.objects.create(
-            menu=menu,
-            title=title,
-            url=url,
-            order=order,
-        )
-        children = item.get("children", [])
-        if isinstance(children, list):
-            for c_idx, child in enumerate(children):
-                c_title = child.get("title", "").strip() if isinstance(child, dict) else ""
-                if not c_title:
-                    continue
-                MenuItem.objects.create(
-                    menu=menu,
-                    parent=parent_item,
-                    title=c_title,
-                    url=child.get("url", "").strip(),
-                    order=child.get("order", c_idx),
-                )
+        children = item.get("children") or []
+        if not isinstance(children, list):
+            raise ValidationError({"items": "Children must be a list."})
+        link["children"] = [c for c in (_clean_menu_link(child, "items") for child in children) if c]
+        total += 1 + len(link["children"])
+        cleaned.append(link)
+    if total > MAX_MENU_ITEMS:
+        raise ValidationError({"items": f"A menu can have at most {MAX_MENU_ITEMS} items."})
+    return cleaned
+
+
+def _order(value, fallback):
+    return value if isinstance(value, int) and value >= 0 else fallback
+
+
+def _sync_menu_items(menu, items):
+    """Replaces the menu's items with the output of _clean_menu_items."""
+    with transaction.atomic():
+        menu.items.all().delete()
+        for idx, item in enumerate(items):
+            parent = MenuItem.objects.create(
+                menu=menu, title=item["title"], url=item["url"], order=_order(item["order"], idx)
+            )
+            MenuItem.objects.bulk_create([
+                MenuItem(menu=menu, parent=parent, title=c["title"], url=c["url"], order=_order(c["order"], c_idx))
+                for c_idx, c in enumerate(item["children"])
+            ])
 
 
 class MenuSerializer(serializers.ModelSerializer):
@@ -1211,18 +1240,17 @@ class MenuSerializer(serializers.ModelSerializer):
         model = Menu
         fields = ["id", "name", "handle", "items", "items_summary", "items_count", "created_at", "updated_at"]
 
+    def _top_items(self, obj):
+        return sorted((i for i in obj.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
+
     def get_items(self, obj):
-        top_items = obj.items.filter(parent__isnull=True).order_by("order", "created_at")
-        return MenuItemSerializer(top_items, many=True).data
+        return MenuItemSerializer(self._top_items(obj), many=True).data
 
     def get_items_summary(self, obj):
-        titles = list(
-            obj.items.filter(parent__isnull=True).order_by("order", "created_at").values_list("title", flat=True)
-        )
-        return ", ".join(titles)
+        return ", ".join(i.title for i in self._top_items(obj))
 
     def get_items_count(self, obj):
-        return obj.items.count()
+        return len(obj.items.all())
 
     def validate_name(self, value):
         if not value or not value.strip():
@@ -1231,34 +1259,38 @@ class MenuSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         store = self.context["request"].store
+        others = Menu.objects.filter(store=store)
+        if self.instance:
+            others = others.exclude(pk=self.instance.pk)
         name = attrs.get("name")
-        if name:
-            qs = Menu.objects.filter(store=store, name__iexact=name.strip())
-            if self.instance:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                raise serializers.ValidationError({"name": "A menu with this name already exists."})
+        if name and others.filter(name__iexact=name.strip()).exists():
+            raise serializers.ValidationError({"name": "A menu with this name already exists."})
+        # The storefront finds menus by handle, so two menus must not share one
+        handle = attrs.get("handle") or (slugify(name)[:255] if name and not self.instance else "")
+        if handle and others.filter(handle=handle).exists():
+            raise serializers.ValidationError({"handle": "A menu with this handle already exists."})
+        if "items" in self.context["request"].data:
+            self._items = _clean_menu_items(self.context["request"].data.get("items"))
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
-        request = self.context["request"]
-        raw_items = request.data.get("items", [])
         name = validated_data["name"].strip()
         handle = validated_data.get("handle") or slugify(name)[:255]
-        menu = Menu.objects.create(store=request.store, name=name, handle=handle)
-        _sync_menu_items(menu, raw_items)
+        menu = Menu.objects.create(store=self.context["request"].store, name=name, handle=handle)
+        _sync_menu_items(menu, getattr(self, "_items", []))
         return menu
 
+    @transaction.atomic
     def update(self, instance, validated_data):
-        request = self.context["request"]
         instance.name = validated_data.get("name", instance.name).strip()
-        if "handle" in validated_data and validated_data["handle"]:
+        if validated_data.get("handle"):
             instance.handle = validated_data["handle"]
         elif "name" in validated_data:
             instance.handle = slugify(instance.name)[:255]
         instance.save()
-        if "items" in request.data:
-            _sync_menu_items(instance, request.data.get("items", []))
+        if hasattr(self, "_items"):
+            _sync_menu_items(instance, self._items)
         return instance
 
 
@@ -1269,7 +1301,7 @@ class MenusView(StoreThemeView):
     """
 
     def get(self, request):
-        menus = Menu.objects.filter(store=request.store).prefetch_related("items").order_by("created_at")
+        menus = Menu.objects.filter(store=request.store).prefetch_related("items__children").order_by("created_at")
         return Response(MenuSerializer(menus, many=True, context={"request": request}).data)
 
     def post(self, request):
@@ -1284,7 +1316,7 @@ class MenuView(StoreThemeView):
 
     def get_menu(self, menu_id):
         return get_object_or_404(
-            Menu.objects.prefetch_related("items"), store=self.request.store, pk=menu_id
+            Menu.objects.prefetch_related("items__children"), store=self.request.store, pk=menu_id
         )
 
     def get(self, request, menu_id):
