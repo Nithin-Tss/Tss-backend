@@ -15,6 +15,21 @@ class JWTAuthenticationScheme(OpenApiAuthenticationExtension):
         return {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
 
+class ApiKeyAuthenticationScheme(OpenApiAuthenticationExtension):
+    """Documents apps.platform_admin.authentication.ApiKeyAuthentication (X-Api-Key header)."""
+
+    target_class = "apps.platform_admin.authentication.ApiKeyAuthentication"
+    name = "apiKeyAuth"
+
+    def get_security_definition(self, auto_schema):
+        return {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Api-Key",
+            "description": "Store API key (tssk_<prefix>_<secret>). `Authorization: Bearer tssk_...` also works.",
+        }
+
+
 from drf_spectacular.openapi import AutoSchema  # noqa: E402
 from drf_spectacular.types import OpenApiTypes  # noqa: E402
 from rest_framework.generics import GenericAPIView  # noqa: E402
