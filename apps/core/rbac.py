@@ -133,6 +133,12 @@ BUILT_IN_ROLES = {
             "customers.view", "products.view",
         ],
     ),
+    "shipping_coordinator": (
+        PREDEFINED,
+        "Shipping coordinator",
+        "Packs and ships orders, manages delivery partners and tracks shipments.",
+        ["orders.view"] + _view_and_manage("fulfillment", "shipping"),
+    ),
     "merchandiser": (
         PREDEFINED,
         "Merchandiser",

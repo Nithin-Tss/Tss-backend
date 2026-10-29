@@ -737,8 +737,7 @@ def layout_data(settings, base_url, nav, menu_links=None):
         for key, name in SOCIAL_NAMES.items()
         if settings.get(f"footer_{key}")
     ]
-    utility = _menu_links(settings.get("utility_menu"), base_url)
-    return {"header_links": header, "footer_links": footer, "footer_social": social, "utility_links": utility}
+    return {"header_links": header, "footer_links": footer, "footer_social": social}
 
 
 def _environment(files, base_url, currency, overrides=None):

@@ -19,6 +19,7 @@ urlpatterns = [
     path("inventory/", include("apps.inventory.urls")),
     path("discounts/", include("apps.discounts.urls")),
     path("themes/", include("apps.themes.urls")),
+    path("media/", include("apps.media.urls")),
     path("payments/", include("apps.payments.urls")),
     path("gift-cards/", include("apps.gift_cards.urls")),
     path("fulfillments/", include("apps.fulfillment.urls")),

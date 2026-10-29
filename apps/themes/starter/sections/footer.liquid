@@ -78,8 +78,32 @@
       &copy; {{ 'now' | date: '%Y' }} {{ shop.name }}
     {%- endif -%}
   </div>
+  {%- if s.utility_show -%}
+    <div class="site-footer__utility" style="{% if s.utility_bg != blank %}background:{{ s.utility_bg }};{% endif %}{% if s.utility_color != blank %}color:{{ s.utility_color }};{% endif %}">
+      <div class="page-width site-footer__utility-inner">
+        <span>{{ s.utility_left }}</span>
+        <nav aria-label="Contact">
+          {%- if s.utility_phone != blank -%}
+            <a href="tel:{{ s.utility_phone | replace: ' ', '' }}">{{ s.utility_phone }}</a>
+          {%- endif -%}
+          {%- if s.utility_email != blank -%}
+            <a href="mailto:{{ s.utility_email }}">{{ s.utility_email }}</a>
+          {%- endif -%}
+          {%- for link in s.utility_menu -%}
+            <a href="{{ link.url }}">{{ link.label }}</a>
+          {%- endfor -%}
+        </nav>
+      </div>
+    </div>
+  {%- endif -%}
 </footer>
 <style>
+  .site-footer__utility { border-top: 1px solid var(--line); font-size: 13px; }
+  .site-footer__utility-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; min-height: 34px; padding-top: 4px; padding-bottom: 4px; }
+  .site-footer__utility nav { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .site-footer__utility a { color: inherit; text-decoration: none; }
+  .site-footer__utility a:hover { text-decoration: underline; }
+  @media (max-width: 640px) { .site-footer__utility-inner { justify-content: center; text-align: center; } }
   .site-footer__logo { display: inline-flex; align-items: center; font-family: var(--tss-heading-font); font-size: 20px; font-weight: 700; color: var(--text); }
   .site-footer a.site-footer__logo:hover { text-decoration: none; }
   .site-footer__logo-row[data-position="left"], .site-footer__logo-row[data-position="center"], .site-footer__logo-row[data-position="right"] { flex: 0 0 100%; display: flex; }
@@ -103,6 +127,13 @@
   "name": "Footer",
   "max_blocks": 9,
   "settings": [
+    {"type": "checkbox", "id": "utility_show", "label": "Show the utility bar", "default": false, "info": "A thin strip in the footer with contact details and quick links."},
+    {"type": "text", "id": "utility_left", "label": "Utility bar text", "default": "", "info": "For example: Free delivery over ₹999."},
+    {"type": "text", "id": "utility_phone", "label": "Phone number", "default": ""},
+    {"type": "text", "id": "utility_email", "label": "Email address", "default": ""},
+    {"type": "menu", "id": "utility_menu", "label": "Utility bar links", "default": "", "info": "One link per line: Label | /page"},
+    {"type": "color", "id": "utility_bg", "label": "Utility bar colour", "default": ""},
+    {"type": "color", "id": "utility_color", "label": "Utility bar text colour", "default": ""},
     {"type": "text", "id": "copyright", "label": "Copyright line", "default": "", "info": "Empty shows the year and the store name."},
     {"type": "color", "id": "background", "label": "Background colour", "default": ""},
     {"type": "color", "id": "text_color", "label": "Text colour", "default": ""}

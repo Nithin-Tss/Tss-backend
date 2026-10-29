@@ -10,7 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core import signing
 from django.core.cache import cache
 from django.core.files.storage import default_storage
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, transaction
 from django.db.models import F
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -33,7 +33,6 @@ from rest_framework.views import APIView
 
 from apps.catalog.models import Collection
 from apps.catalog.services import published_collections, published_products
-from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from django.contrib.auth import authenticate, get_user_model
 from apps.customers.models import Customer, CustomerAddress
@@ -41,6 +40,8 @@ from apps.customers import services as customer_services
 
 from apps.tenancy.models import Store, StoreMembership
 
+from apps.media.models import MediaAsset
+from apps.media.services import upload_image
 from .models import BlogPost, Menu, MenuItem, StorePage, StoreTheme, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import presets
@@ -468,23 +469,9 @@ class ThemeImageView(StoreThemeView):
     parser_classes = [MultiPartParser]
 
     def post(self, request):
-        file = request.FILES.get("image")
-        if file is None:
-            raise ValidationError({"image": "Choose an image to upload."})
-        if file.size > MAX_IMAGE_SIZE:
-            raise ValidationError({"image": "Image is too large. Maximum size is 1MB per image."})
-
-        ext = image_extension(file.read(12))
-        if ext is None:
-            raise ValidationError({"image": "Not a supported image. Use JPG, PNG or WEBP."})
-        file.seek(0)
-
-        ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
-        image = ThemeImage.objects.create(
-            store_id=request.store.store_id, content_type=ctype, data=file.read(), size=file.size,
-        )
-        url = request.build_absolute_uri(f"/s/_img/{image.id}")
-        return Response({"url": url}, status=status.HTTP_201_CREATED)
+        # Kept in the database and listed in the store's media assets (product photos are not)
+        asset = upload_image(request.store.store_id, request.FILES.get("image"), request.user)
+        return Response({"url": request.build_absolute_uri(asset.url)}, status=status.HTTP_201_CREATED)
 
 
 THEME_IMAGE_CACHE_SECONDS = 60 * 60
@@ -493,12 +480,16 @@ THEME_IMAGE_CACHE_MAX_BYTES = 2 * 1024 * 1024  # bigger pictures are read from t
 
 @require_GET
 def theme_image(request, image_id):
-    """Public: a customizer picture. Bytes are cached in Redis (a picture never changes once uploaded)."""
+    """Public: a picture (a media asset, or a product photo). Bytes are cached in Redis (a picture never changes once uploaded)."""
     key = f"theme-image:{image_id}"
     cached = cache.get(key)
     if cached is None:
-        image = get_object_or_404(ThemeImage, pk=image_id)
-        cached = (bytes(image.data), image.content_type)
+        asset = MediaAsset.objects.filter(pk=image_id, data__isnull=False).only("data", "mime_type").first()
+        if asset is not None:
+            cached = (bytes(asset.data), asset.mime_type)
+        else:
+            image = get_object_or_404(ThemeImage, pk=image_id)
+            cached = (bytes(image.data), image.content_type)
         if len(cached[0]) <= THEME_IMAGE_CACHE_MAX_BYTES:
             cache.set(key, cached, THEME_IMAGE_CACHE_SECONDS)
     data, content_type = cached

@@ -80,8 +80,6 @@ REQUIRED_FILES = {
     "sections/newsletter.liquid",
     "sections/static-text.liquid",
     "sections/quiz.liquid",
-    # Utility bar (rendered by layout/theme.liquid)
-    "snippets/utility-bar.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -233,8 +231,9 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
-        "ffb4bab6dfa1d089aeac006429c44e893f8da005169f991c21501f04d45e60a7",  # revision 20: legacy wishlist block fixture
-        "273a5cc1d49eddaa271162239a00bf333bece877bb41516479cbef77001d4f7b",  # revision 18: legacy Show Wishlist fixture
+        "2a4098b38d89db4b74379ed9d6bdbf7e344864db5bac20b2c9e96abf5c5f5db2",  # revision 41: before the announcement bar
+        "21010ea6743143bf2281d7893c1326b12c47cd7a7a0f020ea2cbe8708b9e3271",  # revision 20: legacy wishlist block fixture
+        "93f271e89641e62c17fbffebc7ff2ddf6dffb168fbbfa7d732a7b317af884848",  # revision 18: legacy Show Wishlist fixture
         # Revision 40: before the header Search block
         "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",  # revision 40: before the Search block
         "0f1b0c1d6442b03d7604b4a82f00e99d6d7a05685b312a621f07aace30925b8a",  # revision 39: before the sign-in icon
@@ -261,6 +260,9 @@ STARTER_UPGRADES = {
         "4dba4b04f36e6b14a9b43dc8ced1387eda1d44a0c78d6dd4d86d9f89df15cc2d",  # revision 40: before the utility bar (CRLF)
     },
     "snippets/header.liquid": {"6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1"},
+    "sections/footer.liquid": {
+        "f37dffa266ec5f3a173bf9eec4b7a87547bd9389118ffa9597aeeacf4d32ff3d",  # revision 41: before the utility bar
+    },
     "snippets/footer.liquid": {"46998966bcd74dab088da530528ad25f6fac556a3cd7d2224bcdb728e6bf3573"},
     "snippets/styles.liquid": {
         "83a3d9accc2af4aa68a6a58ad84c8eb662acc3b6e422adb71458afc2d80b0079",
@@ -393,7 +395,6 @@ def _prepare(store_theme, new_store=False):
     _add_page_templates(store_theme)
     sync_card_cart_icon(store_theme)
     _upgrade_footer_icon(store_theme.theme)
-    _add_utility_bar(store_theme.theme)
 
 
 def get_store_theme(store):
@@ -915,23 +916,32 @@ IMAGES_FILE = "assets/images.json"
 
 def images_file(store_theme):
     """The pictures uploaded in the customizer (stored in the database), listed as read-only JSON."""
+    from apps.media.models import MediaAsset
+
     from .models import ThemeImage
 
     used = _dump(store_theme.custom_data)
+    rows = [
+        (asset.id, asset.mime_type, asset.file_size, asset.created_at)
+        for asset in MediaAsset.objects.filter(store_id=store_theme.store_id, data__isnull=False).defer("data")
+    ] + [  # product photos and older pictures, kept in the older table
+        (image.id, image.content_type, image.size, image.created_at)
+        for image in ThemeImage.objects.filter(store_id=store_theme.store_id).defer("data")
+    ]
     images = []
-    for image in ThemeImage.objects.filter(store_id=store_theme.store_id).order_by("-created_at"):
-        key = str(image.id)
+    for image_id, content_type, size, created_at in sorted(rows, key=lambda row: row[3], reverse=True):
+        key = str(image_id)
         images.append({
             "id": key,
             "url": f"/s/_img/{key}",
-            "type": image.content_type,
-            "bytes": image.size,
-            "uploaded": image.created_at.isoformat(timespec="seconds"),
+            "type": content_type,
+            "bytes": size,
+            "uploaded": created_at.isoformat(timespec="seconds"),
             "in_use": key in used,
         })
     return _dump({
-        "_note": "Pictures uploaded in the customizer. They are stored in the database; use the url in a Liquid file "
-                 "or pick the picture in the customizer. This file is read-only.",
+        "_note": "Pictures uploaded in the customizer (see Media assets). They are stored in the database; use the url in a "
+                 "Liquid file or pick the picture in the customizer. This file is read-only.",
         "images": images,
     })
 
@@ -1619,28 +1629,6 @@ def _add_footer_icon_setting(content):
     return patched
 
 
-_UTILITY_RENDER = "{% render 'utility-bar', settings: settings, utility_links: utility_links %}"
-_BODY_OPEN = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
-
-
-def _add_utility_bar(theme):
-    """
-    A layout that predates the utility bar (an edited copy, or one from a preset) never rendered it,
-    so its Theme settings did nothing. Render it right after <body>. Layouts that already do are left alone.
-    """
-    file = theme.files.filter(file_path="layout/theme.liquid").first()
-    if file is None or "utility-bar" in file.content:
-        return
-    match = _BODY_OPEN.search(file.content)
-    if match is None:
-        return
-    newline = "\r\n" if "\r\n" in file.content else "\n"
-    upgraded = file.content[: match.end()] + f"{newline}  {_UTILITY_RENDER}" + file.content[match.end():]
-    file.content = upgraded
-    file.file_size = len(upgraded.encode("utf-8"))
-    file.save(update_fields=["content", "file_size", "updated_at"])
-
-
 def _upgrade_footer_icon(theme):
     file = theme.files.filter(file_path="sections/footer.liquid").first()
     if file:
@@ -1756,6 +1744,10 @@ def _seed_header(s, store_name):
             "show_nav": s.get("header_show_nav", True), "collections": s.get("header_collections", 4),
             "sticky": s.get("header_sticky", True), "border": s.get("header_border", True),
             "background": s.get("header_bg", ""), "text_color": s.get("header_text", ""),
+            # The announcement bar is part of the header now
+            "announcement_text": s.get("announcement", "") if s.get("announcement_show") is not False else "",
+            "announcement_link": s.get("announcement_link", ""), "announcement_bg": s.get("announcement_bg", ""),
+            "announcement_color": s.get("announcement_text", ""),
         },
         "blocks": blocks,
     }

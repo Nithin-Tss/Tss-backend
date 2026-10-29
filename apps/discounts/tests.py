@@ -89,6 +89,9 @@ class DiscountConstraintTests(StoreClientMixin, APITestCase):
 
     def test_invalid_values_violate_check_constraints(self):
         for bad in (
+            {"discount_type": "invalid"},
+            {"discount_type": "percentage", "value": Decimal("100.01")},
+            {"ends_at": timezone.now() - timedelta(days=2)},
             {"value": Decimal("-1")},
             {"minimum_order_amount": Decimal("-1")},
             {"maximum_discount_amount": Decimal("-1")},

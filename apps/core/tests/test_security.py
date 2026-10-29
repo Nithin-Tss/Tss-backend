@@ -34,6 +34,7 @@ from apps.catalog.models import Catalogue, Category, Collection, Product, Produc
 from apps.commerce.models import Cart, Checkout
 from apps.commerce.tests import CommerceTestBase
 from apps.core.viewsets import StoreScopedGenericViewSet
+from apps.media.models import MediaAsset
 from apps.customers.models import Customer, CustomerAddress
 from apps.delivery.models import DeliveryGateway, Shipment
 from apps.discounts.models import Discount
@@ -464,6 +465,7 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             Checkout.objects.create(store=store, cart=cart, currency="INR", subtotal=0, total_amount=0,
                                     status="open", is_deleted=False, **zero),
             WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant),
+            MediaAsset.objects.create(store=store, original_name="banner.png", mime_type="image/png", file_size=40),
         ]
         return {type(r): r for r in records}
 

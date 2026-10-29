@@ -2321,8 +2321,8 @@ class CartTest(StoreClientMixin, APITestCase):
             self.assertEqual(cart_data._safe_url(safe), safe, safe)
 
         # the owner cannot save a javascript: link as the checkout button's address
-        header = self.ok("get", "/api/v1/themes/sections/")["header"]
-        values = header["values"]
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        values = header
         cart = next(b for b in values["blocks"] if b["type"] == "cart")
         cart["settings"]["checkout_url"] = "javascript:alert(1)"
         r = self.client.patch("/api/v1/themes/settings/", {"sections": {"header": values}}, format="json")
@@ -2332,8 +2332,8 @@ class CartTest(StoreClientMixin, APITestCase):
         self.add(self.mug, 1)
         html = self.call("get", "fragment").json()["html"]
         self.assertIn("data-cart-checkout-soon", html)  # no address set: "Checkout is coming soon"
-        header = self.ok("get", "/api/v1/themes/sections/")["header"]
-        values = header["values"]
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        values = header
         cart = next(b for b in values["blocks"] if b["type"] == "cart")
         cart["settings"].update(checkout_url="/checkout", checkout_label="Pay now", show_discount=False)
         self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
@@ -2356,8 +2356,8 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertIn(f'data-cart-session="{cookie.value}"', again.content.decode())
 
         # no cart on the page (the owner removed the icon): no cookie is set
-        header = self.ok("get", "/api/v1/themes/sections/")["header"]
-        values = header["values"]
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        values = header
         values["blocks"] = [b for b in values["blocks"] if b["type"] != "cart"]
         self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
         # the product cards' cart icon (a "Cart icon" block in each product section) needs the cart too: hide it
@@ -5708,16 +5708,25 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.client.post(f"{self.base}/newsletter", {"email": "back@example.com"}, format="json").status_code, 200)
         self.assertEqual(Customer.objects.get(store=store, email="back@example.com").email_subscription_status, "subscribed")
 
-    def test_utility_bar_follows_the_theme_settings(self):
-        self.assertNotIn("utility-bar__inner", self.client.get(f"{self.base}/").content.decode())
-        self.ok("patch", "/api/v1/themes/settings/", {"settings": {
-            "utility_show": True, "utility_left": "Free delivery over 999", "utility_phone": "+91 99999 00000",
-            "utility_menu": "Track order | /account",
-        }})
+    def test_utility_bar_is_part_of_the_footer_section(self):
+        self.assertNotIn('class="page-width site-footer__utility-inner"', self.client.get(f"{self.base}/").content.decode())
+        footer = self.ok("get", "/api/v1/themes/sections/")["footer"]["values"]
+        values = {"settings": {**footer["settings"], "utility_show": True, "utility_left": "Free delivery over 999",
+                               "utility_phone": "+91 99999 00000", "utility_menu": "Track order | /account"},
+                  "blocks": footer["blocks"]}
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"footer": values}})
         html = self.client.get(f"{self.base}/").content.decode()
         self.assertIn("Free delivery over 999", html)
         self.assertIn('href="tel:+9199999' + '00000"', html)
         self.assertIn(f'href="{self.base}/account">Track order</a>', html)
+
+    def test_announcement_bar_is_part_of_the_header_section(self):
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        values = {"settings": {**header["settings"], "announcement_text": "Big sale today"}, "blocks": header["blocks"]}
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn("Big sale today", html)
+        self.assertLess(html.index("Big sale today"), html.index('class="site-header"'))
 
     def test_search_lists_only_matching_products(self):
         html = self.client.get(f"{self.base}/collections/all?q=mug").content.decode()
