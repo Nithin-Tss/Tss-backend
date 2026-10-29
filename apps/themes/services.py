@@ -89,7 +89,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 42
+STARTER_REVISION = 43
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -244,6 +244,8 @@ STARTER_UPGRADES = {
     },
     # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
     "snippets/cart.liquid": {
+        "bf6180d6c1db029759afe489ea7f753f99897e16d0394f296736abe101704a31",  # revision 43: before "Check out" went to the checkout page
+        "3bd8efbcc5e448be5369a998b85d83c64c02916442ada043303971153dda4e7c",  # revision 43: before "Check out" went to the checkout page (CRLF)
         "4c5704af71070bde93c5088802de1e571978e92fe093bd0a1dae721291dab8b0",  # revision 37: before "Clear cart"
         "b21d8cbf1318bf5b02f7cae3833e7d847ebbe41a22c58d0080d08378c6f3a835",  # revision 37: before "Clear cart" (CRLF)
         "477a7af3604ffac5bcd7b20d6536ba4d9cc9b399fe024ddfce348c5326da043f",  # revision 25: before the cart icon on product cards

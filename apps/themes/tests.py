@@ -2490,7 +2490,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 42)
+        self.assertEqual(theme.theme_data["starter_revision"], 43)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2530,6 +2530,20 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.theme()
         self.assertEqual(self.stored(self.SNIPPET), starter_files()[self.SNIPPET])
         self.assertIn("data-cart-clear", self.stored(self.SNIPPET))
+
+    def test_the_snippet_from_before_the_checkout_redirect_is_registered_for_the_upgrade(self):
+        """A store holding it showed "Checkout is coming soon" on the real store instead of opening checkout."""
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        hashes = STARTER_UPGRADES[self.SNIPPET]
+        self.assertIn("bf6180d6c1db029759afe489ea7f753f99897e16d0394f296736abe101704a31", hashes)
+        self.assertIn("3bd8efbcc5e448be5369a998b85d83c64c02916442ada043303971153dda4e7c", hashes)
+        # the current snippet must never be one of the "older" copies, or it would be replaced by itself
+        current = starter_files()[self.SNIPPET]
+        self.assertNotIn(hashlib.sha256(current.encode("utf-8")).hexdigest(), hashes)
+        self.assertIn('window.location.href = href;', current)
 
     def snippet_before_link_ids(self):
         """The snippet as revision 22 shipped it: the script kept a header's own badge, but links had no cart id."""
@@ -2686,7 +2700,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 42)
+        self.assertEqual(STARTER_REVISION, 43)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3497,7 +3511,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 42)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 43)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
