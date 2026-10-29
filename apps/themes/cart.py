@@ -276,6 +276,17 @@ def view_data(cart, base_url):
         .prefetch_related("product__images")
         .order_by("created_at")
     )
+    # Today's catalogue price, like the cart API and the start of checkout: the variants are already loaded with
+    # the lines, so finding what changed costs no query, and the changed lines are saved together in one
+    stale = []
+    for item in items:
+        if item.variant is not None:
+            current = services._money(item.variant.price)
+            if current != item.unit_price:
+                item.unit_price, item.updated_at = current, timezone.now()
+                stale.append(item)
+    if stale:
+        CartItem.objects.bulk_update(stale, ["unit_price", "updated_at"])
     subtotal = sum((i.unit_price * i.quantity for i in items), Decimal("0.00"))
     # Two queries for the whole cart, not one per line: the stock of every variant, and what is still for sale
     totals = {

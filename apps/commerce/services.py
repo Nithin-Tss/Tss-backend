@@ -59,8 +59,8 @@ def refresh_prices(cart):
     return changed
 
 
-def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
-    """The shopper's open cart: by customer if signed in, otherwise by session."""
+def get_or_create_cart(store, session_id=None, customer=None, currency=None):
+    """The shopper's open cart: by customer if signed in, otherwise by session. In the store's currency."""
     if customer is None and not session_id:
         raise ValidationError({"session_id": "A session id or customer is required."})
 
@@ -72,7 +72,7 @@ def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
             store=store,
             customer=customer,
             session_id=session_id,
-            currency=currency,
+            currency=currency or store.currency,
             status=CART_OPEN,
             is_deleted=False,
         )
@@ -255,6 +255,10 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
         _check_available(cart.store, item.product)
         _check_stock(item.product, item.variant, item.quantity)
 
+    if cart.currency != cart.store.currency:
+        cart.currency = cart.store.currency
+        cart.save(update_fields=["currency", "updated_at"])
+
     checkout = Checkout.objects.filter(cart=cart, status=CHECKOUT_OPEN, is_deleted=False).first()
 
     if checkout is None:
@@ -262,7 +266,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
             store=cart.store,
             cart=cart,
             customer=cart.customer,
-            currency=cart.currency,
+            currency=cart.store.currency,
             subtotal=ZERO,
             discount_amount=ZERO,
             tax_amount=ZERO,
@@ -389,6 +393,7 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
     if billing_address is not None:
         checkout.billing_address = billing_address
 
+    checkout.currency = checkout.store.currency  # what the order and the card payment are made in
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
     lines = list(checkout.items.filter(is_deleted=False).select_related("variant", "product"))
@@ -554,6 +559,9 @@ def _place_order(checkout, payment_method, payment_reference=None):
         shipping_amount=checkout.shipping_amount,
         checkout=checkout,
     )
+    if order.total != checkout.total_amount:
+        # What was shown, and what a card was charged, is the checkout's total: never place an order for another one
+        raise ValidationError({"total": "Prices or charges changed. Please review your order and confirm again."})
 
     if match is not None:
         OrderDiscount.objects.create(

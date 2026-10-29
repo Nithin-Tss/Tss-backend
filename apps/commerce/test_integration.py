@@ -1362,3 +1362,60 @@ class CartPanelTests(CommerceIntegrationBase):
                 cart_data.view_data(cart, "/s/shop")
             counts.append(len(queries))
         self.assertEqual(counts[0], counts[1], counts)  # not one more query per line
+
+    def test_the_cart_panel_shows_todays_prices_and_saves_them(self):
+        from apps.themes import cart as cart_data
+
+        hat, _ = stock_product(self.store, "Hat", "HAT-1", "10.00", 5, self.location)
+        cart = self.cart_of("panel-price-aaaaaaaaaa", [self.product, hat])
+        ProductVariant.objects.filter(pk=self.variant.pk).update(price=Decimal("450.50"))  # the owner changes a price
+
+        data = cart_data.view_data(cart, "/s/shop")
+
+        lines = {line["title"]: line for line in data["lines"]}
+        self.assertEqual((lines["Tee"]["unit_price"], lines["Tee"]["total"]), ("450.50", "450.50"))
+        self.assertEqual(lines["Hat"]["unit_price"], "10.00")
+        self.assertEqual(data["subtotal"], "460.50")
+        # saved, so the cart API and the checkout that starts next read the same price
+        self.assertEqual(sorted(str(i.unit_price) for i in services.active_items(cart)), ["10.00", "450.50"])
+
+    def test_changed_prices_cost_one_query_however_many_lines_changed(self):
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes import cart as cart_data
+
+        def queries(cart):
+            with CaptureQueriesContext(connection) as captured:
+                cart_data.view_data(cart, "/s/shop")
+            return len(captured)
+
+        counts = []
+        for lines in (1, 5):
+            products = [self.product] + [
+                stock_product(self.store, f"Extra {lines}-{n}", f"EX-{lines}-{n}", "10.00", 5, self.location)[0]
+                for n in range(lines - 1)
+            ]
+            cart = self.cart_of(f"panel-write-{lines}-aaaaaaaa", products)
+            unchanged = queries(cart)
+            for number, product in enumerate(products):
+                ProductVariant.objects.filter(product=product).update(price=Decimal(f"{20 + lines}.{number}0"))
+            changed = queries(cart)
+            self.assertEqual(changed, unchanged + 1, lines)  # one write for all the lines that changed
+            self.assertEqual(
+                sorted(str(i.unit_price) for i in services.active_items(cart)),
+                sorted(f"{20 + lines}.{n}0" for n in range(lines)),
+            )
+            counts.append(changed)
+        self.assertEqual(counts[0], counts[1])
+
+    def test_a_cart_panel_with_unchanged_prices_writes_nothing(self):
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes import cart as cart_data
+
+        cart = self.cart_of("panel-same-aaaaaaaaaaa", [self.product])
+        before = services.active_items(cart).get().updated_at
+        with CaptureQueriesContext(connection) as captured:
+            cart_data.view_data(cart, "/s/shop")
+        self.assertFalse([q for q in captured.captured_queries if q["sql"].lstrip().upper().startswith(("UPDATE", "INSERT"))])
+        self.assertEqual(services.active_items(cart).get().updated_at, before)

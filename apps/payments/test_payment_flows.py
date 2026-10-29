@@ -1142,3 +1142,191 @@ class StripeStockJourneyTests(base_tests.CommerceTestBase):
             orders_services.return_items(order, [{"order_item": item, "quantity": 1, "location": None}])
         self.assertEqual(self.consistent()["refund_restock"], 1)
         self.client_mock.v1.refunds.create.assert_not_called()
+
+
+@override_settings(ROOT_URLCONF="apps.payments.test_stripe", STRIPE_SECRET_KEY="sk_test", STRIPE_PUBLISHABLE_KEY="pk_test", STRIPE_WEBHOOK_SECRET="whsec")
+class NonInrStoreTests(base_tests.CommerceTestBase):
+    """A store that sells in another currency: cart, checkout, order and the card payment are all in it."""
+
+    base = base_tests.PlaceOrderTests.base
+    h = base_tests.PlaceOrderTests.h
+    address = base_tests.PlaceOrderTests.address
+
+    def setUp(self):
+        super().setUp()
+        self.store.currency = "USD"
+        self.store.stripe_account_id, self.store.stripe_charges_enabled = ACCOUNT, True
+        self.store.save()
+        self.client_mock = mock.MagicMock()
+        patcher = mock.patch.object(stripe_service, "client", return_value=self.client_mock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def start(self, quantity=2):
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": quantity}, format="json", **self.h)
+        r = self.client.post(
+            f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": self.address}, format="json", **self.h
+        )
+        return Checkout.objects.get(pk=r.data["id"])
+
+    def session(self, checkout, currency):
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, currency=currency, status="requires_payment_method")
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 200, r.data)
+        params, = intents.create.call_args.args
+        return r, params
+
+    def test_the_cart_the_checkout_and_a_cash_on_delivery_order_are_in_the_stores_currency(self):
+        from apps.commerce.models import Cart
+
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 2}, format="json", **self.h)
+        self.assertEqual(Cart.objects.get().currency, "USD")  # the cart itself, before any checkout exists
+        r = self.client.post(
+            f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": self.address}, format="json", **self.h
+        )
+        checkout = Checkout.objects.get(pk=r.data["id"])
+        self.assertEqual((Cart.objects.get().currency, checkout.currency), ("USD", "USD"))
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/complete/", {"payment_method": "cod"}, format="json", **self.h)
+        self.assertEqual(r.status_code, 201, r.data)  # was refused: "This store sells in USD."
+        order, payment = Order.objects.get(), Payment.objects.get()
+        self.assertEqual((order.currency_code, order.total, payment.currency), ("USD", Decimal("998.00"), "USD"))
+
+    def test_the_card_payment_amount_and_currency_are_the_stores(self):
+        checkout = self.start()
+
+        response, params = self.session(checkout, "usd")
+
+        self.assertEqual((params["amount"], params["currency"]), (99800, "usd"))
+        self.assertEqual(response.data["currency"], "USD")
+        order = stripe_service.finalize(intent(checkout, currency="usd"), ACCOUNT)
+        payment = Payment.objects.get(order=order)
+        self.assertEqual((order.currency_code, order.total, payment.currency, payment.amount), ("USD", Decimal("998.00"), "USD", Decimal("998.00")))
+        self.assertEqual(stripe_service.to_minor_units(order.total, order.currency_code), 99800)  # what Stripe was asked for
+
+    def test_a_currency_without_cents_is_sent_whole(self):
+        self.store.currency = "JPY"
+        self.store.save()
+        checkout = self.start()
+
+        _, params = self.session(checkout, "jpy")
+
+        self.assertEqual((params["amount"], params["currency"]), (998, "jpy"))  # not 99800
+
+    def test_a_cart_and_checkout_made_before_the_store_changed_currency_follow_the_store(self):
+        from apps.commerce import services as commerce
+        from apps.commerce.models import Cart
+        from apps.tenancy.models import Store
+
+        Store.objects.filter(pk=self.store.pk).update(currency="INR")
+        checkout = self.start()
+        self.assertEqual((Cart.objects.get().currency, checkout.currency), ("INR", "INR"))
+
+        Store.objects.filter(pk=self.store.pk).update(currency="EUR")  # the owner changes the store's currency
+        commerce.start_checkout(Cart.objects.get())  # the shopper comes back to the same checkout
+
+        checkout.refresh_from_db()
+        self.assertEqual((Cart.objects.get().currency, checkout.currency), ("EUR", "EUR"))
+        Store.objects.filter(pk=self.store.pk).update(currency="GBP")
+        _, params = self.session(checkout, "gbp")  # and paying re-prices first, so it is in the store's currency
+        self.assertEqual(params["currency"], "gbp")
+
+
+@override_settings(ROOT_URLCONF="apps.payments.test_stripe", STRIPE_SECRET_KEY="sk_test", STRIPE_PUBLISHABLE_KEY="pk_test", STRIPE_WEBHOOK_SECRET="whsec")
+class OrderTotalGuardTests(base_tests.CommerceTestBase):
+    """An order is only placed for exactly the total its checkout showed (and a card was charged)."""
+
+    base = base_tests.PlaceOrderTests.base
+    h = base_tests.PlaceOrderTests.h
+    address = base_tests.PlaceOrderTests.address
+    MESSAGE = "Prices or charges changed. Please review your order and confirm again."
+
+    def setUp(self):
+        super().setUp()
+        self.store.stripe_account_id, self.store.stripe_charges_enabled = ACCOUNT, True
+        self.store.save()
+        self.client_mock = mock.MagicMock()
+        self.client_mock.v1.refunds.create.return_value = SimpleNamespace(id="re_guard")
+        patcher = mock.patch.object(stripe_service, "client", return_value=self.client_mock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def checkout(self, quantity=2):
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": quantity}, format="json", **self.h)
+        r = self.client.post(
+            f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": self.address}, format="json", **self.h
+        )
+        return Checkout.objects.get(pk=r.data["id"])
+
+    def off_by_one(self):
+        """create_order as it would be if its total ever came out different from the checkout's."""
+        from apps.commerce import services as commerce
+
+        real = commerce.orders.create_order
+
+        def create_order(*args, **kwargs):
+            order = real(*args, **kwargs)
+            order.total += Decimal("1.00")
+            order.save(update_fields=["total"])
+            return order
+
+        return mock.patch.object(commerce.orders, "create_order", create_order)
+
+    def test_a_cash_on_delivery_order_is_refused_if_its_total_would_differ_and_nothing_is_kept(self):
+        from apps.commerce import services as commerce
+        from apps.inventory.models import InventoryHistory
+
+        checkout = self.checkout()
+        with self.off_by_one():
+            with self.assertRaises(ValidationError) as raised:
+                commerce.place_order(checkout)
+        self.assertIn(self.MESSAGE, str(raised.exception.detail))
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (0, 0))
+        self.assertEqual(sellable(self.variant), 10)  # the stock was not committed
+        self.assertEqual(InventoryHistory.objects.filter(reason="order_placed").count(), 0)
+        checkout.refresh_from_db()
+        self.assertEqual(checkout.status, "open")  # the shopper can try again
+
+        order = commerce.place_order(checkout)  # as it normally is: the same total, so it is placed
+        self.assertEqual((order.total, order.total == checkout.total_amount), (Decimal("998.00"), True))
+
+    def test_a_card_payment_whose_order_would_differ_is_refunded_and_recorded_not_placed(self):
+        checkout = self.checkout()
+        with self.off_by_one():
+            self.assertIsNone(stripe_service.finalize(intent(checkout), ACCOUNT))
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (0, 0))
+        self.client_mock.v1.refunds.create.assert_called_once()
+        checkout.refresh_from_db()
+        entry, = checkout.metadata["auto_refunds"]
+        self.assertEqual(entry["status"], "refunded")
+        self.assertIn(self.MESSAGE, entry["reason"])
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_the_order_total_equals_the_checkout_total_with_a_discount_shipping_and_tax(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.commerce import services as commerce
+        from apps.discounts.models import Discount, DiscountCode
+
+        self.store.tax_rate = Decimal("18.00")
+        self.store.shipping_flat_rate = Decimal("50.00")
+        self.store.save()
+        discount = Discount.objects.create(
+            store=self.store, name="Ten off", discount_type="percentage", value=Decimal("10"),
+            starts_at=timezone.now() - timedelta(days=1), is_active=True, is_deleted=False,
+        )
+        DiscountCode.objects.create(discount=discount, code="TEN", is_active=True, is_deleted=False)
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 3}, format="json", **self.h)
+        r = self.client.post(
+            f"{self.base}/checkout/",
+            {"email": "a@b.com", "shipping_address": self.address, "discount_code": "TEN"}, format="json", **self.h,
+        )
+        checkout = Checkout.objects.get(pk=r.data["id"])
+
+        order = commerce.place_order(checkout)
+
+        checkout.refresh_from_db()
+        self.assertGreater(order.tax_amount, 0)
+        self.assertEqual(order.total, checkout.total_amount)

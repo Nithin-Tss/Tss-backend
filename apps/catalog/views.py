@@ -57,6 +57,8 @@ from .services import (
 
     delete_variant,
 
+    ACTIVE,
+    NO_PRICE_MESSAGE,
     import_products,
 
     matching_products,
@@ -196,6 +198,13 @@ class ProductViewSet(StoreScopedViewSet):
         if len(rows) > MAX_BULK_ROWS:
             raise ValidationError({"products": f"Send at most {MAX_BULK_ROWS} products per request."})
 
+        # A SKU that is already in the store only updates stock: its price is not read
+        known_skus = set(
+            ProductVariant.objects.filter(
+                product__store=request.store,
+                sku__in={str(r.get("sku") or "").strip() for r in rows if isinstance(r, dict)} - {""},
+            ).values_list("sku", flat=True)
+        )
         valid, errors = [], []
         for index, row in enumerate(rows):
             serializer = ProductInputSerializer(
@@ -204,6 +213,13 @@ class ProductViewSet(StoreScopedViewSet):
             if serializer.is_valid():
                 if not (serializer.validated_data.get("sku") or "").strip():
                     errors.append({"index": index, "message": "sku: SKU is required."})
+                    continue
+                if (
+                    serializer.validated_data.get("status") == ACTIVE
+                    and serializer.validated_data.get("price") is None
+                    and serializer.validated_data["sku"].strip() not in known_skus
+                ):
+                    errors.append({"index": index, "message": f"price: {NO_PRICE_MESSAGE}"})
                     continue
                 valid.append(serializer.validated_data)
                 continue
@@ -239,6 +255,18 @@ class ProductViewSet(StoreScopedViewSet):
             ids = [uuid.UUID(str(i)) for i in ids]
         except ValueError:
             raise ValidationError({"ids": "Every id must be a valid product id."})
+
+        if new_status == ACTIVE:
+            # Same rule as the product form: no option may be left without a price when a product goes on sale
+            unpriced = (
+                Product.objects.filter(store=request.store, pk__in=ids, variants__price=0).exclude(status=ACTIVE)
+                .distinct().count()
+            )
+            if unpriced:
+                raise ValidationError({"status": (
+                    f"{unpriced} of these products {'has' if unpriced == 1 else 'have'} an option priced 0.00. "
+                    "Enter a price for every option before making them active."
+                )})
 
         updated = audited_update(Product.objects.filter(store=request.store, pk__in=ids), status=new_status, updated_at=timezone.now())
         return Response({"updated": updated})

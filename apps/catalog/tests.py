@@ -756,7 +756,7 @@ class AllProductsStorefrontTests(APITestCase):
 
     def test_import_links_active_products_with_price_and_stock(self):
         r = self.client.post(f"{URL}bulk/", {"products": [
-            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4},
+            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4, "price": "12.50"},
             {"title": "Imported draft", "status": "draft", "sku": "IMP-D"},
         ]}, format="json")
         self.assertEqual(r.json()["created"], 2, r.content)
@@ -766,7 +766,8 @@ class AllProductsStorefrontTests(APITestCase):
         self.assertEqual(list(active.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
         # Every import is on the Online Store; the Draft one stays hidden until it is made Active
         self.assertEqual(list(draft.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
-        self.assertEqual(str(active.variants.get().price), "0.00")
+        self.assertEqual(str(active.variants.get().price), "12.50")
+        self.assertEqual(str(draft.variants.get().price), "0.00")  # a Draft may still be imported without a price
         self.assertEqual(InventoryItem.objects.get(variant__product=active).available, 4)
         self.assertEqual(InventoryItem.objects.get(variant__product=draft).available, 0)
         listing = self.page("collections/all")
@@ -1188,3 +1189,208 @@ class CatalogAdminStoreGuardTests(TestCase):
         self.assertEqual(r.status_code, 302)
         v.refresh_from_db()
         self.assertEqual((v.product_id, str(v.price)), (p_a.pk, "6.00"))
+
+
+class CurrencySymbolTests(APITestCase):
+    """Prices are shown with the symbol of the store's currency; the theme's own symbol only when the owner set one."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "symbol@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        r = self.client.post(URL, {"title": "Vase", "status": "active", "price": "10", "sku": "SYM-1"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.product_id = r.json()["id"]
+
+    def html(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}").content.decode()
+
+    def set_currency(self, code):
+        from apps.tenancy.models import Store
+
+        Store.objects.filter(pk=self.store_id).update(currency=code)
+
+    def set_theme_symbol(self, symbol):
+        r = self.client.patch("/api/v1/themes/settings/", {"settings": {"currency_symbol": symbol}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def shown(self):
+        """The Vase's price on its card and on its own page."""
+        import re
+
+        return (
+            re.search(r'<span class="price">([^<]*10\.00)</span>', self.html("collections/all")).group(1),
+            re.search(r'data-price>.*?<span class="price">([^<]*10\.00)</span>', self.html(f"products/{self.product_id}"), re.S).group(1),
+        )
+
+    def test_an_existing_inr_store_looks_exactly_the_same(self):
+        self.assertEqual(self.shown(), ("₹10.00", "₹10.00"))
+
+    def test_the_symbol_follows_the_stores_currency(self):
+        for code, symbol in (("USD", "$"), ("EUR", "€"), ("GBP", "£"), ("INR", "₹"), ("CHF", "CHF ")):
+            with self.subTest(code=code):
+                self.set_currency(code)
+                self.assertEqual(self.shown(), (f"{symbol}10.00", f"{symbol}10.00"))
+
+    def test_a_symbol_the_owner_set_in_the_theme_wins(self):
+        self.set_theme_symbol("Rs.")
+        self.assertEqual(self.shown(), ("Rs.10.00", "Rs.10.00"))  # an INR store
+        self.set_currency("USD")
+        self.assertEqual(self.shown(), ("Rs.10.00", "Rs.10.00"))  # the owner's choice stays
+        self.set_theme_symbol("$")
+        self.set_currency("INR")
+        self.assertEqual(self.shown(), ("$10.00", "$10.00"))
+
+    def test_the_default_the_code_compares_with_is_the_themes_default(self):
+        from apps.themes.rendering import DEFAULT_CURRENCY_SYMBOL, currency_symbol
+        from apps.themes.schemas import THEME_SETTINGS
+
+        self.assertEqual(DEFAULT_CURRENCY_SYMBOL, THEME_SETTINGS["currency_symbol"]["default"])
+        store = type("S", (), {"currency": "usd"})()  # the code is not case sensitive
+        self.assertEqual(currency_symbol(store, DEFAULT_CURRENCY_SYMBOL), "$")
+        self.assertEqual(currency_symbol(store, ""), "$")
+        self.assertEqual(currency_symbol(type("S", (), {"currency": ""})(), DEFAULT_CURRENCY_SYMBOL), DEFAULT_CURRENCY_SYMBOL)
+
+
+class ProductPriceRequiredTests(APITestCase):
+    """A product that is for sale (Active) has a price on every option; a typed 0 is a price, an empty one is not."""
+
+    MESSAGE = "Enter a price for every option before making this product active."
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "pricerule@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.count = 0
+
+    def create(self, **body):
+        self.count += 1
+        data = {"title": f"Lamp {self.count}", "sku": f"LAMP-{self.count}", "status": "active", **body}
+        return self.client.post(URL, data, format="json")
+
+    def prices(self, product_id):
+        from .models import ProductVariant
+
+        return [str(p) for p in ProductVariant.objects.filter(product_id=product_id).order_by("created_at").values_list("price", flat=True)]
+
+    def refused(self, response):
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn(self.MESSAGE, str(response.json()))
+
+    def test_creating_an_active_product_needs_a_price_but_a_typed_zero_is_one(self):
+        from .models import Product
+
+        self.refused(self.create(price=""))
+        self.refused(self.create(price=None))
+        self.refused(self.create())  # no price at all
+        self.assertEqual(Product.objects.count(), 0)  # nothing half-saved
+
+        for typed in ("0", 0, "0.00"):
+            r = self.create(price=typed)
+            self.assertEqual(r.status_code, 201, r.content)
+            self.assertEqual(self.prices(r.json()["id"]), ["0.00"])
+        r = self.create(price="10", variants=[{"sku": "FREE-1", "price": "0"}])  # a typed 0 on an option stays 0
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["0.00"]), r.content)
+
+        r = self.create(status="draft", price="")  # a Draft may keep an empty price
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["0.00"]))
+        self.assertEqual(self.create(status="draft").status_code, 201)
+
+    def test_making_a_draft_active_checks_the_price(self):
+        from apps.catalog.services import matching_products
+        from apps.tenancy.models import Store
+
+        draft = self.create(status="draft", price="").json()
+        r = self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")  # nothing says it is a typed 0
+        self.refused(r)
+        self.refused(self.client.patch(f"{URL}{draft['id']}/", {"status": "active", "price": ""}, format="json"))
+        self.assertEqual(self.client.get(f"{URL}{draft['id']}/").json()["status"], "draft")
+
+        # Staff find products still at 0.00 with an automated collection: Price is equal to 0
+        store = Store.objects.get(pk=self.store_id)
+        listed = matching_products(store, [{"field": "price", "operator": "equals", "value": "0"}])
+        self.assertIn(draft["id"], {str(pk) for pk in listed.values_list("pk", flat=True)})
+
+        free = self.client.patch(f"{URL}{draft['id']}/", {"status": "active", "price": "0"}, format="json")
+        self.assertEqual((free.status_code, free.json()["status"]), (200, "active"), free.content)
+        other = self.create(status="draft", price="").json()
+        paid = self.client.patch(f"{URL}{other['id']}/", {"status": "active", "price": "25"}, format="json")
+        self.assertEqual((paid.status_code, self.prices(other["id"])), (200, ["25.00"]))
+
+    def test_an_active_products_price_cannot_be_cleared_and_other_edits_keep_it(self):
+        from .models import Product, ProductVariant
+
+        product = self.create(price="30").json()
+        self.refused(self.client.patch(f"{URL}{product['id']}/", {"price": ""}, format="json"))
+        self.assertEqual(self.prices(product["id"]), ["30.00"])  # rolled back
+
+        for change in ({"title": "Renamed"}, {"weight": "2"}, {"vendor": "Acme"}):
+            r = self.client.patch(f"{URL}{product['id']}/", change, format="json")
+            self.assertEqual(r.status_code, 200, r.content)
+            self.assertEqual(self.prices(product["id"]), ["30.00"], change)  # not zeroed by an edit of something else
+
+        # A product already for sale at 0.00 is not touched: renaming it still works and leaves its price alone
+        old = self.create(price="5").json()
+        ProductVariant.objects.filter(product_id=old["id"]).update(price="0.00")
+        r = self.client.patch(f"{URL}{old['id']}/", {"title": "Old free thing"}, format="json")
+        self.assertEqual((r.status_code, self.prices(old["id"])), (200, ["0.00"]), r.content)
+        self.assertEqual(Product.objects.get(pk=old["id"]).status, "active")
+
+    def test_every_option_needs_its_own_price(self):
+        rows = [{"sku": "OPT-A", "price": "10"}, {"sku": "OPT-B", "price": ""}]
+        self.refused(self.create(variants=rows))
+        rows[1]["price"] = "0"
+        r = self.create(variants=rows)
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["10.00", "0.00"]), r.content)
+
+        product = self.create(price="10").json()
+        new_option = {"sku": "OPT-NEW"}  # an option added with no price
+        existing = self.client.get(f"{URL}{product['id']}/").json()["variants"][0]
+        self.refused(self.client.patch(
+            f"{URL}{product['id']}/", {"variants": [{"id": existing["id"]}, new_option]}, format="json"))
+
+    def test_the_bulk_status_change_refuses_products_priced_0_00(self):
+        from .models import Product
+
+        unpriced = self.create(status="draft", price="").json()
+        priced = self.create(status="draft", price="12").json()
+
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [unpriced["id"], priced["id"]], "status": "active"}, format="json")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("Enter a price for every option before making them active.", str(r.json()))
+        self.assertEqual(set(Product.objects.values_list("status", flat=True)), {"draft"})  # all or nothing
+
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [priced["id"]], "status": "active"}, format="json")
+        self.assertEqual((r.status_code, r.json()["updated"]), (200, 1))
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [priced["id"], unpriced["id"]], "status": "draft"}, format="json")
+        self.assertEqual(r.status_code, 200)  # taking products off sale is not checked
+
+    def test_an_import_row_with_no_price_for_an_active_product_is_refused_with_its_message(self):
+        from .models import Product, ProductVariant
+
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Priced", "status": "active", "sku": "IMP-1", "price": "9.50"},
+            {"title": "No price", "status": "active", "sku": "IMP-2"},
+            {"title": "Empty price", "status": "active", "sku": "IMP-3", "price": ""},
+            {"title": "Free", "status": "active", "sku": "IMP-4", "price": "0"},
+            {"title": "Draft no price", "status": "draft", "sku": "IMP-5"},
+            {"title": "No status no price", "sku": "IMP-6"},
+        ]}, format="json")
+
+        body = r.json()
+        self.assertEqual(body["created"], 4, r.content)
+        self.assertEqual([e["index"] for e in body["errors"]], [1, 2])
+        for error in body["errors"]:
+            self.assertEqual(error["message"], f"price: {self.MESSAGE}")
+        self.assertFalse(Product.objects.filter(title__in=["No price", "Empty price"]).exists())
+        self.assertEqual(
+            {v.sku: str(v.price) for v in ProductVariant.objects.all()},
+            {"IMP-1": "9.50", "IMP-4": "0.00", "IMP-5": "0.00", "IMP-6": "0.00"},
+        )
+
+        # A sheet that is only re-uploaded to update stock does not need a price
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Priced", "status": "active", "sku": "IMP-1", "quantity": 3},
+        ]}, format="json")
+        self.assertEqual(r.json()["errors"], [], r.content)

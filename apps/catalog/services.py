@@ -75,6 +75,38 @@ class ProductInUse(Exception):
     """The product, or one of its variants, is referenced by orders or inventory."""
 
 
+NO_PRICE_MESSAGE = "Enter a price for every option before making this product active."
+
+
+def _price_missing(product, data, creating, was_active):
+    """
+    True when saving `data` would leave an option of an Active product with no price. A typed 0 is a price;
+    an empty one is not. An option the form did not send a price for keeps the price it has. Making a product
+    Active (it was not before) also counts an option saved at 0.00 as empty, as a saved 0.00 can't tell a typed 0
+    from an empty price: type the 0 in the form to sell it for free.
+    """
+    existing = [] if creating else list(product.variants.order_by("created_at"))
+    if not ("variants" in data or "price" in data or "weight" in data or not existing):
+        # nothing about prices was sent: only making the product Active needs a look
+        return (not was_active) and any(v.price == 0 for v in existing)
+
+    rows = data.get("variants") or [{"price": data["price"]} if "price" in data else {}]
+    default = data.get("price")
+    by_id = {str(v.id): v for v in existing}
+    by_position = not any(row.get("id") for row in rows)
+    for index, row in enumerate(rows):
+        if row.get("price") is not None or default is not None:
+            continue  # a price was typed (0 included)
+        if "price" in row or "price" in data:
+            return True  # the price was sent, and empty
+        variant = (existing[index] if index < len(existing) else None) if by_position else by_id.get(str(row.get("id")))
+        if variant is None:
+            return True  # a new option with no price
+        if not was_active and variant.price == 0:
+            return True  # being made Active, and the saved price may be an empty one
+    return False
+
+
 def _price(value):
     try:
         return Decimal(str(value or "0")).quantize(Decimal("0.01"))
@@ -299,7 +331,10 @@ def save_product(store, data, product=None, user=None):
                 value = (value or "").strip() or None
             setattr(product, field, value)
 
+    was_active = (not creating) and product.status == ACTIVE
     product.status = data.get("status", product.status or DRAFT)
+    if product.status == ACTIVE and _price_missing(product, data, creating, was_active):
+        raise ValidationError({"price": NO_PRICE_MESSAGE})
 
     # category_id: picked from the store's categories; category: a name (older clients)
     if "category_id" in data:
@@ -451,7 +486,13 @@ def delete_all_products(store):
 
 
 def _apply_variant(variant, row, default_price=None):
-    variant.price = _price(row.get("price") or default_price)
+    if row.get("price") is not None:
+        variant.price = _price(row["price"])  # a typed 0 is a price: it is not replaced by the default
+    elif default_price is not None:
+        variant.price = _price(default_price)
+    elif "price" in row or variant._state.adding:
+        variant.price = _price(None)  # sent empty (a Draft may keep it) or a new option: 0.00
+    # else: no price was sent for this option: it keeps the one it has
     if "continue_selling" in row:
         variant.continue_selling = bool(row["continue_selling"])
     if row.get("weight") is not None:
@@ -473,7 +514,7 @@ def _replace_variants(product, data):
     """
     rows = data.get("variants") or [
         {
-            "price": data.get("price"),
+            **({"price": data["price"]} if "price" in data else {}),
             **({"sku": data["sku"]} if "sku" in data else {}),
             **({"weight": data["weight"]} if "weight" in data else {}),
             **({"continue_selling": data["continue_selling"]} if "continue_selling" in data else {}),

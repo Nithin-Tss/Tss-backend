@@ -29,7 +29,7 @@ from apps.catalog.services import published_collections, published_products
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
-from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
@@ -739,6 +739,25 @@ def layout_data(settings, base_url, nav, menu_links=None):
         if settings.get(f"footer_{key}")
     ]
     return {"header_links": header, "footer_links": footer, "footer_social": social}
+
+
+DEFAULT_CURRENCY_SYMBOL = THEME_SETTINGS["currency_symbol"]["default"]  # what the theme setting holds until changed
+CURRENCY_SYMBOLS = {
+    "INR": "₹", "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "KRW": "₩", "AUD": "A$", "CAD": "C$",
+    "NZD": "NZ$", "SGD": "S$", "HKD": "HK$", "MXN": "MX$", "BRL": "R$", "ZAR": "R", "AED": "AED ", "SAR": "SAR ",
+    "RUB": "₽", "TRY": "₺", "THB": "฿", "PHP": "₱", "VND": "₫", "NGN": "₦", "ILS": "₪", "PLN": "zł ",
+}
+
+
+def currency_symbol(store, theme_symbol):
+    """
+    The symbol prices are shown with. It follows the store's currency. The theme's "Currency symbol" setting
+    wins only when the owner changed it from its default, so existing stores look the same.
+    """
+    if theme_symbol and theme_symbol != DEFAULT_CURRENCY_SYMBOL:
+        return theme_symbol
+    code = (store.currency or "").strip().upper()
+    return CURRENCY_SYMBOLS.get(code, f"{code} " if code else DEFAULT_CURRENCY_SYMBOL)
 
 
 def _environment(files, base_url, currency, overrides=None):
@@ -1573,6 +1592,7 @@ def render_synced_section_fast(store, name, custom_data):
         return None
     data = resolve(custom_data)
     settings = data["settings"]
+    settings["currency_symbol"] = currency_symbol(store, settings["currency_symbol"])
     base_url = shop_url(store)
     env = _environment({}, base_url, settings["currency_symbol"])
     context = {"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"}
@@ -1826,7 +1846,7 @@ def render_cart_html(store, data, opts):
     store_theme = get_store_theme(store)
     files = theme_files(store_theme)
     base_url = shop_url(store)
-    currency = resolve(store_theme.custom_data)["settings"]["currency_symbol"]
+    currency = currency_symbol(store, resolve(store_theme.custom_data)["settings"]["currency_symbol"])
     env = _environment(files, base_url, currency)
     return env.from_string("{% render 'cart', mode: 'lines', cart: cart, settings: opts %}").render(
         shop={"name": store.store_name, "url": base_url}, cart=data, opts=opts,
@@ -2051,6 +2071,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     if not customer_page and page != base_page(page) and f"templates/{page}.liquid" not in files:
         page = base_page(page)
     settings = data["settings"]
+    settings["currency_symbol"] = currency_symbol(store, settings["currency_symbol"])
     base_url = shop_url(store)
     # The header and footer are synced sections (sections/<name>.liquid) when the theme has
     # them: the layout's {% render 'header' %} / {% render 'footer' %} then show them (see section_sync)
