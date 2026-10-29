@@ -255,6 +255,9 @@ STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
 # Signing secret of the webhook endpoint that listens to "Connected accounts" events
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
 
+# How long after ordering a shopper may cancel their own order from the storefront (minutes). Staff have no limit.
+ORDER_CUSTOMER_CANCEL_MINUTES = int(os.getenv('ORDER_CUSTOMER_CANCEL_MINUTES', 60))
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 

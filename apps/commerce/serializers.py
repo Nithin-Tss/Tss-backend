@@ -46,3 +46,17 @@ class CheckoutSerializer(serializers.ModelSerializer):
 
     def get_items(self, checkout):
         return CheckoutItemSerializer([i for i in checkout.items.all() if not i.is_deleted], many=True).data
+
+
+class StaffCheckoutSerializer(CheckoutSerializer):
+    """What the store's staff see. Adds the automatic refunds (never shown to shoppers: they hold payment details)."""
+
+    auto_refunds = serializers.SerializerMethodField()
+
+    class Meta(CheckoutSerializer.Meta):
+        fields = CheckoutSerializer.Meta.fields + ["auto_refunds"]
+        read_only_fields = fields
+
+    def get_auto_refunds(self, checkout):
+        """Money taken by card for an order that could not be placed, and whether it was sent back."""
+        return (checkout.metadata or {}).get("auto_refunds", [])

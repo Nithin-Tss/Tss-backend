@@ -41,6 +41,8 @@ def fulfill(order, lines=None, delivery_method=None, user=None):
 
     if order.status == CANCELLED:
         raise ValidationError("This order is cancelled.")
+    if (order.metadata or {}).get("stock_released"):
+        raise ValidationError("This order was refunded and its stock was put back, so it can't be fulfilled.")
 
     left = remaining(order)
     if not left:
