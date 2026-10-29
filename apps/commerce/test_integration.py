@@ -483,7 +483,83 @@ class PricingAndPaymentTests(CommerceIntegrationBase):
         r = self.shopper.post(f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": ADDRESS}, format="json")
         self.assertEqual(r.data["subtotal"], "599.00")
         self.assertEqual(r.data["email"], "a@b.com")  # response reflects the saved details
+    def test_tax_rates_are_isolated_between_stores(self):
+        # Store 1 uses a 5% tax rate.
+        self.configure(taxRate="5", shippingFlatRate="0")
+        first_checkout_id = self.checkout(
+            quantity=2,
+            email="first-shopper@example.com",
+            shipping_address=ADDRESS,
+        )
+        first_detail = self.shopper.get(
+            f"{self.base}/checkout/{first_checkout_id}/"
+        ).data
+        self.assertEqual(first_detail["tax_amount"], "49.90")
 
+        # Create a separate store with an 18% tax rate.
+        _, second_store = sign_up_with_store("second-owner@example.com")
+        second_store.status = "active"
+        second_store.tax_rate = Decimal("18.00")
+        second_store.shipping_flat_rate = Decimal("0.00")
+        second_store.save(
+            update_fields=[
+                "status",
+                "tax_rate",
+                "shipping_flat_rate",
+            ]
+        )
+
+        second_location = Location.objects.create(
+            store=second_store,
+            name="Second warehouse",
+        )
+        second_product, _ = stock_product(
+            second_store,
+            "Second Store Tee",
+            "TEE-STORE-2",
+            "499.00",
+            10,
+            second_location,
+        )
+
+        # Use a separate shopper session and the second store's storefront.
+        second_shopper = APIClient()
+        second_shopper.credentials(
+            HTTP_X_CART_SESSION="sess-2-bbbbbbbbbbbb"
+        )
+        second_base = f"/api/v1/storefront/{second_store.store_slug}"
+
+        added = second_shopper.post(
+            f"{second_base}/cart/items/",
+            {
+                "product": str(second_product.pk),
+                "quantity": 2,
+            },
+            format="json",
+        )
+        self.assertEqual(added.status_code, 201, added.data)
+
+        response = second_shopper.post(
+            f"{second_base}/checkout/",
+            {
+                "email": "second-shopper@example.com",
+                "shipping_address": ADDRESS,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+
+        second_checkout_id = response.data["id"]
+        second_detail = second_shopper.get(
+            f"{second_base}/checkout/{second_checkout_id}/"
+        ).data
+        self.assertEqual(second_detail["tax_amount"], "179.64")
+
+        # The second store's rate must not change the first store's result.
+        first_detail_again = self.shopper.get(
+            f"{self.base}/checkout/{first_checkout_id}/"
+        ).data
+        self.assertEqual(first_detail_again["tax_amount"], "49.90")
 
 class SweepCartsTests(CommerceIntegrationBase):
     def test_command_abandons_idle_checkouts_and_expires_idle_carts(self):

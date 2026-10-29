@@ -62,6 +62,12 @@ class Store(models.Model):
         db_table = '"tenancy"."stores"'
         verbose_name = "Store"
         verbose_name_plural = "Stores"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(tax_rate__gte=0) & models.Q(tax_rate__lte=100),
+                name="ck_store_tax_rate_range",
+            ),
+        ]
 
     def __str__(self):
         return self.store_name

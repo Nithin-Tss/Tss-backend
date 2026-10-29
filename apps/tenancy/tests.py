@@ -8,6 +8,8 @@ from django.test import TestCase
 from django.utils.text import slugify
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
+from decimal import Decimal
+from django.db import IntegrityError, transaction
 
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.themes.models import StoreTheme, Theme, ThemeFile
@@ -579,3 +581,32 @@ class PurgeStoreWithStockAndCartsTest(StoreClientMixin, APITestCase):
         self.assertFalse(Store.objects.filter(pk=store.pk).exists())
         self.assertFalse(InventoryHistory.objects.exists())
         self.assertFalse(CartItem.objects.exists())
+
+class StoreTaxConstraintTests(TestCase):
+    """The database enforces the valid range for each store's tax rate."""
+
+    def make_store(self, number, tax_rate):
+        return Store.objects.create(
+            store_name=f"Tax Store {number}",
+            store_slug=f"tax-store-{number}",
+            status="active",
+            tax_rate=tax_rate,
+        )
+
+    def test_database_rejects_tax_rates_outside_range(self):
+        for number, bad_rate in enumerate(
+            (Decimal("-0.01"), Decimal("100.01")), start=1
+        ):
+            with (
+                self.subTest(tax_rate=bad_rate),
+                self.assertRaises(IntegrityError),
+                transaction.atomic(),
+            ):
+                self.make_store(number, bad_rate)
+
+    def test_database_accepts_tax_rate_boundaries(self):
+        zero_rate = self.make_store(10, Decimal("0.00"))
+        maximum_rate = self.make_store(11, Decimal("100.00"))
+
+        self.assertEqual(zero_rate.tax_rate, Decimal("0.00"))
+        self.assertEqual(maximum_rate.tax_rate, Decimal("100.00"))
