@@ -259,7 +259,9 @@ class TransferViewSet(StoreScopedViewSet):
     def complete(self, request, pk=None):
         with transaction.atomic():
             transfer = self._pending()
-            for item in transfer.items.select_related("variant__product"):
+            items = list(transfer.items.select_related("variant__product"))
+            services.lock_stock(request.store.pk, [item.variant_id for item in items])
+            for item in items:
                 services.move(
                     item.variant, transfer.source_location, transfer.destination_location, item.quantity,
                     user_id=request.user.pk, reference_id=transfer.pk,

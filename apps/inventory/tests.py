@@ -7,6 +7,7 @@ import uuid
 import copy
 from unittest import mock
 
+from django.db import transaction
 from rest_framework.test import APITestCase
 
 from apps.catalog.models import ProductVariant
@@ -408,3 +409,69 @@ class InventoryResourceApiTests(StoreClientMixin, APITestCase):
             "source_location": self.location, "destination_location": dest,
             "items": [{"variant": self.variant, "quantity": 1}],
         }, expect=400)
+
+
+class StockLockOrderTests(StoreClientMixin, APITestCase):
+    """lock_stock(): one fixed locking order for every path that changes several variants at once."""
+
+    def setUp(self):
+        self.token, store = self.sign_up("lockorder@example.com", "Lock Order Store")
+        self.store_id = store["storeId"]
+        self.variants = []
+        for title in ("Tee", "Hat", "Cap"):
+            product = self.ok("post", "/api/v1/catalog/products/", {
+                "title": title, "status": "active", "price": "5", "sku": f"{title.upper()}-1",
+            }, expect=201)
+            self.variants.append(product["variants"][0]["id"])
+        self.warehouse = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)["id"]
+        self.shop = self.ok("post", "/api/v1/inventory/locations/", {"name": "Shop"}, expect=201)["id"]
+        for variant in self.variants:
+            for location in (self.warehouse, self.shop):
+                self.ok("post", f"{ITEMS}set/", {"variant": variant, "location": location, "available": 5})
+
+    def test_rows_are_locked_by_variant_id_then_location_id_whatever_order_they_are_asked_for_in(self):
+        from apps.inventory.models import InventoryItem
+        from apps.inventory.services import lock_stock
+
+        expected = [
+            item.pk for item in sorted(
+                InventoryItem.objects.filter(variant_id__in=self.variants), key=lambda i: (i.variant_id, i.location_id)
+            )
+        ]
+        self.assertEqual(len(expected), 6)
+        for asked in (self.variants, list(reversed(self.variants)), [self.variants[1], self.variants[2], self.variants[0]]):
+            with transaction.atomic():
+                self.assertEqual(lock_stock(self.store_id, asked), expected)
+
+    def test_another_stores_stock_is_never_locked(self):
+        from apps.inventory.services import lock_stock
+
+        rival_token, rival = self.sign_up("lockrival@example.com", "Lock Rival Store")
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Rival", "status": "active", "price": "5", "sku": "RIVAL-1",
+        }, expect=201)
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Rival warehouse"}, expect=201)["id"]
+        self.ok("post", f"{ITEMS}set/", {"variant": product["variants"][0]["id"], "location": location, "available": 5})
+        with transaction.atomic():
+            self.assertEqual(lock_stock(self.store_id, [product["variants"][0]["id"]]), [])
+            self.assertEqual(len(lock_stock(rival["storeId"], [product["variants"][0]["id"]])), 1)
+
+    def test_no_variants_locks_nothing(self):
+        from apps.inventory.services import lock_stock
+
+        with transaction.atomic():
+            self.assertEqual(lock_stock(self.store_id, []), [])
+            self.assertEqual(lock_stock(self.store_id, [None]), [])
+
+    def test_a_transfer_locks_all_its_variants_first_in_one_call(self):
+        from apps.inventory import services
+
+        body = {
+            "source_location": self.warehouse, "destination_location": self.shop,
+            "items": [{"variant": self.variants[2], "quantity": 1}, {"variant": self.variants[0], "quantity": 2}],
+        }
+        transfer = self.ok("post", "/api/v1/inventory/transfers/", body, expect=201)
+        with mock.patch.object(services, "lock_stock", wraps=services.lock_stock) as locked:
+            self.ok("post", f"/api/v1/inventory/transfers/{transfer['id']}/complete/")
+        self.assertEqual(locked.call_count, 1)
+        self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variants[0], self.variants[2]})

@@ -59,6 +59,7 @@ def fulfill(order, lines=None, delivery_method=None, user=None):
                 {"items": f"Only {by_id.get(item.pk, 0)} of {item.product_name} still need fulfilling."}
             )
 
+    inventory.lock_stock(order.store_id, [line["order_item"].variant_id for line in lines])
     fulfillment = Fulfillment.objects.create(
         order=order, status=DONE, delivery_method=delivery_method or order.delivery_method
     )

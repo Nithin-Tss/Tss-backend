@@ -99,6 +99,12 @@ def create_order(
 
     subtotal = line_discounts = ZERO
 
+    # Lock the stock of every line's variant, in one fixed order, before any of it is changed
+    inventory.lock_stock(store.pk, [
+        getattr(line.get("variant") or line["product"].variants.order_by("created_at").first(), "pk", None)
+        for line in lines
+    ])
+
     for line in lines:
         product, variant, quantity = line["product"], line.get("variant"), line["quantity"]
 
@@ -168,7 +174,9 @@ def cancel_order(order, user=None, refuse_if_paid=False):
         if payments.paid_total(order) > 0:
             raise ValidationError("This order has been paid. Please contact the store to cancel it.")
 
-    for item in order.items.filter(is_deleted=False):
+    items = list(order.items.filter(is_deleted=False))
+    inventory.lock_stock(order.store_id, [item.variant_id for item in items])
+    for item in items:
         inventory.release(item.variant, item.quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
 
     order.status = CANCELLED

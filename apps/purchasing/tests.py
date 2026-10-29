@@ -39,6 +39,23 @@ class PurchaseOrderReceiveTests(StoreClientMixin, APITestCase):
         self.assertEqual(PurchaseOrder.objects.get(pk=po["id"]).status, "received")
 
 
+    def test_receiving_locks_every_variant_first_in_one_call(self):
+        from apps.inventory import services
+
+        hat = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Hat", "status": "active", "price": "5", "sku": "HAT-1",
+        }, expect=201)["variants"][0]["id"]
+        po = self.ok("post", "/api/v1/purchase-orders/", {
+            "supplier_name": "Acme",
+            "items": [{"variant": hat, "quantity": 2}, {"variant": self.variant, "quantity": 3}],
+        }, expect=201)
+        with mock.patch.object(services, "lock_stock", wraps=services.lock_stock) as locked:
+            self.ok("post", f"/api/v1/purchase-orders/{po['id']}/receive/", {"location": self.warehouse})
+        self.assertEqual(locked.call_count, 1)
+        self.assertEqual({str(v) for v in locked.call_args.args[1]}, {hat, self.variant})
+        self.assertEqual(self.stock(hat)["available"], 2)
+
+
 class PurchaseOrderPermissionTests(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, store = self.sign_up("po-permissions@example.com", "PO permissions")

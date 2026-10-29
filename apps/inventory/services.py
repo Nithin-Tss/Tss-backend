@@ -82,6 +82,25 @@ def _locked_item(variant, location):
     return qs.get()
 
 
+def lock_stock(store_id, variant_ids):
+    """
+    Lock the stock rows of these variants (this store's only) until the transaction ends, in ONE fixed
+    order: by variant id, then location id. Every code path that changes stock for several variants in
+    one transaction calls this first (orders, cancels, fulfilments, purchase receipts, transfers), so two
+    of them can never wait on each other's rows (a deadlock). Only the stock rows are locked, not the
+    locations they point to. Must be called inside a transaction. Nothing is changed; returns the locked row ids.
+    """
+    ids = {pk for pk in variant_ids if pk is not None}
+    if not ids:
+        return []
+    return list(
+        InventoryItem.objects.select_for_update(of=("self",))
+        .filter(variant_id__in=ids, variant__product__store_id=store_id)
+        .order_by("variant_id", "location_id")
+        .values_list("pk", flat=True)
+    )
+
+
 def adjust_inventory(
     store_id,
     variant_id,
@@ -303,7 +322,7 @@ def restock_refund(variant, location, quantity, user_id=None, source="refund", r
 def _split(variant, quantity, field, reason, user_id, source, reference_id):
     """Spread `quantity` over the variant's locations (most `field` first) through adjust_inventory."""
     items = list(
-        InventoryItem.objects.select_for_update()
+        InventoryItem.objects.select_for_update(of=("self",))
         .filter(variant=variant)
         .select_related("location")
         .order_by(f"-{field}")
@@ -327,7 +346,7 @@ def commit(variant, quantity, user_id=None, source="order", reference_id=None):
     if variant is None or not is_tracked(variant):
         return
     items = list(
-        InventoryItem.objects.select_for_update().filter(variant=variant).select_related("location")
+        InventoryItem.objects.select_for_update(of=("self",)).filter(variant=variant).select_related("location")
         .order_by("-available")
     )
     total = sum(i.available for i in items)

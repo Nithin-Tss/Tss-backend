@@ -537,6 +537,63 @@ class StockValidationCases:
         levels = self.levels()
         self.assertEqual((levels["available"], levels["committed"]), (0, 5))
 
+    def two_products(self):
+        hat, hat_variant = self.make_product("Hat")
+        self.set_stock(10)
+        self.set_stock(10, variant=hat_variant)
+        return (self.line(1), self.line(2, product=hat, variant=hat_variant)), hat_variant
+
+    def test_orders_with_the_same_products_in_opposite_order_lock_stock_the_same_way(self):
+        """Two shoppers, A+B and B+A: stock is locked once, up front, sorted by variant id (so no deadlock)."""
+        import re
+
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.inventory import services as inventory
+
+        (first, second), hat_variant = self.two_products()
+        locks, statements = [], []
+        for lines in ((first, second), (second, first)):
+            with patch.object(inventory, "lock_stock", wraps=inventory.lock_stock) as locked,                  CaptureQueriesContext(connection) as queries:
+                self.place(*lines)
+            locks.append(locked)
+            statements.append([q["sql"] for q in queries.captured_queries])
+
+        for locked in locks:
+            self.assertEqual(locked.call_count, 1)
+            self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variant, hat_variant})
+        for sql in statements:
+            stock_sql = [s for s in sql if re.search(r"inventory.{1,3}inventory_items", s)]
+            self.assertRegex(stock_sql[0], r"ORDER BY.*variant_id.*location_id")  # the first stock query is the sorted lock
+            self.assertNotRegex(stock_sql[0], r"(?i)update")
+            first_change = next(i for i, s in enumerate(sql) if s.startswith("UPDATE") and "inventory_items" in s)
+            self.assertLess(sql.index(stock_sql[0]), first_change)  # locked before any stock is changed
+        self.assertEqual((self.levels()["available"], self.levels()["committed"]), (8, 2))
+        self.assertEqual((self.levels(hat_variant)["available"], self.levels(hat_variant)["committed"]), (6, 4))
+
+    def test_cancelling_locks_every_line_first_in_one_call(self):
+        from apps.inventory import services as inventory
+
+        (first, second), hat_variant = self.two_products()
+        order = self.place(second, first)
+        with patch.object(inventory, "lock_stock", wraps=inventory.lock_stock) as locked:
+            self.ok("post", f"/api/v1/orders/{order['id']}/cancel/")
+        self.assertEqual(locked.call_count, 1)
+        self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variant, hat_variant})
+        self.assertEqual(self.levels()["available"], 10)
+
+    def test_fulfilling_locks_every_line_first_in_one_call(self):
+        from apps.inventory import services as inventory
+
+        (first, second), hat_variant = self.two_products()
+        order = self.place(second, first)
+        with patch.object(inventory, "lock_stock", wraps=inventory.lock_stock) as locked:
+            self.ok("post", "/api/v1/fulfillments/", {"order": order["id"]}, expect=201)
+        self.assertEqual(locked.call_count, 1)
+        self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variant, hat_variant})
+        self.assertEqual(self.levels()["committed"], 0)
+
     def test_another_stores_variant_cannot_be_ordered(self):
         rival_token, rival = self.sign_up("rivalorders@example.com", "Rival Orders Store")
         rival_product, rival_variant = self.make_product("Rival shirt")

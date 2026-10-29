@@ -4,6 +4,7 @@ against the same store, with real sign-up, store membership and permissions.
 """
 from datetime import timedelta
 from io import StringIO
+from unittest import mock
 from decimal import Decimal
 
 from django.core.cache import cache
@@ -13,7 +14,7 @@ from rest_framework.test import APIClient, APITestCase
 from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
 from apps.catalog.services import online_channels
 from apps.discounts.models import Discount, DiscountCode
-from apps.inventory.models import Location
+from apps.inventory.models import InventoryItem, Location
 from apps.inventory.services import sellable, set_available
 from apps.orders.models import Order
 from apps.tenancy.models import Store
@@ -229,6 +230,26 @@ class VariantAndStockTests(CommerceIntegrationBase):
         self.assertEqual(self.place(second_cid, client=second).status_code, 400)
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(sellable(self.variant), 0)
+
+    def test_two_shoppers_pass_the_stock_check_for_the_last_unit_and_only_one_gets_it(self):
+        """Both read "1 left" before either order exists; the lock decides, and the loser sees the shortage message."""
+        set_available(self.variant, self.location, 1)
+        second = APIClient()
+        second.credentials(HTTP_X_CART_SESSION="sess-2-aaaaaaaaaaaa")
+        first_cid = self.checkout(quantity=1, email="a@b.com", shipping_address=ADDRESS)
+        second_cid = self.checkout(quantity=1, client=second, email="c@d.com", shipping_address=ADDRESS)
+
+        with mock.patch.object(services, "_check_stock"):  # the early read check saw 1 left for both shoppers
+            winner = self.place(first_cid)
+            loser = self.place(second_cid, client=second)
+
+        self.assertEqual(winner.status_code, 201, winner.data)
+        self.assertEqual(loser.status_code, 400)
+        self.assertIn("Only 0 left of TEE-1", str(loser.data))
+        self.assertEqual(Order.objects.count(), 1)
+        item = InventoryItem.objects.get(variant=self.variant)
+        self.assertEqual((item.available, item.committed, item.on_hand), (0, 1, 1))
+        self.assertEqual(Checkout.objects.get(pk=second_cid).status, "open")  # the loser can try again later
 
     def test_price_change_after_checkout_asks_shopper_to_confirm_new_total(self):
         cid = self.checkout(quantity=1, email="a@b.com", shipping_address=ADDRESS)
