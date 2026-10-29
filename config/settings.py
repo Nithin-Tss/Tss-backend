@@ -101,6 +101,7 @@ INSTALLED_APPS = [
     'apps.fulfillment',
     'apps.themes',
     'apps.media',
+    'apps.audit',
     
 ]
 
@@ -110,6 +111,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'apps.core.middleware.SecurityHeadersMiddleware',
     'apps.core.middleware.RequestValidationMiddleware',
+    'apps.audit.middleware.AuditMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -295,6 +297,11 @@ CORS_URLS_REGEX = r'^/(?!s/).*$'
 
 # Request validation (apps/core/middleware.py): applies to /api/ only.
 # Largest request body accepted, from Content-Length (theme/product uploads included).
+# Audit log: how long entries are kept (manage.py prune_audit_logs), and whether the
+# client address comes from the proxy's X-Forwarded-For (only when behind one).
+AUDIT_LOG_RETENTION_DAYS = int(os.getenv('AUDIT_LOG_RETENTION_DAYS', 365))
+AUDIT_TRUST_FORWARDED_FOR = env_bool('DJANGO_BEHIND_PROXY', default=False)
+
 API_MAX_REQUEST_BYTES = int(os.getenv('API_MAX_REQUEST_BYTES', 25 * 1024 * 1024))
 API_ALLOWED_CONTENT_TYPES = {
     'application/json',

@@ -644,7 +644,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     }
     # Sign-in only: they are about the account itself, or do their own store resolution
     ACCOUNT_ONLY = {
-        "MeView", "ChangePasswordView", "ResendVerificationEmailView",
+        "MeView", "ChangePasswordView", "ResendVerificationEmailView", "MyActivityView",
         "StoreViewSet", "CustomerAddressViewSet", "ThemeSchemaView",
     }
     # Plain function views, outside DRF

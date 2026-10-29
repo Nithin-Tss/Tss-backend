@@ -7,6 +7,8 @@ from apps.tenancy.models import StoreMembership
 from apps.tenancy.access import membership_permissions
 from apps.tenancy.services import OWNER
 
+from apps.audit import services as audit
+
 from .rbac import permission_for
 
 STORE_HEADER = "X-Store-Id"
@@ -57,6 +59,7 @@ class IsStoreMember(BasePermission):
         request.store = membership.store
         request.store_role = membership.role
         request.membership = membership
+        audit.begin(request)
         return True
 
 
@@ -80,10 +83,12 @@ class HasStorePermission(BasePermission):
 
         # A store's owner (or a platform admin, who gets an owner membership) has full
         # access to that store; everyone else only what their roles grant.
+        area = getattr(view, "permission_resource", None)
+        audit.bind(request, membership, area, view)
+
         if membership.role == OWNER:
             return True
 
-        area = getattr(view, "permission_resource", None)
         if not area:
             return False
 
@@ -94,4 +99,7 @@ class HasStorePermission(BasePermission):
             getattr(view, "action_permissions", None),
         )
 
-        return needed is None or needed in membership_permissions(membership)
+        allowed = needed is None or needed in membership_permissions(membership)
+        if not allowed:
+            audit.deny(request, needed)
+        return allowed

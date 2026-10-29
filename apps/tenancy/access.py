@@ -34,7 +34,7 @@ def role_permissions(role):
     """System roles always take their permissions from code; others from the row."""
     if role.kind == rbac.SYSTEM and role.key in rbac.BUILT_IN_ROLES:
         return set(rbac.BUILT_IN_ROLES[role.key][3])
-    return set(rbac.clean_permissions(role.permissions or []))
+    return set(rbac.clean_permissions(role.permissions or []))  # also adds implied "view" permissions
 
 
 def membership_permissions(membership):
@@ -147,6 +147,28 @@ def create_role(store, caller, name, description, permissions):
     )
     record(store, caller, "role.created", name, permissions=permissions)
     return role
+
+
+@transaction.atomic
+def duplicate_role(role, caller, name=None):
+    """A custom copy of any role (system ones included), as a starting point for a new one."""
+    permissions = sorted(role_permissions(role))
+    _require_covers(caller, permissions)
+
+    if name is None:
+        name = f"{role.name} (copy)"
+        n = 2
+        while role.store.roles.filter(name__iexact=name).exists():
+            name = f"{role.name} (copy {n})"
+            n += 1
+
+    name, permissions = _clean_role_input(role.store, name, permissions)
+    copy = StoreRole.objects.create(
+        store=role.store, kind=rbac.CUSTOM, name=name,
+        description=role.description, permissions=permissions,
+    )
+    record(role.store, caller, "role.duplicated", name, source=role.name, permissions=permissions)
+    return copy
 
 
 @transaction.atomic

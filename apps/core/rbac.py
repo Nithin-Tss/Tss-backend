@@ -94,6 +94,10 @@ AREAS = {
     "reports": ("Reports and analytics", [
         (VIEW, "View overview, reports and analytics"),
     ]),
+    "audit": ("Audit log", [
+        (VIEW, "View the audit log of who did what in the store"),
+        ("export", "Download the audit log as a file"),
+    ]),
     "members": ("Users and roles", [
         (VIEW, "View users and their roles"),
         (MANAGE, "Add and remove users, assign roles"),
@@ -172,6 +176,12 @@ BUILT_IN_ROLES = {
             "customers.view", "products.view",
         ],
     ),
+    "auditor": (
+        PREDEFINED,
+        "Auditor",
+        "Reads the audit log and the reports, and can download the log. Changes nothing.",
+        ["audit.view", "audit.export", "reports.view", "members.view"],
+    ),
     "shipping_coordinator": (
         PREDEFINED,
         "Shipping coordinator",
@@ -195,9 +205,22 @@ BUILT_IN_ROLES = {
 SYSTEM_KEYS = frozenset(k for k, v in BUILT_IN_ROLES.items() if v[0] == SYSTEM)
 
 
+def with_implied(keys):
+    """
+    Add what each permission takes for granted: whoever may change, delete,
+    refund or export in an area must be able to see it, so "<area>.view" comes with them.
+    """
+    out = set(keys)
+    for key in list(out):
+        info = PERMISSIONS.get(key)
+        if info and f"{info['area']}.{VIEW}" in ALL_PERMISSIONS:
+            out.add(f"{info['area']}.{VIEW}")
+    return out
+
+
 def clean_permissions(keys):
-    """Drop unknown keys and duplicates, keeping a stable order."""
-    return sorted({k for k in keys if k in ALL_PERMISSIONS})
+    """Drop unknown keys and duplicates, add implied ones, keeping a stable order."""
+    return sorted(with_implied(k for k in keys if k in ALL_PERMISSIONS))
 
 
 def permission_for(area, method, action=None, overrides=None):
