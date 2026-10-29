@@ -1,3 +1,5 @@
+from django.core.cache import cache
+from django.test import override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
@@ -79,6 +81,39 @@ class MediaAssetApiTest(StoreClientMixin, APITestCase):
         self.assertEqual([row["name"] for row in self.ok("get", "/api/v1/media/")], ["b.png"])
         self.assertEqual(self.client.get(f"/api/v1/media/{asset['id']}/").status_code, 404)
         self.assertEqual(self.client.delete(f"/api/v1/media/{asset['id']}/").status_code, 404)
+
+    def test_other_store_cannot_rename_a_picture(self):
+        self.sign_up("a2@example.com", "Shop A2")
+        asset = self.upload().json()
+        self.sign_up("b2@example.com", "Shop B2")
+        self.assertEqual(self.client.patch(f"/api/v1/media/{asset['id']}/", {"name": "x"}, format="json").status_code, 404)
+        self.assertEqual(MediaAsset.objects.get().original_name, "banner.png")
+
+    @override_settings(MEDIA_STORE_QUOTA_BYTES=100)
+    def test_storage_quota_is_enforced_per_store(self):
+        self.sign_up("quota@example.com", "Quota Shop")
+        self.assertEqual(self.upload().status_code, 201)  # 40 bytes
+        self.assertEqual(self.upload().status_code, 201)  # 80 bytes
+        full = self.upload()  # 120 > 100
+        self.assertEqual(full.status_code, 400)
+        self.assertIn("full", str(full.json()))
+        self.assertEqual(MediaAsset.objects.count(), 2)
+        # another store has its own allowance
+        self.sign_up("quota2@example.com", "Quota Shop 2")
+        self.assertEqual(self.upload().status_code, 201)
+
+    def test_uploads_are_rate_limited(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        cache.clear()
+        self.sign_up("rate@example.com", "Rate Shop")
+        old = ScopedRateThrottle.THROTTLE_RATES
+        ScopedRateThrottle.THROTTLE_RATES = {**old, "media_upload": "2/min"}
+        try:
+            codes = [self.upload().status_code for _ in range(3)]
+        finally:
+            ScopedRateThrottle.THROTTLE_RATES = old
+        self.assertEqual(codes, [201, 201, 429])
 
     def test_requires_sign_in(self):
         self.assertIn(self.client.get("/api/v1/media/").status_code, (401, 403))

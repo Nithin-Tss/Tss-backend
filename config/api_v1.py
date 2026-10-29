@@ -4,11 +4,16 @@ A breaking change gets a new module (api_v2.py) and a new mount point;
 v1 keeps working unchanged.
 """
 from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
 from apps.core.reports import OverviewView, ReportListView
 from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 
 urlpatterns = [
+    # API documentation (OpenAPI 3)
+    path("schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path("auth/", include("apps.identity.urls")),
     path("stores/", include("apps.tenancy.urls")),
     path("members/", include(members_urlpatterns)),

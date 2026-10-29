@@ -1,5 +1,7 @@
 import json
 
+from django.conf import settings
+from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
 from .models import MediaAsset
@@ -37,6 +39,12 @@ def upload_image(store_id, file, user=None):
     if ext is None:
         raise ValidationError({"image": "Not a supported image. Use JPG, PNG or WEBP."})
     file.seek(0)
+
+    quota = getattr(settings, "MEDIA_STORE_QUOTA_BYTES", 0)
+    if quota:
+        used = MediaAsset.objects.filter(store_id=store_id).aggregate(total=Sum("file_size"))["total"] or 0
+        if used + file.size > quota:
+            raise ValidationError({"image": "Your media library is full. Delete unused pictures first."})
 
     return store_image(store_id, file.read(), IMAGE_TYPES[ext], file.name, user)
 

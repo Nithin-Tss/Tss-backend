@@ -639,6 +639,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
+        # API docs: open in tests/dev, admin-only in production (SPECTACULAR_SETTINGS SERVE_PERMISSIONS)
+        "SpectacularAPIView", "SpectacularSwaggerView", "SpectacularRedocView",
     }
     # Sign-in only: they are about the account itself, or do their own store resolution
     ACCOUNT_ONLY = {
@@ -1013,7 +1015,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout"})
+        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout", "media_upload"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.

@@ -271,3 +271,53 @@ class ShippingRateApiTest(RbacTestBase):
     def test_unrelated_role_is_refused(self):
         self.staff("merch@example.com", "merchandiser")
         self.ok("get", RATES, expect=403)
+
+
+class ShippingRateIsolationTest(RbacTestBase):
+    def test_another_stores_rates_are_invisible_and_immutable(self):
+        self.as_owner()
+        rate = self.ok("post", RATES, {"price": "10"}, expect=201)
+        # a second merchant with their own store
+        token, other = self.sign_up("other-ship@example.com", "Other shipping shop")
+        self.use(token, other["storeId"])
+        self.assertEqual(self.ok("get", RATES), [])
+        self.ok("patch", f"{RATES}{rate['id']}/", {"price": "0"}, expect=404)
+        self.ok("delete", f"{RATES}{rate['id']}/", expect=404)
+        # a submitted store in the body is ignored: the rate lands in the caller's store
+        mine = self.ok("post", RATES, {"price": "5", "store": self.store_id}, expect=201)
+        self.as_owner()
+        self.assertEqual([r["id"] for r in self.ok("get", RATES)], [rate["id"]])
+        self.assertNotEqual(mine["id"], rate["id"])
+        self.assertEqual(self.ok("get", f"{RATES}{rate['id']}/")["price"], "10.00")
+
+    def test_anonymous_cannot_touch_rates(self):
+        anonymous = APIClient()
+        for method in ("get", "post"):
+            r = getattr(anonymous, method)(RATES, {"price": "1"}, format="json", HTTP_X_STORE_ID=self.store_id)
+            self.assertEqual(r.status_code, 401, method)
+
+
+class OrderKeepsItsTaxAfterSettingsChangeTest(CommerceIntegrationBase):
+    def configure(self, **settings):
+        r = self.staff.patch(f"/api/v1/stores/{self.store.pk}/", settings, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_placed_order_is_not_rewritten_by_new_tax_or_shipping(self):
+        self.configure(taxRate="10", shippingFlatRate="50")
+        order = self.place(self.checkout(quantity=2, email="a@b.com", shipping_address=ADDRESS)).data
+        before = (order["tax_amount"], order["shipping_amount"], order["total"])
+        self.assertEqual(before, ("99.80", "50.00", "1147.80"))
+
+        self.configure(taxRate="25", shippingFlatRate="500")
+        again = self.staff.get(f"/api/v1/orders/{order['id']}/").json()
+        self.assertEqual((again["tax_amount"], again["shipping_amount"], again["total"]), before)
+
+    def test_tax_boundaries_and_rounding(self):
+        for rate, ok in (("0", True), ("100", True), ("100.01", False), ("-0.01", False)):
+            r = self.staff.patch(f"/api/v1/stores/{self.store.pk}/", {"taxRate": rate}, format="json")
+            self.assertEqual(r.status_code == 200, ok, rate)
+        self.configure(taxRate="8.25", shippingFlatRate="0")
+        cid = self.checkout(quantity=1, email="a@b.com", shipping_address=ADDRESS)
+        detail = self.shopper.get(f"{self.base}/checkout/{cid}/").data
+        self.assertEqual(detail["tax_amount"], "41.17")  # 499.00 * 8.25% = 41.1675 -> half up
+        self.assertEqual(detail["total_amount"], "540.17")

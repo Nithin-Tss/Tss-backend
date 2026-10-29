@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework import serializers
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from apps.core.viewsets import StoreScopedGenericViewSet
 
@@ -49,6 +50,13 @@ class MediaAssetViewSet(
     serializer_class = MediaAssetSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_throttles(self):
+        # Only uploads are rate limited (see DEFAULT_THROTTLE_RATES["media_upload"])
+        if self.action == "create":
+            self.throttle_scope = "media_upload"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         qs = super().get_queryset()

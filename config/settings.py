@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
     'corsheaders',
     'apps.core',
     'apps.tenancy',
@@ -227,6 +228,9 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # WhiteNoise warns on every middleware init when this directory is missing (fresh checkout, tests).
 STATIC_ROOT.mkdir(exist_ok=True)
 
+# Total picture bytes one store may keep in its media library (0 = unlimited)
+MEDIA_STORE_QUOTA_BYTES = int(os.getenv('MEDIA_STORE_QUOTA_BYTES', str(500 * 1024 * 1024)))
+
 # Uploaded files (product photos). Served by Django only while DEBUG is on;
 # in production the web server or a storage bucket serves MEDIA_URL.
 MEDIA_URL = '/media/'
@@ -292,6 +296,7 @@ API_ALLOWED_CONTENT_TYPES = {
 # API: every endpoint needs a signed-in user unless the view says otherwise.
 # Store-owned endpoints also need the X-Store-Id header (see apps/core/permissions.py).
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'apps.core.schema.TSSAutoSchema',
     # A JWT ("Authorization: Bearer ...") or the Django session cookie set at
     # sign-in; session requests must also send the CSRF token.
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -309,7 +314,34 @@ REST_FRAMEWORK = {
         # Public storefront: browsing/cart traffic, and the calls that create orders
         'storefront': '120/min',
         'storefront_checkout': '20/hour',
+        # Media library uploads per signed-in user
+        'media_upload': '120/hour',
     },
+}
+
+
+# OpenAPI 3 schema + docs (drf-spectacular): /api/v1/schema/, /api/v1/docs/, /api/v1/redoc/
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'TSS Commerce API',
+    'DESCRIPTION': (
+        'Multi-tenant commerce backend: staff/admin APIs (JWT or session auth) '
+        'and public storefront APIs.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SCHEMA_PATH_PREFIX': r'/api/v1',
+    'COMPONENT_SPLIT_REQUEST': True,
+    'ENUM_GENERATE_CHOICE_DESCRIPTION': True,
+    'ENUM_NAME_OVERRIDES': {'PublishStatusEnum': 'apps.catalog.models.Collection.STATUSES'},
+    'SERVERS': [{'url': '/', 'description': 'Current host'}],
+    # Docs/schema are open in development; in production only signed-in admin users
+    # (Django session, e.g. after logging in at /admin/) unless DJANGO_API_DOCS_PUBLIC=True.
+    'SERVE_PERMISSIONS': (
+        ['rest_framework.permissions.AllowAny']
+        if env_bool('DJANGO_API_DOCS_PUBLIC', default=DEBUG)
+        else ['rest_framework.permissions.IsAdminUser']
+    ),
+    'SERVE_AUTHENTICATION': ['rest_framework.authentication.SessionAuthentication'],
 }
 
 

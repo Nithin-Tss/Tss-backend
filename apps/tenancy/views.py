@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -14,6 +16,16 @@ from .serializers import StoreSerializer
 from .services import ACTIVE, CLOSED, OWNER, close_store, create_store, delete_store, reopen_store
 
 
+_STORE_ID = OpenApiParameter("id", OpenApiTypes.UUID, OpenApiParameter.PATH, description="Store id")
+
+
+@extend_schema_view(
+    retrieve=extend_schema(parameters=[_STORE_ID]),
+    partial_update=extend_schema(parameters=[_STORE_ID]),
+    destroy=extend_schema(parameters=[_STORE_ID]),
+    reopen=extend_schema(parameters=[_STORE_ID]),
+    permanent_delete=extend_schema(parameters=[_STORE_ID]),
+)
 class StoreViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
@@ -42,6 +54,8 @@ class StoreViewSet(
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):  # OpenAPI schema generation
+            return Store.objects.none()
         # A platform admin sees every store that isn't closed (and, to reopen one, the closed ones)
         if self.request.user.is_owner:
             stores = Store.objects.order_by("created_at")
