@@ -5771,3 +5771,32 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         html = self.client.get(page).content.decode()
         self.assertNotIn("data-tiers", html)
         self.assertIn('data-zoom="lightbox"', html)
+
+
+class ThemeImageUrlTest(StoreClientMixin, APITestCase):
+    PNG = bytes.fromhex("89504e470d0a1a0a") + bytes(40)
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("imgurl@example.com", "Img Store")
+
+    def upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        r = self.client.post("/api/v1/themes/images/", {"image": SimpleUploadedFile("a.png", self.PNG)}, format="multipart")
+        self.assertEqual(r.status_code, 201)
+        return r.json()["url"]
+
+    def test_logo_upload_saves_and_renders_on_storefront(self):
+        url = self.upload()
+        self.assertRegex(url, r"/s/_img/[0-9a-f-]{36}$")
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        header["settings"]["logo_image"] = url
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": header}})
+        for _ in range(2):  # again after a "refresh"
+            html = self.client.get(f"/s/{self.store['storeSlug']}/").content.decode()
+            self.assertIn(f'<img src="{url}"', html)
+        self.assertEqual(self.client.get(url.split("testserver")[-1]).status_code, 200)
+
+    def test_url_is_https_in_production(self):
+        from django.test import override_settings
+        with override_settings(DEBUG=False):
+            self.assertTrue(self.upload().startswith("https://"))

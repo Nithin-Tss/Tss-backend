@@ -471,7 +471,11 @@ class ThemeImageView(StoreThemeView):
     def post(self, request):
         # Kept in the database and listed in the store's media assets (product photos are not)
         asset = upload_image(request.store.store_id, request.FILES.get("image"), request.user)
-        return Response({"url": request.build_absolute_uri(asset.url)}, status=status.HTTP_201_CREATED)
+        url = request.build_absolute_uri(asset.url)
+        # Behind a proxy Django sees plain http; an http image on the https storefront is blocked by the browser
+        if not settings.DEBUG and url.startswith("http://"):
+            url = "https://" + url[len("http://"):]
+        return Response({"url": url}, status=status.HTTP_201_CREATED)
 
 
 THEME_IMAGE_CACHE_SECONDS = 60 * 60
