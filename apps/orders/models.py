@@ -237,6 +237,8 @@ class DraftOrder(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=30)
+    # Estimated from the store's tax rules and the customer's address; the order recalculates it
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=12, decimal_places=2)
     currency_code = models.CharField(max_length=3)
 

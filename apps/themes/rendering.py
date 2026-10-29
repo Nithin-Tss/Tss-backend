@@ -2267,6 +2267,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         "cart_session": cart_session,
         "store_details": {
             "tax_rate": str(store.tax_rate or 0),
+            "prices_include_tax": bool(store.prices_include_tax),
             "shipping_flat_rate": str(store.shipping_flat_rate or "0.00"),
             "free_shipping_threshold": str(store.free_shipping_threshold or "") if store.free_shipping_threshold is not None else "",
         },

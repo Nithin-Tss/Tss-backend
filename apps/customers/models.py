@@ -60,6 +60,9 @@ class Customer(models.Model):
         blank=True,
     )
 
+    # Tax-exempt customers (e.g. resellers) are charged no tax
+    tax_exempt = models.BooleanField(default=False)
+
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

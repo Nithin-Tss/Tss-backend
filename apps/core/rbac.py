@@ -228,7 +228,7 @@ _AREA_BY_APP = {
     "orders": "orders", "payments": "orders", "commerce": "orders",
     "delivery": "shipping",
 }
-_AREA_BY_MODEL = {"DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping"}
+_AREA_BY_MODEL = {"DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "TaxRate": "shipping"}
 
 
 def area_for_model(model):

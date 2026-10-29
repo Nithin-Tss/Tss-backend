@@ -406,7 +406,8 @@ class OrderCreateSerializer(StoreScopedSerializerMixin, serializers.ModelSeriali
 
     items = OrderLineInputSerializer(many=True)
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
-    tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
+    # Left out, the tax follows the store's tax rules; given, it is taken as is
+    tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, required=False)
     shipping_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
     currency_code = CurrencyCodeField(max_length=3, required=False)
 
@@ -475,10 +476,10 @@ class DraftOrderSerializer(StoreScopedSerializerMixin, serializers.ModelSerializ
     class Meta:
         model = DraftOrder
         fields = [
-            "id", "draft_number", "customer", "customer_name", "po_number", "status", "total", "currency_code",
+            "id", "draft_number", "customer", "customer_name", "po_number", "status", "tax_amount", "total", "currency_code",
             "order", "created_by", "details", "created_at", "updated_at",
         ]
-        read_only_fields = ["draft_number", "status", "total", "order", "created_by"]
+        read_only_fields = ["draft_number", "status", "tax_amount", "total", "order", "created_by"]
 
     def get_customer_name(self, draft):
         c = draft.customer

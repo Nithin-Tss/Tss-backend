@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Prefetch
 
 from apps.core.admin_guards import SameStoreForm, StoreGuardAdmin
-from .models import ShippingRate, Store, StoreMembership
+from .models import ShippingRate, Store, StoreMembership, TaxRate
 from .services import ACTIVE, OWNER, REMOVED, purge_store
 
 
@@ -138,3 +138,9 @@ class StoreMembershipAdmin(StoreGuardAdmin):
 class ShippingRateAdmin(StoreGuardAdmin):
     list_display = ("__str__", "store_name", "country", "min_weight", "max_weight", "price")
     search_fields = ("name", "country", "store__store_name")
+
+
+@admin.register(TaxRate)
+class TaxRateAdmin(StoreGuardAdmin):
+    list_display = ("__str__", "store_name", "country", "region", "rate")
+    search_fields = ("name", "country", "region", "store__store_name")

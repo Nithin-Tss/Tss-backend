@@ -16,7 +16,7 @@ from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.inventory.models import Location
 from apps.inventory.services import set_available
 from apps.orders.models import Order
-from apps.tenancy.models import ShippingRate, Store
+from apps.tenancy.models import ShippingRate, Store, TaxRate
 
 from . import services
 from .models import Cart
@@ -537,3 +537,83 @@ class ShippingCalculationTests(CommerceTestBase):
         checkout = self._checkout()
         self.assertEqual(checkout.tax_amount, Decimal("99.80"))
         self.assertEqual(checkout.total_amount, Decimal("1147.80"))
+
+
+class TaxRulesTests(CommerceTestBase):
+    """Destination rates, exempt goods and customers, tax-inclusive prices, per-line tax."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.tax_rate = Decimal("10.00")
+        self.store.save()
+
+    def _checkout(self, qty=2, address=None, customer=None):
+        # a fresh session each call: the cart is reused per session and quantities would add up
+        self._sessions = getattr(self, "_sessions", 0) + 1
+        cart = services.get_or_create_cart(self.store, session_id=f"tax-{self._sessions}", customer=customer)
+        services.add_item(cart, self.product, qty)
+        address = {"city": "X"} if address is None else {"city": "X", **address}
+        return services.start_checkout(cart, email="a@b.com", shipping_address=address)
+
+    def test_most_specific_rate_wins(self):
+        TaxRate.objects.create(store=self.store, country="India", rate=Decimal("18.00"))
+        TaxRate.objects.create(store=self.store, country="India", region="Kerala", rate=Decimal("12.00"))
+        self.assertEqual(self._checkout(address={"country": "india", "state": "kerala"}).tax_amount, Decimal("119.76"))
+        self.assertEqual(self._checkout(address={"country": "India", "state": "Goa"}).tax_amount, Decimal("179.64"))
+        self.assertEqual(self._checkout(address={"country": "France"}).tax_amount, Decimal("99.80"))  # store rate
+
+    def test_exempt_product_is_not_taxed(self):
+        other = Product.objects.create(store=self.store, title="Book", status="active", is_taxable=False)
+        v2 = ProductVariant.objects.create(product=other, sku="BK-1", price=Decimal("100.00"))
+        for channel in online_channels(self.store):
+            ProductSalesChannel.objects.create(product=other, sales_channel=channel)
+        set_available(v2, self.location, 5)
+        cart = services.get_or_create_cart(self.store, session_id="tax2")
+        services.add_item(cart, self.product, 1)
+        services.add_item(cart, other, 1)
+        checkout = services.start_checkout(cart, email="a@b.com", shipping_address={"city": "X"})
+        self.assertEqual(checkout.tax_amount, Decimal("49.90"))  # only the tee
+        order = services._place_order(checkout, "cod")
+        self.assertEqual({i.product_name: i.tax_amount for i in order.items.all()},
+                         {"Tee": Decimal("49.90"), "Book": Decimal("0.00")})
+        self.assertEqual(order.tax_amount, Decimal("49.90"))
+
+    def test_tax_exempt_customer_pays_no_tax(self):
+        customer = Customer.objects.create(store=self.store, email="r@b.com", tax_exempt=True)
+        self.assertEqual(self._checkout(customer=customer).tax_amount, Decimal("0.00"))
+
+    def test_inclusive_prices_report_tax_without_adding_it(self):
+        self.store.prices_include_tax = True
+        self.store.save()
+        checkout = self._checkout()
+        self.assertEqual(checkout.tax_amount, Decimal("90.73"))  # 998 * 10/110
+        self.assertEqual(checkout.total_amount, Decimal("998.00"))
+        order = services._place_order(checkout, "cod")
+        self.assertEqual(order.total, Decimal("998.00"))
+        self.assertEqual(order.tax_amount, Decimal("90.73"))
+
+    def test_shipping_taxed_only_when_enabled(self):
+        self.store.shipping_flat_rate = Decimal("50.00")
+        self.store.save()
+        self.assertEqual(self._checkout().tax_amount, Decimal("99.80"))
+        self.store.tax_shipping = True
+        self.store.save()
+        self.assertEqual(self._checkout().tax_amount, Decimal("104.80"))
+
+    def test_line_taxes_add_up_to_order_tax(self):
+        from . import tax
+        self.store.tax_rate = Decimal("7.50")
+        result = tax.calculate(self.store, [{"amount": Decimal("0.33"), "taxable": True}] * 3,
+                               discount=Decimal("0.10"))
+        self.assertEqual(sum(result.line_taxes), result.total)
+        self.assertEqual(result.total, Decimal("0.07"))  # (0.99 - 0.10) * 7.5%
+
+    def test_manual_order_computes_tax_unless_given(self):
+        from apps.orders import services as order_services
+        line = [{"product": self.product, "variant": self.variant, "quantity": 1}]
+        auto = order_services.create_order(self.store, line)
+        self.assertEqual(auto.tax_amount, Decimal("49.90"))
+        self.assertEqual(auto.total, Decimal("548.90"))
+        given = order_services.create_order(self.store, line, tax_amount=Decimal("5.00"))
+        self.assertEqual(given.tax_amount, Decimal("5.00"))
+        self.assertEqual(given.items.get().tax_amount, Decimal("5.00"))

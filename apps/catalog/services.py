@@ -290,7 +290,7 @@ def save_product(store, data, product=None, user=None):
     creating = product is None
     product = product or Product(store=store)
 
-    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template", *EXTRA_FIELDS):
+    for field in ("title", "description", "product_type", "vendor", "seo_title", "seo_description", "theme_template", "is_taxable", *EXTRA_FIELDS):
         if field in data:
             value = data[field]
             # Extra fields are free text: blank means "not set"

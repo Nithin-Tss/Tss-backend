@@ -14,6 +14,8 @@ from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 from . import services
 from apps.tenancy.models import Store
 
+from apps.commerce import tax as tax_rules
+
 from .models import DraftOrder, DraftOrderDetail, Order, OrderIdempotencyKey
 from .serializers import DraftOrderSerializer, OrderCreateSerializer, OrderSerializer
 
@@ -161,6 +163,22 @@ class DraftOrderViewSet(StoreScopedViewSet):
 
         draft.total = total
         draft.save(update_fields=["total", "updated_at"])
+        self._price_tax(draft)
+
+    def _price_tax(self, draft):
+        """Estimate the draft's tax from the store's tax rules and the customer's address."""
+        store, customer = draft.store, draft.customer
+        details = list(draft.details.select_related("product"))
+        country, region = services.destination(customer)
+        result = tax_rules.calculate(
+            store,
+            [{"amount": d.total, "taxable": d.product is None or d.product.is_taxable} for d in details],
+            country=country, region=region, exempt=customer.tax_exempt,
+        )
+        subtotal = sum((d.total for d in details), Decimal("0.00"))
+        draft.tax_amount = result.total
+        draft.total = tax_rules.grand_total(store, subtotal, Decimal("0.00"), result.total, Decimal("0.00"))
+        draft.save(update_fields=["tax_amount", "total", "updated_at"])
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -186,6 +204,9 @@ class DraftOrderViewSet(StoreScopedViewSet):
         draft = serializer.save()
         if details is not None:
             self._save_details(draft, details)
+        else:
+            # The customer may have changed, and with them the tax
+            self._price_tax(draft)
 
     @transaction.atomic
     def perform_destroy(self, instance):

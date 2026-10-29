@@ -170,6 +170,9 @@ class Product(models.Model):
         blank=True,
     )
 
+    # Untick for tax-exempt goods: no tax is charged on this product
+    is_taxable = models.BooleanField(default=True)
+
     description = models.TextField(
         null=True,
         blank=True,

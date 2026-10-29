@@ -141,7 +141,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         fields = [
             "id", "first_name", "last_name", "name", "email", "email_subscription_status",
             "city", "state", "country", "location", "orders_count", "amount_spent",
-            "phone", "addresses", "created_at", "updated_at",
+            "phone", "addresses", "tax_exempt", "created_at", "updated_at",
         ]
 
     def _get_default_or_first_address(self, obj):

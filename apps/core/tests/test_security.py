@@ -46,7 +46,7 @@ from apps.inventory.models import InventoryItem, Location, Transfer
 from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
 from apps.purchasing.models import PurchaseOrder
-from apps.tenancy.models import ShippingRate, Store
+from apps.tenancy.models import ShippingRate, Store, TaxRate
 from apps.wishlist.models import Wishlist, WishlistItem
 
 from .test_flow import StoreClientMixin
@@ -442,6 +442,7 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             product, variant, customer, location, order, order_item, fulfillment, gateway, cart, wishlist,
             Category.objects.create(store=store, name="Tops"),
             ShippingRate.objects.create(store=store, country="India", price=60),
+            TaxRate.objects.create(store=store, country="India", rate=18),
             Collection.objects.create(store=store, name="promotions"),
             Catalogue.objects.create(store=store, name="wholesale"),
             CustomerAddress.objects.create(customer=customer, address_type="shipping", address_line_1="1 Main St",

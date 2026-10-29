@@ -3,13 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
-from apps.tenancy.models import ShippingRate
+from apps.tenancy.models import ShippingRate, TaxRate
 
 from . import services
 from .models import DeliveryGateway, Shipment
 from .serializers import (
     DeliveryGatewaySerializer,
     ShippingRateSerializer,
+    TaxRateSerializer,
     ShipmentSerializer,
     ShipSerializer,
     TrackingEventSerializer,
@@ -30,6 +31,14 @@ class ShippingRateViewSet(StoreScopedViewSet):
     permission_resource = "shipping"
     queryset = ShippingRate.objects.order_by("country", "min_weight")
     serializer_class = ShippingRateSerializer
+
+
+class TaxRateViewSet(StoreScopedViewSet):
+    """/api/v1/delivery/tax-rates/  tax percentages by country and region (Store.tax_rate is the fallback)"""
+
+    permission_resource = "shipping"
+    queryset = TaxRate.objects.order_by("country", "region")
+    serializer_class = TaxRateSerializer
 
 
 class ShipmentViewSet(

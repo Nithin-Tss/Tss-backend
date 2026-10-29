@@ -9,6 +9,7 @@ from django.dispatch import Signal
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from apps.commerce import tax as tax_rules
 from apps.core.numbering import next_number
 from apps.inventory import services as inventory
 
@@ -36,6 +37,45 @@ def _money(value):
     return amount
 
 
+def destination(customer=None, checkout=None):
+    """(country, region) tax is charged for: the checkout's shipping address, else the customer's."""
+    address = checkout.shipping_address if checkout is not None else None
+    if isinstance(address, dict) and address.get("country"):
+        return address.get("country"), address.get("state") or address.get("region") or address.get("province")
+    if customer is not None:
+        default = next((a for a in customer.addresses.all() if a.is_default), None) or customer.addresses.first()
+        if default is not None:
+            return default.country, default.state
+        return customer.country, customer.state
+    return None, None
+
+
+def _apply_tax(order, items, lines, order_discount, customer, checkout, explicit):
+    """Set tax_amount on the order and on each of its items."""
+    store = order.store
+    amounts = [i.total for i in items]
+    taxable = [bool(i.product.is_taxable) for i in items]
+
+    if explicit:
+        # Keep the given amount; the lines carry their share of it
+        shares = tax_rules.allocate(order.tax_amount, [a if t else ZERO for a, t in zip(amounts, taxable)])
+    else:
+        country, region = destination(customer, checkout)
+        result = tax_rules.calculate(
+            store,
+            [{"amount": a, "taxable": t} for a, t in zip(amounts, taxable)],
+            discount=order_discount, shipping=order.shipping_amount, country=country, region=region,
+            exempt=bool(customer is not None and customer.tax_exempt),
+        )
+        order.tax_amount = result.total
+        shares = result.line_taxes
+
+    for item, share in zip(items, shares):
+        if share:
+            item.tax_amount = share
+            item.save(update_fields=["tax_amount", "updated_at"])
+
+
 @transaction.atomic
 def create_order(
     store,
@@ -43,7 +83,7 @@ def create_order(
     customer=None,
     currency=None,
     discount_amount=ZERO,
-    tax_amount=ZERO,
+    tax_amount=None,
     shipping_amount=ZERO,
     sales_channel=None,
     delivery_method=None,
@@ -56,6 +96,9 @@ def create_order(
     Prices default to the variant's current price. Stock is committed.
     checkout: the storefront checkout being placed; the order links to it and
     keeps a copy of its email and addresses.
+    tax_amount: left out, tax follows the store's tax rules for the checkout's
+    address (or the customer's) and is split over the lines. A given amount is
+    kept as is and shared over the taxable lines.
     """
     if not lines:
         raise ValidationError({"items": "An order needs at least one item."})
@@ -69,7 +112,8 @@ def create_order(
     if checkout is not None and checkout.store_id != store.pk:
         raise ValidationError({"checkout": "Checkout does not belong to this store."})
 
-    tax_amount = _money(tax_amount)
+    explicit_tax = tax_amount is not None
+    tax_amount = _money(tax_amount) if explicit_tax else ZERO
     shipping_amount = _money(shipping_amount)
     discount_amount = _money(discount_amount)
     if min(tax_amount, shipping_amount, discount_amount) < ZERO:
@@ -98,6 +142,7 @@ def create_order(
     )
 
     subtotal = line_discounts = ZERO
+    items = []
 
     # Lock the stock of every line's variant, in one fixed order, before any of it is changed
     inventory.lock_stock(store.pk, [
@@ -129,7 +174,7 @@ def create_order(
                 {"items": "Prices and discounts must be non-negative, and discounts can't exceed the item subtotal."}
             )
 
-        OrderItem.objects.create(
+        item = OrderItem.objects.create(
             order=order,
             product=product,
             variant=variant,
@@ -144,6 +189,7 @@ def create_order(
         )
         inventory.commit(variant, quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
 
+        items.append(item)
         subtotal += gross
         line_discounts += discount
 
@@ -152,8 +198,10 @@ def create_order(
 
     order.subtotal = subtotal
     order.discount_amount = line_discounts + _money(discount_amount)
-    order.total = max(subtotal - order.discount_amount + order.tax_amount + order.shipping_amount, ZERO)
-    order.save(update_fields=["subtotal", "discount_amount", "total", "updated_at"])
+
+    _apply_tax(order, items, lines, _money(discount_amount), customer, checkout, explicit_tax)
+    order.total = tax_rules.grand_total(store, subtotal, order.discount_amount, order.tax_amount, order.shipping_amount)
+    order.save(update_fields=["subtotal", "discount_amount", "tax_amount", "total", "updated_at"])
 
     transaction.on_commit(lambda: order_placed.send(sender=Order, order=order))
     return order

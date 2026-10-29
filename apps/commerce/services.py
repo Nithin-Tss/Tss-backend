@@ -18,6 +18,7 @@ from apps.orders import services as orders
 from apps.orders.models import Order
 from apps.payments import services as payments
 
+from . import tax as tax_rules
 from .models import Cart, CartItem, Checkout, CheckoutItem
 
 CART_OPEN, CART_CHECKED_OUT, CART_MERGED, CART_EXPIRED = "open", "checked_out", "merged", "expired"
@@ -331,13 +332,15 @@ def _shipping_rate(store, country, weight):
     return None if best is None else _money(best[1].price)
 
 
-def _tax_and_shipping(store, subtotal, discount_amount, country=None, weight=ZERO):
+def _tax_and_shipping(store, subtotal, discount_amount, country=None, weight=ZERO, region=None, lines=None, exempt=False):
     """
-    Tax on the discounted subtotal. Shipping is the matching weight/country rate,
-    else the flat fee; free once the discounted subtotal meets the threshold.
+    Tax by the store's tax rules (see tax.py), on the discounted lines. Shipping
+    is the matching weight/country rate, else the flat fee; free once the
+    discounted subtotal meets the threshold.
+
+    lines: [{"amount", "taxable"}]; without them the subtotal is one taxable line.
     """
     taxable = max(subtotal - discount_amount, ZERO)
-    tax = (taxable * Decimal(store.tax_rate or 0) / Decimal(100)).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
     shipping = _shipping_rate(store, country, weight)
     if shipping is None:
@@ -345,7 +348,12 @@ def _tax_and_shipping(store, subtotal, discount_amount, country=None, weight=ZER
     threshold = store.free_shipping_threshold
     if subtotal <= ZERO or (threshold is not None and taxable >= threshold):
         shipping = ZERO
-    return tax, shipping
+
+    result = tax_rules.calculate(
+        store, lines if lines is not None else [{"amount": subtotal, "taxable": True}],
+        discount=discount_amount, shipping=shipping, country=country, region=region, exempt=exempt,
+    )
+    return result.total, shipping
 
 
 def _cart_weight(items):
@@ -372,14 +380,17 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
 
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
-    lines = checkout.items.filter(is_deleted=False).select_related("variant")
+    lines = list(checkout.items.filter(is_deleted=False).select_related("variant", "product"))
     address = checkout.shipping_address if isinstance(checkout.shipping_address, dict) else {}
     checkout.tax_amount, checkout.shipping_amount = _tax_and_shipping(
         checkout.store, checkout.subtotal, checkout.discount_amount,
         country=address.get("country"), weight=_cart_weight(lines),
+        region=address.get("state") or address.get("region") or address.get("province"),
+        lines=[{"amount": i.total_price, "taxable": i.product.is_taxable} for i in lines],
+        exempt=bool(checkout.customer and checkout.customer.tax_exempt),
     )
-    checkout.total_amount = max(
-        checkout.subtotal - checkout.discount_amount + checkout.tax_amount + checkout.shipping_amount, ZERO
+    checkout.total_amount = tax_rules.grand_total(
+        checkout.store, checkout.subtotal, checkout.discount_amount, checkout.tax_amount, checkout.shipping_amount
     )
     checkout.save()
     return checkout

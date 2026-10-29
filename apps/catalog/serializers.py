@@ -91,6 +91,7 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
     )
     quantity = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     continue_selling = serializers.BooleanField(required=False)
+    is_taxable = serializers.BooleanField(required=False)
 
     def get_fields(self):
         fields = super().get_fields()
@@ -158,7 +159,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             "id", "title", "status", "description", "category", "category_id", "product_type",
-            "vendor", "seo_title", "seo_description", "theme_template", "price", "sku",
+            "vendor", "seo_title", "seo_description", "theme_template", "is_taxable", "price", "sku",
             "collections", "tags", "variants", "quantity", "images", "sales_channels", "createdAt", "updatedAt",
             *EXTRA_FIELDS,
         ]

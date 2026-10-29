@@ -40,6 +40,10 @@ class Store(models.Model):
     # a flat fee, waived once the discounted subtotal reaches free_shipping_threshold.
     # ShippingRate rows (by destination country and cart weight) override the flat fee.
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Tax rules: TaxRate rows (country / region) override tax_rate. With prices_include_tax
+    # the listed prices already contain tax, so tax is reported but not added to the total.
+    prices_include_tax = models.BooleanField(default=False)
+    tax_shipping = models.BooleanField(default=False)
     shipping_flat_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_shipping_threshold = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
@@ -94,6 +98,34 @@ class ShippingRate(models.Model):
 
     def __str__(self):
         return self.name or f"{self.country or 'Anywhere'} {self.min_weight}+"
+
+
+class TaxRate(models.Model):
+    """
+    A tax percentage for one destination: a country (blank country = the whole
+    world) and optionally one state or region of it. The most specific rule
+    for the shopper's address wins; Store.tax_rate applies when none fits.
+    """
+
+    rate_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="tax_rates")
+    name = models.CharField(max_length=100, blank=True, default="")
+    country = models.CharField(max_length=100, blank=True, default="")
+    region = models.CharField(max_length=100, blank=True, default="")
+    rate = models.DecimalField(max_digits=5, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"tenancy"."tax_rates"'
+        verbose_name = "Tax rate"
+        verbose_name_plural = "Tax rates"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(rate__gte=0) & models.Q(rate__lte=100), name="taxrate_rate_range"),
+            models.UniqueConstraint(fields=["store", "country", "region"], name="uq_taxrate_store_destination"),
+        ]
+
+    def __str__(self):
+        return self.name or f"{self.region + ', ' if self.region else ''}{self.country or 'Anywhere'} {self.rate}%"
 
 
 class StoreMembership(models.Model):

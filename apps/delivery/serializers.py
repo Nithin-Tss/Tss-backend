@@ -3,7 +3,7 @@ from rest_framework import serializers
 from apps.core.viewsets import StoreScopedSerializerMixin
 from apps.fulfillment.models import Fulfillment
 
-from apps.tenancy.models import ShippingRate
+from apps.tenancy.models import ShippingRate, TaxRate
 
 from .models import DeliveryGateway, Shipment, ShipmentItem, TrackingEvent
 
@@ -98,4 +98,36 @@ class ShippingRateSerializer(serializers.ModelSerializer):
         high = attrs.get("max_weight", getattr(self.instance, "max_weight", None))
         if high is not None and high <= low:
             raise serializers.ValidationError({"max_weight": "Must be greater than the minimum weight."})
+        return attrs
+
+
+class TaxRateSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(source="rate_id", read_only=True)
+    rate = serializers.DecimalField(max_digits=5, decimal_places=2, min_value=0, max_value=100)
+
+    class Meta:
+        model = TaxRate
+        fields = ["id", "name", "country", "region", "rate", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def validate_name(self, value):
+        return value.strip()
+
+    def validate_country(self, value):
+        return value.strip()
+
+    def validate_region(self, value):
+        return value.strip()
+
+    def validate(self, attrs):
+        country = attrs.get("country", getattr(self.instance, "country", ""))
+        region = attrs.get("region", getattr(self.instance, "region", ""))
+        if region and not country:
+            raise serializers.ValidationError({"country": "A region needs its country."})
+        store = self.context["request"].store
+        clash = TaxRate.objects.filter(store=store, country__iexact=country, region__iexact=region)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError("This store already has a tax rate for that destination.")
         return attrs
