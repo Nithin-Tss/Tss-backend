@@ -82,6 +82,28 @@ def _locked_item(variant, location):
     return qs.get()
 
 
+# The queries that lock stock rows. Each locks the stock rows ONLY: no join, no FOR UPDATE OF (the tables
+# have schema-qualified names, which PostgreSQL does not accept in OF), so a join would lock other tables too.
+
+def stock_lock_query(variant_ids):
+    """Every stock row of these variants, locked, in the one fixed order: variant id, then location id."""
+    return (
+        InventoryItem.objects.select_for_update()
+        .filter(variant_id__in=variant_ids)
+        .order_by("variant_id", "location_id")
+    )
+
+
+def variant_stock_lock_query(variant, order_by):
+    """One variant's stock rows, locked, best-stocked first. The locations are fetched apart, without a lock."""
+    return (
+        InventoryItem.objects.select_for_update()
+        .filter(variant=variant)
+        .order_by(order_by)
+        .prefetch_related("location")
+    )
+
+
 def lock_stock(store_id, variant_ids):
     """
     Lock the stock rows of these variants (this store's only) until the transaction ends, in ONE fixed
@@ -93,12 +115,13 @@ def lock_stock(store_id, variant_ids):
     ids = {pk for pk in variant_ids if pk is not None}
     if not ids:
         return []
-    return list(
-        InventoryItem.objects.select_for_update(of=("self",))
-        .filter(variant_id__in=ids, variant__product__store_id=store_id)
-        .order_by("variant_id", "location_id")
-        .values_list("pk", flat=True)
+    # This store's variants only (a plain read; it locks nothing), then lock their stock rows with no join
+    mine = list(
+        ProductVariant.objects.filter(pk__in=ids, product__store_id=store_id).values_list("pk", flat=True)
     )
+    if not mine:
+        return []
+    return list(stock_lock_query(mine).values_list("pk", flat=True))
 
 
 def adjust_inventory(
@@ -321,12 +344,7 @@ def restock_refund(variant, location, quantity, user_id=None, source="refund", r
 
 def _split(variant, quantity, field, reason, user_id, source, reference_id):
     """Spread `quantity` over the variant's locations (most `field` first) through adjust_inventory."""
-    items = list(
-        InventoryItem.objects.select_for_update(of=("self",))
-        .filter(variant=variant)
-        .select_related("location")
-        .order_by(f"-{field}")
-    )
+    items = list(variant_stock_lock_query(variant, f"-{field}"))
     left = quantity
     for item in items:
         take = min(getattr(item, field), left)
@@ -345,10 +363,7 @@ def commit(variant, quantity, user_id=None, source="order", reference_id=None):
     """An order was placed: move stock from available to committed."""
     if variant is None or not is_tracked(variant):
         return
-    items = list(
-        InventoryItem.objects.select_for_update(of=("self",)).filter(variant=variant).select_related("location")
-        .order_by("-available")
-    )
+    items = list(variant_stock_lock_query(variant, "-available"))
     total = sum(i.available for i in items)
     if total < quantity and not variant.continue_selling:
         raise ValidationError(f"Only {total} left of {_label(variant)}.")

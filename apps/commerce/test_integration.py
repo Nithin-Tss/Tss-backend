@@ -2,13 +2,18 @@
 End-to-end commerce flows: the public storefront API and the staff API working
 against the same store, with real sign-up, store membership and permissions.
 """
+import threading
+import unittest
 from datetime import timedelta
 from io import StringIO
 from unittest import mock
 from decimal import Decimal
 
 from django.core.cache import cache
+from django.db import connection
+from django.test import TransactionTestCase
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient, APITestCase
 
 from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
@@ -16,6 +21,7 @@ from apps.catalog.services import online_channels
 from apps.discounts.models import Discount, DiscountCode
 from apps.inventory.models import InventoryItem, Location
 from apps.inventory.services import sellable, set_available
+from apps.orders import services as orders_services
 from apps.orders.models import Order
 from apps.tenancy.models import Store
 
@@ -496,3 +502,77 @@ class SweepCartsTests(CommerceIntegrationBase):
         self.assertEqual(self.staff.get("/api/v1/carts/?status=expired").json()[0]["session_id"], "sess-idle-aaaaaaaaaaa")
         # the cart with a checkout in progress is kept open so the shopper can still buy
         self.assertEqual(self.place(cid).status_code, 201)
+
+
+@unittest.skipUnless(connection.vendor == "postgresql", "needs PostgreSQL: SQLite ignores row locks")
+class ConcurrentStockTests(TransactionTestCase):
+    """
+    Real threads against real row locks. Skipped on SQLite. Run it only on a LOCAL PostgreSQL
+    (see the commands given with this change): it writes real rows into the test database.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.store = Store.objects.create(store_name="Race Shop", store_slug="race-shop", status="active")
+        self.location = Location.objects.create(store=self.store, name="Main warehouse")
+
+    def race(self, jobs):
+        """Run each job in its own thread, all released at the same moment: [("ok", value) | ("refused", text) | ("error", text)]."""
+        barrier = threading.Barrier(len(jobs))
+        results = [None] * len(jobs)
+
+        def run(index, job):
+            try:
+                barrier.wait(timeout=30)
+                results[index] = ("ok", job())
+            except ValidationError as exc:
+                results[index] = ("refused", str(exc.detail))
+            except Exception as exc:  # a deadlock or a SQL error ends up here
+                results[index] = ("error", repr(exc))
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=run, args=(i, job)) for i, job in enumerate(jobs)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        return results
+
+    def test_two_shoppers_race_for_the_last_unit_and_only_one_gets_it(self):
+        product, variant = stock_product(self.store, "Tee", "TEE-1", "499.00", 1, self.location)
+        checkouts = []
+        for n in (1, 2):
+            cart = services.get_or_create_cart(self.store, session_id=f"race-session-{n}-aaaaaaaa")
+            services.add_item(cart, product, 1, variant)
+            checkouts.append(services.start_checkout(cart, email=f"s{n}@example.com", shipping_address=ADDRESS))
+
+        results = self.race([lambda checkout=checkout: services.place_order(checkout) for checkout in checkouts])
+
+        self.assertEqual(sorted(kind for kind, _ in results), ["ok", "refused"], results)
+        refused = next(text for kind, text in results if kind == "refused")
+        self.assertTrue("left" in refused or "sold out" in refused, refused)  # the lock-time or the early message
+        item = InventoryItem.objects.get(variant=variant)
+        self.assertEqual((item.available, item.committed, item.on_hand), (0, 1, 1))
+        self.assertEqual(Order.objects.count(), 1)
+
+    def test_two_orders_with_the_same_products_in_opposite_order_do_not_deadlock(self):
+        tee, tee_variant = stock_product(self.store, "Tee", "TEE-1", "499.00", 50, self.location)
+        hat, hat_variant = stock_product(self.store, "Hat", "HAT-1", "299.00", 50, self.location)
+
+        def order(first, second):
+            def place():
+                return orders_services.create_order(self.store, [
+                    {"product": first[0], "variant": first[1], "quantity": 1},
+                    {"product": second[0], "variant": second[1], "quantity": 1},
+                ])
+            return place
+
+        for _ in range(10):
+            results = self.race([order((tee, tee_variant), (hat, hat_variant)), order((hat, hat_variant), (tee, tee_variant))])
+            self.assertEqual([kind for kind, _ in results], ["ok", "ok"], results)
+
+        for variant in (tee_variant, hat_variant):
+            item = InventoryItem.objects.get(variant=variant)
+            self.assertEqual((item.available, item.committed), (30, 20))
+        self.assertEqual(Order.objects.count(), 20)

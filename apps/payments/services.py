@@ -124,6 +124,29 @@ def refund(payment, amount, reason=None):
 
 
 @transaction.atomic
+def refund_unrefunded(order, reason="Order cancelled"):
+    """
+    Refund whatever is still unrefunded on the order's captured payments, one payment at a time
+    (Stripe ones are refunded at Stripe first, see refund()). Manual and cash-on-delivery payments
+    only get the refund recorded: staff hand the money back themselves. Nothing to refund does nothing.
+    If any refund fails nothing is recorded for it and the error is raised. Returns the amount refunded now.
+    """
+    total = Decimal("0.00")
+    ids = Payment.objects.filter(
+        order=order, is_deleted=False, status__in=(CAPTURED, PARTIALLY_REFUNDED)
+    ).order_by("created_at", "pk").values_list("pk", flat=True)
+    for pk in list(ids):
+        payment = Payment.objects.select_for_update().get(pk=pk)
+        if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
+            continue
+        left = payment.amount - refunded_total(payment)
+        if left > 0:
+            refund(payment, left, reason)
+            total += left
+    return total
+
+
+@transaction.atomic
 def record_external_refund(payment, total_refunded, reason="refunded_at_provider"):
     """
     The provider says `total_refunded` of this payment has been refunded in all (e.g. from the

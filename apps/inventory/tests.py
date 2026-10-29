@@ -5,9 +5,10 @@ Inventory API tests.
 """
 import uuid
 import copy
+import unittest
 from unittest import mock
 
-from django.db import transaction
+from django.db import connection, transaction
 from rest_framework.test import APITestCase
 
 from apps.catalog.models import ProductVariant
@@ -475,3 +476,53 @@ class StockLockOrderTests(StoreClientMixin, APITestCase):
             self.ok("post", f"/api/v1/inventory/transfers/{transfer['id']}/complete/")
         self.assertEqual(locked.call_count, 1)
         self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variants[0], self.variants[2]})
+
+    def test_the_lock_queries_have_no_of_and_no_join(self):
+        """
+        PostgreSQL refuses FOR UPDATE OF "schema"."table" (our tables are schema-qualified), and a join would
+        lock the joined tables too. SQLite ignores FOR UPDATE completely, so look at the SQL itself.
+        """
+        import re
+
+        from django.db import connection
+
+        from apps.catalog.models import ProductVariant
+        from apps.inventory import services
+        from apps.inventory.models import InventoryItem
+
+        def sql_of(queryset):
+            with mock.patch.object(connection.features, "has_select_for_update", True), mock.patch.object(
+                connection.features, "has_select_for_update_of", True
+            ):
+                return queryset.query.get_compiler(using=queryset.db).as_sql()[0]
+
+        variant = ProductVariant.objects.get(pk=self.variants[0])
+        queries = {
+            "lock_stock": services.stock_lock_query(self.variants),
+            "commit": services.variant_stock_lock_query(variant, "-available"),
+            "split": services.variant_stock_lock_query(variant, "-committed"),
+        }
+        for name, queryset in queries.items():
+            with self.subTest(query=name):
+                sql = sql_of(queryset)
+                self.assertIn("FOR UPDATE", sql)
+                self.assertNotRegex(sql, r"FOR UPDATE OF")
+                self.assertNotIn("JOIN", sql.upper())
+        self.assertRegex(sql_of(queries["lock_stock"]), r'ORDER BY [^,]*"variant_id" ASC, [^,]*"location_id" ASC')
+
+        # The same check must see the two mistakes it is here for
+        self.assertRegex(sql_of(InventoryItem.objects.select_for_update(of=("self",))), r"FOR UPDATE OF")
+        self.assertIn("JOIN", sql_of(
+            InventoryItem.objects.select_for_update().filter(variant__product__store_id=self.store_id)
+        ).upper())
+
+    @unittest.skipUnless(connection.vendor == "postgresql", "needs PostgreSQL: SQLite ignores row locks")
+    def test_the_lock_queries_run_on_postgresql(self):
+        from apps.catalog.models import ProductVariant
+        from apps.inventory import services
+
+        variant = ProductVariant.objects.get(pk=self.variants[0])
+        with transaction.atomic():
+            self.assertEqual(len(services.lock_stock(self.store_id, self.variants)), 6)
+            services.commit(variant, 2)  # the lock query that runs when an order is placed
+            services.release(variant, 2)  # and the one that runs when it is cancelled

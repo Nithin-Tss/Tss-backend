@@ -11,6 +11,8 @@ from unittest import mock
 from django.test import override_settings
 from rest_framework.exceptions import ValidationError
 
+from apps.inventory.services import sellable
+from apps.orders import services as orders_services
 from apps.orders.models import Order
 
 from apps.commerce import tests as base_tests
@@ -231,3 +233,225 @@ class PaymentFlowTests(base_tests.CommerceTestBase):
         r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/confirm/", **self.h)
         self.assertEqual(r.status_code, 400)
         self.assertEqual(Order.objects.count(), 0)
+
+
+@override_settings(ROOT_URLCONF="apps.payments.test_stripe", STRIPE_SECRET_KEY="sk_test", STRIPE_PUBLISHABLE_KEY="pk_test", STRIPE_WEBHOOK_SECRET="whsec")
+class CancelPaidOrderTests(base_tests.CommerceTestBase):
+    """Staff cancelling a paid order: the money goes back first, and only then is the order cancelled."""
+
+    base = base_tests.PlaceOrderTests.base
+    h = base_tests.PlaceOrderTests.h
+    address = base_tests.PlaceOrderTests.address
+    MESSAGE = "The order was not cancelled because the refund failed."
+
+    def setUp(self):
+        super().setUp()
+        self.store.stripe_account_id, self.store.stripe_charges_enabled = ACCOUNT, True
+        self.store.save()
+        self.client_mock = mock.MagicMock()
+        self.client_mock.v1.refunds.create.return_value = SimpleNamespace(id="re_1")
+        patcher = mock.patch.object(stripe_service, "client", return_value=self.client_mock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def checkout(self, quantity=2):
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": quantity}, format="json", **self.h)
+        r = self.client.post(
+            f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": self.address}, format="json", **self.h
+        )
+        return Checkout.objects.get(pk=r.data["id"])
+
+    def stripe_order(self):
+        order = stripe_service.finalize(intent(self.checkout()), ACCOUNT)
+        return order, Payment.objects.get(order=order)
+
+    def cod_order(self):
+        checkout = self.checkout()
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/complete/", {"payment_method": "cod"}, format="json", **self.h)
+        self.assertEqual(r.status_code, 201, r.data)
+        return Order.objects.get(), Payment.objects.get()
+
+    def refunds(self, payment):
+        return list(payment.transactions.filter(transaction_type="refund"))
+
+    def test_a_paid_manual_order_is_refunded_then_cancelled_and_stock_goes_back(self):
+        order, payment = self.cod_order()
+        total = order.total
+        services.capture_payment(payment)
+        self.assertEqual(sellable(self.variant), 8)
+
+        orders_services.cancel_order(order)
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, order.total), ("cancelled", total))
+        self.assertEqual(payment.status, "refunded")
+        refund, = self.refunds(payment)
+        self.assertEqual((refund.amount, refund.reason), (Decimal("998.00"), "Order cancelled"))
+        self.assertEqual(services.paid_total(order), Decimal("0.00"))
+        self.assertEqual(sellable(self.variant), 10)
+        self.client_mock.v1.refunds.create.assert_not_called()  # a manual payment never goes to Stripe
+
+    def test_only_what_is_still_unrefunded_is_refunded(self):
+        order, payment = self.stripe_order()
+        services.refund(payment, Decimal("300.00"))
+        self.client_mock.v1.refunds.create.reset_mock()
+
+        orders_services.cancel_order(order)
+
+        params, = self.client_mock.v1.refunds.create.call_args.args
+        self.assertEqual((params["payment_intent"], params["amount"]), ("pi_1", 69800))
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "refunded")
+        self.assertEqual(sum(r.amount for r in self.refunds(payment)), Decimal("998.00"))
+
+    def test_a_stripe_order_is_refunded_at_stripe_once_and_then_cancelled(self):
+        order, payment = self.stripe_order()
+
+        orders_services.cancel_order(order)
+
+        self.client_mock.v1.refunds.create.assert_called_once()
+        params, = self.client_mock.v1.refunds.create.call_args.args
+        self.assertEqual((params["payment_intent"], params["amount"]), ("pi_1", 99800))
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("cancelled", "refunded"))
+        self.assertEqual(self.refunds(payment)[0].provider_refund_id, "re_1")
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_a_failed_refund_leaves_the_order_open_and_the_stock_committed(self):
+        import stripe
+
+        order, payment = self.stripe_order()
+        self.client_mock.v1.refunds.create.side_effect = stripe.StripeError("boom")
+
+        with self.assertRaises(ValidationError) as raised:
+            orders_services.cancel_order(order)
+
+        detail = raised.exception.detail
+        self.assertIn("Stripe refused the refund", str(detail["payment"]))  # the existing text, unchanged
+        self.assertEqual(str(detail["order"]), self.MESSAGE)
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("open", "captured"))
+        self.assertEqual(self.refunds(payment), [])
+        self.assertEqual(sellable(self.variant), 8)  # still committed
+
+    def test_a_store_that_left_stripe_cannot_cancel_a_stripe_paid_order(self):
+        order, payment = self.stripe_order()
+        self.store.stripe_account_id = ""
+        self.store.save()
+
+        with self.assertRaises(ValidationError) as raised:
+            orders_services.cancel_order(order)
+
+        self.assertIn("This store is no longer connected to Stripe.", str(raised.exception.detail))
+        self.assertEqual(str(raised.exception.detail["order"]), self.MESSAGE)
+        order.refresh_from_db()
+        self.assertEqual(order.status, "open")
+
+    def test_cancelling_twice_refunds_and_releases_once(self):
+        order, payment = self.stripe_order()
+        orders_services.cancel_order(order)
+
+        with self.assertRaises(ValidationError) as raised:
+            orders_services.cancel_order(order)
+
+        self.assertIn("This order is already cancelled.", str(raised.exception))
+        self.assertEqual(self.client_mock.v1.refunds.create.call_count, 1)
+        self.assertEqual(len(self.refunds(payment)), 1)
+        self.assertEqual(sellable(self.variant), 10)  # not 12
+
+    def test_refund_is_taken_before_stock_is_released(self):
+        order, payment = self.stripe_order()
+        calls = []
+        real_refund, real_release = services.refund, orders_services.inventory.release
+        with mock.patch.object(services, "refund", side_effect=lambda *a, **k: (calls.append("refund"), real_refund(*a, **k))[1]), \
+             mock.patch.object(orders_services.inventory, "release", side_effect=lambda *a, **k: (calls.append("release"), real_release(*a, **k))[1]):
+            orders_services.cancel_order(order)
+        self.assertEqual(calls, ["refund", "release"])
+
+    def test_if_the_cancel_fails_after_the_refund_a_retry_asks_stripe_with_the_same_key(self):
+        order, payment = self.stripe_order()
+        with mock.patch.object(orders_services.inventory, "release", side_effect=ValidationError("stock problem")):
+            with self.assertRaises(ValidationError):
+                orders_services.cancel_order(order)
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("open", "captured"))  # rolled back together
+        self.assertEqual(self.refunds(payment), [])
+
+        orders_services.cancel_order(order)
+
+        keys = [c.kwargs["options"]["idempotency_key"] for c in self.client_mock.v1.refunds.create.call_args_list]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], keys[1])  # Stripe returns the first refund instead of making a second one
+        order.refresh_from_db()
+        self.assertEqual(order.status, "cancelled")
+
+    def test_if_the_refund_was_already_recorded_by_the_webhook_a_retry_does_not_ask_stripe_again(self):
+        order, payment = self.stripe_order()
+        with mock.patch.object(orders_services.inventory, "release", side_effect=ValidationError("stock problem")):
+            with self.assertRaises(ValidationError):
+                orders_services.cancel_order(order)
+        self.assertEqual(self.client_mock.v1.refunds.create.call_count, 1)
+        services.record_external_refund(payment, Decimal("998.00"))  # Stripe's charge.refunded event
+
+        orders_services.cancel_order(order)
+
+        self.assertEqual(self.client_mock.v1.refunds.create.call_count, 1)
+        order.refresh_from_db()
+        self.assertEqual(order.status, "cancelled")
+        self.assertEqual(sum(r.amount for r in self.refunds(payment)), Decimal("998.00"))
+
+    def test_an_order_with_shipped_items_is_still_refused_and_nothing_is_refunded(self):
+        order, payment = self.stripe_order()
+        Order.objects.filter(pk=order.pk).update(fulfillment_status="partial")
+
+        with self.assertRaises(ValidationError) as raised:
+            orders_services.cancel_order(order)
+
+        self.assertIn("Orders with shipped items can't be cancelled.", str(raised.exception))
+        self.client_mock.v1.refunds.create.assert_not_called()
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, "captured")
+
+    def test_the_shopper_cancel_of_a_paid_order_is_still_refused_without_a_refund(self):
+        order, payment = self.cod_order()
+        services.capture_payment(payment)
+
+        r = self.client.post(f"{self.base}/orders/{order.pk}/cancel/", **self.h)
+
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("This order has been paid. Please contact the store to cancel it.", str(r.data))
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("open", "captured"))
+        self.assertEqual(self.refunds(payment), [])
+        self.assertEqual(sellable(self.variant), 8)
+
+    def test_an_unpaid_cod_order_is_cancelled_as_before_with_nothing_refunded(self):
+        order, payment = self.cod_order()
+
+        orders_services.cancel_order(order)
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("cancelled", "cancelled"))  # the pending payment is voided
+        self.assertEqual(self.refunds(payment), [])
+        self.assertEqual(sellable(self.variant), 10)
+
+    def test_every_payment_on_the_order_is_refunded_and_pending_ones_are_voided(self):
+        order, pending = self.cod_order()
+        first = services.record_payment(self.store, order, Decimal("300.00"))
+        second = services.record_payment(self.store, order, Decimal("200.00"))
+
+        orders_services.cancel_order(order)
+
+        for payment in (first, second):
+            payment.refresh_from_db()
+            self.assertEqual(payment.status, "refunded")
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, "cancelled")
+        self.assertEqual(services.paid_total(order), Decimal("0.00"))
+        self.assertEqual(sellable(self.variant), 10)

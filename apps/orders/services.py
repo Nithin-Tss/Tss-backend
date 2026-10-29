@@ -221,6 +221,16 @@ def cancel_order(order, user=None, refuse_if_paid=False):
 
         if payments.paid_total(order) > 0:
             raise ValidationError("This order has been paid. Please contact the store to cancel it.")
+    else:
+        # Staff cancel: money still held for this order goes back first. If that fails, nothing below runs
+        # (no cancel, no stock release) and the whole transaction rolls back.
+        from apps.payments import services as payments
+
+        try:
+            payments.refund_unrefunded(order, "Order cancelled")
+        except ValidationError as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"payment": exc.detail}
+            raise ValidationError({**detail, "order": "The order was not cancelled because the refund failed."})
 
     items = list(order.items.filter(is_deleted=False))
     inventory.lock_stock(order.store_id, [item.variant_id for item in items])
