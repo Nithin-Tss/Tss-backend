@@ -1,6 +1,8 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.functions import Lower, Trim
 
 from apps.tenancy.models import Store
 
@@ -248,7 +250,16 @@ class Menu(models.Model):
         verbose_name_plural = "Menus"
         ordering = ["created_at"]
         constraints = [
-            models.UniqueConstraint(fields=["store", "name"], name="uq_menu_store_name"),
+            models.UniqueConstraint(
+                models.F("store"),
+                Lower(Trim("name", characters=" \t\n\r\f\v")),
+                name="uq_menu_store_name_ci",
+            ),
+            models.UniqueConstraint(
+                fields=["store", "handle"],
+                condition=~models.Q(handle=""),
+                name="uq_menu_store_handle",
+            ),
         ]
 
     def __str__(self):
@@ -288,6 +299,28 @@ class MenuItem(models.Model):
         verbose_name = "Menu Item"
         verbose_name_plural = "Menu Items"
         ordering = ["order", "created_at"]
+
+    def clean(self):
+        super().clean()
+        if not self.parent_id:
+            return
+        if self.pk == self.parent_id:
+            raise ValidationError({"parent": "A menu item cannot be its own parent."})
+
+        parent = self.parent
+        if self.menu_id and parent.menu_id != self.menu_id:
+            raise ValidationError({"parent": "The parent item must belong to the same menu."})
+
+        visited = set()
+        while parent is not None:
+            if parent.pk == self.pk or parent.pk in visited:
+                raise ValidationError({"parent": "Menu items cannot form a parent cycle."})
+            visited.add(parent.pk)
+            parent = parent.parent
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title

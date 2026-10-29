@@ -756,7 +756,7 @@ class AllProductsStorefrontTests(APITestCase):
 
     def test_import_links_active_products_with_price_and_stock(self):
         r = self.client.post(f"{URL}bulk/", {"products": [
-            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4},
+            {"title": "Imported active", "status": "active", "sku": "IMP-A", "quantity": 4, "price": "12.50"},
             {"title": "Imported draft", "status": "draft", "sku": "IMP-D"},
         ]}, format="json")
         self.assertEqual(r.json()["created"], 2, r.content)
@@ -766,7 +766,8 @@ class AllProductsStorefrontTests(APITestCase):
         self.assertEqual(list(active.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
         # Every import is on the Online Store; the Draft one stays hidden until it is made Active
         self.assertEqual(list(draft.product_sales_channels.values_list("sales_channel__type", flat=True)), ["online"])
-        self.assertEqual(str(active.variants.get().price), "0.00")
+        self.assertEqual(str(active.variants.get().price), "12.50")
+        self.assertEqual(str(draft.variants.get().price), "0.00")  # a Draft may still be imported without a price
         self.assertEqual(InventoryItem.objects.get(variant__product=active).available, 4)
         self.assertEqual(InventoryItem.objects.get(variant__product=draft).available, 0)
         listing = self.page("collections/all")
@@ -887,6 +888,61 @@ class SoldOutBadgeTests(APITestCase):
         untracked = self.product("Never stocked", "SO-NONE", None)  # no stock record at all
         self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
         self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add[^>]*\sdisabled>\s*Sold out")
+
+    def set_low_stock_setting(self, value):
+        """The product page's "Only a few left at or below" setting, as the store owner sets it in the customizer."""
+        data = self.client.get("/api/v1/themes/settings/").json()
+        sections = data["templates"]["product"]["sections"]
+        main = next(s for s in sections.values() if s["type"] == "main-product")
+        main["settings"]["low_stock_threshold"] = value
+        r = self.client.patch("/api/v1/themes/settings/", {"templates": {"product": {
+            "order": data["templates"]["product"]["order"], "sections": sections}}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_cards_use_the_same_few_left_setting_as_the_product_page(self):
+        from apps.themes import rendering
+
+        badge = 'product-card__badge">Few left</span>'
+        eight = self.product("Eight left", "SO-8", 8)
+
+        # Default 5: eight is plenty, on the card and on the page
+        self.assertNotIn(badge, self.card(self.html("collections/all"), "Eight left"))
+        self.assertRegex(self.html(f"products/{eight['id']}"), r"data-stock[^>]*>\s*In stock")
+
+        # The owner raises it to 10: the card and the page both say so
+        self.set_low_stock_setting(10)
+        self.assertIn(badge, self.card(self.html("collections/all"), "Eight left"))
+        self.assertRegex(self.html(f"products/{eight['id']}"), r"data-stock[^>]*>\s*Only a few left")
+
+        # Lowered to 3: four is not "few" anywhere, three is
+        self.set_low_stock_setting(3)
+        four, three = self.product("Four left", "SO-4", 4), self.product("Three left", "SO-3B", 3)
+        listing = self.html("collections/all")
+        self.assertNotIn(badge, self.card(listing, "Four left"))
+        self.assertIn(badge, self.card(listing, "Three left"))
+        self.assertRegex(self.html(f"products/{four['id']}"), r"data-stock[^>]*>\s*In stock")
+        self.assertRegex(self.html(f"products/{three['id']}"), r"data-stock[^>]*>\s*Only a few left")
+        self.assertEqual(rendering._few_left_at.get(), rendering.FEW_LEFT)  # the setting does not leak into the next page
+
+    def test_an_option_that_keeps_selling_stays_orderable_on_the_product_page(self):
+        from apps.catalog.models import ProductVariant
+
+        sold = self.product("Made to order", "SO-MTO", 0)
+        ProductVariant.objects.filter(product_id=sold["id"]).update(continue_selling=True)
+        # A second option (one that stops at its stock) so the page has the option picker the script works on
+        ProductVariant.objects.create(product_id=sold["id"], sku="SO-MTO-2", price="10.00")
+        plain = self.product("Plain", "SO-PLAIN", 3)
+
+        page = self.html(f"products/{sold['id']}")
+        self.assertNotRegex(page, r"data-add[^>]*\sdisabled")  # the button is on
+        self.assertRegex(page, r"data-stock[^>]*>\s*In stock")  # not "Only a few left" at 0 stock
+        self.assertIn('data-variant-continue="true"', page)  # so the script knows when an option is switched
+        self.assertIn('data-variant-continue="false"', page)
+        self.assertIn('variantContinue !== "true"', page)
+        self.assertNotIn("Sold out", self.card(self.html("collections/all"), "Made to order"))
+
+        page = self.html(f"products/{plain['id']}")
+        self.assertRegex(page, r"data-stock[^>]*>\s*Only a few left")  # real low stock still says so
 
     def test_stock_value_is_a_number(self):
         from apps.themes.rendering import product_drop
@@ -1133,3 +1189,558 @@ class CatalogAdminStoreGuardTests(TestCase):
         self.assertEqual(r.status_code, 302)
         v.refresh_from_db()
         self.assertEqual((v.product_id, str(v.price)), (p_a.pk, "6.00"))
+
+
+class CurrencySymbolTests(APITestCase):
+    """Prices are shown with the symbol of the store's currency; the theme's own symbol only when the owner set one."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "symbol@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.slug = Store.objects.get(pk=self.store_id).store_slug
+        r = self.client.post(URL, {"title": "Vase", "status": "active", "price": "10", "sku": "SYM-1"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.product_id = r.json()["id"]
+
+    def html(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}").content.decode()
+
+    def set_currency(self, code):
+        from apps.tenancy.models import Store
+
+        Store.objects.filter(pk=self.store_id).update(currency=code)
+
+    def set_theme_symbol(self, symbol):
+        r = self.client.patch("/api/v1/themes/settings/", {"settings": {"currency_symbol": symbol}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def shown(self):
+        """The Vase's price on its card and on its own page."""
+        import re
+
+        return (
+            re.search(r'<span class="price">([^<]*10\.00)</span>', self.html("collections/all")).group(1),
+            re.search(r'data-price>.*?<span class="price">([^<]*10\.00)</span>', self.html(f"products/{self.product_id}"), re.S).group(1),
+        )
+
+    def test_an_existing_inr_store_looks_exactly_the_same(self):
+        self.assertEqual(self.shown(), ("₹10.00", "₹10.00"))
+
+    def test_the_symbol_follows_the_stores_currency(self):
+        for code, symbol in (("USD", "$"), ("EUR", "€"), ("GBP", "£"), ("INR", "₹"), ("CHF", "CHF ")):
+            with self.subTest(code=code):
+                self.set_currency(code)
+                self.assertEqual(self.shown(), (f"{symbol}10.00", f"{symbol}10.00"))
+
+    def test_a_symbol_the_owner_set_in_the_theme_wins(self):
+        self.set_theme_symbol("Rs.")
+        self.assertEqual(self.shown(), ("Rs.10.00", "Rs.10.00"))  # an INR store
+        self.set_currency("USD")
+        self.assertEqual(self.shown(), ("Rs.10.00", "Rs.10.00"))  # the owner's choice stays
+        self.set_theme_symbol("$")
+        self.set_currency("INR")
+        self.assertEqual(self.shown(), ("$10.00", "$10.00"))
+
+    def test_the_default_the_code_compares_with_is_the_themes_default(self):
+        from apps.themes.rendering import DEFAULT_CURRENCY_SYMBOL, currency_symbol
+        from apps.themes.schemas import THEME_SETTINGS
+
+        self.assertEqual(DEFAULT_CURRENCY_SYMBOL, THEME_SETTINGS["currency_symbol"]["default"])
+        store = type("S", (), {"currency": "usd"})()  # the code is not case sensitive
+        self.assertEqual(currency_symbol(store, DEFAULT_CURRENCY_SYMBOL), "$")
+        self.assertEqual(currency_symbol(store, ""), "$")
+        self.assertEqual(currency_symbol(type("S", (), {"currency": ""})(), DEFAULT_CURRENCY_SYMBOL), DEFAULT_CURRENCY_SYMBOL)
+
+
+class ProductPriceRequiredTests(APITestCase):
+    """A product that is for sale (Active) has a price on every option; a typed 0 is a price, an empty one is not."""
+
+    MESSAGE = "Enter a price for every option before making this product active."
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "pricerule@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.count = 0
+
+    def create(self, **body):
+        self.count += 1
+        data = {"title": f"Lamp {self.count}", "sku": f"LAMP-{self.count}", "status": "active", **body}
+        return self.client.post(URL, data, format="json")
+
+    def prices(self, product_id):
+        from .models import ProductVariant
+
+        return [str(p) for p in ProductVariant.objects.filter(product_id=product_id).order_by("created_at").values_list("price", flat=True)]
+
+    def refused(self, response):
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn(self.MESSAGE, str(response.json()))
+
+    def test_creating_an_active_product_needs_a_price_but_a_typed_zero_is_one(self):
+        from .models import Product
+
+        self.refused(self.create(price=""))
+        self.refused(self.create(price=None))
+        self.refused(self.create())  # no price at all
+        self.assertEqual(Product.objects.count(), 0)  # nothing half-saved
+
+        for typed in ("0", 0, "0.00"):
+            r = self.create(price=typed)
+            self.assertEqual(r.status_code, 201, r.content)
+            self.assertEqual(self.prices(r.json()["id"]), ["0.00"])
+        r = self.create(price="10", variants=[{"sku": "FREE-1", "price": "0"}])  # a typed 0 on an option stays 0
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["0.00"]), r.content)
+
+        r = self.create(status="draft", price="")  # a Draft may keep an empty price
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["0.00"]))
+        self.assertEqual(self.create(status="draft").status_code, 201)
+
+    def test_making_a_draft_active_checks_the_price(self):
+        from apps.catalog.services import matching_products
+        from apps.tenancy.models import Store
+
+        draft = self.create(status="draft", price="").json()
+        r = self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")  # nothing says it is a typed 0
+        self.refused(r)
+        self.refused(self.client.patch(f"{URL}{draft['id']}/", {"status": "active", "price": ""}, format="json"))
+        self.assertEqual(self.client.get(f"{URL}{draft['id']}/").json()["status"], "draft")
+
+        # Staff find products still at 0.00 with an automated collection: Price is equal to 0
+        store = Store.objects.get(pk=self.store_id)
+        listed = matching_products(store, [{"field": "price", "operator": "equals", "value": "0"}])
+        self.assertIn(draft["id"], {str(pk) for pk in listed.values_list("pk", flat=True)})
+
+        free = self.client.patch(f"{URL}{draft['id']}/", {"status": "active", "price": "0"}, format="json")
+        self.assertEqual((free.status_code, free.json()["status"]), (200, "active"), free.content)
+        other = self.create(status="draft", price="").json()
+        paid = self.client.patch(f"{URL}{other['id']}/", {"status": "active", "price": "25"}, format="json")
+        self.assertEqual((paid.status_code, self.prices(other["id"])), (200, ["25.00"]))
+
+    def test_an_active_products_price_cannot_be_cleared_and_other_edits_keep_it(self):
+        from .models import Product, ProductVariant
+
+        product = self.create(price="30").json()
+        self.refused(self.client.patch(f"{URL}{product['id']}/", {"price": ""}, format="json"))
+        self.assertEqual(self.prices(product["id"]), ["30.00"])  # rolled back
+
+        for change in ({"title": "Renamed"}, {"weight": "2"}, {"vendor": "Acme"}):
+            r = self.client.patch(f"{URL}{product['id']}/", change, format="json")
+            self.assertEqual(r.status_code, 200, r.content)
+            self.assertEqual(self.prices(product["id"]), ["30.00"], change)  # not zeroed by an edit of something else
+
+        # A product already for sale at 0.00 is not touched: renaming it still works and leaves its price alone
+        old = self.create(price="5").json()
+        ProductVariant.objects.filter(product_id=old["id"]).update(price="0.00")
+        r = self.client.patch(f"{URL}{old['id']}/", {"title": "Old free thing"}, format="json")
+        self.assertEqual((r.status_code, self.prices(old["id"])), (200, ["0.00"]), r.content)
+        self.assertEqual(Product.objects.get(pk=old["id"]).status, "active")
+
+    def test_every_option_needs_its_own_price(self):
+        rows = [{"sku": "OPT-A", "price": "10"}, {"sku": "OPT-B", "price": ""}]
+        self.refused(self.create(variants=rows))
+        rows[1]["price"] = "0"
+        r = self.create(variants=rows)
+        self.assertEqual((r.status_code, self.prices(r.json()["id"])), (201, ["10.00", "0.00"]), r.content)
+
+        product = self.create(price="10").json()
+        new_option = {"sku": "OPT-NEW"}  # an option added with no price
+        existing = self.client.get(f"{URL}{product['id']}/").json()["variants"][0]
+        self.refused(self.client.patch(
+            f"{URL}{product['id']}/", {"variants": [{"id": existing["id"]}, new_option]}, format="json"))
+
+    def test_the_bulk_status_change_refuses_products_priced_0_00(self):
+        from .models import Product
+
+        unpriced = self.create(status="draft", price="").json()
+        priced = self.create(status="draft", price="12").json()
+
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [unpriced["id"], priced["id"]], "status": "active"}, format="json")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("Enter a price for every option before making them active.", str(r.json()))
+        self.assertEqual(set(Product.objects.values_list("status", flat=True)), {"draft"})  # all or nothing
+
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [priced["id"]], "status": "active"}, format="json")
+        self.assertEqual((r.status_code, r.json()["updated"]), (200, 1))
+        r = self.client.post(f"{URL}bulk-status/", {"ids": [priced["id"], unpriced["id"]], "status": "draft"}, format="json")
+        self.assertEqual(r.status_code, 200)  # taking products off sale is not checked
+
+    def test_an_import_row_with_no_price_for_an_active_product_is_refused_with_its_message(self):
+        from .models import Product, ProductVariant
+
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Priced", "status": "active", "sku": "IMP-1", "price": "9.50"},
+            {"title": "No price", "status": "active", "sku": "IMP-2"},
+            {"title": "Empty price", "status": "active", "sku": "IMP-3", "price": ""},
+            {"title": "Free", "status": "active", "sku": "IMP-4", "price": "0"},
+            {"title": "Draft no price", "status": "draft", "sku": "IMP-5"},
+            {"title": "No status no price", "sku": "IMP-6"},
+        ]}, format="json")
+
+        body = r.json()
+        self.assertEqual(body["created"], 4, r.content)
+        self.assertEqual([e["index"] for e in body["errors"]], [1, 2])
+        for error in body["errors"]:
+            self.assertEqual(error["message"], f"price: {self.MESSAGE}")
+        self.assertFalse(Product.objects.filter(title__in=["No price", "Empty price"]).exists())
+        self.assertEqual(
+            {v.sku: str(v.price) for v in ProductVariant.objects.all()},
+            {"IMP-1": "9.50", "IMP-4": "0.00", "IMP-5": "0.00", "IMP-6": "0.00"},
+        )
+
+        # A sheet that is only re-uploaded to update stock does not need a price
+        r = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Priced", "status": "active", "sku": "IMP-1", "quantity": 3},
+        ]}, format="json")
+        self.assertEqual(r.json()["errors"], [], r.content)
+
+
+class CatalogNavigationTests(APITestCase):
+    """Collections, categories, menus, redirects and the header: they follow the catalog as it changes."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "navigation@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.slug = self.store.store_slug
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    # ------------------------------------------------------------------ helpers
+    def product(self, title, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"NAV-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def collection(self, name, products=(), **extra):
+        r = self.client.post("/api/v1/catalog/collections/", {"name": name, "products": list(products), **extra}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def edit_collection(self, collection, **body):
+        r = self.client.patch(f"/api/v1/catalog/collections/{collection['id']}/", body, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def get(self, path):
+        return self.client.get(f"/s/{self.slug}/{path}")
+
+    def header(self):
+        import re
+
+        return re.search(r"<header.*?</header>", self.get("").content.decode(), re.S).group(0)
+
+    def make_menu(self, items, name="Main menu"):
+        r = self.client.post("/api/v1/themes/menus/", {"name": name, "items": items}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def redirect(self, path, target, store=None):
+        from apps.themes.models import UrlRedirect
+
+        return UrlRedirect.objects.create(store=store or self.store, path=path, target=target)
+
+    # ------------------------------------------------------------------ problem 3: a collection's handle
+    def test_an_edit_that_sends_the_handle_empty_keeps_the_address(self):
+        summer = self.collection("Summer sale")
+        self.assertEqual(summer["handle"], "summer-sale")  # a new collection's handle comes from its title
+
+        edited = self.edit_collection(summer, name="Winter sale", handle="")
+
+        self.assertEqual((edited["name"], edited["handle"]), ("Winter sale", "summer-sale"))
+        self.assertEqual(self.collection("Autumn")["handle"], "autumn")  # and so does the next new one
+
+    def test_changing_a_handle_adds_a_redirect_from_the_old_address(self):
+        from apps.themes.models import UrlRedirect
+
+        summer = self.collection("Summer sale")
+        self.edit_collection(summer, name="Summer clearance")  # a new title alone: same address, nothing to redirect
+        self.assertEqual(UrlRedirect.objects.count(), 0)
+
+        self.edit_collection(summer, handle="winter")
+        row = UrlRedirect.objects.get()
+        self.assertEqual((row.store_id, row.path, row.target), (self.store.pk, "/collections/summer-sale", "/collections/winter"))
+        listed = self.client.get("/api/v1/themes/redirects/").json()
+        self.assertEqual([(r["path"], r["target"]) for r in listed], [("/collections/summer-sale", "/collections/winter")])
+
+        self.edit_collection(summer, handle="summer-sale")  # back again: the old address is live, the new one redirects
+        self.assertEqual(
+            sorted(UrlRedirect.objects.values_list("path", "target")), [("/collections/winter", "/collections/summer-sale")]
+        )
+
+    def test_an_existing_redirect_for_the_old_address_is_kept(self):
+        from apps.themes.models import UrlRedirect
+
+        autumn = self.collection("Autumn")
+        self.redirect("/collections/autumn", "/collections/somewhere-else")
+
+        self.edit_collection(autumn, handle="fall")
+
+        self.assertEqual(
+            list(UrlRedirect.objects.values_list("path", "target")), [("/collections/autumn", "/collections/somewhere-else")]
+        )
+
+    # ------------------------------------------------------------------ problem 1: redirects on the storefront
+    def test_a_renamed_collection_address_sends_shoppers_to_the_new_one(self):
+        summer = self.collection("Summer sale")
+        self.edit_collection(summer, handle="winter")
+
+        r = self.get("collections/summer-sale?page=2")
+
+        self.assertEqual(r.status_code, 301)
+        self.assertEqual(r["Location"], f"/s/{self.slug}/collections/winter?page=2")
+        self.assertEqual(self.get("collections/winter").status_code, 200)  # the new address itself is not redirected
+
+    def test_redirects_work_whichever_way_the_path_was_saved_and_follow_a_chain(self):
+        self.redirect("/old-page", "/collections/all")
+        self.redirect(f"/s/{self.slug}/other-old-page/", f"/s/{self.slug}/collections/all")
+        self.redirect("/first", "/second")
+        self.redirect("/second", "/third")
+        self.redirect("/third", "/collections/all")
+
+        for path in ("old-page", "old-page/", "other-old-page", "first"):
+            r = self.get(path)
+            self.assertEqual((r.status_code, r["Location"]), (301, f"/s/{self.slug}/collections/all"), path)
+
+    def test_a_missing_page_without_a_redirect_is_still_not_found(self):
+        self.assertEqual(self.get("no-such-page").status_code, 404)
+        self.assertEqual(self.get("collections/no-such-collection").status_code, 404)
+        self.assertEqual(self.get("products/11111111-1111-1111-1111-111111111111").status_code, 404)
+
+    def test_a_removed_product_can_be_sent_to_a_collection(self):
+        product = self.product("Gone soon", location=None, quantity=None)
+        self.client.delete(f"{URL}{product['id']}/")
+        self.redirect(f"/products/{product['id']}", "/collections/all")
+
+        r = self.get(f"products/{product['id']}")
+
+        self.assertEqual((r.status_code, r["Location"]), (301, f"/s/{self.slug}/collections/all"))
+
+    def test_a_redirect_never_replaces_a_page_that_exists(self):
+        winter = self.collection("Winter")
+        self.redirect(f"/collections/{winter['handle']}", "/collections/all")
+        self.assertEqual(self.get(f"collections/{winter['handle']}").status_code, 200)
+
+    def test_only_this_stores_redirects_are_used(self):
+        from apps.tenancy.models import Store
+
+        other_client = type(self.client)()
+        token, other_id = signup(other_client, "other-nav@example.com")
+        other = Store.objects.get(pk=other_id)
+        self.redirect("/collections/summer-sale", "/collections/theirs", store=other)
+
+        self.assertEqual(self.get("collections/summer-sale").status_code, 404)
+
+    def test_loops_long_chains_and_unsafe_targets_are_not_followed(self):
+        self.redirect("/ping", "/pong")
+        self.redirect("/pong", "/ping")
+        for number in range(6):  # six redirects in a row: one more than is followed
+            self.redirect(f"/hop-{number}", f"/hop-{number + 1}" if number < 5 else "/collections/all")
+        self.redirect("/protocol-relative", "//evil.example/steal")
+        self.redirect("/script", "javascript:alert(1)")
+        self.redirect("/split", "/collections/all\nSet-Cookie: x=1")
+
+        for path in ("ping", "pong", "hop-0", "protocol-relative", "script", "split"):
+            self.assertEqual(self.get(path).status_code, 404, path)
+        self.assertEqual(self.get("hop-1").status_code, 301)  # five in a row are followed
+
+    def test_a_redirect_can_leave_the_store_for_an_http_address(self):
+        self.redirect("/moved", "https://example.org/new-home")
+        r = self.get("moved")
+        self.assertEqual((r.status_code, r["Location"]), (301, "https://example.org/new-home"))
+
+    # ------------------------------------------------------------------ problem 2: menus and dead links
+    def dead_and_live(self):
+        """A menu with live links and every kind of dead one."""
+        from .models import Product, ProductSalesChannel
+
+        live = self.product("Live product")
+        draft = self.product("Draft product", status="draft")
+        archived = self.product("Archived product")
+        Product.objects.filter(pk=archived["id"]).update(status="archived")
+        offline = self.product("Offline product")
+        ProductSalesChannel.objects.filter(product_id=offline["id"]).delete()
+        gone = self.product("Gone product", location=None, quantity=None)  # no stock, so it can be deleted
+        self.client.delete(f"{URL}{gone['id']}/")
+        live_shelf = self.collection("Live shelf", [live["id"]])
+        draft_shelf = self.collection("Draft shelf", [live["id"]], status="draft")
+        offline_shelf = self.collection("Offline shelf", [live["id"]])
+        from .models import CollectionSalesChannel
+
+        CollectionSalesChannel.objects.filter(collection_id=offline_shelf["id"]).delete()
+        links = {
+            "Live product": f"/products/{live['id']}",
+            "Draft product": f"/products/{draft['id']}",
+            "Archived product": f"/products/{archived['id']}",
+            "Offline product": f"/products/{offline['id']}",
+            "Gone product": f"/products/{gone['id']}",
+            "No such product": "/products/not-an-id",
+            "Prefixed draft": f"/s/{self.slug}/products/{draft['id']}",
+            "Live shelf": "/collections/live-shelf",
+            "Shelf by id": f"/collections/{live_shelf['id']}/?sort=newest",
+            "Draft shelf": "/collections/draft-shelf",
+            "Offline shelf": "/collections/offline-shelf",
+            "Missing shelf": "/collections/never-made",
+            "All products": "/collections/all",
+            "Blog": "/blog",
+            "Elsewhere": "https://example.org",
+        }
+        return links, draft
+
+    def test_the_storefront_hides_menu_links_to_things_shoppers_cannot_open(self):
+        links, draft = self.dead_and_live()
+        self.make_menu([{"title": title, "url": url} for title, url in links.items()])
+        live = {"Live product", "Live shelf", "Shelf by id", "All products", "Blog", "Elsewhere"}
+
+        header = self.header()
+
+        for title in links:
+            self.assertEqual(f">{title}</a>" in header, title in live, title)
+
+        # Publishing the draft product brings its link back: nothing was removed from the menu
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        header = self.header()
+        self.assertIn(">Draft product</a>", header)
+        self.assertIn(">Prefixed draft</a>", header)
+
+    def test_the_menu_text_lines_in_the_theme_settings_hide_dead_links_too(self):
+        from apps.themes.rendering import _menu_lines, dead_menu_urls, layout_data
+
+        settings = {
+            "header_menu": "Missing shelf | /collections/never-made\nAll products | /collections/all",
+            "footer_menu": "Gone | /products/11111111-1111-1111-1111-111111111111\nBlog | /blog",
+            "header_collections": 0,
+        }
+        urls = [u for _, u in _menu_lines(settings["header_menu"])] + [u for _, u in _menu_lines(settings["footer_menu"])]
+
+        data = layout_data(settings, "/s/x", [], [], dead=dead_menu_urls(self.store, urls))
+
+        self.assertEqual([l["label"] for l in data["header_links"]], ["All products"])
+        self.assertEqual([l["label"] for l in data["footer_links"]], ["Blog"])
+
+    def test_the_admin_menu_api_marks_broken_links_and_keeps_every_item(self):
+        from apps.themes.models import MenuItem
+
+        links, draft = self.dead_and_live()
+        items = [{"title": title, "url": url} for title, url in links.items()]
+        items[-1]["children"] = [{"title": "Dead child", "url": links["Draft product"]}, {"title": "Fine child", "url": "/blog"}]
+        created = self.make_menu(items)
+        broken = {"Draft product", "Archived product", "Offline product", "Gone product", "No such product",
+                  "Prefixed draft", "Draft shelf", "Offline shelf", "Missing shelf"}
+
+        listed = self.client.get("/api/v1/themes/menus/").json()[0]
+        fetched = self.client.get(f"/api/v1/themes/menus/{created['id']}/").json()
+
+        for menu in (created, listed, fetched):
+            by_title = {item["title"]: item["broken"] for item in menu["items"]}
+            self.assertEqual({t for t, flag in by_title.items() if flag}, broken)
+            self.assertEqual(len(menu["items"]), len(links))  # none removed
+            children = {c["title"]: c["broken"] for c in menu["items"][-1]["children"]}
+            self.assertEqual(children, {"Dead child": True, "Fine child": False})
+        self.assertEqual(MenuItem.objects.count(), len(links) + 2)  # what was saved is untouched
+
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        again = {i["title"]: i["broken"] for i in self.client.get("/api/v1/themes/menus/").json()[0]["items"]}
+        self.assertFalse(again["Draft product"])
+        self.assertTrue(again["Missing shelf"])
+
+    def test_checking_a_menu_costs_the_same_queries_for_any_number_of_links(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes.rendering import dead_menu_urls
+
+        links, _ = self.dead_and_live()
+        few = ["/blog", f"/products/{self.product('One')['id']}", "/collections/live-shelf"]
+        many = list(links.values())
+
+        counts = []
+        for urls in (few, many):
+            with CaptureQueriesContext(connection) as queries:
+                dead_menu_urls(self.store, urls)
+            counts.append(len(queries))
+        self.assertEqual(counts[0], counts[1])
+        self.assertLessEqual(counts[0], 2)
+        with CaptureQueriesContext(connection) as queries:
+            dead_menu_urls(self.store, ["/blog", "https://example.org"])
+        self.assertEqual(len(queries), 0)  # nothing to look up
+
+    # ------------------------------------------------------------------ problem 4: category links
+    def test_a_category_filter_by_name_still_works_and_its_links_use_the_id(self):
+        from unittest import mock
+
+        from apps.themes import rendering
+
+        category = self.client.post("/api/v1/catalog/categories/", {"name": "Shoes"}, format="json").json()
+        self.product("Boot A", category_id=category["id"])
+        self.product("Boot B", category_id=category["id"])
+        self.product("A hat")
+
+        with mock.patch.object(rendering, "PAGE_SIZE", 1):
+            by_name = self.get("collections/all?category=Shoes").content.decode()
+            self.assertIn("Boot", by_name)
+            self.assertNotIn("A hat", by_name)  # the old, name based link still filters
+            self.assertIn(f"category={category['id']}", by_name)  # the links on the page now carry the id...
+            self.assertNotIn("category=Shoes", by_name)  # ...not the name
+
+            self.client.patch(f"/api/v1/catalog/categories/{category['id']}/", {"name": "Boots"}, format="json")
+
+            by_id = self.get(f"collections/all?category={category['id']}").content.decode()
+            self.assertIn("Boot", by_id)  # a renamed category keeps working by id
+            self.assertNotIn("A hat", by_id)
+            renamed = self.get("collections/all?category=Boots").content.decode()
+            self.assertIn("Boot", renamed)
+            self.assertIn(f"category={category['id']}", renamed)
+            self.assertNotIn("Boot A", self.get("collections/all?category=Shoes").content.decode())  # the old name is gone
+
+    # ------------------------------------------------------------------ problem 5: the automatic header collections
+    def test_the_automatic_header_list_skips_collections_with_nothing_to_buy(self):
+        from .models import Product, ProductSalesChannel
+
+        live = self.product("In stock thing")
+        draft = self.product("Hidden thing", status="draft")
+        offline = self.product("Pos only thing")
+        ProductSalesChannel.objects.filter(product_id=offline["id"]).delete()
+        self.collection("Full shelf", [live["id"]])
+        self.collection("Empty shelf")
+        self.collection("Draft products shelf", [draft["id"]])
+        self.collection("Offline products shelf", [offline["id"]])
+
+        header = self.header()
+
+        self.assertIn(">Full shelf</a>", header)
+        for name in ("Empty shelf", "Draft products shelf", "Offline products shelf"):
+            self.assertNotIn(f">{name}</a>", header, name)
+
+        # A menu the owner built is theirs: it keeps its link to the empty collection
+        self.make_menu([{"title": "Empty shelf", "url": "/collections/empty-shelf"}])
+        self.assertIn(">Empty shelf</a>", self.header())
+
+        # the product comes back (made Active): its collection joins the automatic list when there is no owner menu
+        self.client.delete(f"/api/v1/themes/menus/{self.client.get('/api/v1/themes/menus/').json()[0]['id']}/")
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        self.assertIn(">Draft products shelf</a>", self.header())
+        self.assertEqual(Product.objects.filter(status="active").count(), 3)
+
+    def test_the_header_collections_are_read_in_one_query(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes.rendering import _nav
+
+        counts = []
+        for shelves in (1, 5):
+            for number in range(shelves):
+                self.collection(f"Shelf {shelves}-{number}", [self.product(f"Thing {shelves}-{number}")["id"]])
+            with CaptureQueriesContext(connection) as queries:
+                nav = _nav(self.store, "/s/x")
+            counts.append(len(queries))
+        self.assertEqual(counts, [1, 1])
+        self.assertTrue(all(entry["has_products"] for entry in nav))

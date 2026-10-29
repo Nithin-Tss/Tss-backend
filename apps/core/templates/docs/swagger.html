@@ -1,0 +1,59 @@
+{% extends "drf_spectacular/swagger_ui.html" %}
+{% block head %}
+{{ block.super }}
+<style>
+  :root {
+    --bg: #f6f7fb; --card: #ffffff; --text: #1f2430; --muted: #5d6677; --line: #e3e6ee; --brand: #4f46e5;
+    --get: #2563eb; --post: #16a34a; --put: #d97706; --patch: #0d9488; --delete: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12141a; --card: #1b1e27; --text: #e8eaf0; --muted: #9aa3b5; --line: #2b3040; --brand: #8b85ff; }
+    .swagger-ui, .swagger-ui .info .title, .swagger-ui .info li, .swagger-ui .info p, .swagger-ui .info table,
+    .swagger-ui .opblock-tag, .swagger-ui .opblock .opblock-summary-description, .swagger-ui .opblock-description-wrapper p,
+    .swagger-ui table thead tr th, .swagger-ui table thead tr td, .swagger-ui .parameter__name, .swagger-ui .parameter__type,
+    .swagger-ui .tab li, .swagger-ui label, .swagger-ui .response-col_status, .swagger-ui .response-col_description,
+    .swagger-ui .model, .swagger-ui .model-title, .swagger-ui section.models h4, .swagger-ui .opblock-section-header h4,
+    .swagger-ui .opblock .opblock-section-header label, .swagger-ui .responses-inner h4, .swagger-ui .responses-inner h5,
+    .swagger-ui .opblock-summary-path, .swagger-ui .scheme-container .schemes > label { color: var(--text) !important; }
+    .swagger-ui .opblock-section-header, .swagger-ui .scheme-container { background: var(--card) !important; }
+    .swagger-ui input, .swagger-ui select, .swagger-ui textarea { background: var(--bg); color: var(--text); }
+    .swagger-ui svg:not(:root) { fill: var(--muted); }
+  }
+  html { color-scheme: light dark; }
+  body { background: var(--bg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .swagger-ui { color: var(--text); }
+  .swagger-ui .wrapper { max-width: 1100px; padding: 0 20px; }
+  .swagger-ui .topbar { display: none; }
+  .swagger-ui .info { margin: 36px 0 20px; }
+  .swagger-ui .info .title { font-size: 30px; letter-spacing: -.02em; }
+  .swagger-ui .scheme-container { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: none; padding: 16px 20px; margin: 0 0 24px; }
+  .swagger-ui .filter-container { margin: 0 0 20px; }
+  .swagger-ui .filter-container .operation-filter-input { border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; background: var(--card); color: var(--text); margin: 0; }
+  .swagger-ui .opblock-tag { border-bottom: 1px solid var(--line); font-size: 19px; padding: 14px 6px; text-transform: capitalize; }
+  .swagger-ui .opblock { border-radius: 10px; border-width: 1px; box-shadow: none; margin: 0 0 10px; background: var(--card); }
+  .swagger-ui .opblock .opblock-summary { padding: 6px 10px; }
+  .swagger-ui .opblock .opblock-summary-method { border-radius: 6px; min-width: 70px; font-size: 13px; }
+  .swagger-ui .opblock .opblock-summary-path { font-size: 15px; }
+  .swagger-ui .opblock.opblock-get { border-color: var(--get); background: color-mix(in srgb, var(--get) 6%, var(--card)); }
+  .swagger-ui .opblock.opblock-post { border-color: var(--post); background: color-mix(in srgb, var(--post) 6%, var(--card)); }
+  .swagger-ui .opblock.opblock-put { border-color: var(--put); background: color-mix(in srgb, var(--put) 6%, var(--card)); }
+  .swagger-ui .opblock.opblock-patch { border-color: var(--patch); background: color-mix(in srgb, var(--patch) 6%, var(--card)); }
+  .swagger-ui .opblock.opblock-delete { border-color: var(--delete); background: color-mix(in srgb, var(--delete) 6%, var(--card)); }
+  .swagger-ui .opblock-get .opblock-summary-method { background: var(--get); }
+  .swagger-ui .opblock-post .opblock-summary-method { background: var(--post); }
+  .swagger-ui .opblock-put .opblock-summary-method { background: var(--put); }
+  .swagger-ui .opblock-patch .opblock-summary-method { background: var(--patch); }
+  .swagger-ui .opblock-delete .opblock-summary-method { background: var(--delete); }
+  .swagger-ui .btn { border-radius: 8px; box-shadow: none; }
+  .swagger-ui .btn.execute { background: var(--brand); border-color: var(--brand); }
+  .swagger-ui .btn.authorize { color: var(--brand); border-color: var(--brand); }
+  .swagger-ui .btn.authorize svg { fill: var(--brand); }
+  .swagger-ui section.models { border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  .swagger-ui section.models.is-open h4 { border-bottom: 1px solid var(--line); }
+  .swagger-ui .model-box { border-radius: 8px; }
+  .swagger-ui .highlight-code > .microlight, .swagger-ui .microlight { border-radius: 8px; }
+  @media (max-width: 640px) { .swagger-ui .wrapper { padding: 0 12px; } }
+</style>
+{% endblock %}

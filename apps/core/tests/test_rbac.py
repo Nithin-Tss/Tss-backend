@@ -34,9 +34,9 @@ class RbacTestBase(StoreClientMixin, APITestCase):
 
 
 class PermissionCatalogTest(RbacTestBase):
-    def test_there_are_31_permissions_in_14_areas(self):
-        self.assertEqual(len(rbac.ALL_PERMISSIONS), 41)
-        self.assertEqual(len(rbac.AREAS), 22)
+    def test_permission_catalog_size(self):
+        self.assertEqual(len(rbac.ALL_PERMISSIONS), 44)
+        self.assertEqual(len(rbac.AREAS), 24)
 
     def test_every_store_view_declares_an_area(self):
         missing = []
@@ -178,7 +178,7 @@ class EnforcementTest(RbacTestBase):
 
         owner = next(s for s in self.owner_me() if s["storeId"] == self.store_id)
         self.assertIn("store.manage", owner["permissions"])
-        self.assertEqual(len(owner["permissions"]), 42)
+        self.assertEqual(len(owner["permissions"]), 45)
 
     def owner_me(self):
         self.as_owner()
@@ -189,13 +189,13 @@ class TeamRulesTest(RbacTestBase):
     def test_built_in_roles_are_listed(self):
         self.assertEqual(
             {"administrator", "store_user_administrator", "online_store_editor",
-             "customer_support", "shipping_coordinator", "merchandiser", "marketer"},
+             "customer_support", "shipping_coordinator", "merchandiser", "marketer", "auditor"},
             {k for k, r in self.roles.items() if r["key"]},
         )
         admin = self.roles["administrator"]
         self.assertEqual(admin["kind"], "system")
         self.assertEqual(admin["memberCount"], 0)
-        self.assertEqual(len(admin["permissions"]), 41)
+        self.assertEqual(len(admin["permissions"]), 44)
 
     def test_system_roles_are_locked(self):
         rid = self.roles["administrator"]["id"]

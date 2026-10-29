@@ -13,7 +13,7 @@ from apps.catalog.services import published_products
 from apps.discounts import services as discounts
 from apps.discounts.models import Discount, OrderDiscount
 from apps.customers.models import Customer
-from apps.inventory.services import sellable
+from apps.inventory.services import sellable, sellable_for, convert_reservations
 from apps.orders import services as orders
 from apps.orders.models import Order
 from apps.payments import services as payments
@@ -59,8 +59,8 @@ def refresh_prices(cart):
     return changed
 
 
-def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
-    """The shopper's open cart: by customer if signed in, otherwise by session."""
+def get_or_create_cart(store, session_id=None, customer=None, currency=None):
+    """The shopper's open cart: by customer if signed in, otherwise by session. In the store's currency."""
     if customer is None and not session_id:
         raise ValidationError({"session_id": "A session id or customer is required."})
 
@@ -72,7 +72,7 @@ def get_or_create_cart(store, session_id=None, customer=None, currency="INR"):
             store=store,
             customer=customer,
             session_id=session_id,
-            currency=currency,
+            currency=currency or store.currency,
             status=CART_OPEN,
             is_deleted=False,
         )
@@ -99,18 +99,29 @@ def merge_carts(source, target):
         raise ValidationError("Only open carts can be merged.")
 
     now = timezone.now()
-    for item in list(active_items(source)):
+    lines = list(active_items(source))
+    # What is still for sale on the store (Active and on the Online Store): the rest is not carried over
+    for_sale = set(
+        published_products(target.store).prefetch_related(None)
+        .filter(pk__in={i.product_id for i in lines}).values_list("pk", flat=True)
+    )
+    for item in lines:
+        # A variant that keeps selling past its stock is not capped by it (only by the per-line limit)
+        sells_on = item.variant is not None and item.variant.continue_selling
         in_stock = sellable(item.variant) if item.variant is not None else 0
         existing = CartItem.objects.filter(
             cart=target, product=item.product, variant=item.variant, is_deleted=False
         ).first()
 
-        if existing:
-            existing.quantity = min(existing.quantity + item.quantity, max(in_stock, existing.quantity))
+        if item.product_id not in for_sale:
+            pass
+        elif existing:
+            cap = MAX_LINE_QUANTITY if sells_on else max(in_stock, existing.quantity)
+            existing.quantity = min(existing.quantity + item.quantity, cap)
             existing.save(update_fields=["quantity", "updated_at"])
-        elif in_stock > 0:
+        elif sells_on or in_stock > 0:
             item.cart = target
-            item.quantity = min(item.quantity, in_stock)
+            item.quantity = min(item.quantity, MAX_LINE_QUANTITY if sells_on else in_stock)
             item.save(update_fields=["cart", "quantity", "updated_at"])
             continue
         item.is_deleted, item.deleted_at = True, now
@@ -137,11 +148,14 @@ def _open_cart(cart):
     return cart
 
 
-def _check_stock(product, variant, quantity):
-    """Quantity 0 (or no stock record) is sold out; never sell more than is available."""
+def _check_stock(product, variant, quantity, checkout_id=None):
+    """
+    Quantity 0 (or no stock record) is sold out; never sell more than is available. With a checkout id,
+    stock held for OTHER checkouts doesn't count as available (this checkout's own hold does).
+    """
     if variant is not None and variant.continue_selling:
         return  # the store keeps selling when out of stock
-    in_stock = sellable(variant) if variant is not None else 0
+    in_stock = sellable_for(variant, checkout_id) if variant is not None else 0
     if in_stock <= 0:
         raise ValidationError({"product": f"{product.title} is sold out."})
     if quantity > in_stock:
@@ -244,6 +258,10 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
         _check_available(cart.store, item.product)
         _check_stock(item.product, item.variant, item.quantity)
 
+    if cart.currency != cart.store.currency:
+        cart.currency = cart.store.currency
+        cart.save(update_fields=["currency", "updated_at"])
+
     checkout = Checkout.objects.filter(cart=cart, status=CHECKOUT_OPEN, is_deleted=False).first()
 
     if checkout is None:
@@ -251,7 +269,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
             store=cart.store,
             cart=cart,
             customer=cart.customer,
-            currency=cart.currency,
+            currency=cart.store.currency,
             subtotal=ZERO,
             discount_amount=ZERO,
             tax_amount=ZERO,
@@ -378,6 +396,7 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
     if billing_address is not None:
         checkout.billing_address = billing_address
 
+    checkout.currency = checkout.store.currency  # what the order and the card payment are made in
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
     lines = list(checkout.items.filter(is_deleted=False).select_related("variant", "product"))
@@ -515,7 +534,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
     # Catalogue prices may have moved since the cart was frozen
     for item in items:
         _check_available(checkout.store, item.product)
-        _check_stock(item.product, item.variant, item.quantity)
+        _check_stock(item.product, item.variant, item.quantity, checkout.pk)
 
     customer = checkout.customer or _guest_customer(checkout)
     if not online:
@@ -543,6 +562,9 @@ def _place_order(checkout, payment_method, payment_reference=None):
         shipping_amount=checkout.shipping_amount,
         checkout=checkout,
     )
+    if order.total != checkout.total_amount:
+        # What was shown, and what a card was charged, is the checkout's total: never place an order for another one
+        raise ValidationError({"total": "Prices or charges changed. Please review your order and confirm again."})
 
     if match is not None:
         OrderDiscount.objects.create(
@@ -566,6 +588,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
     checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk), "payment_method": payment_method}
     checkout.save(update_fields=["customer", "metadata", "updated_at"])
     complete_checkout(checkout)
+    convert_reservations(checkout.pk)
     return order
 
 

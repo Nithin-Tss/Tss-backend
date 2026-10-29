@@ -6,6 +6,7 @@ Stripe endpoints.
   POST     /api/v1/storefront/<store>/checkout/<id>/stripe/          start paying
   POST     /api/v1/storefront/<store>/checkout/<id>/stripe/confirm/  shopper is back from Stripe
 """
+import json
 import logging
 
 import stripe
@@ -16,13 +17,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.orders.serializers import OrderSerializer
+from apps.orders.serializers import ShopperOrderSerializer
 from apps.commerce.storefront_views import CheckoutDetailView
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.core.rbac import PAYMENTS_MANAGE, PAYMENTS_VIEW
-from apps.tenancy.models import Store
 
 from . import stripe_service
+from .tasks import process_event
 
 logger = logging.getLogger(__name__)
 
@@ -87,24 +88,8 @@ class StripeWebhookView(APIView):
         except (ValueError, stripe.SignatureVerificationError):
             return HttpResponse(status=400)
 
-        # construct_event returns a Stripe object, not a dict: no .get()
-        account_id = event["account"] if "account" in event else None
-        obj = event["data"]["object"]
-        # An error here answers 5xx so Stripe retries; a payment we can't place is refunded inside finalize
-        if event["type"] == "payment_intent.succeeded" and account_id:
-            stripe_service.finalize(obj, account_id)
-        elif event["type"] == "charge.refunded" and account_id:
-            stripe_service.record_charge_refunds(obj, account_id)
-        elif event["type"] in ("charge.dispute.created", "charge.dispute.closed") and account_id:
-            stripe_service.record_dispute(obj, account_id)
-        elif event["type"] in ("payment_intent.payment_failed", "payment_intent.canceled"):
-            stripe_service.note_unpaid(obj, account_id)
-        elif event["type"] == "account.application.deauthorized" and account_id:
-            stripe_service.disconnect(account_id)
-        elif event["type"] == "account.updated":
-            store = Store.objects.filter(stripe_account_id=obj["id"]).first()
-            if store:
-                stripe_service.sync_account(store, account=obj)
+        # Signature is checked; the work happens in a background job (retried if it fails)
+        process_event.delay(json.dumps(event.to_dict() if hasattr(event, "to_dict") else event, default=vars))
         return HttpResponse(status=200)
 
 
@@ -134,4 +119,4 @@ class CheckoutStripeConfirmView(StripeErrorsMixin, CheckoutDetailView):
         order = stripe_service.finalize(intent, account_id)
         if order is None:
             raise ValidationError("Your payment was refunded because the order could not be placed.")
-        return Response(OrderSerializer(order).data)
+        return Response(ShopperOrderSerializer(order).data)

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.audit.services import record as audit_record
 from apps.core.tokens import (
     REMEMBER_CLAIM, SessionStore, SESSION_CLAIM, end_token_session, issue_tokens, refresh_tokens,
 )
@@ -87,6 +88,7 @@ class SignupView(PublicAuthView):
         user = serializer.save()
         start_session(request, user)
         send_verification_email(user)
+        audit_record("auth.signup", request=request, user=user, resource="auth")
 
         self._sync_customer(user, request)
 
@@ -166,6 +168,11 @@ class LoginView(PublicAuthView):
         )
 
         if not serializer.is_valid():
+            # Only the address that was tried is kept, never the password
+            audit_record(
+                "auth.login_failed", request=request, resource="auth", status_code=400,
+                email=str(request.data.get("email", "") if hasattr(request.data, "get") else "")[:254],
+            )
             return Response(
                 serializer.errors,
                 status=status.HTTP_400_BAD_REQUEST,
@@ -175,6 +182,7 @@ class LoginView(PublicAuthView):
         remember_me = serializer.validated_data["rememberMe"]
         start_session(request, user, remember_me=remember_me)
         tokens = issue_tokens(user, remember_me=remember_me)
+        audit_record("auth.login", request=request, user=user, resource="auth", status_code=200)
 
         return Response(
             {
@@ -221,7 +229,11 @@ class LogoutView(APIView):
         if serializer.validated_data.get("refresh"):
             end_token_session(serializer.validated_data["refresh"])
 
+        # This view skips DRF authentication so a dead token can still sign out; the cookie session says who it was
+        user = request._request.user if request._request.user.is_authenticated else None
         logout(request._request)
+        if user is not None:
+            audit_record("auth.logout", request=request, user=user, resource="auth", status_code=204)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -260,6 +272,8 @@ class ChangePasswordView(APIView):
         if request.auth is not None and hasattr(request.auth, "get"):
             remember_me = bool(request.auth.get(REMEMBER_CLAIM))
             SessionStore(session_key=request.auth.get(SESSION_CLAIM)).delete()
+
+        audit_record("auth.password_changed", request=request, user=user, resource="auth", status_code=200)
 
         return Response({
             "message": "Password changed.",

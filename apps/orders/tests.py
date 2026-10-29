@@ -594,6 +594,23 @@ class StockValidationCases:
         self.assertEqual({str(v) for v in locked.call_args.args[1]}, {self.variant, hat_variant})
         self.assertEqual(self.levels()["committed"], 0)
 
+    def test_cancelling_a_paid_order_in_the_admin_refunds_it_first(self):
+        self.set_stock(5)
+        order = self.place(self.line(2))
+        self.ok("post", "/api/v1/payments/", {"order": order["id"], "amount": order["total"], "provider": "manual"}, expect=201)
+
+        cancelled = self.ok("post", f"/api/v1/orders/{order['id']}/cancel/")
+
+        self.assertEqual((cancelled["status"], cancelled["total"]), ("cancelled", order["total"]))
+        payment, = self.ok("get", f"/api/v1/payments/?order={order['id']}")
+        self.assertEqual(payment["status"], "refunded")
+        self.assertEqual([t["transaction_type"] for t in payment["transactions"]], ["capture", "refund"])
+        levels = self.levels()
+        self.assertEqual((levels["available"], levels["committed"]), (5, 0))
+        self.ok("post", f"/api/v1/orders/{order['id']}/cancel/", expect=400)  # again: no second refund
+        payment, = self.ok("get", f"/api/v1/payments/?order={order['id']}")
+        self.assertEqual(len([t for t in payment["transactions"] if t["transaction_type"] == "refund"]), 1)
+
     def test_another_stores_variant_cannot_be_ordered(self):
         rival_token, rival = self.sign_up("rivalorders@example.com", "Rival Orders Store")
         rival_product, rival_variant = self.make_product("Rival shirt")

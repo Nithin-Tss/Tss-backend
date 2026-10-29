@@ -33,6 +33,18 @@ class ReportsTest(RbacTestBase):
         self.assertEqual(sum(day["orders"] for day in data["series"]), 2)
         self.assertTrue(data["activity"])
 
+    def test_every_built_in_report_has_a_detail_endpoint(self):
+        store = Store.objects.get(pk=self.store_id)
+        Order.objects.create(
+            store=store, order_number="1", currency_code="INR", subtotal="30.00", discount_amount=0,
+            tax_amount=0, shipping_amount=0, total="30.00", status="open", fulfillment_status="unfulfilled")
+        for report in self.ok("get", "/api/v1/reports/"):
+            data = self.ok("get", f"/api/v1/reports/{report['id']}/?days=7")
+            self.assertEqual(data["id"], report["id"])
+            self.assertIn("rows", data)
+        self.assertEqual(float(self.ok("get", "/api/v1/reports/sales-over-time/")["total"]), 30.0)
+        self.assertEqual(self.client.get("/api/v1/reports/nope/").status_code, 404)
+
     def test_staff_needs_the_reports_permission(self):
         self.staff("support@example.com", "customer_support")  # has no reports.view
         self.assertEqual(self.client.get("/api/v1/reports/overview/").status_code, 403)

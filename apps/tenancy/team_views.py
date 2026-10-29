@@ -125,6 +125,30 @@ class RoleListView(TeamView):
         return Response(role_json(role), status=status.HTTP_201_CREATED)
 
 
+class MyAccessView(TeamView):
+    """GET /api/v1/roles/me/  what the signed-in person may do in this store (any member)"""
+
+    action_permissions = {"GET": None}
+
+    def get(self, request):
+        m = request.membership
+        return Response({
+            "isOwner": m.role == OWNER,
+            "roles": [{"id": str(r.role_id), "name": r.name} for r in access.member_roles(m)],
+            "permissions": sorted(access.membership_permissions(m)),
+        })
+
+
+class RoleDuplicateView(TeamView):
+    """POST /api/v1/roles/<id>/duplicate/  {name?}  a custom copy of a role (roles.manage)"""
+
+    action_permissions = {"POST": "roles.manage"}
+
+    def post(self, request, role_id):
+        copy = access.duplicate_role(self.get_role(role_id), request.membership, request.data.get("name"))
+        return Response(role_json(copy), status=status.HTTP_201_CREATED)
+
+
 class RoleDetailView(TeamView):
     """PATCH / DELETE /api/v1/roles/<id>/  (roles.manage)"""
 

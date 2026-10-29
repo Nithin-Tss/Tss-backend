@@ -6,6 +6,7 @@ from rest_framework import mixins, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
+from apps.audit.receivers import note_delete
 from apps.tenancy.models import Store
 
 from .permissions import HasStorePermission, IsStoreMember
@@ -70,6 +71,12 @@ class StoreScopedGenericViewSet(viewsets.GenericViewSet):
             qs = qs.filter(is_deleted=False)
 
         return qs
+
+    def get_object(self):
+        obj = super().get_object()
+        if self.request.method == "DELETE":
+            note_delete(obj)  # a hard delete leaves no row to diff, so keep what it was
+        return obj
 
     def creation_defaults(self, model):
         extra = {}

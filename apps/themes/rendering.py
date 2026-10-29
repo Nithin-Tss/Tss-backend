@@ -7,6 +7,7 @@ Page = layout/theme.liquid
 """
 import hashlib
 import json
+from contextvars import ContextVar
 import re
 import uuid
 from collections.abc import Sequence
@@ -18,17 +19,17 @@ from liquid import DictLoader, Environment
 from liquid.exceptions import LiquidError
 from markupsafe import Markup, escape
 
-from django.db.models import Avg, Count, IntegerField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Avg, Count, Exists, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.text import slugify
 
-from apps.catalog.models import EXTRA_FIELDS
+from apps.catalog.models import EXTRA_FIELDS, ProductCollection
 from apps.catalog.services import published_collections, published_products
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
-from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, base_page, default_template, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
@@ -688,17 +689,72 @@ def _resolve_link(base_url, value):
     return base_url + value if value.startswith("/") and not value.startswith("//") else value
 
 
-def _menu_links(text, base_url):
-    """[{"label", "url"}] from "Label | /page" lines (already validated by the menu setting)."""
-    links = []
+def _menu_lines(text):
+    """[(label, url)] from "Label | /page" lines (already validated by the menu setting)."""
+    lines = []
     for line in str(text or "").splitlines():
         label, _, url = line.partition("|")
         label, url = label.strip(), url.strip()
         if label and not url:  # a bare link is its own label
             url = label
         if label and url:
-            links.append({"label": label, "url": _resolve_link(base_url, url)})
-    return links
+            lines.append((label, url))
+    return lines
+
+
+def _menu_links(text, base_url, dead=()):
+    """[{"label", "url"}] from "Label | /page" lines, without the links in `dead`."""
+    return [
+        {"label": label, "url": _resolve_link(base_url, url)} for label, url in _menu_lines(text) if url not in dead
+    ]
+
+
+_PRODUCT_LINK = re.compile(r"^/products/([^/?#]+)/?(?:[?#].*)?$")
+_COLLECTION_LINK = re.compile(r"^/collections/([^/?#]+)/?(?:[?#].*)?$")
+
+
+def dead_menu_urls(store, urls):
+    """
+    The links among `urls` (as saved in a menu) that go to a product or collection of this store that shoppers
+    can't open: deleted, Draft, Archived or off the Online Store. Other links are never judged. Two queries for
+    any number of links.
+    """
+    base = shop_url(store)
+    products, collections = {}, {}
+    for url in set(urls):
+        path = str(url or "").strip()
+        path = path[len(base):] if path.startswith(base + "/") else path
+        found = _PRODUCT_LINK.match(path)
+        if found:
+            products[url] = found.group(1)
+            continue
+        found = _COLLECTION_LINK.match(path)
+        if found and found.group(1) not in ("all", "promotions"):  # the built-in pages are always there
+            collections[url] = found.group(1)
+
+    def as_uuid(value):
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            return None
+
+    dead = set()
+    ids = {as_uuid(v) for v in products.values()} - {None}
+    live = set(published_products(store).prefetch_related(None).filter(pk__in=ids).values_list("pk", flat=True)) if ids else set()
+    dead.update(url for url, value in products.items() if as_uuid(value) not in live)
+
+    if collections:
+        ids = {as_uuid(v) for v in collections.values()} - {None}
+        handles = {v for v in collections.values() if as_uuid(v) is None}
+        rows = list(
+            published_collections(store).filter(Q(pk__in=ids) | Q(handle__in=handles)).values_list("pk", "handle")
+        )
+        live_ids, live_handles = {pk for pk, _ in rows}, {handle for _, handle in rows}
+        for url, value in collections.items():
+            number = as_uuid(value)
+            if (number not in live_ids) if number is not None else (value not in live_handles):
+                dead.add(url)
+    return dead
 
 
 NAVBAR_MENU_HANDLES = ("main-menu", "header", "navbar", "main")
@@ -718,17 +774,21 @@ def navbar_menu_links(store, base_url):
     if menu is None:
         return []
     items = sorted((i for i in menu.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
-    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.title and i.url]
+    items = [i for i in items if i.title and i.url]
+    dead = dead_menu_urls(store, [i.url for i in items])  # links to products and collections shoppers can't open are hidden
+    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.url not in dead]
 
 
-def layout_data(settings, base_url, nav, menu_links=None):
+def layout_data(settings, base_url, nav, menu_links=None, dead=()):
     """Header links, footer links and footer social links for layout/theme.liquid."""
-    header = _menu_links(settings.get("header_menu"), base_url) or list(menu_links or [])
+    header = _menu_links(settings.get("header_menu"), base_url, dead) or list(menu_links or [])
     if not header:
         header = [{"label": "Home", "url": f"{base_url}/"}, {"label": "Shop all", "url": f"{base_url}/collections/all"}]
-        header += [{"label": c["name"], "url": c["url"]} for c in nav[: int(settings.get("header_collections") or 0)]]
+        # The automatic list: collections with something to buy in them
+        filled = [c for c in nav if c.get("has_products", True)]
+        header += [{"label": c["name"], "url": c["url"]} for c in filled[: int(settings.get("header_collections") or 0)]]
 
-    footer = _menu_links(settings.get("footer_menu"), base_url) or [
+    footer = _menu_links(settings.get("footer_menu"), base_url, dead) or [
         {"label": "Home", "url": f"{base_url}/"},
         {"label": "Shop all", "url": f"{base_url}/collections/all"},
     ]
@@ -738,6 +798,25 @@ def layout_data(settings, base_url, nav, menu_links=None):
         if settings.get(f"footer_{key}")
     ]
     return {"header_links": header, "footer_links": footer, "footer_social": social}
+
+
+DEFAULT_CURRENCY_SYMBOL = THEME_SETTINGS["currency_symbol"]["default"]  # what the theme setting holds until changed
+CURRENCY_SYMBOLS = {
+    "INR": "₹", "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "KRW": "₩", "AUD": "A$", "CAD": "C$",
+    "NZD": "NZ$", "SGD": "S$", "HKD": "HK$", "MXN": "MX$", "BRL": "R$", "ZAR": "R", "AED": "AED ", "SAR": "SAR ",
+    "RUB": "₽", "TRY": "₺", "THB": "฿", "PHP": "₱", "VND": "₫", "NGN": "₦", "ILS": "₪", "PLN": "zł ",
+}
+
+
+def currency_symbol(store, theme_symbol):
+    """
+    The symbol prices are shown with. It follows the store's currency. The theme's "Currency symbol" setting
+    wins only when the owner changed it from its default, so existing stores look the same.
+    """
+    if theme_symbol and theme_symbol != DEFAULT_CURRENCY_SYMBOL:
+        return theme_symbol
+    code = (store.currency or "").strip().upper()
+    return CURRENCY_SYMBOLS.get(code, f"{code} " if code else DEFAULT_CURRENCY_SYMBOL)
 
 
 def _environment(files, base_url, currency, overrides=None):
@@ -804,6 +883,24 @@ def _number(value):
     except (InvalidOperation, ValueError):
         return None
     return number if number.is_finite() and number >= 0 else None
+
+
+def _with_category_ids(store, filters):
+    """Category filters given by name (older links) are turned into ids: the links built from them then keep working."""
+    wanted = filters.get("category") or []
+    if not wanted:
+        return filters
+    from apps.catalog.models import Category
+
+    by_name = {}
+    for pk, name in Category.objects.filter(store=store).values_list("pk", "name"):
+        by_name.setdefault(name.strip().lower(), []).append(str(pk))
+    ids = []
+    for value in wanted:
+        for found in by_name.get(value.strip().lower(), [value]):
+            if found not in ids:
+                ids.append(found)
+    return {**filters, "category": ids}
 
 
 def parse_collection_filters(params):
@@ -906,8 +1003,21 @@ def _filter_query(f, sort):
     return urlencode(pairs)
 
 
-# "Only a few left" at this quantity or lower
+# "Only a few left" at this quantity or lower, unless the store's product page sets its own (see _few_left_threshold)
 FEW_LEFT = 5
+_few_left_at = ContextVar("few_left_at", default=FEW_LEFT)
+
+
+def _few_left_threshold(data):
+    """The product page's "Only a few left" setting (low_stock_threshold, default 5): cards use the same number."""
+    template = (data.get("templates") or {}).get("product") or default_template("product")
+    for section in (template.get("sections") or {}).values():
+        if section.get("type") == "main-product":
+            try:
+                return max(int((section.get("settings") or {}).get("low_stock_threshold")), 1)
+            except (TypeError, ValueError):
+                break
+    return FEW_LEFT
 NEW_PRODUCT_DAYS = 14
 MAX_BADGES = 2
 
@@ -933,8 +1043,8 @@ def product_badges(tags, sold_out, few_left, is_new):
 
 
 def _available(variant):
-    """Available stock of one variant over all locations; no stock record counts as 0."""
-    return sum(max(item.available, 0) for item in variant.inventory_items.all())
+    """What shoppers can buy of one variant: max(sum of available over all locations, 0), as inventory.sellable."""
+    return max(sum(item.available for item in variant.inventory_items.all()), 0)
 
 
 def product_drop(product, base_url):
@@ -948,7 +1058,7 @@ def product_drop(product, base_url):
     sold_out = available_total <= 0 and not selling_on
 
     tags = [pt.tag.name for pt in product.product_tags.all()]
-    few_left = 0 < available_total <= FEW_LEFT
+    few_left = 0 < available_total <= _few_left_at.get()
     created = getattr(product, "created_at", None)
     is_new = bool(created) and (timezone.now() - created).days < NEW_PRODUCT_DAYS
 
@@ -1472,7 +1582,17 @@ class _LazyList(Sequence):
 
 
 def _nav(store, base_url):
-    return [{"name": c.name, "url": collection_url(base_url, c)} for c in published_collections(store)[:20]]
+    """
+    The store's published collections that have at least one published product in them (one query). This is the
+    `collections` the header's automatic menu lists; a menu the owner built is not affected by it.
+    """
+    filled = ProductCollection.objects.filter(
+        collection=OuterRef("pk"), product__in=published_products(store).prefetch_related(None).order_by().values("pk")
+    )
+    return [
+        {"name": c.name, "url": collection_url(base_url, c), "has_products": True}
+        for c in published_collections(store).filter(Exists(filled))[:20]
+    ]
 
 
 def _env_key(files, base_url, currency):
@@ -1559,6 +1679,7 @@ def render_synced_section_fast(store, name, custom_data):
         return None
     data = resolve(custom_data)
     settings = data["settings"]
+    settings["currency_symbol"] = currency_symbol(store, settings["currency_symbol"])
     base_url = shop_url(store)
     env = _environment({}, base_url, settings["currency_symbol"])
     context = {"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"}
@@ -1812,7 +1933,7 @@ def render_cart_html(store, data, opts):
     store_theme = get_store_theme(store)
     files = theme_files(store_theme)
     base_url = shop_url(store)
-    currency = resolve(store_theme.custom_data)["settings"]["currency_symbol"]
+    currency = currency_symbol(store, resolve(store_theme.custom_data)["settings"]["currency_symbol"])
     env = _environment(files, base_url, currency)
     return env.from_string("{% render 'cart', mode: 'lines', cart: cart, settings: opts %}").render(
         shop={"name": store.store_name, "url": base_url}, cart=data, opts=opts,
@@ -1998,11 +2119,20 @@ def _with_customer_link(html, token, base_url):
     return html + script if index < 0 else html[:index] + script + html[index:]
 
 
-def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
-                sort="newest", page_number=1, article=None, blog_filter=None, request=None,
-                wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
-                filters=None, customer_page=None, customer=None, customer_user=None,
-                auth_error=None, auth_success=None, order_completed=False, order=None):
+def render_page(*args, **kwargs):
+    """Render one storefront page (see _render_page). The "few left" number is per render and never leaks to the next."""
+    token = _few_left_at.set(FEW_LEFT)
+    try:
+        return _render_page(*args, **kwargs)
+    finally:
+        _few_left_at.reset(token)
+
+
+def _render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
+                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
+                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
+                 filters=None, customer_page=None, customer=None, customer_user=None,
+                 auth_error=None, auth_success=None, order_completed=False, order=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -2023,10 +2153,12 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         if promotions_schema is not None:
             files[promotions_path] = promotions_markup
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
+    _few_left_at.set(_few_left_threshold(data))
     # A page template whose file is gone shows the base Page template
     if not customer_page and page != base_page(page) and f"templates/{page}.liquid" not in files:
         page = base_page(page)
     settings = data["settings"]
+    settings["currency_symbol"] = currency_symbol(store, settings["currency_symbol"])
     base_url = shop_url(store)
     # The header and footer are synced sections (sections/<name>.liquid) when the theme has
     # them: the layout's {% render 'header' %} / {% render 'footer' %} then show them (see section_sync)
@@ -2080,7 +2212,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
     if page == "collection":
         sort = sort if sort in SORTS else "newest"
         all_products = _products(store, base_url, collection=collection["obj"])
-        filters = filters or parse_collection_filters({})
+        filters = _with_category_ids(store, filters or parse_collection_filters({}))
         products = [p for p in all_products if _matches_filters(p, filters)]
         if SORTS[sort]:
             products.sort(key=SORTS[sort])
@@ -2280,7 +2412,11 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         # True in the customizer preview: templates may show hints that shoppers never see
         "design_mode": editor,
         "menu_links": menu_links,
-        **layout_data(settings, base_url, nav, menu_links),
+        **layout_data(
+            settings, base_url, nav, menu_links,
+            dead=dead_menu_urls(store, [u for _, u in _menu_lines(settings.get("header_menu"))]
+                                + [u for _, u in _menu_lines(settings.get("footer_menu"))]),
+        ),
     }
 
     # The synced sections, rendered from their saved (or, in the preview, unsaved) values

@@ -101,7 +101,8 @@ INSTALLED_APPS = [
     'apps.fulfillment',
     'apps.themes',
     'apps.media',
-    
+    'apps.audit',
+    'apps.webhooks',
 ]
 
 AUTH_USER_MODEL = "identity.User"
@@ -110,6 +111,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'apps.core.middleware.SecurityHeadersMiddleware',
     'apps.core.middleware.RequestValidationMiddleware',
+    'apps.audit.middleware.AuditMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -236,12 +238,29 @@ MEDIA_STORE_QUOTA_BYTES = int(os.getenv('MEDIA_STORE_QUOTA_BYTES', str(500 * 102
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Media library pictures. Leave MEDIA_S3_BUCKET empty to keep them in the database; set it to store them in an
+# S3-compatible bucket (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO) instead.
+MEDIA_S3_BUCKET = os.getenv('MEDIA_S3_BUCKET', '')
+MEDIA_S3_ENDPOINT_URL = os.getenv('MEDIA_S3_ENDPOINT_URL', '')
+MEDIA_S3_REGION = os.getenv('MEDIA_S3_REGION', '')
+MEDIA_S3_ACCESS_KEY_ID = os.getenv('MEDIA_S3_ACCESS_KEY_ID', '')
+MEDIA_S3_SECRET_ACCESS_KEY = os.getenv('MEDIA_S3_SECRET_ACCESS_KEY', '')
+# Public address of the bucket or its CDN, e.g. https://cdn.example.com
+MEDIA_S3_PUBLIC_URL = os.getenv('MEDIA_S3_PUBLIC_URL', '')
+
 
 # Stripe (Connect). Keys come from the platform's Stripe account; each store connects its own.
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
 STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
 # Signing secret of the webhook endpoint that listens to "Connected accounts" events
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+
+# Outbound webhooks (apps/webhooks) may only target public https URLs. Turn this on to allow
+# http:// and private addresses such as localhost while developing; never in production.
+WEBHOOKS_ALLOW_PRIVATE_URLS = env_bool('WEBHOOKS_ALLOW_PRIVATE_URLS', default=DEBUG)
+
+# How long after ordering a shopper may cancel their own order from the storefront (minutes). Staff have no limit.
+ORDER_CUSTOMER_CANCEL_MINUTES = int(os.getenv('ORDER_CUSTOMER_CANCEL_MINUTES', 60))
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
@@ -255,6 +274,17 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 # How long the links work
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', 60 * 60))  # 1 hour
 EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60 * 24 * 3))  # 3 days
+
+# Background jobs (Celery, see config/celery.py)
+# Broker defaults to REDIS_URL. With no broker, tasks run inline in the calling process.
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL') or 'memory://'
+CELERY_TASK_ALWAYS_EAGER = not (os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL'))
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_TIME_LIMIT = 300
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TIMEZONE = 'UTC'
 
 # No email provider yet: emails are printed in the runserver console.
 MAILERS = {
@@ -285,6 +315,11 @@ CORS_URLS_REGEX = r'^/(?!s/).*$'
 
 # Request validation (apps/core/middleware.py): applies to /api/ only.
 # Largest request body accepted, from Content-Length (theme/product uploads included).
+# Audit log: how long entries are kept (manage.py prune_audit_logs), and whether the
+# client address comes from the proxy's X-Forwarded-For (only when behind one).
+AUDIT_LOG_RETENTION_DAYS = int(os.getenv('AUDIT_LOG_RETENTION_DAYS', 365))
+AUDIT_TRUST_FORWARDED_FOR = env_bool('DJANGO_BEHIND_PROXY', default=False)
+
 API_MAX_REQUEST_BYTES = int(os.getenv('API_MAX_REQUEST_BYTES', 25 * 1024 * 1024))
 API_ALLOWED_CONTENT_TYPES = {
     'application/json',
@@ -334,6 +369,16 @@ SPECTACULAR_SETTINGS = {
     'ENUM_GENERATE_CHOICE_DESCRIPTION': True,
     'ENUM_NAME_OVERRIDES': {'PublishStatusEnum': 'apps.catalog.models.Collection.STATUSES'},
     'SERVERS': [{'url': '/', 'description': 'Current host'}],
+    # Swagger UI: groups start collapsed (264 operations is a lot), a search box, sorted groups,
+    # and the sign-in token survives a page refresh.
+    'SWAGGER_UI_SETTINGS': {
+        'docExpansion': 'none',
+        'filter': True,
+        'persistAuthorization': True,
+        'displayRequestDuration': True,
+        'tagsSorter': 'alpha',
+        'defaultModelsExpandDepth': 0,
+    },
     # Docs/schema are open in development; in production only signed-in admin users
     # (Django session, e.g. after logging in at /admin/) unless DJANGO_API_DOCS_PUBLIC=True.
     'SERVE_PERMISSIONS': (

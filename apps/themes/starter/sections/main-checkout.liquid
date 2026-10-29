@@ -351,6 +351,94 @@
     border-color: var(--accent-color, #111827);
     background: rgba(17, 24, 39, 0.02);
   }
+  .checkout-payment-modal[hidden] { display: none; }
+  .checkout-payment-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(17, 24, 39, .55);
+  }
+  .checkout-payment-modal__card {
+    width: min(100%, 520px);
+    max-height: min(92vh, 760px);
+    overflow-y: auto;
+    padding: 24px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .2);
+  }
+  .checkout-payment-modal__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .checkout-payment-modal__close {
+    border: 0;
+    background: transparent;
+    font-size: 24px;
+    cursor: pointer;
+  }
+  .checkout-payment-demo-notice {
+    padding: 10px 12px;
+    margin: 0 0 18px;
+    border: 1px solid #FCD34D;
+    border-radius: 8px;
+    background: #FFFBEB;
+    color: #92400E;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .checkout-payment-fields {
+    display: grid;
+    gap: 14px;
+  }
+  .checkout-payment-fields label {
+    display: block;
+    margin-bottom: 6px;
+    color: #374151;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .checkout-payment-fields input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    border: 1px solid #D1D5DB;
+    border-radius: var(--button-radius, 6px);
+    background: #fff;
+    color: #111827;
+    font: inherit;
+    font-size: 14px;
+  }
+  .checkout-payment-fields input:focus {
+    border-color: var(--accent-color, #111827);
+    outline: 3px solid rgba(17, 24, 39, .1);
+  }
+  .checkout-payment-fields__row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .checkout-payment-demo-result {
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #F3F4F6;
+    color: #374151;
+    font-size: 14px;
+  }
+  @media (max-width: 480px) {
+    .checkout-payment-modal { padding: 12px; }
+    .checkout-payment-modal__card { padding: 18px; }
+    .checkout-payment-fields__row { grid-template-columns: 1fr 1fr; }
+  }
   .checkout-empty {
     text-align: center;
     padding: 60px 20px;
@@ -574,6 +662,13 @@
                   <div style="font-size: 12px; color: #6B7280; margin-top: 2px;">Pay with cash or UPI upon delivery.</div>
                 </div>
               </label>
+              <label class="checkout-radio-option">
+                <input type="radio" name="payment_method" value="online_demo">
+                <div>
+                  <div style="font-weight: 600; font-size: 14px;">Online Payment</div>
+                  <div style="font-size: 12px; color: #6B7280; margin-top: 2px;">Preview the online card payment form.</div>
+                </div>
+              </label>
             </div>
           </div>
 
@@ -586,10 +681,50 @@
             </div>
           {%- endif -%}
 
-          <button type="submit" id="checkout-submit-btn" class="checkout-submit-btn">
+          <button type="submit" id="checkout-submit-btn" class="checkout-submit-btn" data-label="{{ btn_text | escape }}">
             {{ btn_text }}
           </button>
         </form>
+      </div>
+
+      <div class="checkout-payment-modal" id="checkout-payment-modal" hidden aria-hidden="true">
+        <div class="checkout-payment-modal__card" role="dialog" aria-modal="true" aria-labelledby="checkout-payment-title" aria-describedby="checkout-payment-demo-notice">
+          <div class="checkout-payment-modal__header">
+            <h2 id="checkout-payment-title" style="font-size: 18px; margin: 0;">Card payment <span style="font-size:12px; font-weight:500; color:#6B7280;">Demo</span></h2>
+            <button type="button" id="checkout-payment-close" class="checkout-payment-modal__close" aria-label="Close payment">&times;</button>
+          </div>
+          <p class="checkout-payment-demo-notice" id="checkout-payment-demo-notice">Demo payment form only. Do not enter real card details. Nothing is sent, charged, or processed.</p>
+          <form id="checkout-payment-demo-form" class="checkout-payment-fields">
+            <div>
+              <label for="demo-cardholder">Name on card</label>
+              <input id="demo-cardholder" name="cardholder" type="text" autocomplete="off" required>
+            </div>
+            <div>
+              <label for="demo-card-number">Card number</label>
+              <input id="demo-card-number" name="card_number" type="text" inputmode="numeric" autocomplete="off" placeholder="1234 5678 9012 3456" maxlength="19" required>
+            </div>
+            <div class="checkout-payment-fields__row">
+              <div>
+                <label for="demo-card-expiry">Expiry date</label>
+                <input id="demo-card-expiry" name="card_expiry" type="text" inputmode="numeric" autocomplete="off" placeholder="MM / YY" maxlength="7" required>
+              </div>
+              <div>
+                <label for="demo-card-cvc">Security code</label>
+                <input id="demo-card-cvc" name="card_cvc" type="text" inputmode="numeric" autocomplete="off" placeholder="CVC" maxlength="4" required>
+              </div>
+            </div>
+            <div>
+              <label for="demo-billing-email">Billing email</label>
+              <input id="demo-billing-email" name="billing_email" type="email" autocomplete="off" value="{{ customer.email | default: '' | escape }}" required>
+            </div>
+            <div>
+              <label for="demo-billing-postal">Billing postal code</label>
+              <input id="demo-billing-postal" name="billing_postal" type="text" autocomplete="off" maxlength="20" required>
+            </div>
+            <button type="submit" id="checkout-payment-demo-pay" class="checkout-submit-btn">Pay</button>
+          </form>
+          <div id="checkout-payment-demo-result" class="checkout-payment-demo-result" role="status" hidden></div>
+        </div>
       </div>
 
       {%- if s.show_order_summary != false -%}
@@ -666,11 +801,19 @@
 
   var session = root.getAttribute('data-cart-session') || '';
   var shopUrl = root.getAttribute('data-shop-url') || '';
-  var shopSlug = root.getAttribute('data-shop-slug') || '';
   var form = document.getElementById('checkout-form');
   var submitBtn = document.getElementById('checkout-submit-btn');
+  var paymentModal = document.getElementById('checkout-payment-modal');
+  var paymentCloseBtn = document.getElementById('checkout-payment-close');
+  var demoPaymentForm = document.getElementById('checkout-payment-demo-form');
+  var demoCardNumber = document.getElementById('demo-card-number');
+  var demoCardExpiry = document.getElementById('demo-card-expiry');
+  var demoCardCvc = document.getElementById('demo-card-cvc');
+  var demoBillingEmail = document.getElementById('demo-billing-email');
+  var demoPaymentResult = document.getElementById('checkout-payment-demo-result');
   var alertBox = document.getElementById('checkout-alert-box');
   var alertMsg = document.getElementById('checkout-alert-msg');
+  var paymentOptions = form ? form.querySelectorAll('input[name="payment_method"]') : [];
 
   var discountInput = document.getElementById('discount-code-input');
   var discountApplyBtn = document.getElementById('discount-apply-btn');
@@ -690,6 +833,56 @@
   var currentDiscount = '';
   var currency = '{{ cur }}';
 
+  function closePaymentModal() {
+    if (paymentModal) {
+      paymentModal.hidden = true;
+      paymentModal.setAttribute('aria-hidden', 'true');
+    }
+    if (submitBtn) submitBtn.disabled = false;
+  }
+
+  function openDemoPayment() {
+    if (demoPaymentForm) demoPaymentForm.reset();
+    if (demoBillingEmail && form.email) demoBillingEmail.value = form.email.value.trim();
+    if (demoPaymentResult) {
+      demoPaymentResult.hidden = true;
+      demoPaymentResult.textContent = '';
+    }
+    if (paymentModal) {
+      paymentModal.hidden = false;
+      paymentModal.setAttribute('aria-hidden', 'false');
+    }
+    if (demoCardNumber) demoCardNumber.focus();
+  }
+
+  if (paymentCloseBtn) paymentCloseBtn.addEventListener('click', closePaymentModal);
+  if (paymentModal) paymentModal.addEventListener('click', function(e) {
+    if (e.target === paymentModal) closePaymentModal();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && paymentModal && !paymentModal.hidden) closePaymentModal();
+  });
+
+  if (demoCardNumber) demoCardNumber.addEventListener('input', function() {
+    var digits = demoCardNumber.value.replace(/\D/g, '').slice(0, 16);
+    demoCardNumber.value = digits.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+  });
+  if (demoCardExpiry) demoCardExpiry.addEventListener('input', function() {
+    var digits = demoCardExpiry.value.replace(/\D/g, '').slice(0, 4);
+    demoCardExpiry.value = digits.length > 2 ? digits.slice(0, 2) + ' / ' + digits.slice(2) : digits;
+  });
+  if (demoCardCvc) demoCardCvc.addEventListener('input', function() {
+    demoCardCvc.value = demoCardCvc.value.replace(/\D/g, '').slice(0, 4);
+  });
+  if (demoPaymentForm) demoPaymentForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    if (!demoPaymentForm.reportValidity()) return;
+    if (demoPaymentResult) {
+      demoPaymentResult.textContent = 'Demo complete. No payment was processed and no order was placed.';
+      demoPaymentResult.hidden = false;
+    }
+  });
+
   function showAlert(msg) {
     if (!alertBox || !alertMsg) return;
     alertMsg.textContent = msg;
@@ -701,6 +894,24 @@
     if (alertBox) alertBox.style.display = 'none';
   }
 
+  function selectedPaymentMethod() {
+    var selected = form && form.querySelector('input[name="payment_method"]:checked');
+    return selected ? selected.value : 'cod';
+  }
+
+  function updatePaymentSelection() {
+    paymentOptions.forEach(function(option) {
+      var label = option.closest('.checkout-radio-option');
+      if (label) label.classList.toggle('selected', option.checked);
+    });
+    if (submitBtn) submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : submitBtn.dataset.label;
+  }
+
+  paymentOptions.forEach(function(option) {
+    option.addEventListener('change', updatePaymentSelection);
+  });
+  updatePaymentSelection();
+
   // Apply discount code
   if (discountApplyBtn && discountInput) {
     discountApplyBtn.addEventListener('click', function(e) {
@@ -708,6 +919,7 @@
       var code = discountInput.value.trim();
       if (!code) return;
       hideAlert();
+
       discountApplyBtn.disabled = true;
 
       fetch(shopUrl + '/checkout/', {
@@ -795,6 +1007,11 @@
       e.preventDefault();
       hideAlert();
 
+      if (selectedPaymentMethod() === 'online_demo') {
+        openDemoPayment();
+        return;
+      }
+
       var email = form.email.value.trim();
       var first_name = form.first_name.value.trim();
       var last_name = form.last_name.value.trim();
@@ -856,7 +1073,7 @@
         showAlert(err.message || 'There was a problem processing your order. Please try again.');
         if (submitBtn) {
           submitBtn.disabled = false;
-          submitBtn.textContent = '{{ btn_text }}';
+          submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : submitBtn.dataset.label;
         }
       });
     });

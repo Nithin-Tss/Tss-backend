@@ -28,6 +28,40 @@ urlpatterns = [
 ]
 
 
+def assert_stock_consistent(case, store):
+    """
+    The stock rules, for every stock row of the store, to call after each step of a journey:
+    on_hand = available + committed + unavailable; committed and unavailable never negative; available
+    never negative unless the variant sells past its stock (continue_selling); and every change left a
+    history row: what the history adds up to is exactly what the row holds, and each history row is itself
+    consistent. Returns {reason: how many history rows}, so a test can check which changes were recorded.
+    """
+    from collections import Counter
+
+    from django.db.models import Sum
+
+    from apps.inventory.models import InventoryHistory, InventoryItem
+
+    for item in InventoryItem.objects.filter(variant__product__store=store).select_related("variant", "location"):
+        where = f"{item.variant.sku} at {item.location.name}"
+        case.assertEqual(item.on_hand, item.available + item.committed + item.unavailable, f"on_hand identity, {where}")
+        case.assertGreaterEqual(item.committed, 0, f"committed, {where}")
+        case.assertGreaterEqual(item.unavailable, 0, f"unavailable, {where}")
+        if not item.variant.continue_selling:
+            case.assertGreaterEqual(item.available, 0, f"available, {where}")
+            case.assertGreaterEqual(item.on_hand, 0, f"on_hand, {where}")
+        rows = InventoryHistory.objects.filter(store=store, variant=item.variant, location=item.location)
+        totals = rows.aggregate(a=Sum("change"), c=Sum("committed_change"), u=Sum("unavailable_change"))
+        case.assertEqual(
+            (totals["a"] or 0, totals["c"] or 0, totals["u"] or 0),
+            (item.available, item.committed, item.unavailable),
+            f"history adds up to the stock row, {where}",
+        )
+        for row in rows:
+            case.assertEqual(row.on_hand, row.after + row.committed + row.unavailable, f"history row {row.reason}, {where}")
+    return Counter(InventoryHistory.objects.filter(store=store).values_list("reason", flat=True))
+
+
 @override_settings(ROOT_URLCONF=__name__)
 class CommerceTestBase(APITestCase):
     def setUp(self):
@@ -617,3 +651,66 @@ class TaxRulesTests(CommerceTestBase):
         given = order_services.create_order(self.store, line, tax_amount=Decimal("5.00"))
         self.assertEqual(given.tax_amount, Decimal("5.00"))
         self.assertEqual(given.items.get().tax_amount, Decimal("5.00"))
+
+
+class CartMergeRulesTests(CommerceTestBase):
+    """Signing in merges the guest cart into the customer's: the same stock rules as everywhere else."""
+
+    def setUp(self):
+        super().setUp()
+        self.customer = Customer.objects.create(
+            store=self.store, email="merge@example.com", email_subscription_status="not_subscribed"
+        )
+        self.guest = services.get_or_create_cart(self.store, session_id="guest-merge-aaaaaaaa")
+        self.target = services.get_or_create_cart(self.store, customer=self.customer)
+
+    def sells_past_its_stock(self, stock=0):
+        set_available(self.variant, self.location, stock)
+        self.variant.continue_selling = True
+        self.variant.save()
+
+    def lines(self):
+        return {i.product.title: i.quantity for i in services.active_items(self.target)}
+
+    def test_a_line_that_keeps_selling_past_its_stock_is_carried_over_whole(self):
+        self.sells_past_its_stock(0)
+        services.add_item(self.guest, self.product, 3)  # allowed: it keeps selling
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 3})  # not dropped for having no stock
+
+    def test_a_line_that_keeps_selling_adds_up_past_its_stock(self):
+        self.sells_past_its_stock(0)
+        services.add_item(self.target, self.product, 2)
+        services.add_item(self.guest, self.product, 3)
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 5})  # not capped at the stock of 0
+
+    def test_a_line_that_does_not_keep_selling_is_still_capped_by_stock(self):
+        set_available(self.variant, self.location, 4)
+        services.add_item(self.target, self.product, 2)
+        services.add_item(self.guest, self.product, 4)
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 4})
+
+    def test_a_product_that_is_no_longer_for_sale_is_not_carried_over(self):
+        services.add_item(self.guest, self.product, 2)
+        Product.objects.filter(pk=self.product.pk).update(status="draft")
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {})
+        self.assertEqual(list(services.active_items(self.guest)), [])
+
+    def test_a_product_taken_off_the_online_store_is_not_carried_over(self):
+        services.add_item(self.guest, self.product, 2)
+        ProductSalesChannel.objects.filter(product=self.product).delete()
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {})

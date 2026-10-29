@@ -1,7 +1,8 @@
 from django.urls import path
 
 from .team_views import (
-    ActivityView, InvitationDetailView, InvitationListView, MemberDetailView, MemberListView, PermissionCatalogView, RoleDetailView, RoleListView,
+    ActivityView, InvitationDetailView, InvitationListView, MemberDetailView, MemberListView, MyAccessView,
+    PermissionCatalogView, RoleDetailView, RoleDuplicateView, RoleListView,
 )
 
 members_urlpatterns = [
@@ -15,5 +16,7 @@ members_urlpatterns = [
 roles_urlpatterns = [
     path("", RoleListView.as_view(), name="role_list"),
     path("permissions/", PermissionCatalogView.as_view(), name="role_permissions"),
+    path("me/", MyAccessView.as_view(), name="role_me"),
+    path("<uuid:role_id>/duplicate/", RoleDuplicateView.as_view(), name="role_duplicate"),
     path("<uuid:role_id>/", RoleDetailView.as_view(), name="role_detail"),
 ]

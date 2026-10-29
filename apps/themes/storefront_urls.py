@@ -2,7 +2,7 @@
 from django.urls import path
 
 from .views import (
-    storefront_account, storefront_account_address, storefront_account_profile,
+    storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
     storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
     storefront_product, storefront_register,
@@ -43,4 +43,6 @@ urlpatterns = [
     path("<slug:store_slug>/blog", storefront_blog, name="storefront-blog"),
     path("<slug:store_slug>/blog/<slug:kind>/<slug:handle>", storefront_blog, name="storefront-blog-filter"),
     path("<slug:store_slug>/blog/<slug:handle>", storefront_article, name="storefront-article"),
+    # Anything else under a store: its redirect if it has one, else the not-found page. Keep this last.
+    path("<slug:store_slug>/<path:rest>", storefront_not_found, name="storefront-not-found"),
 ]

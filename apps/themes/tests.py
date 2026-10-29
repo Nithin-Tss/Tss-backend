@@ -1057,8 +1057,13 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn("e.preventDefault();", page)
 
     def test_automatic_menu_when_there_are_no_links(self):
-        for name in ("Autumn", "Basics", "Coats"):
-            self.ok("post", "/api/v1/catalog/collections/", {"name": name, "status": "active"}, expect=201)
+        for name in ("Autumn", "Basics", "Coats"):  # each has a product to buy: the automatic menu skips empty ones
+            product = self.ok("post", "/api/v1/catalog/products/", {
+                "title": f"{name} thing", "status": "active", "price": "10", "sku": f"AUTO-{name.upper()}",
+            }, expect=201)
+            self.ok("post", "/api/v1/catalog/collections/",
+                    {"name": name, "status": "active", "products": [product["id"]]}, expect=201)
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Barely there", "status": "active"}, expect=201)
         values = self.section()["values"]
         self.assertEqual([b["type"] for b in values["blocks"]], ["wishlist", "cart", "search"])  # only the icons: no menu links
         values["settings"]["collections"] = 2
@@ -1068,12 +1073,13 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn(">Shop all</a>", nav)
         shown = [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in nav]
         self.assertEqual(shown, ["Autumn", "Basics"])
+        self.assertNotIn(">Barely there</a>", nav)  # no products in it
         # The fast preview path reads the collections the same way
         self.assertEqual(shown, [name for name in ("Autumn", "Basics", "Coats") if f">{name}</a>" in preview])
 
     def test_menu_from_admin_menus_shows_on_the_navbar(self):
         self.ok("post", "/api/v1/themes/menus/", {"name": "Main menu", "items": [
-            {"title": "Sale", "url": "/collections/sale"}, {"title": "Journal", "url": "/blog"}]}, expect=201)
+            {"title": "Sale", "url": "/collections/all"}, {"title": "Journal", "url": "/blog"}]}, expect=201)
         nav = self.header_html(self.home())
         self.assertIn(">Sale</a>", nav)
         self.assertIn(">Journal</a>", nav)
@@ -2490,7 +2496,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 42)
+        self.assertEqual(theme.theme_data["starter_revision"], 44)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2530,6 +2536,20 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.theme()
         self.assertEqual(self.stored(self.SNIPPET), starter_files()[self.SNIPPET])
         self.assertIn("data-cart-clear", self.stored(self.SNIPPET))
+
+    def test_the_snippet_from_before_the_checkout_redirect_is_registered_for_the_upgrade(self):
+        """A store holding it showed "Checkout is coming soon" on the real store instead of opening checkout."""
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        hashes = STARTER_UPGRADES[self.SNIPPET]
+        self.assertIn("bf6180d6c1db029759afe489ea7f753f99897e16d0394f296736abe101704a31", hashes)
+        self.assertIn("3bd8efbcc5e448be5369a998b85d83c64c02916442ada043303971153dda4e7c", hashes)
+        # the current snippet must never be one of the "older" copies, or it would be replaced by itself
+        current = starter_files()[self.SNIPPET]
+        self.assertNotIn(hashlib.sha256(current.encode("utf-8")).hexdigest(), hashes)
+        self.assertIn('window.location.href = href;', current)
 
     def snippet_before_link_ids(self):
         """The snippet as revision 22 shipped it: the script kept a header's own badge, but links had no cart id."""
@@ -2686,7 +2706,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 42)
+        self.assertEqual(STARTER_REVISION, 44)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3497,7 +3517,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 42)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 44)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5859,8 +5879,93 @@ class MenusApiTest(StoreClientMixin, APITestCase):
 
     def test_names_and_handles_are_unique_per_store(self):
         self.ok("post", self.URL, {"name": "Footer", "handle": "footer"}, expect=201)
-        self.assertEqual(self.client.post(self.URL, {"name": "footer"}, format="json").status_code, 400)
-        self.assertEqual(self.client.post(self.URL, {"name": "Other", "handle": "footer"}, format="json").status_code, 400)
+        duplicate_name = self.client.post(self.URL, {"name": "  footer  "}, format="json")
+        self.assertEqual(duplicate_name.status_code, 400)
+        self.assertIn("name", duplicate_name.data)
+        duplicate_handle = self.client.post(
+            self.URL, {"name": "Other", "handle": "footer"}, format="json"
+        )
+        self.assertEqual(duplicate_handle.status_code, 400)
+        self.assertIn("handle", duplicate_handle.data)
+        header = self.ok("post", self.URL, {"name": "Header"}, expect=201)
+        duplicate_update = self.client.patch(
+            f"{self.URL}{header['id']}/", {"handle": "footer"}, format="json"
+        )
+        self.assertEqual(duplicate_update.status_code, 400)
+        self.assertIn("handle", duplicate_update.data)
+
+    def test_same_name_and_handle_are_allowed_in_different_stores(self):
+        self.ok("post", self.URL, {"name": "Main", "handle": "main"}, expect=201)
+        self.sign_up("other-menu-store@example.com", "Other Menu Store")
+        self.ok("post", self.URL, {"name": "Main", "handle": "main"}, expect=201)
+
+    def test_generated_handles_avoid_collisions_on_create_and_rename(self):
+        first = self.ok("post", self.URL, {"name": "Main menu"}, expect=201)
+        second = self.ok("post", self.URL, {"name": "Header", "handle": "header"}, expect=201)
+        self.assertEqual(first["handle"], "main-menu")
+
+        renamed = self.ok("patch", f"{self.URL}{second['id']}/", {"name": "Main-menu"})
+        self.assertEqual(renamed["handle"], "main-menu-2")
+
+        third = self.ok("post", self.URL, {"name": "Main--menu"}, expect=201)
+        self.assertEqual(third["handle"], "main-menu-3")
+
+    def test_menu_constraints_reject_duplicate_direct_writes(self):
+        from django.db import IntegrityError, transaction
+
+        from apps.themes.models import Menu
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_name="Menu Store")
+        Menu.objects.create(store=store, name="Normalized Name", handle="normalized-name")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Menu.objects.create(store=store, name=" normalized name ", handle="different")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Menu.objects.create(store=store, name="Different Name", handle="normalized-name")
+
+    def test_menu_items_reject_invalid_parent_relationships(self):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from apps.themes.models import Menu, MenuItem
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_name="Menu Store")
+        menu = Menu.objects.create(store=store, name="Parent menu", handle="parent-menu")
+        other_menu = Menu.objects.create(store=store, name="Other parent menu", handle="other-menu")
+        parent = MenuItem.objects.create(menu=menu, title="Parent")
+        child = MenuItem.objects.create(menu=menu, parent=parent, title="Child")
+
+        with self.assertRaises(DjangoValidationError):
+            MenuItem.objects.create(menu=other_menu, parent=parent, title="Cross-menu child")
+
+        parent.parent = parent
+        with self.assertRaises(DjangoValidationError):
+            parent.save()
+
+        parent.parent = child
+        with self.assertRaises(DjangoValidationError):
+            parent.save()
+
+    def test_invalid_item_replacement_preserves_existing_items(self):
+        menu = self.ok("post", self.URL, {
+            "name": "Preserve items",
+            "items": [{"title": "Existing", "url": "/existing"}],
+        }, expect=201)
+        url = f"{self.URL}{menu['id']}/"
+
+        response = self.client.put(url, {
+            "name": "Preserve items",
+            "items": [{"title": "Invalid", "url": "javascript:alert(1)"}],
+        }, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        current = self.ok("get", url)
+        self.assertEqual(current["items_count"], 1)
+        self.assertEqual(current["items"][0]["title"], "Existing")
 
     def test_menus_are_private_to_their_store(self):
         menu = self.ok("post", self.URL, {"name": "Mine"}, expect=201)
@@ -5884,3 +5989,93 @@ class MenusApiTest(StoreClientMixin, APITestCase):
             self.ok("post", self.URL, {"name": f"M{n}", "items": [
                 {"title": f"t{i}", "url": "/", "children": [{"title": "c", "url": "/"}]} for i in range(5)]}, expect=201)
         self.assertEqual(list_queries(), small)
+
+
+class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
+    """Stores get the product page that respects options which keep selling, unless they edited their own copy."""
+
+    PATH = "sections/main-product.liquid"
+    PREVIOUS_HASH = "f2e87477d18719a79f68bff217b82ce6415d3fbbefed5ebfea20a3b6f6c65a31"
+    PREVIOUS_HASH_CRLF = "3c8b55dc638fb076f8c8e49a63c993ddeea59e6708c9c0eed86a63743cd8e1ae"
+
+    # (new text, the text it replaced): undoing them gives the file stores had before
+    CHANGES = (
+        ('''{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock %} product__stock--few''',
+         '''{% elsif shown_variant.available_total <= low_stock %} product__stock--few'''),
+        ('''{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock %}Only a few left''',
+         '''{% elsif shown_variant.available_total <= low_stock %}Only a few left'''),
+        (''' data-variant-continue="{{ variant.continue_selling }}">''', '''>'''),
+        ('''      var out = left <= 0 && option.dataset.variantContinue !== "true"; // an option that keeps selling is never sold out
+      add.disabled = out;
+      add.textContent = out ? add.dataset.soldOut : add.dataset.label;
+      if (qty) {
+        qty.disabled = out;''', '''      add.disabled = left <= 0;
+      add.textContent = left <= 0 ? add.dataset.soldOut : add.dataset.label;
+      if (qty) {
+        qty.disabled = left <= 0;'''),
+        ('''        var few = left > 0 && left <= low;
+        stock.textContent = out ? add.dataset.soldOut : few ? "Only a few left" : "In stock";
+        stock.className = "product__stock" + (out ? " product__stock--out" : few ? " product__stock--few" : "");''',
+         '''        stock.textContent = left <= 0 ? add.dataset.soldOut : left <= low ? "Only a few left" : "In stock";
+        stock.className = "product__stock" + (left <= 0 ? " product__stock--out" : left <= low ? " product__stock--few" : "");'''),
+    )
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("pp-upgrade@example.com", "Product Page Upgrade Store")
+
+    def theme(self):
+        from apps.tenancy.models import Store
+
+        from .services import get_store_theme
+
+        return get_store_theme(Store.objects.get(store_id=self.store["storeId"])).theme
+
+    def previous_starter_file(self):
+        from .services import starter_files
+
+        text = starter_files()[self.PATH]
+        for new, old in self.CHANGES:
+            self.assertEqual(text.count(new), 1, new[:60])
+            text = text.replace(new, old)
+        return text
+
+    def store_copy(self, theme, content):
+        theme.files.filter(file_path=self.PATH).update(content=content, file_size=len(content.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 43}
+        theme.save()
+
+    def stored(self, theme):
+        return theme.files.get(file_path=self.PATH).content
+
+    def test_the_file_stores_had_before_is_registered_as_never_edited(self):
+        import hashlib
+
+        from .services import STARTER_UPGRADES, STARTER_REVISION
+
+        previous = self.previous_starter_file()
+        self.assertEqual(hashlib.sha256(previous.encode("utf-8")).hexdigest(), self.PREVIOUS_HASH)
+        self.assertEqual(hashlib.sha256(previous.replace("\n", "\r\n").encode("utf-8")).hexdigest(), self.PREVIOUS_HASH_CRLF)
+        self.assertLessEqual({self.PREVIOUS_HASH, self.PREVIOUS_HASH_CRLF}, STARTER_UPGRADES[self.PATH])
+        self.assertGreaterEqual(STARTER_REVISION, 44)
+
+    def test_a_store_with_the_untouched_old_file_gets_the_new_one(self):
+        from . import services
+
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                theme = self.theme()
+                self.store_copy(theme, self.previous_starter_file().replace("\n", newline))
+                services._upgrade_untouched_starter_files(theme)
+                self.assertEqual(self.stored(theme), services.starter_files()[self.PATH])
+                self.assertIn('data-variant-continue="{{ variant.continue_selling }}"', self.stored(theme))
+
+    def test_a_store_that_edited_its_copy_keeps_it(self):
+        from . import services
+
+        theme = self.theme()
+        edited = self.previous_starter_file() + "\n<!-- my own change -->\n"
+        self.store_copy(theme, edited)
+        services._upgrade_untouched_starter_files(theme)
+        self.assertEqual(self.stored(theme), edited)
+        theme.refresh_from_db()
+        self.assertEqual(theme.theme_data["starter_revision"], services.STARTER_REVISION)  # checked once, left alone

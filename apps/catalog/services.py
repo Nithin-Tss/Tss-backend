@@ -6,6 +6,7 @@ from django.db.models import Exists, OuterRef, PROTECT, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from rest_framework.exceptions import ValidationError
 
+from apps.audit.services import note_created, note_deleted
 from apps.inventory.services import default_location, import_stock, set_available
 
 from .models import (
@@ -72,6 +73,38 @@ def sales_channels_for(store):
 
 class ProductInUse(Exception):
     """The product, or one of its variants, is referenced by orders or inventory."""
+
+
+NO_PRICE_MESSAGE = "Enter a price for every option before making this product active."
+
+
+def _price_missing(product, data, creating, was_active):
+    """
+    True when saving `data` would leave an option of an Active product with no price. A typed 0 is a price;
+    an empty one is not. An option the form did not send a price for keeps the price it has. Making a product
+    Active (it was not before) also counts an option saved at 0.00 as empty, as a saved 0.00 can't tell a typed 0
+    from an empty price: type the 0 in the form to sell it for free.
+    """
+    existing = [] if creating else list(product.variants.order_by("created_at"))
+    if not ("variants" in data or "price" in data or "weight" in data or not existing):
+        # nothing about prices was sent: only making the product Active needs a look
+        return (not was_active) and any(v.price == 0 for v in existing)
+
+    rows = data.get("variants") or [{"price": data["price"]} if "price" in data else {}]
+    default = data.get("price")
+    by_id = {str(v.id): v for v in existing}
+    by_position = not any(row.get("id") for row in rows)
+    for index, row in enumerate(rows):
+        if row.get("price") is not None or default is not None:
+            continue  # a price was typed (0 included)
+        if "price" in row or "price" in data:
+            return True  # the price was sent, and empty
+        variant = (existing[index] if index < len(existing) else None) if by_position else by_id.get(str(row.get("id")))
+        if variant is None:
+            return True  # a new option with no price
+        if not was_active and variant.price == 0:
+            return True  # being made Active, and the saved price may be an empty one
+    return False
 
 
 def _price(value):
@@ -298,7 +331,10 @@ def save_product(store, data, product=None, user=None):
                 value = (value or "").strip() or None
             setattr(product, field, value)
 
+    was_active = (not creating) and product.status == ACTIVE
     product.status = data.get("status", product.status or DRAFT)
+    if product.status == ACTIVE and _price_missing(product, data, creating, was_active):
+        raise ValidationError({"price": NO_PRICE_MESSAGE})
 
     # category_id: picked from the store's categories; category: a name (older clients)
     if "category_id" in data:
@@ -408,10 +444,12 @@ def delete_products(store, ids):
     Products used by orders or inventory are left alone.
     Returns (deleted count, titles of those kept).
     """
-    products = {p.pk: p.title for p in Product.objects.filter(store=store, pk__in=ids)}
+    found = list(Product.objects.filter(store=store, pk__in=ids))
+    products = {p.pk: p.title for p in found}
     blocked = _protected_product_ids(list(products))
     free = [pk for pk in products if pk not in blocked]
     if free:
+        note_deleted([p for p in found if p.pk in set(free)])
         with transaction.atomic():
             for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
                 model.objects.filter(product__in=free).delete()
@@ -448,7 +486,13 @@ def delete_all_products(store):
 
 
 def _apply_variant(variant, row, default_price=None):
-    variant.price = _price(row.get("price") or default_price)
+    if row.get("price") is not None:
+        variant.price = _price(row["price"])  # a typed 0 is a price: it is not replaced by the default
+    elif default_price is not None:
+        variant.price = _price(default_price)
+    elif "price" in row or variant._state.adding:
+        variant.price = _price(None)  # sent empty (a Draft may keep it) or a new option: 0.00
+    # else: no price was sent for this option: it keeps the one it has
     if "continue_selling" in row:
         variant.continue_selling = bool(row["continue_selling"])
     if row.get("weight") is not None:
@@ -470,7 +514,7 @@ def _replace_variants(product, data):
     """
     rows = data.get("variants") or [
         {
-            "price": data.get("price"),
+            **({"price": data["price"]} if "price" in data else {}),
             **({"sku": data["sku"]} if "sku" in data else {}),
             **({"weight": data["weight"]} if "weight" in data else {}),
             **({"continue_selling": data["continue_selling"]} if "continue_selling" in data else {}),
@@ -640,6 +684,7 @@ def import_products(store, rows, user=None):
             product_images.append(ProductImage(product=product, url=url, position=position))
 
     Product.objects.bulk_create(products)
+    note_created(products)
     ProductVariant.objects.bulk_create(variants)
     ProductImage.objects.bulk_create(product_images)
     ProductCollection.objects.bulk_create(product_collections)

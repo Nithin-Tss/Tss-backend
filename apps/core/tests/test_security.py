@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timedelta
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
@@ -42,11 +43,12 @@ from apps.fulfillment.models import Fulfillment
 from apps.gift_cards.models import GiftCard
 from apps.identity.email_links import VERIFY_EMAIL_SALT
 from apps.identity.models import User
-from apps.inventory.models import InventoryItem, Location, Transfer
+from apps.inventory.models import InventoryItem, Location, StockReservation, Transfer
 from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
 from apps.purchasing.models import PurchaseOrder
 from apps.tenancy.models import ShippingRate, Store, TaxRate
+from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
 from apps.wishlist.models import Wishlist, WishlistItem
 
 from .test_flow import StoreClientMixin
@@ -452,6 +454,8 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             Transfer.objects.create(store=store, transfer_number=f"{store.store_slug}-T1", status="draft",
                                     source_location=location,
                                     destination_location=Location.objects.create(store=store, name="Shop")),
+            StockReservation.objects.create(store=store, variant=variant, checkout_id=uuid.uuid4(), quantity=1,
+                                            expires_at=timezone.now() + timedelta(minutes=15)),
             DraftOrder.objects.create(store=store, draft_number=f"{store.store_slug}-D1", customer=customer,
                                       status="open", total=0, currency_code="INR",
                                       created_by_user=User.objects.get(email=owner_email)),
@@ -469,6 +473,8 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant),
             MediaAsset.objects.create(store=store, original_name="banner.png", mime_type="image/png", file_size=40),
         ]
+        endpoint = WebhookEndpoint.objects.create(store=store, url="https://example.com/hook", events=["*"])
+        records += [endpoint, WebhookDelivery.objects.create(endpoint=endpoint, event_type="ping", payload={})]
         return {type(r): r for r in records}
 
     def snapshot(self):
@@ -644,7 +650,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     }
     # Sign-in only: they are about the account itself, or do their own store resolution
     ACCOUNT_ONLY = {
-        "MeView", "ChangePasswordView", "ResendVerificationEmailView",
+        "MeView", "ChangePasswordView", "ResendVerificationEmailView", "MyActivityView",
         "StoreViewSet", "CustomerAddressViewSet", "ThemeSchemaView",
     }
     # Plain function views, outside DRF

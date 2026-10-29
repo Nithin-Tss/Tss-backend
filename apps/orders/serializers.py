@@ -15,9 +15,14 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model = OrderItem
         fields = [
             "id", "product", "variant", "product_name", "variant_title", "sku", "quantity",
-            "unit_price", "discount_amount", "tax_amount", "total", "image_url",
+            "unit_price", "discount_amount", "tax_amount", "total", "image_url", "returned_quantity",
         ]
         read_only_fields = fields
+
+    returned_quantity = serializers.SerializerMethodField()
+
+    def get_returned_quantity(self, item):
+        return (item.metadata or {}).get("returned_quantity", 0)
 
     def get_image_url(self, item):
         if item.product_id:
@@ -49,6 +54,11 @@ class OrderSerializer(serializers.ModelSerializer):
     financial_summary = serializers.SerializerMethodField()
     timeline = serializers.SerializerMethodField()
     notes = serializers.SerializerMethodField()
+    customer_cancel_until = serializers.SerializerMethodField()
+    returned_at = serializers.SerializerMethodField()
+    stock_released_at = serializers.SerializerMethodField()
+    dispute = serializers.SerializerMethodField()
+    disputes = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -58,11 +68,47 @@ class OrderSerializer(serializers.ModelSerializer):
             "subtotal", "discount_amount", "tax_amount", "shipping_amount", "total",
             "status", "payment_status", "fulfillment_status", "delivery_status", "delivery_method",
             "shipping_address", "billing_address", "fulfillments", "payments", "source_draft",
-            "financial_summary", "timeline", "notes",
+            "financial_summary", "timeline", "notes", "customer_cancel_until", "returned_at", "stock_released_at", "dispute", "disputes",
             "items", "items_count", "tags", "created_at", "updated_at",
         ]
         # Totals and statuses are calculated by the system, never typed in.
         read_only_fields = [f for f in fields if f != "delivery_method"]
+
+    def get_disputes(self, order):
+        """Card chargebacks on this order (newest first): id, status, reason, amount, times. Staff only."""
+        entries = (order.metadata or {}).get("disputes", [])
+        return sorted(entries, key=lambda e: e.get("updated_at") or "", reverse=True)
+
+    def get_dispute(self, order):
+        """The latest chargeback on this order, or null: the one staff should look at."""
+        entries = self.get_disputes(order)
+        return entries[0] if entries else None
+
+    def get_returned_at(self, order):
+        """When staff marked every shipped item as returned, or null."""
+        return ((order.metadata or {}).get("returned") or {}).get("at")
+
+    def get_stock_released_at(self, order):
+        """When this order's unshipped stock went back on the shelf (cancel or full refund), or null."""
+        return ((order.metadata or {}).get("stock_released") or {}).get("at")
+
+    def get_customer_cancel_until(self, order):
+        """
+        Until when the shopper can cancel this order themselves, or null when they can't (any more): too late,
+        not open, already shipped, or money received. For staff this is information only: staff have no limit.
+        """
+        from django.utils import timezone
+
+        from apps.payments import services as payments
+
+        from . import services
+
+        if order.status != services.OPEN or order.fulfillment_status != services.UNFULFILLED:
+            return None
+        deadline = services.customer_cancel_deadline(order)
+        if timezone.now() > deadline or payments.paid_total(order) > 0:
+            return None
+        return serializers.DateTimeField().to_representation(deadline)
 
     def get_items(self, order):
         return OrderItemSerializer(
@@ -319,6 +365,14 @@ class OrderSerializer(serializers.ModelSerializer):
                 "timestamp": order.updated_at.isoformat() if order.updated_at else created_at_str,
             })
 
+        for dispute in (order.metadata or {}).get("disputes", []):
+            events.append({
+                "id": f"dispute_{dispute['id']}",
+                "type": "payment_dispute",
+                "title": f"The customer's bank opened a dispute on this order's payment ({dispute['status'].replace('_', ' ')}).",
+                "timestamp": dispute.get("updated_at") or created_at_str,
+            })
+
         events.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         return events
 
@@ -391,6 +445,42 @@ class OrderLineInputSerializer(StoreScopedSerializerMixin, serializers.Serialize
     quantity = serializers.IntegerField(min_value=1)
     unit_price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, required=False)
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, required=False)
+
+
+class ShopperOrderSerializer(OrderSerializer):
+    """What a shopper sees of their own order: no chargeback details and no internal stock notes."""
+
+    dispute = None
+    disputes = None
+    stock_released_at = None
+
+    class Meta(OrderSerializer.Meta):
+        fields = [f for f in OrderSerializer.Meta.fields if f not in ("dispute", "disputes", "stock_released_at")]
+        read_only_fields = [f for f in fields if f != "delivery_method"]
+
+    def get_timeline(self, order):
+        return [event for event in super().get_timeline(order) if event.get("type") != "payment_dispute"]
+
+    def get_payments(self, order):
+        """The order's payments without their chargeback rows: a shopper does not see those."""
+        payments = []
+        for payment in super().get_payments(order):
+            payment = dict(payment)
+            payment["transactions"] = [
+                t for t in payment.get("transactions", []) if t.get("transaction_type") != "dispute"
+            ]
+            payments.append(payment)
+        return payments
+
+
+class OrderReturnLineSerializer(serializers.Serializer):
+    order_item = serializers.UUIDField()
+    quantity = serializers.IntegerField(min_value=1)
+    location = serializers.UUIDField(required=False, allow_null=True)
+
+
+class OrderReturnSerializer(serializers.Serializer):
+    items = OrderReturnLineSerializer(many=True, allow_empty=False)
 
 
 class CurrencyCodeField(serializers.CharField):

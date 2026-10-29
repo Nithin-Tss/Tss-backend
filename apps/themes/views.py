@@ -12,7 +12,10 @@ from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, connection, transaction
 from django.db.models import F
-from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
+from django.db.models.functions import Lower, Trim
+from django.http import (
+    Http404, HttpResponse, HttpResponsePermanentRedirect, HttpResponseRedirect, JsonResponse, StreamingHttpResponse,
+)
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -47,8 +50,8 @@ from .customizer import read_settings, save_settings, validate_settings
 from . import presets
 from . import section_sync as sync
 from .rendering import (
-    _catalog, parse_collection_filters, published_pages, published_posts, render_cart_html, render_page,
-    render_synced_section_fast, shop_url,
+    _catalog, dead_menu_urls, parse_collection_filters, published_pages, published_posts, render_cart_html,
+    render_page, render_synced_section_fast, shop_url,
 )
 from apps.catalog.models import Product, ProductVariant
 from apps.commerce import services as commerce_services
@@ -488,6 +491,11 @@ def theme_image(request, image_id):
     key = f"theme-image:{image_id}"
     cached = cache.get(key)
     if cached is None:
+        stored = MediaAsset.objects.filter(pk=image_id, storage_key__isnull=False).only("storage_key").first()
+        if stored is not None:  # kept in the bucket: older /s/_img/ links keep working by redirecting there
+            response = HttpResponseRedirect(stored.url)
+            response["Cache-Control"] = "public, max-age=3600"
+            return response
         asset = MediaAsset.objects.filter(pk=image_id, data__isnull=False).only("data", "mime_type").first()
         if asset is not None:
             cached = (bytes(asset.data), asset.mime_type)
@@ -1157,16 +1165,21 @@ class MenuItemSerializer(serializers.ModelSerializer):
     order = serializers.IntegerField(default=0)
     parent = serializers.PrimaryKeyRelatedField(queryset=MenuItem.objects.all(), required=False, allow_null=True)
     children = serializers.SerializerMethodField()
+    broken = serializers.SerializerMethodField()
 
     class Meta:
         model = MenuItem
-        fields = ["id", "title", "url", "order", "parent", "children"]
+        fields = ["id", "title", "url", "order", "parent", "children", "broken"]
+
+    def get_broken(self, obj):
+        """True when the link goes to a product or collection that shoppers can't open now (see dead_menu_urls)."""
+        return obj.url in self.context.get("broken_urls", ())
 
     def get_children(self, obj):
         if obj.parent_id is not None:  # menus nest one level deep
             return []
         children = sorted(obj.children.all(), key=lambda c: (c.order, c.created_at))
-        return MenuItemSerializer(children, many=True).data
+        return MenuItemSerializer(children, many=True, context=self.context).data
 
 
 MAX_MENU_ITEMS = 100
@@ -1214,6 +1227,44 @@ def _order(value, fallback):
     return value if isinstance(value, int) and value >= 0 else fallback
 
 
+def _available_menu_handle(store, name, exclude_pk=None):
+    base = slugify(name)[:255]
+    if not base:
+        return ""
+
+    menus = Menu.objects.filter(store=store)
+    if exclude_pk is not None:
+        menus = menus.exclude(pk=exclude_pk)
+
+    handle = base
+    suffix = 2
+    while menus.filter(handle=handle).exists():
+        suffix_text = f"-{suffix}"
+        handle = f"{base[:255 - len(suffix_text)].rstrip('-')}{suffix_text}"
+        suffix += 1
+    return handle
+
+
+def _menu_uniqueness_conflict_field(error):
+    cause = error.__cause__ or error
+    constraint_name = getattr(getattr(cause, "diag", None), "constraint_name", None)
+    if constraint_name == "uq_menu_store_name_ci":
+        return "name"
+    if constraint_name == "uq_menu_store_handle":
+        return "handle"
+
+    message = str(cause)
+    if "uq_menu_store_name_ci" in message:
+        return "name"
+    if (
+        "themes__menus.store_id" in message
+        and "themes__menus.handle" in message
+        and "UNIQUE constraint failed" in message
+    ):
+        return "handle"
+    return None
+
+
 def _sync_menu_items(menu, items):
     """Replaces the menu's items with the output of _clean_menu_items."""
     with transaction.atomic():
@@ -1244,7 +1295,7 @@ class MenuSerializer(serializers.ModelSerializer):
         return sorted((i for i in obj.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
 
     def get_items(self, obj):
-        return MenuItemSerializer(self._top_items(obj), many=True).data
+        return MenuItemSerializer(self._top_items(obj), many=True, context=self.context).data
 
     def get_items_summary(self, obj):
         return ", ".join(i.title for i in self._top_items(obj))
@@ -1263,12 +1314,20 @@ class MenuSerializer(serializers.ModelSerializer):
         if self.instance:
             others = others.exclude(pk=self.instance.pk)
         name = attrs.get("name")
-        if name and others.filter(name__iexact=name.strip()).exists():
-            raise serializers.ValidationError({"name": "A menu with this name already exists."})
-        # The storefront finds menus by handle, so two menus must not share one
-        handle = attrs.get("handle") or (slugify(name)[:255] if name and not self.instance else "")
-        if handle and others.filter(handle=handle).exists():
+        if name:
+            duplicate_name = others.annotate(
+                _normalized_name=Lower(Trim("name", characters=" \t\n\r\f\v"))
+            ).filter(_normalized_name=name.strip().lower()).exists()
+            if duplicate_name:
+                raise serializers.ValidationError({"name": "A menu with this name already exists."})
+
+        handle = attrs.get("handle")
+        explicit_handle = "handle" in self.initial_data and bool(handle)
+        if explicit_handle and others.filter(handle=handle).exists():
             raise serializers.ValidationError({"handle": "A menu with this handle already exists."})
+        if not explicit_handle and (self.instance is None or name):
+            self._generated_handle = _available_menu_handle(store, name or self.instance.name, self.instance.pk if self.instance else None)
+
         if "items" in self.context["request"].data:
             self._items = _clean_menu_items(self.context["request"].data.get("items"))
         return attrs
@@ -1276,8 +1335,16 @@ class MenuSerializer(serializers.ModelSerializer):
     @transaction.atomic
     def create(self, validated_data):
         name = validated_data["name"].strip()
-        handle = validated_data.get("handle") or slugify(name)[:255]
-        menu = Menu.objects.create(store=self.context["request"].store, name=name, handle=handle)
+        handle = validated_data.get("handle") or getattr(self, "_generated_handle", "")
+        try:
+            menu = Menu.objects.create(store=self.context["request"].store, name=name, handle=handle)
+        except IntegrityError as error:
+            field = _menu_uniqueness_conflict_field(error)
+            if field is None:
+                raise
+            raise serializers.ValidationError(
+                {field: f"A menu with this {field} already exists."}
+            ) from error
         _sync_menu_items(menu, getattr(self, "_items", []))
         return menu
 
@@ -1287,11 +1354,31 @@ class MenuSerializer(serializers.ModelSerializer):
         if validated_data.get("handle"):
             instance.handle = validated_data["handle"]
         elif "name" in validated_data:
-            instance.handle = slugify(instance.name)[:255]
-        instance.save()
+            instance.handle = getattr(self, "_generated_handle", "")
+        try:
+            instance.save()
+        except IntegrityError as error:
+            field = _menu_uniqueness_conflict_field(error)
+            if field is None:
+                raise
+            raise serializers.ValidationError(
+                {field: f"A menu with this {field} already exists."}
+            ) from error
         if hasattr(self, "_items"):
             _sync_menu_items(instance, self._items)
         return instance
+
+
+def _menu_context(request, menus):
+    """What the menu serializers need to mark broken links: every link of these menus checked together."""
+    urls = [item.url for menu in menus for item in menu.items.all() if item.url]
+    return {"request": request, "broken_urls": dead_menu_urls(request.store, urls)}
+
+
+def _menu_data(request, menu):
+    """One menu as the admin sees it, read fresh after a save, with its broken links marked."""
+    menu = Menu.objects.prefetch_related("items__children").get(pk=menu.pk)
+    return MenuSerializer(menu, context=_menu_context(request, [menu])).data
 
 
 class MenusView(StoreThemeView):
@@ -1301,14 +1388,14 @@ class MenusView(StoreThemeView):
     """
 
     def get(self, request):
-        menus = Menu.objects.filter(store=request.store).prefetch_related("items__children").order_by("created_at")
-        return Response(MenuSerializer(menus, many=True, context={"request": request}).data)
+        menus = list(Menu.objects.filter(store=request.store).prefetch_related("items__children").order_by("created_at"))
+        return Response(MenuSerializer(menus, many=True, context=_menu_context(request, menus)).data)
 
     def post(self, request):
         serializer = MenuSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(_menu_data(request, serializer.instance), status=status.HTTP_201_CREATED)
 
 
 class MenuView(StoreThemeView):
@@ -1320,13 +1407,13 @@ class MenuView(StoreThemeView):
         )
 
     def get(self, request, menu_id):
-        return Response(MenuSerializer(self.get_menu(menu_id), context={"request": request}).data)
+        return Response(_menu_data(request, self.get_menu(menu_id)))
 
     def put(self, request, menu_id):
         serializer = MenuSerializer(self.get_menu(menu_id), data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(_menu_data(request, serializer.instance))
 
     def patch(self, request, menu_id):
         serializer = MenuSerializer(
@@ -1334,7 +1421,7 @@ class MenuView(StoreThemeView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        return Response(_menu_data(request, serializer.instance))
 
     def delete(self, request, menu_id):
         self.get_menu(menu_id).delete()
@@ -1757,6 +1844,51 @@ class StorefrontLinkView(APIView):
         return Response({"url": url + ("&" if "?" in url else "?") + urlencode({"admin_bar": token})})
 
 
+REDIRECT_HOPS = 5  # a redirect that leads to another one is followed this far, then given up on
+
+
+def _redirect_forms(store, path):
+    """The ways a redirect from `path` may have been saved: with or without /s/<store>, with or without a final /."""
+    base = shop_url(store)
+    relative = path[len(base):] if path.startswith(base) else path
+    plain = "/" + relative.strip("/")
+    forms = {plain} if plain == "/" else {plain, plain + "/"}
+    return plain, sorted(forms | {base + f for f in forms})
+
+
+def _store_redirect(store, path, query=""):
+    """
+    Where a page that was not found should send the shopper: this store's UrlRedirect for the path (301), followed
+    through further redirects. None when there is none, it loops, it takes more than REDIRECT_HOPS, or the target
+    is not a store path or an http(s) link.
+    """
+    base = shop_url(store)
+    seen, current, hops = {_redirect_forms(store, path)[0]}, path, 0
+    while True:
+        row = (
+            UrlRedirect.objects.filter(store=store, path__in=_redirect_forms(store, current)[1])
+            .order_by("-created_at").first()
+        )
+        if row is None:
+            break
+        hops += 1
+        target = (row.target or "").strip()
+        if hops > REDIRECT_HOPS or "\n" in target or "\r" in target:
+            return None
+        if target.startswith(("http://", "https://")):
+            return target  # another site: the end of the road
+        if not target.startswith("/") or target.startswith("//"):
+            return None
+        current = target if target == base or target.startswith(base + "/") else base + target
+        key = _redirect_forms(store, current)[0]
+        if key in seen:
+            return None  # a loop
+        seen.add(key)
+    if hops == 0:
+        return None
+    return current + ("?" + query if query and "?" not in current else "")
+
+
 def _storefront(render):
     """
     Wraps a public storefront view.
@@ -1790,6 +1922,9 @@ def _storefront(render):
             status_code = 200
 
         except Http404:
+            moved = _store_redirect(store, request.path, request.META.get("QUERY_STRING", ""))
+            if moved:
+                return HttpResponsePermanentRedirect(moved)
             # Drafts and unknown pages: a readable page that the preview frame is allowed to show
             html = (
                 "<!doctype html><meta charset='utf-8'><title>Page not found</title>"
@@ -1854,6 +1989,12 @@ def storefront_home(store, request, params):
         "index",
         request=request,
     )
+
+
+@_storefront
+def storefront_not_found(store, request, params, rest=""):
+    """Any other address under the store: a redirect for it if the store has one, else the not-found page."""
+    raise Http404("Page not found.")
 
 
 @_storefront
