@@ -17,6 +17,7 @@ from rest_framework.response import Response
 
 
 
+from apps.audit.services import audited_update
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 
@@ -239,7 +240,7 @@ class ProductViewSet(StoreScopedViewSet):
         except ValueError:
             raise ValidationError({"ids": "Every id must be a valid product id."})
 
-        updated = Product.objects.filter(store=request.store, pk__in=ids).update(status=new_status, updated_at=timezone.now())
+        updated = audited_update(Product.objects.filter(store=request.store, pk__in=ids), status=new_status, updated_at=timezone.now())
         return Response({"updated": updated})
 
     @action(detail=False, methods=["post"], url_path="bulk-delete")

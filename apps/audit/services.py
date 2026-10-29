@@ -191,6 +191,52 @@ def _area_of(model):
     return area_for_model(model)
 
 
+# ---------------------------------------------------------------- writes that skip model signals
+# bulk_create(), queryset.update() and queryset.delete() send no save signals, so code that
+# uses them tells the audit log itself.
+
+def _collecting(model):
+    collector = current()
+    if collector is None or not collector.collect or not auditable(model):
+        return None
+    return collector
+
+
+def note_created(objects):
+    """After a bulk_create: note each new row."""
+    for obj in objects:
+        collector = _collecting(type(obj))
+        if collector is None:
+            return
+        collector.note((obj._meta.label, str(obj.pk)), build_change(obj, {}, snapshot(obj), "create"))
+
+
+def note_deleted(objects):
+    """Before a delete that sends no signals: keep what each row was."""
+    for obj in objects:
+        collector = _collecting(type(obj))
+        if collector is None:
+            return
+        collector.deletes.append(build_change(obj, snapshot(obj), {}, "delete"))
+
+
+def audited_update(queryset, **values):
+    """queryset.update(**values), noting each row's before and after. Returns the row count."""
+    collector = _collecting(queryset.model)
+    if collector is None:
+        return queryset.update(**values)
+
+    rows = list(queryset)
+    before = {row.pk: snapshot(row) for row in rows}
+    count = queryset.update(**values)
+    for row in rows:
+        after = {**before[row.pk], **{k: _plain(v) for k, v in values.items() if k not in NOISE_FIELDS}}
+        change = build_change(row, before[row.pk], after, "update")
+        if change["fields"]:
+            collector.note((row._meta.label, str(row.pk)), change)
+    return count
+
+
 # ---------------------------------------------------------------- recording
 
 def client_ip(request):

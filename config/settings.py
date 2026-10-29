@@ -351,6 +351,16 @@ SPECTACULAR_SETTINGS = {
     'ENUM_GENERATE_CHOICE_DESCRIPTION': True,
     'ENUM_NAME_OVERRIDES': {'PublishStatusEnum': 'apps.catalog.models.Collection.STATUSES'},
     'SERVERS': [{'url': '/', 'description': 'Current host'}],
+    # Swagger UI: groups start collapsed (264 operations is a lot), a search box, sorted groups,
+    # and the sign-in token survives a page refresh.
+    'SWAGGER_UI_SETTINGS': {
+        'docExpansion': 'none',
+        'filter': True,
+        'persistAuthorization': True,
+        'displayRequestDuration': True,
+        'tagsSorter': 'alpha',
+        'defaultModelsExpandDepth': 0,
+    },
     # Docs/schema are open in development; in production only signed-in admin users
     # (Django session, e.g. after logging in at /admin/) unless DJANGO_API_DOCS_PUBLIC=True.
     'SERVE_PERMISSIONS': (

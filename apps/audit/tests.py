@@ -188,3 +188,43 @@ class AdvancedRoleTest(AuditTestBase):
         self.as_owner()
         self.ok("post", "/api/v1/roles/", {"name": "Custom", "permissions": ["orders.view"]}, expect=201)
         self.assertTrue(any(e["action"] == "members.post" and any(c["model"] == "StoreRole" for c in self.ok("get", f"/api/v1/audit/logs/{e['id']}/")["changes"]) for e in self.logs()))
+
+
+class AccuracyTest(AuditTestBase):
+    """Writes that skip Django's save signals must still be logged correctly."""
+
+    def entry_for(self, action):
+        entry = next(e for e in self.logs(f"?action={action}"))
+        return self.ok("get", f"/api/v1/audit/logs/{entry['id']}/")
+
+    def test_summary_is_readable(self):
+        self.make_product("Linen Shirt")
+        self.assertEqual(self.logs("?action=products.create")[0]["summary"].split(" and ")[0], "Created product “Linen Shirt”")
+
+    def test_bulk_status_change_lists_every_product_with_before_and_after(self):
+        ids = [self.make_product(t)["id"] for t in ("Aaa", "Bbb")]
+        self.ok("post", "/api/v1/catalog/products/bulk-status/", {"ids": ids, "status": "draft"})
+        detail = self.entry_for("products.bulk_status")
+        changed = {c["id"]: c for c in detail["changes"] if c["model"] == "Product"}
+        self.assertEqual(set(changed), set(ids))
+        self.assertEqual(changed[ids[0]]["fields"]["status"], {"from": "active", "to": "draft"})
+
+    def test_bulk_delete_keeps_what_was_deleted(self):
+        pid = self.make_product("Gone")["id"]
+        self.ok("post", "/api/v1/catalog/products/bulk-delete/", {"ids": [pid]})
+        detail = self.entry_for("products.bulk_delete")
+        deleted = next(c for c in detail["changes"] if c["id"] == pid)
+        self.assertEqual(deleted["op"], "delete")
+        self.assertEqual(deleted["fields"]["title"]["from"], "Gone")
+
+    def test_stock_change_is_an_update_not_a_create(self):
+        variant = self.make_product("Stocked")["variants"][0]["id"]
+        warehouse = self.ok("post", "/api/v1/inventory/locations/", {"name": "WH"}, expect=201)
+        self.ok("post", "/api/v1/inventory/items/set/", {"variant": variant, "location": warehouse["id"], "available": 5})
+        self.ok("post", "/api/v1/inventory/items/set/", {"variant": variant, "location": warehouse["id"], "available": 9})
+        entries = [self.ok("get", f"/api/v1/audit/logs/{e['id']}/") for e in self.logs("?resource=inventory")]
+        last = entries[0]  # newest first
+        item = next(c for c in last["changes"] if c["model"] == "InventoryItem")
+        self.assertEqual(item["op"], "update")
+        history = next(c for c in last["changes"] if c["model"] == "InventoryHistory")
+        self.assertEqual(history["fields"]["after"]["to"], 9)

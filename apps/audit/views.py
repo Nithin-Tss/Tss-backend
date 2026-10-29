@@ -18,8 +18,40 @@ MAX_LIMIT = 200
 EXPORT_LIMIT = 10000
 
 
+_OPS = {"create": "Created", "update": "Updated", "delete": "Deleted"}
+_LABELS = {  # what the screens call things
+    "auth.signup": "Created an account", "auth.login": "Signed in", "auth.login_failed": "Failed sign-in attempt",
+    "auth.logout": "Signed out", "auth.password_changed": "Changed password",
+    "audit.export": "Downloaded the audit log", services.DENIED: "Was refused access",
+}
+
+
+def summary(entry):
+    """One readable line: "Updated Product “Wool Shirt”", or what the request was when no row changed."""
+    if entry.action in _LABELS:
+        return _LABELS[entry.action]
+    changes = entry.changes or []
+    if changes:
+        first = changes[0]
+        # Prefer the record the request was about over rows made along the way
+        main = next((c for c in changes if c.get("id") == entry.object_id), first)
+        text = f"{_OPS.get(main['op'], main['op'].title())} {_humanize(main['model'])}"
+        if main.get("repr"):
+            text += f" “{main['repr']}”"
+        extra = len(changes) - 1
+        return text + (f" and {extra} other record{'s' if extra != 1 else ''}" if extra > 0 else "")
+    return f"{entry.method} {entry.path}".strip()
+
+
+def _humanize(model_name):
+    import re
+
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", model_name).lower()
+
+
 def entry_json(entry, detail=False):
     data = {
+        "summary": summary(entry),
         "id": str(entry.id),
         "action": entry.action,
         "resource": entry.resource,

@@ -12,7 +12,7 @@ from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 urlpatterns = [
     # API documentation (OpenAPI 3)
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
-    path("docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("docs/", SpectacularSwaggerView.as_view(url_name="schema", template_name="docs/swagger.html"), name="swagger-ui"),
     path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path("auth/", include("apps.identity.urls")),
     path("stores/", include("apps.tenancy.urls")),

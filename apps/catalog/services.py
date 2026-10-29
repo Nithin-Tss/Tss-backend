@@ -6,6 +6,7 @@ from django.db.models import Exists, OuterRef, PROTECT, ProtectedError, Q, Sum
 from django.db.models.functions import Coalesce
 from rest_framework.exceptions import ValidationError
 
+from apps.audit.services import note_created, note_deleted
 from apps.inventory.services import default_location, import_stock, set_available
 
 from .models import (
@@ -408,10 +409,12 @@ def delete_products(store, ids):
     Products used by orders or inventory are left alone.
     Returns (deleted count, titles of those kept).
     """
-    products = {p.pk: p.title for p in Product.objects.filter(store=store, pk__in=ids)}
+    found = list(Product.objects.filter(store=store, pk__in=ids))
+    products = {p.pk: p.title for p in found}
     blocked = _protected_product_ids(list(products))
     free = [pk for pk in products if pk not in blocked]
     if free:
+        note_deleted([p for p in found if p.pk in set(free)])
         with transaction.atomic():
             for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
                 model.objects.filter(product__in=free).delete()
@@ -640,6 +643,7 @@ def import_products(store, rows, user=None):
             product_images.append(ProductImage(product=product, url=url, position=position))
 
     Product.objects.bulk_create(products)
+    note_created(products)
     ProductVariant.objects.bulk_create(variants)
     ProductImage.objects.bulk_create(product_images)
     ProductCollection.objects.bulk_create(product_collections)
