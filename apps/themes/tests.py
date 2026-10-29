@@ -6108,8 +6108,8 @@ class ProductSEOTest(StoreClientMixin, APITestCase):
             "seo_title": "Best Canvas Walking Shoes",
             "seo_description": "Shop our top-rated canvas shoes with all-day comfort and durable soles.",
             "images": [
-                "https://images.example.com/shoe1.jpg",
-                "https://images.example.com/shoe2.jpg",
+                "/media/shoe1.jpg",
+                "/media/shoe2.jpg",
             ],
         }, expect=201)
 
@@ -6149,8 +6149,8 @@ class ProductSEOTest(StoreClientMixin, APITestCase):
         self.assertEqual(data["description"], "Shop our top-rated canvas shoes with all-day comfort and durable soles.")
         self.assertEqual(data["brand"]["name"], "ShoeCo")
         self.assertEqual(data["image"], [
-            "https://images.example.com/shoe1.jpg",
-            "https://images.example.com/shoe2.jpg",
+            "http://testserver/media/shoe1.jpg",
+            "http://testserver/media/shoe2.jpg",
         ])
         self.assertEqual(data["offers"]["@type"], "Offer")
         self.assertEqual(data["offers"]["price"], "89.99")
@@ -6191,6 +6191,7 @@ class ProductSEOTest(StoreClientMixin, APITestCase):
             "title": "Backpack",
             "sku": "BP-1",
             "status": "active",
+            "price": "49.00",
             "seo_title": "Backpack · SEO Store",
         }, expect=201)
 
