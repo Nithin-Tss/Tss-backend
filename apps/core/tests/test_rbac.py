@@ -118,6 +118,45 @@ class EnforcementTest(RbacTestBase):
         self.staff("viewer@example.com", "online_store_editor")
         self.ok("get", "/api/v1/themes/files/")
 
+    def test_media_and_theme_settings_follow_the_themes_permissions(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from apps.media.tests import PNG as png
+
+        def upload():
+            return self.client.post("/api/v1/media/", {"image": SimpleUploadedFile("a.png", png)}, format="multipart")
+
+        self.as_owner()
+        asset = upload().json()
+
+        # No themes access: neither media nor theme settings
+        self.staff("nobody@example.com")
+        self.ok("get", "/api/v1/media/", expect=403)
+        self.assertEqual(upload().status_code, 403)
+        self.ok("get", "/api/v1/themes/settings/", expect=403)
+
+        # themes.view: can look, cannot change
+        self.as_owner()
+        role = self.ok("post", "/api/v1/roles/", {"name": "Theme viewer", "permissions": ["themes.view"]}, expect=201)
+        self.roles["Theme viewer"] = role
+        self.staff("viewer2@example.com", "Theme viewer")
+        self.ok("get", "/api/v1/media/")
+        self.ok("get", "/api/v1/themes/settings/")
+        self.assertEqual(upload().status_code, 403)
+        self.ok("patch", f"/api/v1/media/{asset['id']}/", {"alt_text": "x"}, expect=403)
+        self.ok("delete", f"/api/v1/media/{asset['id']}/", expect=403)
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {}}, expect=403)
+
+        # themes.manage: full media and settings access
+        self.staff("editor2@example.com", "online_store_editor")
+        self.assertEqual(upload().status_code, 201)
+        self.ok("patch", f"/api/v1/media/{asset['id']}/", {"alt_text": "x"})
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {}})
+        self.ok("delete", f"/api/v1/media/{asset['id']}/", expect=204)
+
+    def test_media_belongs_to_the_online_store_area(self):
+        from apps.media.models import MediaAsset
+        self.assertEqual(rbac.area_for_model(MediaAsset), "themes")
+
     def test_roles_add_up(self):
         self.staff("both@example.com", "merchandiser", "marketer")
         self.ok("get", "/api/v1/catalog/products/")

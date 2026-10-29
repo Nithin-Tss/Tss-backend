@@ -224,7 +224,7 @@ def permission_for(area, method, action=None, overrides=None):
 _AREA_BY_APP = {
     "catalog": "products", "customers": "customers", "wishlist": "customers",
     "inventory": "inventory", "discounts": "discounts", "gift_cards": "gift_cards",
-    "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes",
+    "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes", "media": "themes",
     "orders": "orders", "payments": "orders", "commerce": "orders",
     "delivery": "shipping",
 }
