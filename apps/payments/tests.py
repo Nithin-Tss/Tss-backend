@@ -238,3 +238,30 @@ class PaidTotalTests(StoreClientMixin, APITestCase):
             paid_total(self.order),
             Decimal("0.00"),
         )
+
+class ProcessEventRetryTests(TestCase):
+    """A broken event is not retried forever; a transient failure is."""
+
+    def run_task(self, exc):
+        from unittest import mock
+        from . import tasks
+        task = tasks.process_event._get_current_object()
+        task.push_request(is_eager=False, retries=0)
+        self.addCleanup(task.pop_request)
+        with mock.patch.object(tasks, "_handle", side_effect=exc), \
+                mock.patch.object(task, "retry", side_effect=RuntimeError("retried")) as retry:
+            try:
+                task.run("{}")
+            except Exception as raised:
+                return raised, retry
+        return None, retry
+
+    def test_permanent_errors_are_not_retried(self):
+        raised, retry = self.run_task(KeyError("x"))
+        self.assertIsInstance(raised, KeyError)
+        retry.assert_not_called()
+
+    def test_transient_errors_are_retried(self):
+        raised, retry = self.run_task(ConnectionError("db down"))
+        retry.assert_called_once()
+        self.assertIsInstance(raised, RuntimeError)

@@ -1,12 +1,19 @@
 import json
+import logging
 
 import stripe
 from celery import shared_task
 from django.conf import settings
+from rest_framework.exceptions import ValidationError
 
 from apps.tenancy.models import Store
 
 from . import stripe_service
+
+logger = logging.getLogger(__name__)
+
+# Retrying can't fix a payload or a rule that is wrong; only outages and lock timeouts are worth another go
+PERMANENT = (ValueError, KeyError, TypeError, ValidationError)
 
 
 @shared_task(bind=True, max_retries=8)
@@ -16,6 +23,10 @@ def process_event(self, payload):
         _handle(json.loads(payload))
     except Exception as exc:
         if self.request.is_eager:  # no broker: fail the request so Stripe retries, as before
+            raise
+        if isinstance(exc, PERMANENT) or self.request.retries >= self.max_retries:
+            # Nobody is retrying this any more: it needs a person (money may be taken with no order)
+            logger.critical("Stripe event dropped, needs attention: %s", payload[:500], exc_info=exc)
             raise
         raise self.retry(exc=exc, countdown=min(2 ** self.request.retries * 15, 900))
 

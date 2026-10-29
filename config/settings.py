@@ -280,6 +280,9 @@ EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60
 # Broker defaults to REDIS_URL. With no broker, tasks run inline in the calling process.
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL') or 'memory://'
 CELERY_TASK_ALWAYS_EAGER = not (os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL'))
+if not DEBUG and CELERY_TASK_ALWAYS_EAGER:
+    # Inline tasks would make Stripe webhooks slow, un-retried requests; refuse to start rather than do that quietly
+    raise ImproperlyConfigured('Set REDIS_URL (or CELERY_BROKER_URL) before running with DEBUG off.')
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_TIME_LIMIT = 300

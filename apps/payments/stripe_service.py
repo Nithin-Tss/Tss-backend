@@ -370,7 +370,11 @@ def note_unpaid(intent, account_id):
     intent = plain(intent)
     # A failed attempt can be retried on the same intent, so only a cancelled one gives the stock back now
     checkout_id = plain(intent.get("metadata")).get("checkout_id")
-    if intent.get("status") == "canceled" and checkout_id:
-        inventory.release_reservations(checkout_id)
+    # The metadata is written by whoever owns the Stripe account: only honour it for a checkout of that account's store
+    if intent.get("status") == "canceled" and checkout_id and account_id:
+        if Checkout.objects.filter(pk=checkout_id, store__stripe_account_id=account_id).exists():
+            inventory.release_reservations(checkout_id)
+        else:
+            logger.error("Stripe payment %s on %s names checkout %s of another store", intent.get("id"), account_id, checkout_id)
     error = (intent.get("last_payment_error") or {}).get("message")
     logger.info("Stripe payment %s on %s ended unpaid (%s): %s", intent.get("id"), account_id, intent.get("status"), error)

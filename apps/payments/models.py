@@ -92,6 +92,12 @@ class Payment(models.Model):
                 condition=models.Q(amount__gte=0),
                 name="ck_payment_amount_nonneg",
             ),
+            # One captured card payment per Stripe PaymentIntent, whatever the code above does (manual references are free text)
+            models.UniqueConstraint(
+                fields=["provider", "provider_payment_id"],
+                condition=models.Q(provider="stripe", provider_payment_id__isnull=False, is_deleted=False),
+                name="uq_payment_stripe_intent",
+            ),
         ]
 
     def __str__(self):
