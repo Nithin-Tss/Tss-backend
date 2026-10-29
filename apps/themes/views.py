@@ -12,6 +12,7 @@ from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, connection, transaction
 from django.db.models import F
+from django.db.models.functions import Lower, Trim
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -1219,6 +1220,44 @@ def _order(value, fallback):
     return value if isinstance(value, int) and value >= 0 else fallback
 
 
+def _available_menu_handle(store, name, exclude_pk=None):
+    base = slugify(name)[:255]
+    if not base:
+        return ""
+
+    menus = Menu.objects.filter(store=store)
+    if exclude_pk is not None:
+        menus = menus.exclude(pk=exclude_pk)
+
+    handle = base
+    suffix = 2
+    while menus.filter(handle=handle).exists():
+        suffix_text = f"-{suffix}"
+        handle = f"{base[:255 - len(suffix_text)].rstrip('-')}{suffix_text}"
+        suffix += 1
+    return handle
+
+
+def _menu_uniqueness_conflict_field(error):
+    cause = error.__cause__ or error
+    constraint_name = getattr(getattr(cause, "diag", None), "constraint_name", None)
+    if constraint_name == "uq_menu_store_name_ci":
+        return "name"
+    if constraint_name == "uq_menu_store_handle":
+        return "handle"
+
+    message = str(cause)
+    if "uq_menu_store_name_ci" in message:
+        return "name"
+    if (
+        "themes__menus.store_id" in message
+        and "themes__menus.handle" in message
+        and "UNIQUE constraint failed" in message
+    ):
+        return "handle"
+    return None
+
+
 def _sync_menu_items(menu, items):
     """Replaces the menu's items with the output of _clean_menu_items."""
     with transaction.atomic():
@@ -1268,12 +1307,20 @@ class MenuSerializer(serializers.ModelSerializer):
         if self.instance:
             others = others.exclude(pk=self.instance.pk)
         name = attrs.get("name")
-        if name and others.filter(name__iexact=name.strip()).exists():
-            raise serializers.ValidationError({"name": "A menu with this name already exists."})
-        # The storefront finds menus by handle, so two menus must not share one
-        handle = attrs.get("handle") or (slugify(name)[:255] if name and not self.instance else "")
-        if handle and others.filter(handle=handle).exists():
+        if name:
+            duplicate_name = others.annotate(
+                _normalized_name=Lower(Trim("name", characters=" \t\n\r\f\v"))
+            ).filter(_normalized_name=name.strip().lower()).exists()
+            if duplicate_name:
+                raise serializers.ValidationError({"name": "A menu with this name already exists."})
+
+        handle = attrs.get("handle")
+        explicit_handle = "handle" in self.initial_data and bool(handle)
+        if explicit_handle and others.filter(handle=handle).exists():
             raise serializers.ValidationError({"handle": "A menu with this handle already exists."})
+        if not explicit_handle and (self.instance is None or name):
+            self._generated_handle = _available_menu_handle(store, name or self.instance.name, self.instance.pk if self.instance else None)
+
         if "items" in self.context["request"].data:
             self._items = _clean_menu_items(self.context["request"].data.get("items"))
         return attrs
@@ -1281,8 +1328,16 @@ class MenuSerializer(serializers.ModelSerializer):
     @transaction.atomic
     def create(self, validated_data):
         name = validated_data["name"].strip()
-        handle = validated_data.get("handle") or slugify(name)[:255]
-        menu = Menu.objects.create(store=self.context["request"].store, name=name, handle=handle)
+        handle = validated_data.get("handle") or getattr(self, "_generated_handle", "")
+        try:
+            menu = Menu.objects.create(store=self.context["request"].store, name=name, handle=handle)
+        except IntegrityError as error:
+            field = _menu_uniqueness_conflict_field(error)
+            if field is None:
+                raise
+            raise serializers.ValidationError(
+                {field: f"A menu with this {field} already exists."}
+            ) from error
         _sync_menu_items(menu, getattr(self, "_items", []))
         return menu
 
@@ -1292,8 +1347,16 @@ class MenuSerializer(serializers.ModelSerializer):
         if validated_data.get("handle"):
             instance.handle = validated_data["handle"]
         elif "name" in validated_data:
-            instance.handle = slugify(instance.name)[:255]
-        instance.save()
+            instance.handle = getattr(self, "_generated_handle", "")
+        try:
+            instance.save()
+        except IntegrityError as error:
+            field = _menu_uniqueness_conflict_field(error)
+            if field is None:
+                raise
+            raise serializers.ValidationError(
+                {field: f"A menu with this {field} already exists."}
+            ) from error
         if hasattr(self, "_items"):
             _sync_menu_items(instance, self._items)
         return instance

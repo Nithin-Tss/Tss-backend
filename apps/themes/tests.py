@@ -5873,8 +5873,93 @@ class MenusApiTest(StoreClientMixin, APITestCase):
 
     def test_names_and_handles_are_unique_per_store(self):
         self.ok("post", self.URL, {"name": "Footer", "handle": "footer"}, expect=201)
-        self.assertEqual(self.client.post(self.URL, {"name": "footer"}, format="json").status_code, 400)
-        self.assertEqual(self.client.post(self.URL, {"name": "Other", "handle": "footer"}, format="json").status_code, 400)
+        duplicate_name = self.client.post(self.URL, {"name": "  footer  "}, format="json")
+        self.assertEqual(duplicate_name.status_code, 400)
+        self.assertIn("name", duplicate_name.data)
+        duplicate_handle = self.client.post(
+            self.URL, {"name": "Other", "handle": "footer"}, format="json"
+        )
+        self.assertEqual(duplicate_handle.status_code, 400)
+        self.assertIn("handle", duplicate_handle.data)
+        header = self.ok("post", self.URL, {"name": "Header"}, expect=201)
+        duplicate_update = self.client.patch(
+            f"{self.URL}{header['id']}/", {"handle": "footer"}, format="json"
+        )
+        self.assertEqual(duplicate_update.status_code, 400)
+        self.assertIn("handle", duplicate_update.data)
+
+    def test_same_name_and_handle_are_allowed_in_different_stores(self):
+        self.ok("post", self.URL, {"name": "Main", "handle": "main"}, expect=201)
+        self.sign_up("other-menu-store@example.com", "Other Menu Store")
+        self.ok("post", self.URL, {"name": "Main", "handle": "main"}, expect=201)
+
+    def test_generated_handles_avoid_collisions_on_create_and_rename(self):
+        first = self.ok("post", self.URL, {"name": "Main menu"}, expect=201)
+        second = self.ok("post", self.URL, {"name": "Header", "handle": "header"}, expect=201)
+        self.assertEqual(first["handle"], "main-menu")
+
+        renamed = self.ok("patch", f"{self.URL}{second['id']}/", {"name": "Main-menu"})
+        self.assertEqual(renamed["handle"], "main-menu-2")
+
+        third = self.ok("post", self.URL, {"name": "Main--menu"}, expect=201)
+        self.assertEqual(third["handle"], "main-menu-3")
+
+    def test_menu_constraints_reject_duplicate_direct_writes(self):
+        from django.db import IntegrityError, transaction
+
+        from apps.themes.models import Menu
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_name="Menu Store")
+        Menu.objects.create(store=store, name="Normalized Name", handle="normalized-name")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Menu.objects.create(store=store, name=" normalized name ", handle="different")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Menu.objects.create(store=store, name="Different Name", handle="normalized-name")
+
+    def test_menu_items_reject_invalid_parent_relationships(self):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from apps.themes.models import Menu, MenuItem
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_name="Menu Store")
+        menu = Menu.objects.create(store=store, name="Parent menu", handle="parent-menu")
+        other_menu = Menu.objects.create(store=store, name="Other parent menu", handle="other-menu")
+        parent = MenuItem.objects.create(menu=menu, title="Parent")
+        child = MenuItem.objects.create(menu=menu, parent=parent, title="Child")
+
+        with self.assertRaises(DjangoValidationError):
+            MenuItem.objects.create(menu=other_menu, parent=parent, title="Cross-menu child")
+
+        parent.parent = parent
+        with self.assertRaises(DjangoValidationError):
+            parent.save()
+
+        parent.parent = child
+        with self.assertRaises(DjangoValidationError):
+            parent.save()
+
+    def test_invalid_item_replacement_preserves_existing_items(self):
+        menu = self.ok("post", self.URL, {
+            "name": "Preserve items",
+            "items": [{"title": "Existing", "url": "/existing"}],
+        }, expect=201)
+        url = f"{self.URL}{menu['id']}/"
+
+        response = self.client.put(url, {
+            "name": "Preserve items",
+            "items": [{"title": "Invalid", "url": "javascript:alert(1)"}],
+        }, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        current = self.ok("get", url)
+        self.assertEqual(current["items_count"], 1)
+        self.assertEqual(current["items"][0]["title"], "Existing")
 
     def test_menus_are_private_to_their_store(self):
         menu = self.ok("post", self.URL, {"name": "Mine"}, expect=201)
