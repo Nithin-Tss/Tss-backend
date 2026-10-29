@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 # from django.db import transaction
 from django.db import DatabaseError, connection, transaction
+from django.test import TransactionTestCase
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
@@ -380,3 +381,162 @@ class InventoryApiTests(StockBase):
         r = self.client.post(f"{ITEMS}adjust/", {**body, "delta": -9}, format="json")
         self.assertEqual(r.status_code, 400)
         self.assertEqual(self.row(variant).available, 5)
+
+
+class StockConsistencyTests(StockBase):
+    """Every row adds up, matches its latest history line, and each order only moves its own units."""
+
+    def assertConsistent(self):
+        for row in InventoryItem.objects.all():
+            self.assertEqual(row.on_hand, row.available + row.committed + row.unavailable)
+            self.assertGreaterEqual(row.committed, 0)
+            self.assertGreaterEqual(row.unavailable, 0)
+            last = (InventoryHistory.objects.filter(variant=row.variant, location=row.location)
+                    .order_by("-created_at", "-id").first())
+            if last is not None:
+                self.assertEqual((last.after, last.committed, last.unavailable, last.on_hand),
+                                 (row.available, row.committed, row.unavailable, row.on_hand))
+
+    def numbers(self, variant, location=None):
+        r = InventoryItem.objects.get(variant=variant, location_id=location or self.location)
+        return r.available, r.committed, r.unavailable, r.on_hand
+
+    def order(self, product, quantity):
+        r = self.client.post("/api/v1/orders/", {"items": [{"product": product["id"], "quantity": quantity}]},
+                             format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()["id"]
+
+    def fulfil(self, order_id, **extra):
+        r = self.client.post("/api/v1/fulfillments/", {"order": order_id, **extra}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def cancel(self, order_id):
+        r = self.client.post(f"/api/v1/orders/{order_id}/cancel/")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_every_change_keeps_the_numbers_and_history_in_step(self):
+        product, variant = self.variant_with_stock(0)
+        location = Location.objects.get(pk=self.location)
+        self.adjust(variant, delta=10)
+        services.mark_unavailable(variant, location, 2, "damaged")
+        placed = self.order(product, 3)
+        self.assertEqual(self.numbers(variant), (5, 3, 2, 10))
+        self.fulfil(placed)
+        self.assertEqual(self.numbers(variant), (5, 0, 2, 7))
+        self.cancel(self.order(product, 4))
+        services.release_unavailable(variant, location, 2, "damaged")
+        self.assertEqual(self.numbers(variant), (7, 0, 0, 7))
+        self.assertEqual(InventoryHistory.objects.count(), 7)
+        self.assertConsistent()
+
+    def test_a_failed_change_saves_neither_stock_nor_history(self):
+        _, variant = self.variant_with_stock(0)
+        self.adjust(variant, delta=3)
+        with mock.patch.object(InventoryHistory.objects, "create", side_effect=DatabaseError("history down")):
+            with self.assertRaises(DatabaseError):
+                self.adjust(variant, delta=4)
+        self.assertEqual(self.numbers(variant), (3, 0, 0, 3))
+        self.assertEqual(InventoryHistory.objects.count(), 1)
+        self.assertConsistent()
+
+    def test_cancelling_an_order_placed_while_untracked_releases_nothing(self):
+        product = self.product(sku="U-1")  # no stock row: not tracked, so the order commits nothing
+        variant = ProductVariant.objects.get(pk=product["variants"][0]["id"])
+        untracked_order = self.order(product, 3)
+        self.adjust(variant, delta=5)  # tracking starts
+        self.order(product, 2)
+        self.assertEqual(self.numbers(variant), (3, 2, 0, 5))
+
+        self.cancel(untracked_order)
+        self.assertEqual(self.numbers(variant), (3, 2, 0, 5))  # the other order's 2 units stay committed
+        self.assertConsistent()
+
+    def test_fulfilling_an_order_placed_while_untracked_ships_nothing_from_stock(self):
+        product = self.product(sku="U-2")
+        variant = ProductVariant.objects.get(pk=product["variants"][0]["id"])
+        untracked_order = self.order(product, 3)
+        self.adjust(variant, delta=5)
+        tracked_order = self.order(product, 2)
+
+        self.fulfil(untracked_order)
+        self.assertEqual(self.numbers(variant), (3, 2, 0, 5))
+        self.fulfil(tracked_order)
+        self.assertEqual(self.numbers(variant), (3, 0, 0, 3))
+        self.assertConsistent()
+
+    def test_cancel_and_fulfil_use_the_location_the_order_committed_at(self):
+        product, variant = self.variant_with_stock(0)
+        shop = Location.objects.create(store=self.store, name="Shop")
+        self.adjust(variant, delta=3)
+        first = self.order(product, 2)  # commits at Main, the only stock
+        adjust_inventory(self.store_id, variant.pk, shop.pk, "correction", delta=10)
+        second = self.order(product, 5)  # commits at Shop, which has the most available
+        self.assertEqual((self.numbers(variant), self.numbers(variant, shop.pk)), ((1, 2, 0, 3), (5, 5, 0, 10)))
+
+        self.cancel(first)
+        self.assertEqual((self.numbers(variant), self.numbers(variant, shop.pk)), ((3, 0, 0, 3), (5, 5, 0, 10)))
+        self.fulfil(second)
+        self.assertEqual((self.numbers(variant), self.numbers(variant, shop.pk)), ((3, 0, 0, 3), (5, 0, 0, 5)))
+        self.assertConsistent()
+
+    def test_partial_fulfilments_ship_only_what_is_left_of_the_order(self):
+        product, variant = self.variant_with_stock(0)
+        self.adjust(variant, delta=10)
+        order_id = self.order(product, 4)
+        item = self.client.get(f"/api/v1/orders/{order_id}/").json()["items"][0]["id"]
+        for quantity in (1, 3):
+            self.fulfil(order_id, items=[{"order_item": item, "quantity": quantity}])
+        self.assertEqual(self.numbers(variant), (6, 0, 0, 6))
+        self.assertConsistent()
+
+    def test_a_transfer_cannot_move_stock_that_is_not_there_even_when_selling_past_zero(self):
+        _, variant = self.variant_with_stock(1)
+        ProductVariant.objects.filter(pk=variant.pk).update(continue_selling=True)
+        shop = self.client.post("/api/v1/inventory/locations/", {"name": "Shop"}, format="json").json()["id"]
+        made = self.client.post("/api/v1/inventory/transfers/", {
+            "source_location": self.location, "destination_location": shop,
+            "items": [{"variant": str(variant.pk), "quantity": 3}],
+        }, format="json").json()
+        r = self.client.post(f"/api/v1/inventory/transfers/{made['id']}/complete/")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(self.numbers(variant), (1, 0, 0, 1))
+        self.assertFalse(InventoryItem.objects.filter(location_id=shop).exists())
+        self.assertFalse(InventoryHistory.objects.exists())
+
+
+@unittest.skipUnless(connection.vendor == "postgresql", "Row locks need PostgreSQL; SQLite locks the whole database.")
+class ConcurrentOrderTests(TransactionTestCase):
+    """Two orders for the last unit at the same moment: exactly one gets it (PostgreSQL only)."""
+
+    def test_the_last_unit_is_sold_once(self):
+        import threading
+
+        from apps.catalog.models import Product
+        from apps.orders.services import create_order
+
+        store = Store.objects.create(store_name="Race", store_slug="race", status="active")
+        product = Product.objects.create(store=store, title="Last one", status="active")
+        variant = ProductVariant.objects.create(product=product, price="5", sku="RACE-1")
+        services.set_available(variant, Location.objects.create(store=store, name="Main"), 1)
+        barrier, results = threading.Barrier(2), []
+
+        def buy():
+            try:
+                barrier.wait()
+                create_order(store, [{"product": product, "variant": variant, "quantity": 1}])
+                results.append("ok")
+            except ValidationError:
+                results.append("refused")
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=buy) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(sorted(results), ["ok", "refused"])
+        row = InventoryItem.objects.get(variant=variant)
+        self.assertEqual((row.available, row.committed, row.on_hand), (0, 1, 1))

@@ -11,7 +11,7 @@ from apps.customers.models import Customer
 from apps.discounts.models import Discount, DiscountCode
 from apps.gift_cards.models import GiftCard, GiftCardTransaction
 from apps.identity.models import User
-from apps.inventory.models import InventoryHistory, InventoryItem, Location, Transfer
+from apps.inventory.models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
 from apps.orders.models import Order, OrderItem
 from apps.payments.models import Payment, PaymentTransaction
 from apps.tenancy.models import Store, StoreMembership
@@ -187,13 +187,77 @@ class AdminStoreGuardTests(TestCase):
                 r = self.post(type(obj), self.form_data(obj, store=self.a, **{field: other}))
                 self.assertIn(field, self.errors(r))
 
-    def test_inventory_item_location_and_variant_must_match(self):
+    def test_stock_levels_can_be_viewed_but_not_added_edited_or_deleted(self):
         stock = InventoryItem.objects.create(variant=self.a.variant, location=self.a.location, unavailable=0,
                                              committed=0, available=1, on_hand=1, incoming=0)
-        r = self.post(InventoryItem, self.form_data(stock, variant=self.b.variant, location=self.a.location))
-        self.assertIn("variant", self.errors(r))
-        # an existing row keeps its variant and location
-        r = self.post(InventoryItem, self.form_data(stock, location=self.b.location, available=3), stock)
-        self.assertEqual(r.status_code, 302)
+        numbers = {"variant": self.a.variant.pk, "location": self.a.location.pk, "available": 9, "committed": 0,
+                   "unavailable": 0, "on_hand": 9, "incoming": 0}
+        self.assertEqual(self.client.get(self.url(InventoryItem, "changelist")).status_code, 200)
+        self.assertEqual(self.client.get(self.url(InventoryItem, "change", stock)).status_code, 200)
+        self.assertEqual(self.client.get(self.url(InventoryItem, "add")).status_code, 403)
+        self.assertEqual(self.post(InventoryItem, numbers).status_code, 403)
+        self.assertEqual(self.post(InventoryItem, numbers, stock).status_code, 403)
+        self.assertEqual(self.client.post(self.url(InventoryItem, "delete", stock), {"post": "yes"}).status_code, 403)
+        self.client.post(self.url(InventoryItem, "changelist"),
+                         {"action": "delete_selected", "_selected_action": [stock.pk], "post": "yes"})
         stock.refresh_from_db()
-        self.assertEqual((stock.location_id, stock.available), (self.a.location.pk, 3))
+        self.assertEqual((stock.available, stock.on_hand), (1, 1))
+        self.assertEqual(InventoryItem.objects.count(), 1)
+        self.assertFalse(InventoryHistory.objects.exists())
+
+    def transfer(self, status, quantity=1):
+        transfer = Transfer.objects.create(store=self.a, transfer_number=f"T-{status}", status=status,
+                                           source_location=self.a.location,
+                                           destination_location=Location.objects.create(store=self.a, name="Shop"))
+        item = TransferItem.objects.create(transfer=transfer, variant=self.a.variant, quantity=quantity)
+        return transfer, item
+
+    def test_transfer_status_cannot_be_set_in_admin(self):
+        stock = InventoryItem.objects.create(variant=self.a.variant, location=self.a.location, unavailable=0,
+                                             committed=0, available=5, on_hand=5, incoming=0)
+        pending, _ = self.transfer("pending", quantity=2)
+        r = self.client.get(self.url(Transfer, "change", pending))
+        self.assertNotContains(r, 'name="status"')
+        r = self.post(Transfer, self.form_data(pending, status="completed"), pending)  # crafted POST
+        self.assertEqual(r.status_code, 302)
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, "pending")
+
+        # a new transfer starts pending whatever the POST says
+        r = self.post(Transfer, {"store": self.a.pk, "transfer_number": "T-new", "status": "completed",
+                                 "source_location": self.a.location.pk,
+                                 "destination_location": pending.destination_location_id})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(Transfer.objects.get(transfer_number="T-new").status, "pending")
+
+        # no stock moved, nothing recorded
+        stock.refresh_from_db()
+        self.assertEqual((stock.available, stock.on_hand), (5, 5))
+        self.assertFalse(InventoryItem.objects.exclude(pk=stock.pk).exists())
+        self.assertFalse(InventoryHistory.objects.exists())
+
+    def test_finished_transfers_and_their_items_cannot_change(self):
+        for status in ("completed", "cancelled"):
+            transfer, item = self.transfer(status)
+            with self.subTest(status=status):
+                self.assertEqual(self.client.get(self.url(Transfer, "change", transfer)).status_code, 200)
+                self.assertEqual(self.post(Transfer, {"transfer_number": "X"}, transfer).status_code, 403)
+                self.assertEqual(self.client.post(self.url(Transfer, "delete", transfer), {"post": "yes"}).status_code,
+                                 403)
+                self.assertEqual(self.post(TransferItem, {"variant": self.a.variant.pk, "quantity": 9}, item).status_code,
+                                 403)
+                self.assertEqual(self.client.post(self.url(TransferItem, "delete", item), {"post": "yes"}).status_code,
+                                 403)
+                r = self.post(TransferItem, {"transfer": transfer.pk, "variant": self.a.variant.pk, "quantity": 3})
+                self.assertIn("already", str(self.errors(r)["__all__"]))
+                transfer.refresh_from_db()
+                item.refresh_from_db()
+                self.assertEqual((transfer.status, transfer.transfer_number, item.quantity), (status, f"T-{status}", 1))
+                self.assertEqual(transfer.items.count(), 1)
+
+        # a pending transfer's items can still be edited
+        _, item = self.transfer("pending")
+        r = self.post(TransferItem, self.form_data(item, quantity=4), item)
+        self.assertEqual(r.status_code, 302)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, 4)

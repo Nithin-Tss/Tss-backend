@@ -319,17 +319,35 @@ def restock_refund(variant, location, quantity, user_id=None, source="refund", r
                  source=source, reference_id=reference_id, note=note)
 
 
+def _held_by(variant, reference_id):
+    """{location_id: units still committed to this order}, from the order's own history lines."""
+    rows = (
+        InventoryHistory.objects.filter(store_id=_store_id(variant), variant=variant, reference_id=str(reference_id))
+        .exclude(committed_change=0)
+        .values("location_id")
+        .annotate(units=Sum("committed_change"))
+    )
+    return {row["location_id"]: row["units"] for row in rows}
+
+
 def _split(variant, quantity, field, reason, user_id, source, reference_id):
-    """Spread `quantity` over the variant's locations (most `field` first) through adjust_inventory."""
+    """
+    Spread `quantity` over the variant's locations (most `field` first) through adjust_inventory.
+    With a reference (the order), committed units are only taken where that order committed them,
+    never another order's: an order placed while the variant was untracked committed nothing.
+    """
     items = list(
         InventoryItem.objects.select_for_update(of=("self",))
         .filter(variant=variant)
         .select_related("location")
         .order_by(f"-{field}")
     )
+    held = _held_by(variant, reference_id) if field == "committed" and reference_id is not None else None
     left = quantity
     for item in items:
         take = min(getattr(item, field), left)
+        if held is not None:
+            take = min(take, held.get(item.location_id, 0))
         if take <= 0:
             continue
         _call(variant, item.location, reason, delta=take, user_id=user_id,
@@ -389,6 +407,15 @@ def receive(variant, location, quantity, user_id=None, source="purchase_order", 
 
 @transaction.atomic
 def move(variant, source_location, destination, quantity, user_id=None, reference_id=None):
+    # Only stock that is there can move, even when the variant keeps selling past zero
+    on_shelf = InventoryItem.objects.filter(variant=variant, location=source_location).values_list(
+        "available", flat=True
+    ).first() or 0
+    if on_shelf < quantity:
+        raise ValidationError(
+            f"Only {max(on_shelf, 0)} available of {_label(variant)} at {source_location.name}. "
+            f"Can't move {quantity}."
+        )
     adjust(variant, source_location, -quantity, user_id=user_id, source="transfer",
            reason="correction", reference_id=reference_id)
     receive(variant, destination, quantity, user_id=user_id, source="transfer", reference_id=reference_id)
