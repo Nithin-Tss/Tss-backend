@@ -285,6 +285,10 @@ class DraftOrder(models.Model):
                 condition=models.Q(total__gte=0),
                 name="ck_draft_total_nonneg",
             ),
+            models.CheckConstraint(
+                condition=models.Q(tax_amount__gte=0),
+                name="ck_draft_tax_nonneg",
+            ),
         ]
 
     def __str__(self):

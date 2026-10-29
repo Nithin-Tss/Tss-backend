@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower, Trim
 
 
 class Store(models.Model):
@@ -127,7 +128,12 @@ class TaxRate(models.Model):
         verbose_name_plural = "Tax rates"
         constraints = [
             models.CheckConstraint(condition=models.Q(rate__gte=0) & models.Q(rate__lte=100), name="taxrate_rate_range"),
-            models.UniqueConstraint(fields=["store", "country", "region"], name="uq_taxrate_store_destination"),
+            # One rule per destination, matched the way the tax engine matches it (trimmed, any case)
+            models.UniqueConstraint(
+                "store", Lower(Trim("country")), Lower(Trim("region")),
+                name="uq_taxrate_store_destination_ci",
+                violation_error_message="This store already has a tax rate for that destination.",
+            ),
         ]
 
     def __str__(self):
