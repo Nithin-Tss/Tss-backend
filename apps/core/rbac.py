@@ -98,6 +98,9 @@ AREAS = {
         (VIEW, "View the audit log of who did what in the store"),
         ("export", "Download the audit log as a file"),
     ]),
+    "webhooks": ("Webhooks", [
+        (MANAGE, "Create and edit webhook endpoints, see their signing secrets and delivery log"),
+    ]),
     "members": ("Users and roles", [
         (VIEW, "View users and their roles"),
         (MANAGE, "Add and remove users, assign roles"),
@@ -249,7 +252,7 @@ _AREA_BY_APP = {
     "inventory": "inventory", "discounts": "discounts", "gift_cards": "gift_cards",
     "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes", "media": "themes",
     "orders": "orders", "payments": "orders", "commerce": "orders",
-    "delivery": "shipping",
+    "delivery": "shipping", "webhooks": "webhooks",
 }
 _AREA_BY_MODEL = {"DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "TaxRate": "shipping"}
 

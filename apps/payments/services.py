@@ -8,6 +8,7 @@ Providers: "manual" (cash, bank transfer, cash on delivery) and "stripe"
 from decimal import Decimal
 
 from django.db import transaction
+from django.dispatch import Signal
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -19,6 +20,10 @@ CAPTURED, PARTIALLY_REFUNDED, REFUNDED = "captured", "partially_refunded", "refu
 CAPTURE, REFUND, SUCCESS = "capture", "refund", "success"
 PROVIDERS = ("manual",)
 CANCELLED = "cancelled"
+
+# Announcements other parts of the system can listen to (webhooks); sent after the transaction commits.
+payment_captured = Signal()   # sender=Payment, payment=...
+payment_refunded = Signal()   # sender=Payment, payment=..., refunded=<total refunded so far>
 
 
 def refunded_total(payment):
@@ -48,6 +53,7 @@ def record_payment(store, order, amount, provider="manual", currency=None, refer
         status=SUCCESS,
         provider_transaction_id=reference,
     )
+    transaction.on_commit(lambda: payment_captured.send(sender=Payment, payment=payment))
     return payment
 
 
@@ -86,6 +92,7 @@ def capture_payment(payment, reference=None):
     if reference:
         payment.provider_payment_id = reference
     payment.save(update_fields=["status", "provider_payment_id", "updated_at"])
+    transaction.on_commit(lambda: payment_captured.send(sender=Payment, payment=payment))
     return payment
 
 
@@ -144,6 +151,7 @@ def refund(payment, amount, reason=None, settle_order=True):
     )
     payment.status = REFUNDED if amount == left else PARTIALLY_REFUNDED
     payment.save(update_fields=["status", "updated_at"])
+    transaction.on_commit(lambda: payment_refunded.send(sender=Payment, payment=payment, refunded=refunded_total(payment)))
     if settle_order and order is not None:
         from apps.orders import services as orders
 

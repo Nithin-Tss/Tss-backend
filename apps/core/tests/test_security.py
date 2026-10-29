@@ -48,6 +48,7 @@ from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
 from apps.purchasing.models import PurchaseOrder
 from apps.tenancy.models import ShippingRate, Store, TaxRate
+from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
 from apps.wishlist.models import Wishlist, WishlistItem
 
 from .test_flow import StoreClientMixin
@@ -472,6 +473,8 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant),
             MediaAsset.objects.create(store=store, original_name="banner.png", mime_type="image/png", file_size=40),
         ]
+        endpoint = WebhookEndpoint.objects.create(store=store, url="https://example.com/hook", events=["*"])
+        records += [endpoint, WebhookDelivery.objects.create(endpoint=endpoint, event_type="ping", payload={})]
         return {type(r): r for r in records}
 
     def snapshot(self):

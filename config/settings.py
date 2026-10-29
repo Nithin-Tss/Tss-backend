@@ -102,7 +102,7 @@ INSTALLED_APPS = [
     'apps.themes',
     'apps.media',
     'apps.audit',
-    
+    'apps.webhooks',
 ]
 
 AUTH_USER_MODEL = "identity.User"
@@ -254,6 +254,10 @@ STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
 STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
 # Signing secret of the webhook endpoint that listens to "Connected accounts" events
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+
+# Outbound webhooks (apps/webhooks) may only target public https URLs. Turn this on to allow
+# http:// and private addresses such as localhost while developing; never in production.
+WEBHOOKS_ALLOW_PRIVATE_URLS = env_bool('WEBHOOKS_ALLOW_PRIVATE_URLS', default=DEBUG)
 
 # How long after ordering a shopper may cancel their own order from the storefront (minutes). Staff have no limit.
 ORDER_CUSTOMER_CANCEL_MINUTES = int(os.getenv('ORDER_CUSTOMER_CANCEL_MINUTES', 60))
