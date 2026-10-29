@@ -351,6 +351,8 @@ REST_FRAMEWORK = {
         'storefront_checkout': '20/hour',
         # Media library uploads per signed-in user
         'media_upload': '120/hour',
+        # Product photo uploads per signed-in user
+        'product_image_upload': '120/hour',
     },
 }
 

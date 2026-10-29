@@ -1,5 +1,8 @@
+import re
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.db import transaction
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -25,6 +28,44 @@ def _redirect_old_handle(store, old, new):
     UrlRedirect.objects.get_or_create(
         store=store, path=f"/collections/{old}", defaults={"target": f"/collections/{new}"}
     )
+
+
+OWN_IMAGE_PATH = re.compile(r"^/s/_img/[0-9a-fA-F-]{36}$")
+
+
+def is_own_image_url(url, request=None):
+    """
+    True for a picture that lives on this platform: the /s/_img/<id> route (on this site), /media/..., or the
+    media bucket. Anything else is somebody else's server.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if any(ch.isspace() or ord(ch) < 32 for ch in url) or ".." in parts.path:
+        return False
+    if not parts.scheme and not parts.netloc:  # a path on this site
+        return bool(OWN_IMAGE_PATH.match(parts.path)) or parts.path.startswith("/media/")
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return False
+    hosts = {h for h in settings.ALLOWED_HOSTS if h and h != "*" and not h.startswith(".")}
+    if request is not None:
+        hosts.add(request.get_host())
+    if parts.netloc in hosts and (OWN_IMAGE_PATH.match(parts.path) or parts.path.startswith("/media/")):
+        return True
+    from apps.media import storage
+
+    return storage.is_configured() and url.startswith(storage.public_url("uploads/"))
+
+
+def _is_plain_url(url, scheme):
+    """An absolute address with this scheme and a host, no login part and no spaces or control characters."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    clean = not any(ch.isspace() or ord(ch) < 32 for ch in url)
+    return clean and parts.scheme == scheme and bool(parts.hostname) and not parts.username
 
 
 class VariantInputSerializer(serializers.Serializer):
@@ -127,9 +168,17 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         return rows
 
     def validate_images(self, value):
+        request = self.context.get("request")
+        kept = self.context.get("kept_images", ())  # a product's current pictures stay valid when the form is saved again
+        external = self.context.get("external_images", False)  # imports may point at other sites, over https only
         for url in value:
-            if not url.startswith(("http://", "https://", "/media/")):
-                raise serializers.ValidationError("Each image must be an uploaded image URL.")
+            if url in kept or is_own_image_url(url, request):
+                continue
+            if external and _is_plain_url(url, "https"):
+                continue
+            if external and _is_plain_url(url, "http"):
+                raise serializers.ValidationError("Each image URL must start with https://.")
+            raise serializers.ValidationError("Each image must be an uploaded image URL.")
         return value
 
     def validate(self, data):

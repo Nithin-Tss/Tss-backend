@@ -381,7 +381,9 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         self.sign_up("img@example.com", "Image Shop")
-        png = SimpleUploadedFile("banner.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        from apps.media.tests import CLEAN_PNG, PNG as PNG_BYTES
+
+        png = SimpleUploadedFile("banner.png", PNG_BYTES)
         r = self.client.post("/api/v1/themes/images/", {"image": png}, format="multipart")
         self.assertEqual(r.status_code, 201, r.content)
         url = r.json()["url"]
@@ -395,8 +397,8 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         from apps.media.models import MediaAsset
         from apps.themes.models import ThemeImage
         asset = MediaAsset.objects.get()
-        self.assertEqual((asset.original_name, asset.mime_type, asset.file_size), ("banner.png", "image/png", 40))
-        self.assertEqual(bytes(asset.data), b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        self.assertEqual((asset.original_name, asset.mime_type, asset.file_size), ("banner.png", "image/png", len(CLEAN_PNG)))
+        self.assertEqual(bytes(asset.data), CLEAN_PNG)
         self.assertTrue(asset.uploaded_by_id)
         self.assertEqual(asset.url, urlsplit(url).path)
         self.assertFalse(ThemeImage.objects.exists())

@@ -1523,7 +1523,7 @@ class PromotionsProductsTest(StoreClientMixin, APITestCase):
 
     def setUp(self):
         self.token, self.store = self.sign_up("promo-products@example.com", "Promo Products Store")
-        self.a = self.product("Product A", "500", images=["https://example.com/a.jpg"])
+        self.a = self.product("Product A", "500", images=["/media/a.jpg"])
         self.b = self.product("Product B", "800")
         self.c = self.product("Product C", "1000")  # no image
         self.collection = self.ok("post", "/api/v1/catalog/collections/", {
@@ -1577,7 +1577,7 @@ class PromotionsProductsTest(StoreClientMixin, APITestCase):
             self.assertIn("Product A", html)
             self.assertIn("Product C", html)
             self.assertNotIn("Product B", html)
-            self.assertIn('src="https://example.com/a.jpg"', html)
+            self.assertIn('src="/media/a.jpg"', html)
             self.assertIn("500.00</span>", html)  # the product's own price: nothing is discounted for being promoted
             self.assertIn("1,000.00</span>", html)
             self.assertIn(f'href="{self.url(self.a)}"', html)
@@ -5794,7 +5794,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
 
 
 class ThemeImageUrlTest(StoreClientMixin, APITestCase):
-    PNG = bytes.fromhex("89504e470d0a1a0a") + bytes(40)
+    from apps.media.tests import PNG
 
     def setUp(self):
         self.token, self.store = self.sign_up("imgurl@example.com", "Img Store")
