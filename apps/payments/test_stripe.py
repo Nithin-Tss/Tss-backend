@@ -188,6 +188,23 @@ class StripeTests(base_tests.CommerceTestBase):
         stripe_service.note_unpaid({"id": "pi_1", "status": "canceled", "metadata": {"checkout_id": str(checkout.pk)}}, ACCOUNT)
         self.assertEqual(reserved(self.variant), 0)
 
+    def test_canceled_intent_of_another_account_cannot_release_my_hold(self):
+        from apps.inventory.services import reserved
+        checkout = self.checkout(quantity=2)
+        self.client_mock.v1.payment_intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        stripe_service.note_unpaid(
+            {"id": "pi_evil", "status": "canceled", "metadata": {"checkout_id": str(checkout.pk)}}, "acct_other"
+        )
+        self.assertEqual(reserved(self.variant), 2)
+
+    def test_database_refuses_a_second_payment_for_the_same_intent(self):
+        from django.db import IntegrityError, transaction
+        checkout = self.checkout()
+        order = stripe_service.finalize(intent(checkout), ACCOUNT)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            services.record_payment(self.store, order, order.total, provider="stripe", reference="pi_1")
+
     def test_paid_intent_places_one_captured_order_even_if_finalized_twice(self):
         checkout = self.checkout()
         paid = intent(checkout)
