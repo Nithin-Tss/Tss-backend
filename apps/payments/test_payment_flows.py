@@ -883,6 +883,28 @@ class DisputeFlagTests(base_tests.CommerceTestBase):
         self.assertNotIn("dispute_dp_1", str(data["timeline"]))
         self.assertIn("customer_cancel_until", data)
 
+    def test_shoppers_do_not_see_the_dispute_rows_of_their_payment_but_staff_do(self):
+        from apps.orders.serializers import OrderSerializer
+
+        order, payment = self.stripe_order()
+        stripe_service.record_dispute(self.dispute(), ACCOUNT)
+        self.assertEqual(payment.transactions.filter(transaction_type="dispute").count(), 1)
+
+        detail = self.client.get(f"{self.base}/orders/{order.pk}/", **self.h)
+        listed = self.client.get(f"{self.base}/orders/", **self.h)
+
+        self.assertEqual((detail.status_code, listed.status_code), (200, 200), detail.data)
+        for shown in (detail.data, listed.data[0]):
+            kinds = [t["transaction_type"] for p in shown["payments"] for t in p["transactions"]]
+            self.assertEqual(kinds, ["capture"])  # the money that came in is still shown, the chargeback is not
+            self.assertNotIn("dp_1", str(shown["payments"]))
+            self.assertNotIn("fraudulent", str(shown["payments"]))
+        order.refresh_from_db()
+        staff = OrderSerializer(order).data
+        self.assertEqual(
+            sorted(t["transaction_type"] for p in staff["payments"] for t in p["transactions"]), ["capture", "dispute"]
+        )
+
     def test_the_order_row_is_locked_before_the_payment_row(self):
         from .models import Payment as PaymentModel
 
@@ -902,3 +924,221 @@ class DisputeFlagTests(base_tests.CommerceTestBase):
              mock.patch.object(PaymentModel.objects, "select_for_update", side_effect=select):
             stripe_service.record_dispute(self.dispute(), ACCOUNT)
         self.assertEqual(calls[:2], ["order", "payment"])
+
+
+@override_settings(ROOT_URLCONF="apps.payments.test_stripe", STRIPE_SECRET_KEY="sk_test", STRIPE_PUBLISHABLE_KEY="pk_test", STRIPE_WEBHOOK_SECRET="whsec")
+class StripeStockJourneyTests(base_tests.CommerceTestBase):
+    """
+    Whole card-payment journeys (Stripe mocked). After EVERY step the stock rules hold (on_hand = available +
+    committed + unavailable, nothing negative, a history row for every change) and the payment and order agree.
+    """
+
+    base = base_tests.PlaceOrderTests.base
+    h = base_tests.PlaceOrderTests.h
+    address = base_tests.PlaceOrderTests.address
+
+    def setUp(self):
+        super().setUp()
+        self.store.stripe_account_id, self.store.stripe_charges_enabled = ACCOUNT, True
+        self.store.save()
+        self.client_mock = mock.MagicMock()
+        self.client_mock.v1.refunds.create.return_value = SimpleNamespace(id="re_1")
+        patcher = mock.patch.object(stripe_service, "client", return_value=self.client_mock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def checkout(self, quantity=2, session=None):
+        h = {"HTTP_X_CART_SESSION": session} if session else self.h
+        self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": quantity}, format="json", **h)
+        r = self.client.post(
+            f"{self.base}/checkout/", {"email": "a@b.com", "shipping_address": self.address}, format="json", **h
+        )
+        return Checkout.objects.get(pk=r.data["id"])
+
+    def stripe_order(self, intent_id="pi_1"):
+        order = stripe_service.finalize(intent(self.checkout(), id=intent_id), ACCOUNT)
+        return order, Payment.objects.get(order=order)
+
+    def levels(self):
+        from apps.inventory.models import InventoryItem
+
+        item = InventoryItem.objects.get(variant=self.variant)
+        return item.available, item.committed
+
+    def consistent(self, store=None):
+        return base_tests.assert_stock_consistent(self, store or self.store)
+
+    def event(self, kind, obj):
+        return {"type": kind, "account": ACCOUNT, "data": {"object": obj}}
+
+    def webhook(self, event):
+        with mock.patch("apps.payments.stripe_views.stripe.Webhook.construct_event", return_value=event):
+            return self.client.generic("POST", "/api/v1/payments/stripe/webhook/", b"{}", content_type="application/json")
+
+    def test_4_paid_once_even_when_the_webhook_the_return_and_a_replay_all_arrive(self):
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(self.levels(), (10, 0))  # starting a payment holds nothing
+        self.consistent()
+
+        paid = intent(checkout)
+        self.assertEqual(self.webhook(self.event("payment_intent.succeeded", paid)).status_code, 200)
+        self.assertEqual(self.levels(), (8, 2))
+        self.consistent()
+
+        intents.retrieve.return_value = paid
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/confirm/", **self.h)  # the shopper comes back
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.webhook(self.event("payment_intent.succeeded", paid)).status_code, 200)  # Stripe repeats it
+
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (1, 1))
+        self.assertEqual(self.levels(), (8, 2))  # committed once
+        history = self.consistent()
+        self.assertEqual(history["order_placed"], 1)
+        self.client_mock.v1.refunds.create.assert_not_called()
+        self.assertEqual(Payment.objects.get().status, "captured")
+
+    def test_5_paid_but_the_stock_ran_out_is_refunded_with_no_order_and_stock_untouched(self):
+        from apps.inventory.services import set_available
+
+        for left in (1, 0):  # fewer than the 2 wanted, and none at all
+            with self.subTest(left=left):
+                self.client_mock.v1.refunds.create.reset_mock()
+                set_available(self.variant, self.location, 10)
+                checkout = self.checkout(quantity=2, session=f"sess-left-{left}-aaaaaaaaaa")
+                set_available(self.variant, self.location, left)
+                before = self.consistent()
+
+                self.assertIsNone(stripe_service.finalize(intent(checkout, id=f"pi_left_{left}"), ACCOUNT))
+
+                self.assertEqual(self.levels(), (left, 0))  # nothing committed, nothing lost
+                self.assertEqual(self.consistent(), before)  # and no history row was written
+                self.assertEqual((Order.objects.count(), Payment.objects.count()), (0, 0))
+                self.client_mock.v1.refunds.create.assert_called_once()
+                checkout.refresh_from_db()
+                entry, = checkout.metadata["auto_refunds"]
+                self.assertEqual((entry["status"], entry["payment_intent"]), ("refunded", f"pi_left_{left}"))
+
+    def test_6_a_payment_that_failed_or_was_cancelled_leaves_stock_alone(self):
+        checkout = self.checkout()
+        before = self.consistent()
+
+        for status in ("processing", "requires_payment_method", "requires_action", "canceled"):
+            self.assertIsNone(stripe_service.finalize(intent(checkout, status=status), ACCOUNT))
+        for kind in ("payment_intent.payment_failed", "payment_intent.canceled"):
+            r = self.webhook(self.event(kind, {"id": "pi_1", "status": "canceled", "last_payment_error": {"message": "declined"}}))
+            self.assertEqual(r.status_code, 200)
+
+        self.assertEqual(self.levels(), (10, 0))
+        self.assertEqual(self.consistent(), before)
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (0, 0))
+        self.client_mock.v1.refunds.create.assert_not_called()
+
+    def test_7_staff_cancel_of_a_paid_order_refunds_first_and_a_failed_refund_changes_nothing(self):
+        import stripe
+
+        order, payment = self.stripe_order()
+        self.assertEqual(self.levels(), (8, 2))
+        before = self.consistent()
+        self.client_mock.v1.refunds.create.side_effect = stripe.StripeError("boom")
+
+        with self.assertRaises(ValidationError):
+            orders_services.cancel_order(order)
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("open", "captured"))
+        self.assertEqual(self.levels(), (8, 2))
+        self.assertEqual(self.consistent(), before)  # not one new history row
+        self.assertEqual(payment.transactions.filter(transaction_type="refund").count(), 0)
+
+        self.client_mock.v1.refunds.create.side_effect = None
+        orders_services.cancel_order(order)
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("cancelled", "refunded"))
+        self.assertEqual(self.levels(), (10, 0))
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_cancelled"]), (1, 1))
+
+    def test_8_refunds_partial_then_full_and_a_partly_shipped_order(self):
+        from apps.fulfillment import services as fulfillment
+
+        order, payment = self.stripe_order()
+        services.refund(payment, Decimal("300.00"))  # partial: no stock change
+        order.refresh_from_db()
+        self.assertEqual((order.status, self.levels()), ("open", (8, 2)))
+        self.assertEqual(self.consistent()["order_cancelled"], 0)
+
+        services.refund(payment, Decimal("698.00"))  # the rest: back once, cancelled
+        order.refresh_from_db()
+        self.assertEqual((order.status, self.levels()), ("cancelled", (10, 0)))
+        self.assertEqual(self.consistent()["order_cancelled"], 1)
+
+        second, second_payment = self.stripe_order(intent_id="pi_2")
+        fulfillment.fulfill(second, lines=[{"order_item": second.items.get(), "quantity": 1}])
+        self.assertEqual(self.levels(), (8, 1))
+        self.consistent()
+        services.refund(second_payment, Decimal("998.00"))  # the shipped unit is with the customer
+        second.refresh_from_db()
+        self.assertEqual((second.status, self.levels()), ("open", (9, 0)))  # only the unshipped unit is back
+        history = self.consistent()
+        self.assertEqual((history["order_fulfilled"], history["order_cancelled"]), (1, 2))
+
+    def test_11_a_card_journey_in_one_store_never_touches_another_stores_stock_or_payments(self):
+        from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
+        from apps.catalog.services import online_channels
+        from apps.inventory.models import InventoryHistory, InventoryItem, Location
+        from apps.inventory.services import set_available
+        from apps.tenancy.models import Store
+
+        other = Store.objects.create(store_name="Other", store_slug="other-shop", status="active")
+        product = Product.objects.create(store=other, title="Tee", status="active")
+        variant = ProductVariant.objects.create(product=product, sku="TEE-1", price=Decimal("499.00"))  # the same SKU
+        for channel in online_channels(other):
+            ProductSalesChannel.objects.create(product=product, sales_channel=channel)
+        set_available(variant, Location.objects.create(store=other, name="Main warehouse"), 10)
+
+        def snapshot():
+            rows = sorted(InventoryItem.objects.filter(variant__product__store=other).values_list(
+                "available", "committed", "unavailable", "on_hand"))
+            return (rows, InventoryHistory.objects.filter(store=other).count(),
+                    Payment.objects.filter(store=other).count(), Order.objects.filter(store=other).count())
+
+        before = snapshot()
+        order, payment = self.stripe_order()
+        services.refund(payment, Decimal("300.00"))
+        services.refund(payment, Decimal("698.00"))
+        second, _ = self.stripe_order(intent_id="pi_2")
+        orders_services.cancel_order(second)
+
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.levels(), (10, 0))
+        self.consistent()
+        self.consistent(other)
+
+    def test_9_a_shipped_card_order_that_is_returned_is_flagged_and_its_stock_comes_back_once(self):
+        from apps.fulfillment import services as fulfillment
+
+        order, payment = self.stripe_order()
+        item = order.items.get()
+        fulfillment.fulfill(order)
+        self.assertEqual(self.levels(), (8, 0))
+        self.consistent()
+
+        orders_services.return_items(order, [{"order_item": item, "quantity": 2, "location": None}])
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual((order.status, payment.status), ("open", "captured"))  # money received: staff refund it
+        self.assertIsNotNone(order.metadata["returned"]["at"])
+        self.assertEqual(self.levels(), (10, 0))
+        history = self.consistent()
+        self.assertEqual((history["order_fulfilled"], history["refund_restock"]), (1, 1))
+        with self.assertRaises(ValidationError):
+            orders_services.return_items(order, [{"order_item": item, "quantity": 1, "location": None}])
+        self.assertEqual(self.consistent()["refund_restock"], 1)
+        self.client_mock.v1.refunds.create.assert_not_called()

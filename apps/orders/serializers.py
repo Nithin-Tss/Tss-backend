@@ -461,6 +461,17 @@ class ShopperOrderSerializer(OrderSerializer):
     def get_timeline(self, order):
         return [event for event in super().get_timeline(order) if event.get("type") != "payment_dispute"]
 
+    def get_payments(self, order):
+        """The order's payments without their chargeback rows: a shopper does not see those."""
+        payments = []
+        for payment in super().get_payments(order):
+            payment = dict(payment)
+            payment["transactions"] = [
+                t for t in payment.get("transactions", []) if t.get("transaction_type") != "dispute"
+            ]
+            payments.append(payment)
+        return payments
+
 
 class OrderReturnLineSerializer(serializers.Serializer):
     order_item = serializers.UUIDField()

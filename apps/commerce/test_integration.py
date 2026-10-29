@@ -19,13 +19,15 @@ from rest_framework.test import APIClient, APITestCase
 from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
 from apps.catalog.services import online_channels
 from apps.discounts.models import Discount, DiscountCode
-from apps.inventory.models import InventoryItem, Location
+from apps.inventory.models import InventoryHistory, InventoryItem, Location
 from apps.inventory.services import sellable, set_available
 from apps.orders import services as orders_services
 from apps.orders.models import Order
+from apps.payments.models import Payment
 from apps.tenancy.models import Store
 
 from . import services
+from .tests import assert_stock_consistent
 from .models import Cart, Checkout
 
 ADDRESS = {"first_name": "A", "last_name": "B", "address_line_1": "1 Main St", "city": "Chennai", "state": "TN", "postal_code": "600001", "country": "India"}
@@ -932,3 +934,321 @@ class OrderReturnTests(CommerceIntegrationBase):
         )
         self.assertEqual(r.status_code, 400)
         self.assertEqual(self.stock(), (8, 0))
+
+
+class StockAndPaymentJourneyTests(CommerceIntegrationBase):
+    """
+    Whole cash-on-delivery journeys. After EVERY step the stock rules hold (on_hand = available + committed +
+    unavailable, nothing negative, a history row for every change) and the payment says what it should.
+    """
+
+    def second_shopper(self):
+        shopper = APIClient()
+        shopper.credentials(HTTP_X_CART_SESSION="sess-2-aaaaaaaaaaaa")
+        return shopper
+
+    def consistent(self, store=None):
+        return assert_stock_consistent(self, store or self.store)
+
+    def stock(self, variant=None):
+        item = InventoryItem.objects.get(variant=variant or self.variant)
+        return item.available, item.committed
+
+    def place_cod(self, quantity=2, client=None):
+        cid = self.checkout(quantity=quantity, client=client, email="a@b.com", shipping_address=ADDRESS)
+        r = self.place(cid, client=client)
+        self.assertEqual(r.status_code, 201, r.data)
+        return r.data
+
+    def payment(self, order):
+        return Payment.objects.get(order=order["id"])
+
+    def capture(self, order):
+        r = self.staff.post(f"/api/v1/payments/{self.payment(order).pk}/capture/", {"reference": "CASH"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def ship(self, order, quantity=None):
+        body = {"order": order["id"]}
+        if quantity:
+            body["items"] = [{"order_item": order["items"][0]["id"], "quantity": quantity}]
+        r = self.staff.post("/api/v1/fulfillments/", body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def give_back(self, order, quantity):
+        r = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/",
+            {"items": [{"order_item": order["items"][0]["id"], "quantity": quantity}]}, format="json",
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_1_cod_order_placed_then_paid_then_fulfilled(self):
+        order = self.place_cod()
+        self.assertEqual(self.stock(), (8, 2))
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_fulfilled"]), (1, 0))
+        self.assertEqual(self.payment(order).status, "pending")
+
+        self.capture(order)
+        self.assertEqual(self.payment(order).status, "captured")
+        self.assertEqual(self.stock(), (8, 2))  # money received does not move stock
+        self.consistent()
+
+        self.ship(order)
+        self.assertEqual(self.stock(), (8, 0))  # committed goes down, available does not come back
+        self.assertEqual(Order.objects.get(pk=order["id"]).fulfillment_status, "fulfilled")
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_fulfilled"], history["order_cancelled"]), (1, 1, 0))
+        self.assertEqual(self.payment(order).status, "captured")
+
+    def test_2_cod_order_cancelled_before_shipping_by_the_shopper_and_by_staff(self):
+        by_shopper = self.place_cod()
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{by_shopper['id']}/cancel/").status_code, 200)
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(self.payment(by_shopper).status, "cancelled")  # the pending payment is voided
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_cancelled"]), (1, 1))
+
+        other = self.second_shopper()
+        by_staff = self.place_cod(client=other)
+        self.assertEqual(self.stock(), (8, 2))
+        self.consistent()
+        r = self.staff.post(f"/api/v1/orders/{by_staff['id']}/cancel/")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(self.payment(by_staff).status, "cancelled")
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_cancelled"]), (2, 2))
+
+    def test_3_cod_delivery_fails_and_the_returned_items_cancel_the_unpaid_order(self):
+        order = self.place_cod()
+        self.consistent()
+        self.ship(order)
+        self.assertEqual(self.stock(), (8, 0))
+        self.consistent()
+
+        body = self.give_back(order, 2)
+
+        self.assertEqual(self.stock(), (10, 0))  # back once
+        self.assertEqual((body["status"], self.payment(order).status), ("cancelled", "cancelled"))
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_fulfilled"], history["refund_restock"]), (1, 1, 1))
+        self.assertEqual(history["order_cancelled"], 0)  # nothing was left committed to release
+
+    def test_9_a_paid_order_that_is_shipped_and_returned_is_flagged_and_stock_comes_back_once(self):
+        order = self.place_cod()
+        self.capture(order)
+        self.ship(order)
+        self.consistent()
+
+        body = self.give_back(order, 2)
+
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual((body["status"], self.payment(order).status), ("open", "captured"))
+        self.assertIsNotNone(body["returned_at"])
+        history = self.consistent()
+        self.assertEqual(history["refund_restock"], 1)
+        r = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/",
+            {"items": [{"order_item": order["items"][0]["id"], "quantity": 1}]}, format="json",
+        )
+        self.assertEqual(r.status_code, 400)  # the same units cannot come back twice
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(self.consistent()["refund_restock"], 1)
+
+    def test_10_the_shopper_can_cancel_within_the_hour_and_not_after_it(self):
+        inside = self.place_cod()
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{inside['id']}/cancel/").status_code, 200)
+        self.assertEqual(self.stock(), (10, 0))
+        before = self.consistent()
+        self.assertEqual(before["order_cancelled"], 1)
+
+        other = self.second_shopper()
+        late = self.place_cod(client=other)
+        Order.objects.filter(pk=late["id"]).update(created_at=timezone.now() - timedelta(minutes=61))
+        history = self.consistent()
+        r = other.post(f"{self.base}/orders/{late['id']}/cancel/")
+
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("within 1 hour", str(r.data))
+        self.assertEqual(self.stock(), (8, 2))  # untouched by the refused cancel
+        self.assertEqual(self.consistent(), history)  # and no history row was written
+        self.assertEqual(self.payment(late).status, "pending")
+
+    def test_11_a_journey_in_one_store_never_touches_the_other_stores_stock_or_payments(self):
+        other_client, other_store = sign_up_with_store("journey-b@example.com")
+        other_store.status = "active"
+        other_store.save()
+        other_location = Location.objects.create(store=other_store, name="Main warehouse")
+        stock_product(other_store, "Tee", "TEE-1", "499.00", 10, other_location)  # the same SKU as store A's
+
+        def snapshot(store):
+            rows = sorted(InventoryItem.objects.filter(variant__product__store=store).values_list(
+                "variant__sku", "available", "committed", "unavailable", "on_hand"))
+            return (rows, InventoryHistory.objects.filter(store=store).count(),
+                    Payment.objects.filter(store=store).count(), Order.objects.filter(store=store).count())
+
+        b_before = snapshot(other_store)
+
+        # Store A: a paid order that is shipped and partly returned, an order cancelled, a paid order cancelled
+        paid = self.place_cod(quantity=3)
+        self.capture(paid)
+        self.ship(paid)
+        self.give_back(paid, 1)
+        second = self.second_shopper()
+        cancelled = self.place_cod(client=second)
+        self.assertEqual(second.post(f"{self.base}/orders/{cancelled['id']}/cancel/").status_code, 200)
+        refunded = self.place_cod(client=second)
+        self.capture(refunded)
+        self.assertEqual(self.staff.post(f"/api/v1/orders/{refunded['id']}/cancel/").status_code, 200)
+
+        self.assertEqual(snapshot(other_store), b_before)
+        self.assertEqual(self.stock(), (8, 0))  # 10 - 3 shipped + 1 returned
+        self.consistent()
+        self.consistent(other_store)
+
+        # Store B sells and cancels: store A does not move
+        a_before = snapshot(self.store)
+        base_b = f"/api/v1/storefront/{other_store.store_slug}"
+        shopper_b = APIClient()
+        shopper_b.credentials(HTTP_X_CART_SESSION="sess-b-aaaaaaaaaaaaaa")
+        product_b = Product.objects.get(store=other_store)
+        self.assertEqual(shopper_b.post(f"{base_b}/cart/items/", {"product": str(product_b.pk), "quantity": 2}, format="json").status_code, 201)
+        cid = shopper_b.post(f"{base_b}/checkout/", {"email": "b@b.com", "shipping_address": ADDRESS}, format="json").data["id"]
+        placed = shopper_b.post(f"{base_b}/checkout/{cid}/complete/")
+        self.assertEqual(placed.status_code, 201, placed.data)
+        self.assertEqual(other_client.post(f"/api/v1/orders/{placed.data['id']}/cancel/").status_code, 200)
+
+        self.assertEqual(snapshot(self.store), a_before)
+        self.consistent()
+        history_b = self.consistent(other_store)
+        self.assertEqual((history_b["order_placed"], history_b["order_cancelled"]), (1, 1))
+
+    def test_12_a_variant_that_sells_past_its_stock_goes_negative_and_comes_back_exactly(self):
+        set_available(self.variant, self.location, 1)
+        self.variant.continue_selling = True
+        self.variant.save()
+
+        first = self.place_cod(quantity=3)
+        self.assertEqual(self.stock(), (-2, 3))  # 1 on the shelf, 3 sold
+        self.consistent()
+        self.assertEqual(self.shopper.post(f"{self.base}/orders/{first['id']}/cancel/").status_code, 200)
+        self.assertEqual(self.stock(), (1, 0))
+        self.consistent()
+
+        other = self.second_shopper()
+        second = self.place_cod(quantity=3, client=other)
+        self.capture(second)
+        self.ship(second)
+        self.assertEqual(self.stock(), (-2, 0))
+        self.consistent()
+        self.give_back(second, 3)
+        self.assertEqual(self.stock(), (1, 0))  # exactly what it was before
+        self.consistent()
+
+        third = self.place_cod(quantity=3, client=self.second_shopper())
+        self.capture(third)
+        payment = self.payment(third)
+        r = self.staff.post(f"/api/v1/payments/{payment.pk}/refund/", {"amount": str(payment.amount)}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Order.objects.get(pk=third["id"]).status, "cancelled")
+        self.assertEqual(self.stock(), (1, 0))
+        self.consistent()
+
+    def untracked_admin_order(self, product):
+        r = self.staff.post("/api/v1/orders/", {"items": [{"product": str(product.pk), "quantity": 3}]}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def pay_in_full(self, order):
+        r = self.staff.post("/api/v1/payments/", {"order": order["id"], "amount": order["total"], "provider": "manual"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def untracked_product(self):
+        product = Product.objects.create(store=self.store, title="Gift card", status="active")
+        variant = ProductVariant.objects.create(product=product, sku="GIFT-1", price=Decimal("50.00"))
+        return product, variant
+
+    def test_12_an_untracked_variant_is_never_blocked_and_never_gets_a_stock_row(self):
+        product, variant = self.untracked_product()
+
+        cancelled = self.untracked_admin_order(product)  # place and cancel
+        self.assertEqual(self.staff.post(f"/api/v1/orders/{cancelled['id']}/cancel/").status_code, 200)
+        shipped = self.untracked_admin_order(product)  # place, pay, ship
+        self.pay_in_full(shipped)
+        self.ship_admin(shipped)
+        refunded = self.untracked_admin_order(product)  # place, pay, refund in full: cancelled
+        payment = self.pay_in_full(refunded)
+        r = self.staff.post(f"/api/v1/payments/{payment['id']}/refund/", {"amount": refunded["total"]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(Order.objects.get(pk=refunded["id"]).status, "cancelled")
+
+        self.assertFalse(InventoryItem.objects.filter(variant=variant).exists())  # still untracked
+        self.assertFalse(InventoryHistory.objects.filter(variant=variant).exists())
+        self.assertEqual(self.stock(), (10, 0))  # the other product is untouched
+        self.consistent()
+
+    def ship_admin(self, order):
+        r = self.staff.post("/api/v1/fulfillments/", {"order": order["id"]}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def test_12_returning_an_untracked_variants_items_does_not_start_tracking_it(self):
+        product, variant = self.untracked_product()
+        order = self.untracked_admin_order(product)
+        self.pay_in_full(order)
+        self.ship_admin(order)
+
+        r = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/",
+            {"items": [{"order_item": order["items"][0]["id"], "quantity": 3}]}, format="json",
+        )
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertFalse(InventoryItem.objects.filter(variant=variant).exists())  # as before: no stock rows
+        self.assertFalse(InventoryHistory.objects.filter(variant=variant).exists())
+        self.assertEqual(r.json()["items"][0]["returned_quantity"], 3)  # the units still count as returned
+        self.assertIsNotNone(r.json()["returned_at"])
+        again = self.staff.post(
+            f"/api/v1/orders/{order['id']}/return/",
+            {"items": [{"order_item": order["items"][0]["id"], "quantity": 1}]}, format="json",
+        )
+        self.assertEqual(again.status_code, 400)  # so they cannot be returned a second time
+        self.assertFalse(InventoryItem.objects.filter(variant=variant).exists())
+        self.assertEqual(self.stock(), (10, 0))
+        self.consistent()
+
+    def test_7_a_paid_cod_order_cancelled_by_staff_is_refunded_then_the_stock_comes_back(self):
+        order = self.place_cod()
+        self.capture(order)
+        self.consistent()
+
+        r = self.staff.post(f"/api/v1/orders/{order['id']}/cancel/")
+
+        self.assertEqual(r.status_code, 200, r.content)
+        payment = self.payment(order)
+        self.assertEqual(payment.status, "refunded")
+        self.assertEqual(payment.transactions.filter(transaction_type="refund").count(), 1)
+        self.assertEqual(self.stock(), (10, 0))
+        history = self.consistent()
+        self.assertEqual((history["order_placed"], history["order_cancelled"]), (1, 1))
+        again = self.staff.post(f"/api/v1/orders/{order['id']}/cancel/")
+        self.assertEqual(again.status_code, 400)  # no second refund, no second release
+        self.assertEqual(self.stock(), (10, 0))
+        self.assertEqual(self.payment(order).transactions.filter(transaction_type="refund").count(), 1)
+        self.assertEqual(self.consistent()["order_cancelled"], 1)
+
+    def test_8_a_partial_cod_refund_changes_no_stock_and_the_rest_cancels_the_order(self):
+        order = self.place_cod()
+        self.capture(order)
+        payment = self.payment(order)
+
+        r = self.staff.post(f"/api/v1/payments/{payment.pk}/refund/", {"amount": "100.00"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((Order.objects.get(pk=order["id"]).status, self.stock()), ("open", (8, 2)))
+        self.assertEqual(self.consistent()["order_cancelled"], 0)
+
+        r = self.staff.post(f"/api/v1/payments/{payment.pk}/refund/", {"amount": "898.00"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((Order.objects.get(pk=order["id"]).status, self.stock()), ("cancelled", (10, 0)))
+        self.assertEqual(self.consistent()["order_cancelled"], 1)
