@@ -28,6 +28,40 @@ urlpatterns = [
 ]
 
 
+def assert_stock_consistent(case, store):
+    """
+    The stock rules, for every stock row of the store, to call after each step of a journey:
+    on_hand = available + committed + unavailable; committed and unavailable never negative; available
+    never negative unless the variant sells past its stock (continue_selling); and every change left a
+    history row: what the history adds up to is exactly what the row holds, and each history row is itself
+    consistent. Returns {reason: how many history rows}, so a test can check which changes were recorded.
+    """
+    from collections import Counter
+
+    from django.db.models import Sum
+
+    from apps.inventory.models import InventoryHistory, InventoryItem
+
+    for item in InventoryItem.objects.filter(variant__product__store=store).select_related("variant", "location"):
+        where = f"{item.variant.sku} at {item.location.name}"
+        case.assertEqual(item.on_hand, item.available + item.committed + item.unavailable, f"on_hand identity, {where}")
+        case.assertGreaterEqual(item.committed, 0, f"committed, {where}")
+        case.assertGreaterEqual(item.unavailable, 0, f"unavailable, {where}")
+        if not item.variant.continue_selling:
+            case.assertGreaterEqual(item.available, 0, f"available, {where}")
+            case.assertGreaterEqual(item.on_hand, 0, f"on_hand, {where}")
+        rows = InventoryHistory.objects.filter(store=store, variant=item.variant, location=item.location)
+        totals = rows.aggregate(a=Sum("change"), c=Sum("committed_change"), u=Sum("unavailable_change"))
+        case.assertEqual(
+            (totals["a"] or 0, totals["c"] or 0, totals["u"] or 0),
+            (item.available, item.committed, item.unavailable),
+            f"history adds up to the stock row, {where}",
+        )
+        for row in rows:
+            case.assertEqual(row.on_hand, row.after + row.committed + row.unavailable, f"history row {row.reason}, {where}")
+    return Counter(InventoryHistory.objects.filter(store=store).values_list("reason", flat=True))
+
+
 @override_settings(ROOT_URLCONF=__name__)
 class CommerceTestBase(APITestCase):
     def setUp(self):

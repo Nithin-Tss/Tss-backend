@@ -353,11 +353,14 @@ def return_items(order, lines, user=None):
     inventory.lock_stock(order.store_id, [e["item"].variant_id for e in wanted.values()])
     for entry in wanted.values():
         item = entry["item"]
-        location = entry["location"] or _return_location(order.store, item.variant)
-        inventory.restock_refund(
-            item.variant, location, entry["quantity"], user_id=getattr(user, "pk", None),
-            source="return", reference_id=order.pk, note="Returned",
-        )
+        # A variant with no stock rows is not tracked: it never had stock to put back, and restocking would
+        # start tracking it. Its units still count as returned below, so they can't be returned twice.
+        if inventory.is_tracked(item.variant):
+            location = entry["location"] or _return_location(order.store, item.variant)
+            inventory.restock_refund(
+                item.variant, location, entry["quantity"], user_id=getattr(user, "pk", None),
+                source="return", reference_id=order.pk, note="Returned",
+            )
         metadata = dict(item.metadata or {})
         metadata["returned_quantity"] = metadata.get("returned_quantity", 0) + entry["quantity"]
         item.metadata = metadata
