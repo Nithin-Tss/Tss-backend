@@ -5,7 +5,7 @@
 {%- endcomment -%}
 {%- assign s = section.settings -%}
 {%- assign heading = s.heading | default: 'Checkout' -%}
-{%- assign btn_text = 'Place Order' -%}
+{%- assign btn_text = s.order_button_text | default: 'Place order' -%}
 {%- assign cur = settings.currency_symbol | default: '₹' -%}
 
 <style>
@@ -681,7 +681,7 @@
             </div>
           {%- endif -%}
 
-          <button type="submit" id="checkout-submit-btn" class="checkout-submit-btn">
+          <button type="submit" id="checkout-submit-btn" class="checkout-submit-btn" data-label="{{ btn_text | escape }}">
             {{ btn_text }}
           </button>
         </form>
@@ -904,7 +904,7 @@
       var label = option.closest('.checkout-radio-option');
       if (label) label.classList.toggle('selected', option.checked);
     });
-    if (submitBtn) submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : 'Place Order';
+    if (submitBtn) submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : submitBtn.dataset.label;
   }
 
   paymentOptions.forEach(function(option) {
@@ -1073,7 +1073,7 @@
         showAlert(err.message || 'There was a problem processing your order. Please try again.');
         if (submitBtn) {
           submitBtn.disabled = false;
-          submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : 'Place Order';
+          submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : submitBtn.dataset.label;
         }
       });
     });
