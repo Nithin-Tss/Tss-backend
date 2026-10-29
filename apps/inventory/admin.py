@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from apps.core.admin_guards import StoreGuardAdmin
-from .models import ( Location, InventoryItem, Transfer, TransferItem, InventoryHistory )
+from .models import ( Location, InventoryItem, Transfer, TransferItem, InventoryHistory, StockReservation )
 
 
 @admin.register(Location)
@@ -35,6 +35,25 @@ class InventoryHistoryAdmin(StoreGuardAdmin):
     list_display = ("created_at", "store_name", "variant", "location", "change", "after", "reason", "source", "user")
     list_filter = ("reason", "source")
     search_fields = ("variant__sku", "variant__product__title", "reference_id", "note")
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(StockReservation)
+class StockReservationAdmin(StoreGuardAdmin):
+    """Checkout stock holds are made and ended by the checkout flow: viewable here, never added, edited or deleted."""
+
+    list_display = ("created_at", "store_name", "variant", "quantity", "status", "expires_at", "checkout_id")
+    list_filter = ("status",)
+    search_fields = ("variant__sku", "variant__product__title", "checkout_id")
     ordering = ("-created_at",)
 
     def has_add_permission(self, request):

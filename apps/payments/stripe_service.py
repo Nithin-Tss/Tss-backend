@@ -10,6 +10,7 @@ unpaid checkouts never hold stock. If the order cannot be placed after the shopp
 paid (stock ran out, the total moved), the payment is refunded straight away.
 """
 import logging
+from datetime import timedelta
 from decimal import Decimal
 
 import stripe
@@ -18,6 +19,7 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from apps.commerce import services as commerce
+from apps.inventory import services as inventory
 from apps.commerce.models import Checkout
 from apps.tenancy.models import Store
 
@@ -27,6 +29,7 @@ from .models import Payment, PaymentTransaction
 logger = logging.getLogger(__name__)
 
 PROVIDER = "stripe"
+STOCK_HOLD = timedelta(minutes=getattr(settings, "STOCK_HOLD_MINUTES", 15))
 SUCCEEDED = "succeeded"
 DISPUTE = "dispute"
 # Currencies Stripe counts in whole units, not 1/100ths
@@ -115,9 +118,12 @@ def payment_session(checkout):
     if checkout.total_amount <= 0:
         raise ValidationError("There is nothing to pay for.")
 
-    for item in checkout.items.filter(is_deleted=False).select_related("product", "variant"):
+    items = list(checkout.items.filter(is_deleted=False).select_related("product", "variant"))
+    for item in items:
         commerce._check_available(checkout.store, item.product)  # still Active and on the Online Store
-        commerce._check_stock(item.product, item.variant, item.quantity)
+        commerce._check_stock(item.product, item.variant, item.quantity, checkout.pk)
+    # Hold the stock while the shopper pays; a hold that runs out is simply re-taken if stock is still there
+    inventory.reserve(checkout.pk, checkout.store_id, [(i.variant, i.quantity) for i in items], STOCK_HOLD)
 
     store = checkout.store
     options = {"stripe_account": store.stripe_account_id}
@@ -356,7 +362,11 @@ def disconnect(account_id):
 
 
 def note_unpaid(intent, account_id):
-    """payment_intent.payment_failed / .canceled: no order exists yet, so there is nothing to undo."""
+    """payment_intent.payment_failed / .canceled: no order exists yet, so there is nothing to undo but the stock hold."""
     intent = plain(intent)
+    # A failed attempt can be retried on the same intent, so only a cancelled one gives the stock back now
+    checkout_id = plain(intent.get("metadata")).get("checkout_id")
+    if intent.get("status") == "canceled" and checkout_id:
+        inventory.release_reservations(checkout_id)
     error = (intent.get("last_payment_error") or {}).get("message")
     logger.info("Stripe payment %s on %s ended unpaid (%s): %s", intent.get("id"), account_id, intent.get("status"), error)

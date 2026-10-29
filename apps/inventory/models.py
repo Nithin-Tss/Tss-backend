@@ -271,3 +271,45 @@ class TransferItem(models.Model):
 
     def __str__(self):
         return f"{self.transfer} - {self.variant}"
+
+class StockReservation(models.Model):
+    """
+    Stock held for a checkout while the shopper pays. It never changes the stock numbers: it only
+    lowers what other shoppers can buy (see services.sellable_for) until `expires_at`, or until the
+    hold is converted (order placed, stock committed) or released (payment gave up).
+    """
+
+    ACTIVE, CONVERTED, RELEASED = "active", "converted", "released"
+    STATUSES = [(ACTIVE, "Active"), (CONVERTED, "Converted"), (RELEASED, "Released")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    store = models.ForeignKey(
+        Store, on_delete=models.PROTECT, db_column="store_id", related_name="stock_reservations",
+    )
+
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, db_column="variant_id", related_name="stock_reservations",
+    )
+
+    # The checkout this hold belongs to. A plain id, not a foreign key: commerce depends on inventory.
+    checkout_id = models.UUIDField(db_index=True)
+
+    quantity = models.PositiveIntegerField()
+    status = models.CharField(max_length=10, choices=STATUSES, default=ACTIVE)
+    expires_at = models.DateTimeField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"inventory"."stock_reservations"'
+        verbose_name = "Stock Reservation"
+        verbose_name_plural = "Stock Reservations"
+        constraints = [
+            models.UniqueConstraint(fields=["checkout_id", "variant"], name="uq_stock_reservation_checkout_variant"),
+        ]
+        indexes = [models.Index(fields=["variant", "status", "expires_at"], name="idx_stock_resv_variant_live")]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.variant} for checkout {self.checkout_id} ({self.status})"

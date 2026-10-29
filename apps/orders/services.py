@@ -189,7 +189,8 @@ def create_order(
             total=max(gross - discount, ZERO),
             is_deleted=False,
         )
-        inventory.commit(variant, quantity, user_id=getattr(user, "pk", None), reference_id=order.pk)
+        inventory.commit(variant, quantity, user_id=getattr(user, "pk", None), reference_id=order.pk,
+                         checkout_id=getattr(checkout, "pk", None))
 
         items.append(item)
         subtotal += gross

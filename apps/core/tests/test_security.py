@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timedelta
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
@@ -42,7 +43,7 @@ from apps.fulfillment.models import Fulfillment
 from apps.gift_cards.models import GiftCard
 from apps.identity.email_links import VERIFY_EMAIL_SALT
 from apps.identity.models import User
-from apps.inventory.models import InventoryItem, Location, Transfer
+from apps.inventory.models import InventoryItem, Location, StockReservation, Transfer
 from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
 from apps.purchasing.models import PurchaseOrder
@@ -452,6 +453,8 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             Transfer.objects.create(store=store, transfer_number=f"{store.store_slug}-T1", status="draft",
                                     source_location=location,
                                     destination_location=Location.objects.create(store=store, name="Shop")),
+            StockReservation.objects.create(store=store, variant=variant, checkout_id=uuid.uuid4(), quantity=1,
+                                            expires_at=timezone.now() + timedelta(minutes=15)),
             DraftOrder.objects.create(store=store, draft_number=f"{store.store_slug}-D1", customer=customer,
                                       status="open", total=0, currency_code="INR",
                                       created_by_user=User.objects.get(email=owner_email)),

@@ -18,7 +18,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.catalog.models import ProductVariant
 
-from .models import InventoryHistory, InventoryItem, Location
+from .models import InventoryHistory, InventoryItem, Location, StockReservation
 
 # Where stock goes when none is chosen (imports) and the store has no location yet
 DEFAULT_LOCATION = "Main warehouse"
@@ -258,6 +258,19 @@ def sellable(variant):
     return max(InventoryItem.objects.filter(variant=variant).aggregate(total=Sum("available"))["total"] or 0, 0)
 
 
+def reserved(variant, exclude_checkout_id=None):
+    """Units of `variant` held by live (active, unexpired) checkout reservations, optionally not counting one checkout's."""
+    qs = StockReservation.objects.filter(variant=variant, status=StockReservation.ACTIVE, expires_at__gt=timezone.now())
+    if exclude_checkout_id is not None:
+        qs = qs.exclude(checkout_id=exclude_checkout_id)
+    return qs.aggregate(total=Sum("quantity"))["total"] or 0
+
+
+def sellable_for(variant, checkout_id=None):
+    """What a shopper can buy right now: sellable stock minus other checkouts' live holds (their own hold doesn't count)."""
+    return max(sellable(variant) - reserved(variant, checkout_id), 0)
+
+
 def default_location(store):
     """The store's first location, created if it has none."""
     location = Location.objects.filter(store=store).order_by("created_at").first()
@@ -363,14 +376,18 @@ def _split(variant, quantity, field, reason, user_id, source, reference_id):
 
 
 @transaction.atomic
-def commit(variant, quantity, user_id=None, source="order", reference_id=None):
-    """An order was placed: move stock from available to committed."""
+def commit(variant, quantity, user_id=None, source="order", reference_id=None, checkout_id=None):
+    """
+    An order was placed: move stock from available to committed. Stock held by other checkouts' live
+    reservations can't be taken (the order's own checkout, `checkout_id`, doesn't count against it).
+    """
     if variant is None or not is_tracked(variant):
         return
     items = list(variant_stock_lock_query(variant, "-available"))
     total = sum(i.available for i in items)
-    if total < quantity and not variant.continue_selling:
-        raise ValidationError(f"Only {total} left of {_label(variant)}.")
+    free = total - reserved(variant, checkout_id)
+    if free < quantity and not variant.continue_selling:
+        raise ValidationError(f"Only {max(free, 0)} left of {_label(variant)}.")
     left = quantity
     for i, item in enumerate(items):
         # With continue_selling on, whatever is not in stock goes on the first location
@@ -411,3 +428,66 @@ def move(variant, source_location, destination, quantity, user_id=None, referenc
     adjust(variant, source_location, -quantity, user_id=user_id, source="transfer",
            reason="correction", reference_id=reference_id)
     receive(variant, destination, quantity, user_id=user_id, source="transfer", reference_id=reference_id)
+
+
+# ---------------------------------------------------------------------------
+# Checkout holds
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def reserve(checkout_id, store_id, lines, ttl):
+    """
+    Hold stock for a checkout while its shopper pays. `lines` is [(variant, quantity)]; `ttl` a timedelta.
+    Asking again for the same checkout renews and resizes its holds. Untracked variants and variants that
+    continue selling out of stock are never held. Raises ValidationError if another checkout's holds
+    leave too little; nothing is held then.
+    """
+    wanted = {}
+    for variant, quantity in lines:
+        if variant is not None and quantity > 0:
+            wanted[variant.pk] = (variant, wanted.get(variant.pk, (variant, 0))[1] + quantity)
+    lock_stock(store_id, list(wanted))  # one fixed order, so two checkouts can't deadlock each other
+    expires_at = timezone.now() + ttl
+    held = []
+    for variant, quantity in wanted.values():
+        if variant.continue_selling or not is_tracked(variant):
+            continue
+        held.append(variant.pk)
+        left = sellable(variant) - reserved(variant, checkout_id)
+        if left <= 0:
+            raise ValidationError({"product": f"{variant.product.title} is sold out."})
+        if quantity > left:
+            raise ValidationError({"quantity": f"Only {left} of {variant.product.title} left."})
+        StockReservation.objects.update_or_create(
+            checkout_id=checkout_id, variant=variant,
+            defaults={"store_id": store_id, "quantity": quantity, "status": StockReservation.ACTIVE,
+                      "expires_at": expires_at},
+        )
+    # Lines taken out of the cart (or no longer needing a hold) give their stock back now, not at expiry
+    StockReservation.objects.filter(checkout_id=checkout_id, status=StockReservation.ACTIVE).exclude(
+        variant_id__in=held
+    ).update(status=StockReservation.RELEASED, updated_at=timezone.now())
+
+
+def _finish(checkout_id, status):
+    return StockReservation.objects.filter(checkout_id=checkout_id, status=StockReservation.ACTIVE).update(
+        status=status, updated_at=timezone.now()
+    )
+
+
+def convert_reservations(checkout_id):
+    """The order was placed (stock committed): the holds have done their job."""
+    return _finish(checkout_id, StockReservation.CONVERTED)
+
+
+def release_reservations(checkout_id):
+    """Payment failed, was cancelled or the shopper left: give the held stock back to everyone."""
+    return _finish(checkout_id, StockReservation.RELEASED)
+
+
+def expire_reservations():
+    """Housekeeping: mark holds past their time as released. Returns how many. (Expired holds already stop counting.)"""
+    return StockReservation.objects.filter(status=StockReservation.ACTIVE, expires_at__lte=timezone.now()).update(
+        status=StockReservation.RELEASED, updated_at=timezone.now()
+    )
