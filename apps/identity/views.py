@@ -31,6 +31,7 @@ def session_payload(user, tokens=None):
             "lastName": user.last_name,
             "mobileNumber": user.phone,
             "emailVerified": user.email_verified_at is not None,
+            "isPlatformAdmin": user.is_owner,
         },
         "stores": stores_for_user(user),
     }

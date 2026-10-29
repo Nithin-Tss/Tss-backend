@@ -35,7 +35,7 @@ class StoreViewSet(
     viewsets.GenericViewSet,
 ):
     """
-    GET    /api/v1/stores/              stores the signed-in user belongs to
+    GET    /api/v1/stores/              stores the signed-in user belongs to (only those, even for a platform admin)
     POST   /api/v1/stores/              create a store (the caller becomes its owner)
     GET    /api/v1/stores/<id>/         one of those stores
     PATCH  /api/v1/stores/<id>/         change its settings (that store's owner, or a platform admin)
@@ -56,8 +56,9 @@ class StoreViewSet(
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):  # OpenAPI schema generation
             return Store.objects.none()
-        # A platform admin sees every store that isn't closed (and, to reopen one, the closed ones)
-        if self.request.user.is_owner:
+        # The list is always the caller's own stores, platform admin or not. A platform admin can
+        # still open, change, close or reopen any store by its id (the platform page lists them all).
+        if self.request.user.is_owner and self.action != "list":
             stores = Store.objects.order_by("created_at")
             return stores if self.action in ("reopen", "permanent_delete") else stores.exclude(status=CLOSED)
         # Only the caller's own stores: anyone else's id is a 404
