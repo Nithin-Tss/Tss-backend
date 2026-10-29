@@ -1,6 +1,10 @@
+from io import StringIO
+from unittest import mock
+
 from django.core.cache import cache
-from django.test import override_settings
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -117,3 +121,64 @@ class MediaAssetApiTest(StoreClientMixin, APITestCase):
 
     def test_requires_sign_in(self):
         self.assertIn(self.client.get("/api/v1/media/").status_code, (401, 403))
+
+
+@override_settings(
+    MEDIA_S3_BUCKET="tss-media",
+    MEDIA_S3_ENDPOINT_URL="https://s3.example.com",
+    MEDIA_S3_PUBLIC_URL="https://cdn.example.com",
+)
+class MediaBucketStorageTest(StoreClientMixin, APITestCase):
+    """With a bucket configured, bytes go there instead of the database."""
+
+    def setUp(self):
+        self.objects = {}
+        patches = [
+            mock.patch("apps.media.storage.put", side_effect=lambda key, data, ctype: self.objects.__setitem__(key, data)),
+            mock.patch("apps.media.storage.delete", side_effect=lambda key: self.objects.pop(key, None)),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def upload(self):
+        return self.client.post("/api/v1/media/", {"image": png()}, format="multipart")
+
+    def test_upload_goes_to_the_bucket_and_delete_removes_it(self):
+        self.sign_up("bucket@example.com", "Bucket Shop")
+
+        created = self.upload()
+        self.assertEqual(created.status_code, 201, created.content)
+        asset = MediaAsset.objects.get()
+        self.assertIsNone(asset.data)
+        self.assertEqual(asset.file_size, 40)
+        self.assertRegex(asset.storage_key, r"^uploads/[^/]+/[0-9a-f]{32}\.png$")
+        self.assertEqual(self.objects, {asset.storage_key: PNG})
+        self.assertEqual(created.json()["url"], f"https://cdn.example.com/{asset.storage_key}")
+
+        # The older /s/_img/<id> address redirects to the bucket
+        old = self.client.get(f"/s/_img/{asset.id}")
+        self.assertEqual(old.status_code, 302)
+        self.assertEqual(old["Location"], f"https://cdn.example.com/{asset.storage_key}")
+
+        self.ok("delete", f"/api/v1/media/{asset.id}/", expect=204)
+        self.assertEqual(self.objects, {})
+
+    def test_a_failed_bucket_write_saves_nothing(self):
+        self.sign_up("fail@example.com", "Fail Shop")
+        with mock.patch("apps.media.storage.put", side_effect=OSError("down")):
+            self.assertEqual(self.upload().status_code, 400)
+        self.assertFalse(MediaAsset.objects.exists())
+
+    def test_move_command_copies_database_pictures(self):
+        self.sign_up("move@example.com", "Move Shop")
+        with override_settings(MEDIA_S3_BUCKET=""):
+            self.upload()
+        asset = MediaAsset.objects.get()
+        self.assertIsNotNone(asset.data)
+
+        call_command("move_media_to_storage", stdout=StringIO())
+        asset.refresh_from_db()
+        self.assertIsNone(asset.data)
+        self.assertEqual(self.objects[asset.storage_key], PNG)
+        self.assertEqual(self.client.get(f"/s/_img/{asset.id}").status_code, 302)

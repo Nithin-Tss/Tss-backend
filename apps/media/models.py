@@ -36,6 +36,9 @@ class MediaAsset(models.Model):
     # It is served publicly at /s/_img/<id>. `file` is only for assets saved on disk.
     data = models.BinaryField(blank=True, null=True)
 
+    # Object key in the external bucket (see storage.py). Set instead of `data` when the bucket is configured.
+    storage_key = models.CharField(max_length=500, blank=True, null=True)
+
     file = models.FileField(
         upload_to=media_upload_path,
         max_length=500,
@@ -87,6 +90,10 @@ class MediaAsset(models.Model):
     @property
     def url(self):
         """Public address of the picture, relative to the site root."""
+        if self.storage_key:
+            from . import storage
+
+            return storage.public_url(self.storage_key)
         if self.file:
             return self.file.url
         return f"/s/_img/{self.id}"

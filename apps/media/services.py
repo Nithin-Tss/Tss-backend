@@ -1,25 +1,40 @@
 import json
+import uuid
 
 from django.conf import settings
 from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
+from . import storage
 from .models import MediaAsset
 
 IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
+IMAGE_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
 def store_image(store_id, data, content_type, original_name, user=None, asset_id=None):
-    """Keep a picture's bytes in the store's media assets (one row, in the database)."""
-    extra = {"id": asset_id} if asset_id else {}
+    """Keep a picture in the store's media assets: in the bucket if one is configured, else in the database."""
+    asset_id = asset_id or uuid.uuid4()
+    size = len(data)
+    storage_key = None
+    if storage.is_configured():
+        storage_key = f"uploads/{store_id}/{asset_id.hex}{IMAGE_EXTENSIONS.get(content_type, '')}"
+        try:
+            storage.put(storage_key, data, content_type)
+        except Exception as exc:
+            raise ValidationError({"image": "Could not save the image. Please try again."}) from exc
+        data = None
     return MediaAsset.objects.create(
+        id=asset_id,
         store_id=store_id,
         data=data,
+        storage_key=storage_key,
         original_name=(original_name or "image")[:255],
         mime_type=content_type,
-        file_size=len(data),
+        file_size=size,
         uploaded_by=user if getattr(user, "is_authenticated", False) else None,
-        **extra,
     )
 
 
