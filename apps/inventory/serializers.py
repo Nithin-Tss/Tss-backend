@@ -1,9 +1,10 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.catalog.models import ProductVariant
 from apps.core.viewsets import StoreScopedSerializerMixin
 
-from .models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
+from .models import InventoryHistory, InventoryItem, Location, StockReservation, Transfer, TransferItem
 from .services import MANUAL_REASONS, UNAVAILABLE_REASONS
 
 
@@ -113,3 +114,21 @@ class TransferSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
         if not data.get("items"):
             raise serializers.ValidationError({"items": "Add at least one item."})
         return data
+
+
+class StockReservationSerializer(serializers.ModelSerializer):
+    product = serializers.UUIDField(source="variant.product_id", read_only=True)
+    product_title = serializers.CharField(source="variant.product.title", read_only=True)
+    sku = serializers.CharField(source="variant.sku", read_only=True)
+    is_live = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockReservation
+        fields = [
+            "id", "checkout_id", "variant", "product", "product_title", "sku", "quantity",
+            "status", "is_live", "expires_at", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_is_live(self, obj):
+        return obj.status == StockReservation.ACTIVE and obj.expires_at > timezone.now()

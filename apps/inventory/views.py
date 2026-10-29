@@ -2,6 +2,7 @@ import uuid
 
 from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -12,11 +13,12 @@ from apps.core.numbering import next_number
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 
 from . import services
-from .models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
+from .models import InventoryHistory, InventoryItem, Location, StockReservation, Transfer, TransferItem
 from .serializers import (
     InventoryHistorySerializer,
     InventoryItemSerializer,
     LocationSerializer,
+    StockReservationSerializer,
     StockChangeSerializer,
     TransferSerializer,
     UnavailableChangeSerializer,
@@ -276,3 +278,31 @@ class TransferViewSet(StoreScopedViewSet):
         transfer.status = CANCELLED
         transfer.save(update_fields=["status", "updated_at"])
         return Response(self.get_serializer(transfer).data)
+
+
+class StockReservationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    StoreScopedGenericViewSet,
+):
+    """
+    GET /api/v1/inventory/reservations/?variant=&product=&checkout=&status=&live=true
+    Checkout stock holds, read-only: they are made and ended by the checkout flow (services.reserve etc.).
+    """
+
+    permission_resource = "inventory"
+    queryset = StockReservation.objects.select_related("variant__product").order_by("-created_at")
+    serializer_class = StockReservationSerializer
+    http_method_names = ["get", "head", "options"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        for param, lookup in (
+            ("product", "variant__product"), ("variant", "variant"), ("checkout", "checkout_id"), ("status", "status"),
+        ):
+            if params.get(param):
+                qs = qs.filter(**{lookup: params[param]})
+        if params.get("live", "").lower() == "true":
+            qs = qs.filter(status=StockReservation.ACTIVE, expires_at__gt=timezone.now())
+        return qs

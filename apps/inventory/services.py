@@ -376,14 +376,18 @@ def _split(variant, quantity, field, reason, user_id, source, reference_id):
 
 
 @transaction.atomic
-def commit(variant, quantity, user_id=None, source="order", reference_id=None):
-    """An order was placed: move stock from available to committed."""
+def commit(variant, quantity, user_id=None, source="order", reference_id=None, checkout_id=None):
+    """
+    An order was placed: move stock from available to committed. Stock held by other checkouts' live
+    reservations can't be taken (the order's own checkout, `checkout_id`, doesn't count against it).
+    """
     if variant is None or not is_tracked(variant):
         return
     items = list(variant_stock_lock_query(variant, "-available"))
     total = sum(i.available for i in items)
-    if total < quantity and not variant.continue_selling:
-        raise ValidationError(f"Only {total} left of {_label(variant)}.")
+    free = total - reserved(variant, checkout_id)
+    if free < quantity and not variant.continue_selling:
+        raise ValidationError(f"Only {max(free, 0)} left of {_label(variant)}.")
     left = quantity
     for i, item in enumerate(items):
         # With continue_selling on, whatever is not in stock goes on the first location
@@ -445,9 +449,11 @@ def reserve(checkout_id, store_id, lines, ttl):
             wanted[variant.pk] = (variant, wanted.get(variant.pk, (variant, 0))[1] + quantity)
     lock_stock(store_id, list(wanted))  # one fixed order, so two checkouts can't deadlock each other
     expires_at = timezone.now() + ttl
+    held = []
     for variant, quantity in wanted.values():
         if variant.continue_selling or not is_tracked(variant):
             continue
+        held.append(variant.pk)
         left = sellable(variant) - reserved(variant, checkout_id)
         if left <= 0:
             raise ValidationError({"product": f"{variant.product.title} is sold out."})
@@ -458,6 +464,10 @@ def reserve(checkout_id, store_id, lines, ttl):
             defaults={"store_id": store_id, "quantity": quantity, "status": StockReservation.ACTIVE,
                       "expires_at": expires_at},
         )
+    # Lines taken out of the cart (or no longer needing a hold) give their stock back now, not at expiry
+    StockReservation.objects.filter(checkout_id=checkout_id, status=StockReservation.ACTIVE).exclude(
+        variant_id__in=held
+    ).update(status=StockReservation.RELEASED, updated_at=timezone.now())
 
 
 def _finish(checkout_id, status):

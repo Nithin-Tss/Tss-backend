@@ -526,3 +526,98 @@ class StockLockOrderTests(StoreClientMixin, APITestCase):
             self.assertEqual(len(services.lock_stock(self.store_id, self.variants)), 6)
             services.commit(variant, 2)  # the lock query that runs when an order is placed
             services.release(variant, 2)  # and the one that runs when it is cancelled
+
+
+class ReservationTests(StoreClientMixin, APITestCase):
+    """Checkout stock holds: reserve, release, the order commit, and the read-only API."""
+
+    def setUp(self):
+        self.sign_up("hold@example.com", "Hold Store")
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Tee", "status": "active", "price": "500", "sku": "TEE-1",
+        }, expect=201)
+        self.variant = product["variants"][0]["id"]
+        self.warehouse = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)["id"]
+        from datetime import timedelta
+        from apps.inventory import services
+        self.services, self.ttl = services, timedelta(minutes=15)
+        self.v = ProductVariant.objects.select_related("product").get(pk=self.variant)
+        self.store_id = self.v.product.store_id
+        self.ok("post", f"{ITEMS}set/", {"variant": self.variant, "location": self.warehouse, "available": 10})
+
+    def other_variant(self):
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Cap", "status": "active", "price": "100", "sku": "CAP-1",
+        }, expect=201)
+        v = ProductVariant.objects.select_related("product").get(pk=product["variants"][0]["id"])
+        self.services.set_available(v, self.services.default_location(v.product.store), 10)
+        return v
+
+    def test_asking_again_drops_holds_for_lines_no_longer_wanted(self):
+        from apps.inventory.models import StockReservation
+        cap, checkout = self.other_variant(), uuid.uuid4()
+        self.services.reserve(checkout, self.store_id, [(self.v, 3), (cap, 2)], self.ttl)
+        self.assertEqual((self.services.reserved(self.v), self.services.reserved(cap)), (3, 2))
+
+        self.services.reserve(checkout, self.store_id, [(self.v, 4)], self.ttl)
+        self.assertEqual((self.services.reserved(self.v), self.services.reserved(cap)), (4, 0))
+        self.assertEqual(StockReservation.objects.get(variant=cap).status, "released")
+
+    def test_commit_cannot_take_stock_held_by_another_checkout(self):
+        from rest_framework.exceptions import ValidationError
+        mine, theirs = uuid.uuid4(), uuid.uuid4()
+        self.services.reserve(theirs, self.store_id, [(self.v, 8)], self.ttl)
+        with self.assertRaises(ValidationError):
+            self.services.commit(self.v, 5)
+        with self.assertRaises(ValidationError):
+            self.services.commit(self.v, 5, checkout_id=mine)
+        self.services.commit(self.v, 2, checkout_id=mine)  # the 2 nobody holds
+        self.assertEqual(self.services.sellable(self.v), 8)
+
+    def test_commit_by_the_holding_checkout_is_allowed(self):
+        mine = uuid.uuid4()
+        self.services.reserve(mine, self.store_id, [(self.v, 8)], self.ttl)
+        self.services.commit(self.v, 8, checkout_id=mine)
+        self.assertEqual(self.services.convert_reservations(mine), 1)
+        self.assertEqual(self.services.reserved(self.v), 0)
+
+    def test_untracked_and_continue_selling_variants_are_not_held(self):
+        from apps.inventory.models import StockReservation
+        ProductVariant.objects.filter(pk=self.v.pk).update(continue_selling=True)
+        self.v.refresh_from_db()
+        self.services.reserve(uuid.uuid4(), self.store_id, [(self.v, 3)], self.ttl)
+        self.assertEqual(StockReservation.objects.count(), 0)
+
+    def test_over_asking_holds_nothing(self):
+        from rest_framework.exceptions import ValidationError
+        from apps.inventory.models import StockReservation
+        with self.assertRaises(ValidationError):
+            self.services.reserve(uuid.uuid4(), self.store_id, [(self.v, 11)], self.ttl)
+        self.assertEqual(StockReservation.objects.count(), 0)
+
+    def test_expire_marks_only_timed_out_holds(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.inventory.models import StockReservation
+        old, fresh = uuid.uuid4(), uuid.uuid4()
+        self.services.reserve(old, self.store_id, [(self.v, 2)], self.ttl)
+        self.services.reserve(fresh, self.store_id, [(self.v, 2)], self.ttl)
+        StockReservation.objects.filter(checkout_id=old).update(expires_at=timezone.now() - timedelta(seconds=1))
+        self.assertEqual(self.services.expire_reservations(), 1)
+        self.assertEqual(StockReservation.objects.get(checkout_id=fresh).status, "active")
+        self.assertEqual(self.services.release_reservations(fresh), 1)
+        self.assertEqual(self.services.release_reservations(fresh), 0)  # already ended
+
+    def test_reservations_api_lists_filters_and_is_read_only(self):
+        a, b = uuid.uuid4(), uuid.uuid4()
+        self.services.reserve(a, self.store_id, [(self.v, 2)], self.ttl)
+        self.services.reserve(b, self.store_id, [(self.v, 3)], self.ttl)
+        self.services.release_reservations(b)
+        url = "/api/v1/inventory/reservations/"
+        rows = self.ok("get", url)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(self.ok("get", f"{url}?live=true")), 1)
+        self.assertEqual(self.ok("get", f"{url}?status=released")[0]["quantity"], 3)
+        self.assertEqual(self.ok("get", f"{url}?checkout={a}")[0]["is_live"], True)
+        self.assertEqual(self.ok("get", f"{url}?variant={self.variant}")[0]["sku"], "TEE-1")
+        self.ok("post", url, {}, expect=405)
