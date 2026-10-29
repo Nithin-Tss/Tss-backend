@@ -94,6 +94,10 @@ AREAS = {
     "reports": ("Reports and analytics", [
         (VIEW, "View overview, reports and analytics"),
     ]),
+    "api_keys": ("API keys", [
+        (VIEW, "View the store's API keys (never the secrets)"),
+        (MANAGE, "Create, edit, rotate and revoke API keys"),
+    ]),
     "audit": ("Audit log", [
         (VIEW, "View the audit log of who did what in the store"),
         ("export", "Download the audit log as a file"),
@@ -254,7 +258,7 @@ _AREA_BY_APP = {
     "orders": "orders", "payments": "orders", "commerce": "orders",
     "delivery": "shipping", "webhooks": "webhooks",
 }
-_AREA_BY_MODEL = {"DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "TaxRate": "shipping"}
+_AREA_BY_MODEL = {"ApiKey": "api_keys", "DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "TaxRate": "shipping"}
 
 
 def area_for_model(model):

@@ -12,6 +12,9 @@ from .models import (
     Brand, Category, Collection, CollectionSalesChannel, Product, ProductCollection,
     ProductSalesChannel, ProductVariant, SalesChannel,
 )
+from apps.media.images import clean_image
+from apps.media.tests import make_image
+
 from .services import ProductInUse, delete_product, save_product
 
 URL = "/api/v1/catalog/products/"
@@ -523,7 +526,8 @@ class ProductServiceTests(APITestCase):
 class ProductFormSchemaTests(APITestCase):
     """The "Add product" form: photos, category, stock, channels, template and status."""
 
-    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    PNG = make_image("PNG")
+    CLEAN_PNG = clean_image(PNG)[0]  # what is kept after an upload
 
     def setUp(self):
         token, self.store_id = signup(self.client, "form@example.com")
@@ -546,13 +550,13 @@ class ProductFormSchemaTests(APITestCase):
         url = self.upload(self.PNG).json()["url"]
         stored = ThemeImage.objects.get()
         self.assertEqual((str(stored.store_id), stored.content_type), (self.store_id, "image/png"))
-        self.assertEqual(bytes(stored.data), self.PNG)
+        self.assertEqual(bytes(stored.data), self.CLEAN_PNG)
         self.assertFalse(MediaAsset.objects.exists())  # product photos are not media assets
 
         public = APIClient()  # shoppers aren't signed in
         r = public.get(urlsplit(url).path)
         self.assertEqual((r.status_code, r["Content-Type"]), (200, "image/png"))
-        self.assertEqual(r.content, self.PNG)
+        self.assertEqual(r.content, self.CLEAN_PNG)
 
     def test_full_form_saves_everything(self):
         urls = [self.upload(self.PNG).json()["url"] for _ in range(2)]
@@ -1744,3 +1748,102 @@ class CatalogNavigationTests(APITestCase):
             counts.append(len(queries))
         self.assertEqual(counts, [1, 1])
         self.assertTrue(all(entry["has_products"] for entry in nav))
+
+
+class ProductPhotoRulesTests(APITestCase):
+    """Photo upload rate limit, and which image addresses the product form and imports accept."""
+
+    PNG = make_image("PNG")
+    UUID = "0b9e6a52-6d0c-4f0e-9a52-7a2d0c1f8e11"
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "photos@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.n = 0
+
+    def upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return self.client.post(f"{URL}images/", {"image": SimpleUploadedFile("a.png", self.PNG)}, format="multipart")
+
+    def create(self, images):
+        self.n += 1
+        return self.client.post(
+            URL, {"title": f"P{self.n}", "sku": f"PH-{self.n}", "images": images}, format="json"
+        )
+
+    def test_photo_uploads_are_rate_limited(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        cache.clear()
+        old = ScopedRateThrottle.THROTTLE_RATES
+        ScopedRateThrottle.THROTTLE_RATES = {**old, "product_image_upload": "2/min"}
+        try:
+            codes = [self.upload().status_code for _ in range(3)]
+        finally:
+            ScopedRateThrottle.THROTTLE_RATES = old
+        self.assertEqual(codes, [201, 201, 429])
+
+    def test_form_accepts_only_our_own_image_urls(self):
+        uploaded = self.upload().json()["url"]
+        for url in (uploaded, f"/s/_img/{self.UUID}", f"http://testserver/s/_img/{self.UUID}",
+                    f"https://testserver/s/_img/{self.UUID}", "/media/uploads/a.png"):
+            r = self.create([url])
+            self.assertEqual(r.status_code, 201, (url, r.content))
+
+    def test_form_refuses_other_sites_and_odd_addresses(self):
+        for url in (
+            "https://cdn.example.com/photo.png",
+            "http://cdn.example.com/photo.png",
+            f"https://evil.example/s/_img/{self.UUID}",  # right path, wrong site
+            f"https://testserver@evil.example/s/_img/{self.UUID}",  # our name used as a login
+            f"https://evil.example/media/a.png",
+            "/s/_img/not-an-id",
+            "/media/../etc/passwd",
+            f"/s/_img/{self.UUID} onerror=alert(1)",
+            "javascript:alert(1)",
+            "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+            "//evil.example/s/_img/" + self.UUID,
+        ):
+            r = self.create([url])
+            self.assertEqual(r.status_code, 400, url)
+            self.assertEqual(r.json(), {"images": ["Each image must be an uploaded image URL."]}, url)
+
+    def test_form_accepts_our_bucket_address(self):
+        from django.test import override_settings
+
+        with override_settings(MEDIA_S3_BUCKET="tss-media", MEDIA_S3_PUBLIC_URL="https://cdn.example.com"):
+            self.assertEqual(self.create([f"https://cdn.example.com/uploads/{self.store_id}/a.png"]).status_code, 201)
+            self.assertEqual(self.create(["https://cdn.example.com/other/a.png"]).status_code, 400)
+        # without a bucket the same address is just somebody else's server
+        self.assertEqual(self.create([f"https://cdn.example.com/uploads/{self.store_id}/a.png"]).status_code, 400)
+
+    def import_rows(self, *images):
+        rows = [{"title": f"I{i}", "sku": f"IM-{i}", "images": [url]} for i, url in enumerate(images)]
+        return self.client.post(f"{URL}bulk/", {"products": rows}, format="json").json()
+
+    def test_imports_may_use_https_pictures_from_other_sites(self):
+        body = self.import_rows("https://cdn.example.com/photo.png", f"/s/_img/{self.UUID}")
+        self.assertEqual((body["created"], body["errors"]), (2, []))
+
+    def test_imports_refuse_http_and_other_schemes(self):
+        body = self.import_rows(
+            "http://cdn.example.com/photo.png", "ftp://cdn.example.com/photo.png", "javascript:alert(1)",
+            "https://user:pass@cdn.example.com/photo.png", "https:///photo.png",
+        )
+        self.assertEqual(body["created"], 0)
+        messages = {e["index"]: e["message"] for e in body["errors"]}
+        self.assertEqual(messages[0], "images: Each image URL must start with https://.")
+        for index in (1, 2, 3, 4):
+            self.assertEqual(messages[index], "images: Each image must be an uploaded image URL.")
+
+    def test_editing_an_imported_product_keeps_its_external_picture(self):
+        self.import_rows("https://cdn.example.com/photo.png")
+        product = Product.objects.get(variants__sku="IM-0")
+        url = "https://cdn.example.com/photo.png"
+        # The form sends the picture list back unchanged
+        r = self.client.patch(f"{URL}{product.pk}/", {"title": "Renamed", "images": [url]}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        # ... but a new outside address is still refused
+        r = self.client.patch(f"{URL}{product.pk}/", {"images": [url, "https://other.example/b.png"]}, format="json")
+        self.assertEqual(r.status_code, 400)

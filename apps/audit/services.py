@@ -53,6 +53,7 @@ class Collector:
         self.changes = {}  # (model label, pk) -> change dict, in the order first seen
         self.deletes = []  # snapshots of rows about to be hard-deleted
         self.skipped = 0
+        self.api_key = ""  # prefix of the API key the request used, if any
 
     def note(self, key, change):
         if key in self.changes:
@@ -98,6 +99,7 @@ def bind(request, membership, area, view):
     collector.store = membership.store
     collector.user = request.user
     collector.area = area or ""
+    collector.api_key = getattr(request.auth, "prefix", "") or ""
     action = getattr(view, "action", None)
     collector.verb = _STANDARD_VERBS.get(action) or action or _METHOD_VERBS.get(request.method, request.method.lower())
     return collector
@@ -314,6 +316,8 @@ def log_request(request, response):
     primary = next((c for c in changes if c["area"] == collector.area), None) or (changes[0] if changes else None)
 
     metadata = {"omittedChanges": collector.skipped} if collector.skipped else {}
+    if collector.api_key:
+        metadata["apiKey"] = collector.api_key
     return record(
         f"{collector.area}.{collector.verb}" if collector.area else collector.verb,
         request=request, store=collector.store, user=collector.user, resource=collector.area,

@@ -23,6 +23,11 @@ _LABELS = {  # what the screens call things
     "auth.signup": "Created an account", "auth.login": "Signed in", "auth.login_failed": "Failed sign-in attempt",
     "auth.logout": "Signed out", "auth.password_changed": "Changed password",
     "audit.export": "Downloaded the audit log", services.DENIED: "Was refused access",
+    "platform.store_suspended": "Suspended the store", "platform.store_unsuspended": "Restored the store",
+    "platform.admin_granted": "Made a platform administrator", "platform.admin_revoked": "Removed a platform administrator",
+    "platform.api_key_revoked": "Revoked an API key (platform)", "platform.flag_created": "Created a feature flag",
+    "platform.flag_updated": "Changed a feature flag", "platform.flag_deleted": "Deleted a feature flag",
+    "platform.flag_override_set": "Set a feature flag for the store", "platform.flag_override_removed": "Reset a feature flag for the store",
 }
 
 

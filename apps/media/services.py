@@ -6,6 +6,7 @@ from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
 from . import storage
+from .images import MAX_IMAGE_SIZE, clean_image
 from .models import MediaAsset
 
 IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
@@ -40,28 +41,23 @@ def store_image(store_id, data, content_type, original_name, user=None, asset_id
 
 def upload_image(store_id, file, user=None):
     """
-    Validate an uploaded picture (JPG, PNG or WEBP up to 1MB, checked by its first bytes, same rules as product
-    photos), keep it in the database and list it as a media asset. Returns the MediaAsset.
+    Validate and clean an uploaded picture (JPG, PNG or WEBP up to 1MB, really decoded and saved again without
+    EXIF / GPS data, same rules as product photos), keep it in the database and list it as a media asset. Returns the MediaAsset.
     """
-    from apps.catalog.views import MAX_IMAGE_SIZE, image_extension
-
     if file is None:
         raise ValidationError({"image": "Choose an image to upload."})
     if file.size > MAX_IMAGE_SIZE:
         raise ValidationError({"image": "Image is too large. Maximum size is 1MB per image."})
 
-    ext = image_extension(file.read(12))
-    if ext is None:
-        raise ValidationError({"image": "Not a supported image. Use JPG, PNG or WEBP."})
-    file.seek(0)
+    data, _, content_type = clean_image(file.read())
 
     quota = getattr(settings, "MEDIA_STORE_QUOTA_BYTES", 0)
     if quota:
         used = MediaAsset.objects.filter(store_id=store_id).aggregate(total=Sum("file_size"))["total"] or 0
-        if used + file.size > quota:
+        if used + len(data) > quota:
             raise ValidationError({"image": "Your media library is full. Delete unused pictures first."})
 
-    return store_image(store_id, file.read(), IMAGE_TYPES[ext], file.name, user)
+    return store_image(store_id, data, content_type, file.name, user)
 
 
 def asset_in_use(asset):

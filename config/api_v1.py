@@ -19,6 +19,7 @@ urlpatterns = [
     path("members/", include(members_urlpatterns)),
     path("roles/", include(roles_urlpatterns)),
     path("audit/", include("apps.audit.urls")),
+    path("", include("apps.platform_admin.urls")),
     path("catalog/", include("apps.catalog.urls")),
     path("customers/", include("apps.customers.urls")),
     path("orders/", include("apps.orders.urls")),

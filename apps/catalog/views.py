@@ -14,6 +14,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import MultiPartParser
 
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 
 
@@ -73,31 +74,11 @@ from .services import (
 
 
 
-# Product photos: JPG, PNG or WEBP up to 1MB, checked by their first bytes, not the file name
-
-MAX_IMAGE_SIZE = 1 * 1024 * 1024
+# Product photos: JPG, PNG or WEBP up to 1MB, checked and cleaned in apps/media/images.py
+# (MAX_IMAGE_SIZE and image_extension are importable from here as before)
+from apps.media.images import MAX_IMAGE_SIZE, clean_image, image_extension  # noqa: E402,F401
 
 MAX_BULK_ROWS = 500
-
-IMAGE_SIGNATURES = {"jpg": (b"\xff\xd8\xff",), "png": (b"\x89PNG\r\n\x1a\n",)}
-
-
-
-
-
-def image_extension(head):
-
-    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-
-        return "webp"
-
-    for ext, signatures in IMAGE_SIGNATURES.items():
-
-        if head.startswith(signatures):
-
-            return ext
-
-    return None
 
 
 
@@ -137,7 +118,10 @@ class ProductViewSet(StoreScopedViewSet):
 
     def _save(self, request, product=None, partial=False):
 
-        data = ProductInputSerializer(data=request.data, partial=partial, context=self.get_serializer_context())
+        context = self.get_serializer_context()
+        if product is not None:
+            context["kept_images"] = set(product.images.values_list("url", flat=True))
+        data = ProductInputSerializer(data=request.data, partial=partial, context=context)
 
         data.is_valid(raise_exception=True)
 
@@ -208,7 +192,7 @@ class ProductViewSet(StoreScopedViewSet):
         valid, errors = [], []
         for index, row in enumerate(rows):
             serializer = ProductInputSerializer(
-                data=row, context={**self.get_serializer_context(), "location_optional": True}
+                data=row, context={**self.get_serializer_context(), "location_optional": True, "external_images": True}
             )
             if serializer.is_valid():
                 if not (serializer.validated_data.get("sku") or "").strip():
@@ -303,6 +287,13 @@ class ProductViewSet(StoreScopedViewSet):
         deleted, blocked = delete_all_products(request.store)
         return Response({"deleted": deleted, "blocked": blocked})
 
+    def get_throttles(self):
+        # Only photo uploads are rate limited (see DEFAULT_THROTTLE_RATES["product_image_upload"])
+        if self.action == "upload_image":
+            self.throttle_scope = "product_image_upload"
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
     @action(detail=False, methods=["post"], url_path="images", parser_classes=[MultiPartParser])
 
     def upload_image(self, request):
@@ -327,23 +318,14 @@ class ProductViewSet(StoreScopedViewSet):
 
 
 
-        ext = image_extension(file.read(12))
-
-        if ext is None:
-
-            raise ValidationError({"image": "Not a supported image. Use JPG, PNG or WEBP."})
-
-        file.seek(0)
-
-
+        data, _, ctype = clean_image(file.read())
 
         # Stored in the database (the server's disk is wiped on deploy). Served by the
         # public /s/_img/<id> route, the same one customizer pictures use.
         from apps.themes.models import ThemeImage
 
-        ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
         image = ThemeImage.objects.create(
-            store_id=request.store.store_id, content_type=ctype, data=file.read(), size=file.size,
+            store_id=request.store.store_id, content_type=ctype, data=data, size=len(data),
         )
         url = request.build_absolute_uri(f"/s/_img/{image.id}")
 

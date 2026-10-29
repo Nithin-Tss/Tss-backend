@@ -8,10 +8,25 @@ from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
+from apps.media.images import clean_image
 from apps.media.models import MediaAsset
 from apps.themes.models import ThemeImage
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+def make_image(fmt="PNG", size=(8, 8), exif=None, mode="RGB", **save):
+    """The bytes of a real (tiny) picture, so the upload checks have something they can decode."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new(mode, size, (200, 30, 30)[: len(mode)] if mode != "L" else 90).save(
+        buffer, format=fmt, **({"exif": exif} if exif else {}), **save
+    )
+    return buffer.getvalue()
+
+
+PNG = make_image("PNG")
+CLEAN_PNG = clean_image(PNG)[0]  # what is kept after an upload
 
 
 def png(name="banner.png", content=PNG):
@@ -28,9 +43,9 @@ class MediaAssetApiTest(StoreClientMixin, APITestCase):
         created = self.upload()
         self.assertEqual(created.status_code, 201, created.content)
         asset = created.json()
-        self.assertEqual((asset["name"], asset["mime_type"], asset["file_size"]), ("banner.png", "image/png", 40))
+        self.assertEqual((asset["name"], asset["mime_type"], asset["file_size"]), ("banner.png", "image/png", len(CLEAN_PNG)))
         self.assertNotIn("data", asset)  # the list never carries the bytes
-        self.assertEqual(bytes(MediaAsset.objects.get().data), PNG)
+        self.assertEqual(bytes(MediaAsset.objects.get().data), CLEAN_PNG)
         self.assertIn("/s/_img/", asset["url"])
         self.assertEqual(self.client.get(asset["url"].split("testserver", 1)[-1]).status_code, 200)
 
@@ -93,12 +108,12 @@ class MediaAssetApiTest(StoreClientMixin, APITestCase):
         self.assertEqual(self.client.patch(f"/api/v1/media/{asset['id']}/", {"name": "x"}, format="json").status_code, 404)
         self.assertEqual(MediaAsset.objects.get().original_name, "banner.png")
 
-    @override_settings(MEDIA_STORE_QUOTA_BYTES=100)
+    @override_settings(MEDIA_STORE_QUOTA_BYTES=int(len(CLEAN_PNG) * 2.5))
     def test_storage_quota_is_enforced_per_store(self):
         self.sign_up("quota@example.com", "Quota Shop")
-        self.assertEqual(self.upload().status_code, 201)  # 40 bytes
-        self.assertEqual(self.upload().status_code, 201)  # 80 bytes
-        full = self.upload()  # 120 > 100
+        self.assertEqual(self.upload().status_code, 201)  # 1 picture
+        self.assertEqual(self.upload().status_code, 201)  # 2 pictures
+        full = self.upload()  # 3 pictures > 2.5 pictures
         self.assertEqual(full.status_code, 400)
         self.assertIn("full", str(full.json()))
         self.assertEqual(MediaAsset.objects.count(), 2)
@@ -151,9 +166,9 @@ class MediaBucketStorageTest(StoreClientMixin, APITestCase):
         self.assertEqual(created.status_code, 201, created.content)
         asset = MediaAsset.objects.get()
         self.assertIsNone(asset.data)
-        self.assertEqual(asset.file_size, 40)
+        self.assertEqual(asset.file_size, len(CLEAN_PNG))
         self.assertRegex(asset.storage_key, r"^uploads/[^/]+/[0-9a-f]{32}\.png$")
-        self.assertEqual(self.objects, {asset.storage_key: PNG})
+        self.assertEqual(self.objects, {asset.storage_key: CLEAN_PNG})
         self.assertEqual(created.json()["url"], f"https://cdn.example.com/{asset.storage_key}")
 
         # The older /s/_img/<id> address redirects to the bucket
@@ -180,5 +195,5 @@ class MediaBucketStorageTest(StoreClientMixin, APITestCase):
         call_command("move_media_to_storage", stdout=StringIO())
         asset.refresh_from_db()
         self.assertIsNone(asset.data)
-        self.assertEqual(self.objects[asset.storage_key], PNG)
+        self.assertEqual(self.objects[asset.storage_key], CLEAN_PNG)
         self.assertEqual(self.client.get(f"/s/_img/{asset.id}").status_code, 302)

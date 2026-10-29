@@ -103,6 +103,7 @@ INSTALLED_APPS = [
     'apps.media',
     'apps.audit',
     'apps.webhooks',
+    'apps.platform_admin',
 ]
 
 AUTH_USER_MODEL = "identity.User"
@@ -304,6 +305,7 @@ CORS_ALLOW_HEADERS = [
     'authorization',
     'content-type',
     'x-store-id',
+    'x-api-key',
     'x-theme-id',
 ]
 # The public storefront (/s/<store>/...) runs sandboxed (origin "null") and its cart endpoints answer
@@ -334,7 +336,9 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'apps.core.schema.TSSAutoSchema',
     # A JWT ("Authorization: Bearer ...") or the Django session cookie set at
     # sign-in; session requests must also send the CSRF token.
+    # An API key ("Authorization: Bearer tssk_..." or "X-Api-Key") is tried first; it ignores anything else.
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'apps.platform_admin.authentication.ApiKeyAuthentication',
         'apps.core.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
@@ -351,8 +355,14 @@ REST_FRAMEWORK = {
         'storefront_checkout': '20/hour',
         # Media library uploads per signed-in user
         'media_upload': '120/hour',
+        # Product photo uploads per signed-in user
+        'product_image_upload': '120/hour',
     },
 }
+
+
+# Requests one API key may make per minute (apps/platform_admin/authentication.py); 0 = unlimited
+API_KEY_RATE_LIMIT_PER_MINUTE = int(os.getenv('API_KEY_RATE_LIMIT_PER_MINUTE', '600'))
 
 
 # OpenAPI 3 schema + docs (drf-spectacular): /api/v1/schema/, /api/v1/docs/, /api/v1/redoc/

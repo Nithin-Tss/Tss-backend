@@ -5,7 +5,7 @@ from rest_framework.permissions import BasePermission
 
 from apps.tenancy.models import StoreMembership
 from apps.tenancy.access import membership_permissions
-from apps.tenancy.services import OWNER
+from apps.tenancy.services import OWNER, SUSPENDED
 
 from apps.audit import services as audit
 
@@ -13,6 +13,15 @@ from .rbac import permission_for
 
 STORE_HEADER = "X-Store-Id"
 ACTIVE = "active"
+# The role name of a request made with an API key (it holds the key's scopes, nothing else)
+API_KEY_ROLE = "api_key"
+
+
+def _api_key(request):
+    """The ApiKey this request was authenticated with, or None."""
+    from apps.platform_admin.models import ApiKey
+
+    return request.auth if isinstance(request.auth, ApiKey) else None
 
 
 class IsStoreMember(BasePermission):
@@ -27,6 +36,22 @@ class IsStoreMember(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
+        api_key = _api_key(request)
+        if api_key is not None:
+            membership = self._api_key_membership(request, api_key)
+        else:
+            membership = self._user_membership(request)
+
+        if membership.store.status == SUSPENDED and (api_key is not None or not request.user.is_owner):
+            raise exceptions.PermissionDenied("This store is suspended. Contact support.")
+
+        request.store = membership.store
+        request.store_role = membership.role
+        request.membership = membership
+        audit.begin(request)
+        return True
+
+    def _user_membership(self, request):
         raw = request.headers.get(STORE_HEADER)
 
         if not raw:
@@ -56,11 +81,19 @@ class IsStoreMember(BasePermission):
             # Same answer whether the store exists or not, so ids can't be probed.
             raise exceptions.PermissionDenied("You don't have access to this store.")
 
-        request.store = membership.store
-        request.store_role = membership.role
-        request.membership = membership
-        audit.begin(request)
-        return True
+        return membership
+
+    def _api_key_membership(self, request, key):
+        """A request made with an API key acts as a staff member of the key's store holding just its scopes."""
+        from apps.platform_admin.scopes import grantable
+
+        raw = request.headers.get(STORE_HEADER)
+        if raw and raw.lower() != str(key.store_id):
+            raise exceptions.PermissionDenied("This API key belongs to a different store.")
+
+        membership = StoreMembership(user=request.user, store=key.store, role=API_KEY_ROLE, status=ACTIVE)
+        membership._permissions = frozenset(grantable(key.scopes))
+        return membership
 
 
 class HasStorePermission(BasePermission):

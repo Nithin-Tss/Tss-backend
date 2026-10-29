@@ -46,6 +46,9 @@ from apps.identity.models import User
 from apps.inventory.models import InventoryItem, Location, StockReservation, Transfer
 from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
+from apps.platform_admin import platform_views
+from apps.platform_admin.models import ApiKey
+from apps.platform_admin.permissions import IsPlatformAdmin
 from apps.purchasing.models import PurchaseOrder
 from apps.tenancy.models import ShippingRate, Store, TaxRate
 from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
@@ -472,6 +475,8 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
                                     status="open", is_deleted=False, **zero),
             WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant),
             MediaAsset.objects.create(store=store, original_name="banner.png", mime_type="image/png", file_size=40),
+            ApiKey.objects.create(store=store, name="Sync", prefix=owner_email[0] * 8, secret_hash="0" * 64,
+                                  scopes=["products.view"], created_by=User.objects.get(email=owner_email)),
         ]
         endpoint = WebhookEndpoint.objects.create(store=store, url="https://example.com/hook", events=["*"])
         records += [endpoint, WebhookDelivery.objects.create(endpoint=endpoint, event_type="ping", payload={})]
@@ -657,6 +662,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     FUNCTION_VIEWS = {"theme_css"}
     METHODS = ("get", "post", "put", "patch", "delete")
     STORE_PERMISSIONS = ["IsAuthenticated", "IsStoreMember", "HasStorePermission"]
+    PLATFORM_PERMISSIONS = ["IsAuthenticated", "IsPlatformAdmin"]
 
     def classified(self):
         public, account_only, store_scoped, other = {}, {}, {}, {}
@@ -669,8 +675,10 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
                 public[route] = (cls, url)
             elif perms == ["IsAuthenticated"]:
                 account_only[route] = (cls, url)
-            elif perms == self.STORE_PERMISSIONS:
-                store_scoped[route] = (cls, url)
+            elif perms[:3] == self.STORE_PERMISSIONS and all(p.startswith("FeatureEnabled_") for p in perms[3:]):
+                store_scoped[route] = (cls, url)  # a feature flag may gate a store route further
+            elif perms == self.PLATFORM_PERMISSIONS:
+                account_only[route] = (cls, url)  # sign-in only as far as the store checks go; admins only (own test)
             else:
                 self.fail(f"{route}: unexpected permission classes {perms}")
         return public, account_only, store_scoped, other
@@ -688,7 +696,11 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
 
     def test_only_the_expected_routes_skip_the_store_checks(self):
         _, account_only, _, other = self.classified()
-        self.assertEqual({cls.__name__ for cls, _ in account_only.values()}, self.ACCOUNT_ONLY)
+        platform = {
+            c.__name__ for c in vars(platform_views).values()
+            if isinstance(c, type) and issubclass(c, platform_views.PlatformView) and c is not platform_views.PlatformView
+        }
+        self.assertEqual({cls.__name__ for cls, _ in account_only.values()}, self.ACCOUNT_ONLY | platform)
         self.assertEqual(set(other.values()), self.FUNCTION_VIEWS)
 
     def test_signed_in_routes_accept_only_tokens_and_sessions(self):
@@ -696,8 +708,19 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         for route, (cls, _) in {**account_only, **store_scoped}.items():
             self.assertEqual(
                 [c.__name__ for c in cls.authentication_classes],
-                ["JWTAuthentication", "SessionAuthentication"], route,
+                ["ApiKeyAuthentication", "JWTAuthentication", "SessionAuthentication"], route,
             )
+
+    def test_platform_routes_are_for_platform_admins_only(self):
+        token, _ = self.sign_up("plain@example.com", "Plain")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+        _, account_only, _, _ = self.classified()
+        platform = {r: v for r, v in account_only.items() if v[0].permission_classes[-1] is IsPlatformAdmin}
+        self.assertGreaterEqual(len(platform), 15)
+        for route, (cls, url) in platform.items():
+            for method in self.METHODS:
+                r = getattr(self.client, method)(url, {}, format="json")
+                self.assertIn(r.status_code, (403, 405), f"{method.upper()} {url} ({cls.__name__})")
 
     def test_strangers_get_401_from_every_protected_route_and_method(self):
         _, account_only, store_scoped, _ = self.classified()
@@ -842,7 +865,7 @@ class HardeningTest(AccountTestBase):
         text = r.content.decode()
         for needle in (PASSWORD, "pbkdf2", "argon2", "md5$", "password_hash", "\"password\""):
             self.assertNotIn(needle, text)
-        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified"})
+        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified", "isPlatformAdmin"})
 
         me = self.client.get("/api/v1/auth/me/", HTTP_AUTHORIZATION=f"Bearer {r.json()['access']}")
         self.assertNotIn("password", me.content.decode().lower())
@@ -1021,7 +1044,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout", "media_upload"})
+        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.
