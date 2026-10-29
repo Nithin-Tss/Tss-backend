@@ -6,7 +6,7 @@ v1 keeps working unchanged.
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
-from apps.core.reports import OverviewView, ReportListView
+from apps.core.reports import OverviewView, ReportDetailView, ReportListView
 from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 
 urlpatterns = [
@@ -33,6 +33,7 @@ urlpatterns = [
     path("wishlists/", include("apps.wishlist.urls")),
     path("webhooks/", include("apps.webhooks.urls")),
     path("reports/overview/", OverviewView.as_view(), name="reports-overview"),
+    path("reports/<slug:report_id>/", ReportDetailView.as_view(), name="reports-detail"),
     path("reports/", ReportListView.as_view(), name="reports"),
     path("purchase-orders/", include("apps.purchasing.urls")),
     # Commerce: /api/v1/carts/, /api/v1/checkouts/ (staff, read-only)
