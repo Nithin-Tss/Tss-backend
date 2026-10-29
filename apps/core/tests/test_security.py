@@ -1044,7 +1044,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"auth", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload"})
+        self.assertEqual(set(conf["throttles"]), {"api", "auth", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.

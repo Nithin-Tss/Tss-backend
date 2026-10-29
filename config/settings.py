@@ -345,8 +345,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
-    # Slows down password guessing on sign-in / sign-up (see identity views)
+    # Every view without its own throttle gets this one (per user, or per IP when signed out)
+    'DEFAULT_THROTTLE_CLASSES': ['apps.core.throttling.DefaultApiThrottle'],
     'DEFAULT_THROTTLE_RATES': {
+        'api': os.getenv('API_DEFAULT_THROTTLE_RATE', '600/min'),
+        # Slows down password guessing on sign-in / sign-up (see identity views)
         'auth': '10/min',
         # Password reset / verification emails: stops mailbox flooding
         'email': '5/hour',
