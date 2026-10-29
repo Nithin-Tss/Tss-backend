@@ -488,6 +488,11 @@ def theme_image(request, image_id):
     key = f"theme-image:{image_id}"
     cached = cache.get(key)
     if cached is None:
+        stored = MediaAsset.objects.filter(pk=image_id, storage_key__isnull=False).only("storage_key").first()
+        if stored is not None:  # kept in the bucket: older /s/_img/ links keep working by redirecting there
+            response = HttpResponseRedirect(stored.url)
+            response["Cache-Control"] = "public, max-age=3600"
+            return response
         asset = MediaAsset.objects.filter(pk=image_id, data__isnull=False).only("data", "mime_type").first()
         if asset is not None:
             cached = (bytes(asset.data), asset.mime_type)

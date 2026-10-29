@@ -9,6 +9,7 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from apps.core.viewsets import StoreScopedGenericViewSet
 
+from . import storage
 from .models import MediaAsset
 from .services import asset_in_use, upload_image
 
@@ -73,5 +74,11 @@ class MediaAssetViewSet(
         if asset_in_use(instance):
             raise ValidationError("This picture is used in your online store. Remove it there first.")
         key = f"theme-image:{instance.id}"
+        storage_key = instance.storage_key
         instance.delete()
+        if storage_key:
+            try:
+                storage.delete(storage_key)
+            except Exception:  # the row is gone either way; an orphaned object is harmless
+                pass
         cache.delete(key)  # a deleted picture is no longer served

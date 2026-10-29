@@ -236,6 +236,16 @@ MEDIA_STORE_QUOTA_BYTES = int(os.getenv('MEDIA_STORE_QUOTA_BYTES', str(500 * 102
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Media library pictures. Leave MEDIA_S3_BUCKET empty to keep them in the database; set it to store them in an
+# S3-compatible bucket (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO) instead.
+MEDIA_S3_BUCKET = os.getenv('MEDIA_S3_BUCKET', '')
+MEDIA_S3_ENDPOINT_URL = os.getenv('MEDIA_S3_ENDPOINT_URL', '')
+MEDIA_S3_REGION = os.getenv('MEDIA_S3_REGION', '')
+MEDIA_S3_ACCESS_KEY_ID = os.getenv('MEDIA_S3_ACCESS_KEY_ID', '')
+MEDIA_S3_SECRET_ACCESS_KEY = os.getenv('MEDIA_S3_SECRET_ACCESS_KEY', '')
+# Public address of the bucket or its CDN, e.g. https://cdn.example.com
+MEDIA_S3_PUBLIC_URL = os.getenv('MEDIA_S3_PUBLIC_URL', '')
+
 
 # Stripe (Connect). Keys come from the platform's Stripe account; each store connects its own.
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
