@@ -275,6 +275,17 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', 60 * 60))  # 1 hour
 EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60 * 24 * 3))  # 3 days
 
+# Background jobs (Celery, see config/celery.py)
+# Broker defaults to REDIS_URL. With no broker, tasks run inline in the calling process.
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL') or 'memory://'
+CELERY_TASK_ALWAYS_EAGER = not (os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL'))
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_TIME_LIMIT = 300
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TIMEZONE = 'UTC'
+
 # No email provider yet: emails are printed in the runserver console.
 MAILERS = {
     'default': {

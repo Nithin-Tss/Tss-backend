@@ -23,9 +23,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+
+from apps.core.tasks import send_email_async
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ def _send(user, subject, write_body):
     # already saved the account, and a reset request must not reveal (by
     # erroring) that an account exists. Failures are logged instead.
     try:
-        send_mail(subject, write_body(), None, [user.email])
+        send_email_async(subject, write_body(), [user.email])
     except Exception:
         logger.exception("Could not send %r to user %s", subject, user.pk)
 

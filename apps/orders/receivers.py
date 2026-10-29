@@ -1,7 +1,7 @@
 """Reactions to order_placed: the shopper's confirmation email."""
 import logging
 
-from django.core.mail import send_mail
+from apps.core.tasks import send_email_async
 from django.dispatch import receiver
 
 from .services import order_placed
@@ -32,6 +32,6 @@ def email_confirmation(sender, order, **kwargs):
     if not email:
         return
     try:
-        send_mail(f"Order {order.order_number} confirmed", confirmation_body(order), None, [email])
+        send_email_async(f"Order {order.order_number} confirmed", confirmation_body(order), [email])
     except Exception:
         logger.exception("Could not send the confirmation for order %s", order.pk)

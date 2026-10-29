@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.mail import send_mail
+from apps.core.tasks import send_email_async
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -428,13 +428,13 @@ def _send_invitation(invitation):
     store = invitation.store
     link = f"{settings.FRONTEND_URL.rstrip('/')}/auth/signup"
     try:
-        send_mail(
+        send_email_async(
             f"You've been invited to {store.store_name}",
             f"You've been invited to help run {store.store_name}.\n\n"
             f"Create an account with this email address ({invitation.email}) and verify it, "
             f"and you'll get access automatically:\n\n{link}\n\n"
             f"The invitation is valid for {INVITATION_DAYS} days.\n",
-            None, [invitation.email],
+            [invitation.email],
         )
     except Exception:
         logger.exception("Could not send an invitation to %s", invitation.email)
