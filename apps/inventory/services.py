@@ -250,8 +250,12 @@ def adjust_inventory(
 
 
 def sellable(variant):
-    """Units of `variant` a shopper can buy: available stock over all locations, 0 with no stock record."""
-    return InventoryItem.objects.filter(variant=variant).aggregate(total=Sum("available"))["total"] or 0
+    """
+    Units of `variant` a shopper can buy: available stock over all locations, never below 0 (a variant that
+    sells past its stock can be negative; the shopper sees 0). 0 with no stock record. Staff screens show the
+    plain sum instead, so they can see oversold stock.
+    """
+    return max(InventoryItem.objects.filter(variant=variant).aggregate(total=Sum("available"))["total"] or 0, 0)
 
 
 def default_location(store):

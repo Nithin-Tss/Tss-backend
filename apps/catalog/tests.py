@@ -888,6 +888,61 @@ class SoldOutBadgeTests(APITestCase):
         self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
         self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add[^>]*\sdisabled>\s*Sold out")
 
+    def set_low_stock_setting(self, value):
+        """The product page's "Only a few left at or below" setting, as the store owner sets it in the customizer."""
+        data = self.client.get("/api/v1/themes/settings/").json()
+        sections = data["templates"]["product"]["sections"]
+        main = next(s for s in sections.values() if s["type"] == "main-product")
+        main["settings"]["low_stock_threshold"] = value
+        r = self.client.patch("/api/v1/themes/settings/", {"templates": {"product": {
+            "order": data["templates"]["product"]["order"], "sections": sections}}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_cards_use_the_same_few_left_setting_as_the_product_page(self):
+        from apps.themes import rendering
+
+        badge = 'product-card__badge">Few left</span>'
+        eight = self.product("Eight left", "SO-8", 8)
+
+        # Default 5: eight is plenty, on the card and on the page
+        self.assertNotIn(badge, self.card(self.html("collections/all"), "Eight left"))
+        self.assertRegex(self.html(f"products/{eight['id']}"), r"data-stock[^>]*>\s*In stock")
+
+        # The owner raises it to 10: the card and the page both say so
+        self.set_low_stock_setting(10)
+        self.assertIn(badge, self.card(self.html("collections/all"), "Eight left"))
+        self.assertRegex(self.html(f"products/{eight['id']}"), r"data-stock[^>]*>\s*Only a few left")
+
+        # Lowered to 3: four is not "few" anywhere, three is
+        self.set_low_stock_setting(3)
+        four, three = self.product("Four left", "SO-4", 4), self.product("Three left", "SO-3B", 3)
+        listing = self.html("collections/all")
+        self.assertNotIn(badge, self.card(listing, "Four left"))
+        self.assertIn(badge, self.card(listing, "Three left"))
+        self.assertRegex(self.html(f"products/{four['id']}"), r"data-stock[^>]*>\s*In stock")
+        self.assertRegex(self.html(f"products/{three['id']}"), r"data-stock[^>]*>\s*Only a few left")
+        self.assertEqual(rendering._few_left_at.get(), rendering.FEW_LEFT)  # the setting does not leak into the next page
+
+    def test_an_option_that_keeps_selling_stays_orderable_on_the_product_page(self):
+        from apps.catalog.models import ProductVariant
+
+        sold = self.product("Made to order", "SO-MTO", 0)
+        ProductVariant.objects.filter(product_id=sold["id"]).update(continue_selling=True)
+        # A second option (one that stops at its stock) so the page has the option picker the script works on
+        ProductVariant.objects.create(product_id=sold["id"], sku="SO-MTO-2", price="10.00")
+        plain = self.product("Plain", "SO-PLAIN", 3)
+
+        page = self.html(f"products/{sold['id']}")
+        self.assertNotRegex(page, r"data-add[^>]*\sdisabled")  # the button is on
+        self.assertRegex(page, r"data-stock[^>]*>\s*In stock")  # not "Only a few left" at 0 stock
+        self.assertIn('data-variant-continue="true"', page)  # so the script knows when an option is switched
+        self.assertIn('data-variant-continue="false"', page)
+        self.assertIn('variantContinue !== "true"', page)
+        self.assertNotIn("Sold out", self.card(self.html("collections/all"), "Made to order"))
+
+        page = self.html(f"products/{plain['id']}")
+        self.assertRegex(page, r"data-stock[^>]*>\s*Only a few left")  # real low stock still says so
+
     def test_stock_value_is_a_number(self):
         from apps.themes.rendering import product_drop
 

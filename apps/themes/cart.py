@@ -20,8 +20,10 @@ from django.contrib.sessions.models import Session
 from django.db.models import Sum
 from django.utils import timezone
 
+from apps.catalog.services import published_products
 from apps.commerce import services
 from apps.commerce.models import Cart, CartItem
+from apps.inventory.models import InventoryItem
 from apps.inventory.services import sellable
 
 from . import section_sync as sync
@@ -237,12 +239,15 @@ def item_count(store, session_id):
     return total or 0
 
 
-def _line(item, base_url):
+def _line(item, base_url, available=None, for_sale=True):
     variant = item.variant
     selling_on = bool(variant and variant.continue_selling)
-    available = sellable(variant) if variant is not None else 0
+    if available is None:
+        available = sellable(variant) if variant is not None else 0
     warning = ""
-    if not selling_on:
+    if not for_sale:
+        warning = "No longer available"  # drafted, archived or taken off the Online Store since it was added
+    elif not selling_on:
         if available <= 0:
             warning = "Sold out"
         elif item.quantity > available:
@@ -256,7 +261,7 @@ def _line(item, base_url):
         "unit_price": str(item.unit_price),
         "quantity": item.quantity,
         "total": str(item.unit_price * item.quantity),
-        "at_max": (not selling_on) and item.quantity >= available,
+        "at_max": (not for_sale) or ((not selling_on) and item.quantity >= available),
         "warning": warning,
     }
 
@@ -272,10 +277,24 @@ def view_data(cart, base_url):
         .order_by("created_at")
     )
     subtotal = sum((i.unit_price * i.quantity for i in items), Decimal("0.00"))
+    # Two queries for the whole cart, not one per line: the stock of every variant, and what is still for sale
+    totals = {
+        row["variant_id"]: row["total"]
+        for row in InventoryItem.objects.filter(variant_id__in={i.variant_id for i in items if i.variant_id})
+        .values("variant_id").annotate(total=Sum("available")).order_by()
+    }
+    for_sale = set(
+        published_products(cart.store).prefetch_related(None)
+        .filter(pk__in={i.product_id for i in items}).values_list("pk", flat=True)
+    )
+
+    def stock_of(item):  # the same number as inventory.sellable: the sum over locations, never below 0
+        return max(totals.get(item.variant_id) or 0, 0) if item.variant_id else 0
+
     return {
         "count": sum(i.quantity for i in items),
         "subtotal": str(subtotal),
-        "lines": [_line(i, base_url) for i in items],
+        "lines": [_line(i, base_url, stock_of(i), i.product_id in for_sale) for i in items],
     }
 
 

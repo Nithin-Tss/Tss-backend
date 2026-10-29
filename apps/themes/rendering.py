@@ -7,6 +7,7 @@ Page = layout/theme.liquid
 """
 import hashlib
 import json
+from contextvars import ContextVar
 import re
 import uuid
 from collections.abc import Sequence
@@ -906,8 +907,21 @@ def _filter_query(f, sort):
     return urlencode(pairs)
 
 
-# "Only a few left" at this quantity or lower
+# "Only a few left" at this quantity or lower, unless the store's product page sets its own (see _few_left_threshold)
 FEW_LEFT = 5
+_few_left_at = ContextVar("few_left_at", default=FEW_LEFT)
+
+
+def _few_left_threshold(data):
+    """The product page's "Only a few left" setting (low_stock_threshold, default 5): cards use the same number."""
+    template = (data.get("templates") or {}).get("product") or default_template("product")
+    for section in (template.get("sections") or {}).values():
+        if section.get("type") == "main-product":
+            try:
+                return max(int((section.get("settings") or {}).get("low_stock_threshold")), 1)
+            except (TypeError, ValueError):
+                break
+    return FEW_LEFT
 NEW_PRODUCT_DAYS = 14
 MAX_BADGES = 2
 
@@ -933,8 +947,8 @@ def product_badges(tags, sold_out, few_left, is_new):
 
 
 def _available(variant):
-    """Available stock of one variant over all locations; no stock record counts as 0."""
-    return sum(max(item.available, 0) for item in variant.inventory_items.all())
+    """What shoppers can buy of one variant: max(sum of available over all locations, 0), as inventory.sellable."""
+    return max(sum(item.available for item in variant.inventory_items.all()), 0)
 
 
 def product_drop(product, base_url):
@@ -948,7 +962,7 @@ def product_drop(product, base_url):
     sold_out = available_total <= 0 and not selling_on
 
     tags = [pt.tag.name for pt in product.product_tags.all()]
-    few_left = 0 < available_total <= FEW_LEFT
+    few_left = 0 < available_total <= _few_left_at.get()
     created = getattr(product, "created_at", None)
     is_new = bool(created) and (timezone.now() - created).days < NEW_PRODUCT_DAYS
 
@@ -1998,11 +2012,20 @@ def _with_customer_link(html, token, base_url):
     return html + script if index < 0 else html[:index] + script + html[index:]
 
 
-def render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
-                sort="newest", page_number=1, article=None, blog_filter=None, request=None,
-                wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
-                filters=None, customer_page=None, customer=None, customer_user=None,
-                auth_error=None, auth_success=None, order_completed=False, order=None):
+def render_page(*args, **kwargs):
+    """Render one storefront page (see _render_page). The "few left" number is per render and never leaks to the next."""
+    token = _few_left_at.set(FEW_LEFT)
+    try:
+        return _render_page(*args, **kwargs)
+    finally:
+        _few_left_at.reset(token)
+
+
+def _render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
+                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
+                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
+                 filters=None, customer_page=None, customer=None, customer_user=None,
+                 auth_error=None, auth_success=None, order_completed=False, order=None):
     """
     page: "index", "product", "collection", "blog", "article", "page" or an alternate page template ("page.contact").
     page_handle: the handle of the content page the "page" page shows (the first visible one when None, in the preview).
@@ -2023,6 +2046,7 @@ def render_page(store, page, product=None, collection=None, custom_data=None, ed
         if promotions_schema is not None:
             files[promotions_path] = promotions_markup
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
+    _few_left_at.set(_few_left_threshold(data))
     # A page template whose file is gone shows the base Page template
     if not customer_page and page != base_page(page) and f"templates/{page}.liquid" not in files:
         page = base_page(page)

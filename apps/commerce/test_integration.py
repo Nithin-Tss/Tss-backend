@@ -1252,3 +1252,113 @@ class StockAndPaymentJourneyTests(CommerceIntegrationBase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual((Order.objects.get(pk=order["id"]).status, self.stock()), ("cancelled", (10, 0)))
         self.assertEqual(self.consistent()["order_cancelled"], 1)
+
+
+class AvailabilityAgreementTests(CommerceIntegrationBase):
+    """Every number a shopper sees or is checked against is max(sum of available over all locations, 0)."""
+
+    def make_stock(self, here, shop=None):
+        """continue_selling on, `here` at the main warehouse (can be negative: oversold), `shop` at a second one."""
+        from apps.inventory.services import adjust
+
+        self.variant.continue_selling = True
+        self.variant.save()
+        set_available(self.variant, self.location, 0)
+        if here:
+            adjust(self.variant, self.location, here)
+        if shop is not None:
+            set_available(self.variant, Location.objects.get_or_create(store=self.store, name="Shop floor")[0], shop)
+
+    def numbers(self):
+        from apps.catalog.services import published_products
+        from apps.themes.rendering import product_drop
+
+        drop = product_drop(published_products(self.store).get(pk=self.product.pk), "/s/shop")
+        api = self.staff.get(f"/api/v1/inventory/items/availability/?variant={self.variant.pk}").json()
+        return (sellable(self.variant), drop["available_total"], drop["variants"][0]["available_total"], api["quantity"])
+
+    def test_storefront_cart_checks_and_the_availability_api_give_the_same_number(self):
+        self.make_stock(-2, shop=5)  # -2 here (oversold), 5 at the shop: 3 to sell
+        self.assertEqual(self.numbers(), (3, 3, 3, 3))
+
+    def test_a_negative_total_is_zero_for_shoppers_and_the_api(self):
+        self.make_stock(-2)
+        self.assertEqual(self.numbers(), (0, 0, 0, 0))
+
+    def test_the_admin_keeps_the_plain_sum_so_staff_can_see_oversold_stock(self):
+        self.make_stock(-2)
+        product = self.staff.get(f"/api/v1/catalog/products/{self.product.pk}/").json()
+        self.assertEqual((product["quantity"], product["variants"][0]["quantity"]), (-2, -2))
+        self.make_stock(-2, shop=5)
+        product = self.staff.get(f"/api/v1/catalog/products/{self.product.pk}/").json()
+        self.assertEqual((product["quantity"], product["variants"][0]["quantity"]), (3, 3))
+
+    def test_the_untracked_variant_difference_is_kept(self):
+        from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
+        from apps.catalog.services import online_channels, published_products
+        from apps.themes.rendering import product_drop
+
+        product = Product.objects.create(store=self.store, title="Gift card", status="active")
+        variant = ProductVariant.objects.create(product=product, sku="GIFT-1", price=Decimal("50.00"))
+        for channel in online_channels(self.store):
+            ProductSalesChannel.objects.create(product=product, sales_channel=channel)
+
+        self.assertEqual(sellable(variant), 0)  # the storefront: sold out unless it keeps selling
+        self.assertTrue(product_drop(published_products(self.store).get(pk=product.pk), "/s/shop")["is_sold_out"])
+        api = self.staff.get(f"/api/v1/inventory/items/availability/?variant={variant.pk}").json()
+        self.assertEqual((api["tracked"], api["inStock"], api["quantity"]), (False, True, None))  # the admin: in stock
+
+
+class CartPanelTests(CommerceIntegrationBase):
+    """The cart panel the storefront shows: a product that left the store is flagged, and stock is read in bulk."""
+
+    def cart_of(self, session, products):
+        cart = services.get_or_create_cart(self.store, session_id=session)
+        for product in products:
+            services.add_item(cart, product, 1)
+        return cart
+
+    def test_a_product_that_is_no_longer_for_sale_is_flagged_in_the_cart_panel(self):
+        from apps.themes import cart as cart_data
+
+        hat, _ = stock_product(self.store, "Hat", "HAT-1", "10.00", 5, self.location)
+        cart = self.cart_of("panel-flag-aaaaaaaaaa", [self.product, hat])
+        Product.objects.filter(pk=hat.pk).update(status="draft")
+
+        lines = {line["title"]: line for line in cart_data.view_data(cart, "/s/shop")["lines"]}
+
+        self.assertEqual((lines["Hat"]["warning"], lines["Hat"]["at_max"]), ("No longer available", True))
+        self.assertEqual(lines["Tee"]["warning"], "")
+        ProductSalesChannel.objects.filter(product=self.product).delete()  # off the Online Store counts the same
+        lines = {line["title"]: line for line in cart_data.view_data(cart, "/s/shop")["lines"]}
+        self.assertEqual(lines["Tee"]["warning"], "No longer available")
+
+    def test_the_cart_panel_uses_the_same_stock_number_as_the_checks(self):
+        from apps.themes import cart as cart_data
+
+        set_available(self.variant, self.location, 3)
+        cart = self.cart_of("panel-stock-aaaaaaaaaa", [self.product])
+        set_available(self.variant, self.location, 0)
+        self.assertEqual(cart_data.view_data(cart, "/s/shop")["lines"][0]["warning"], "Sold out")
+        set_available(self.variant, self.location, 2)
+        line_item = services.active_items(cart).get()
+        line_item.quantity = 5
+        line_item.save()
+        self.assertEqual(cart_data.view_data(cart, "/s/shop")["lines"][0]["warning"], "Only 2 left")
+
+    def test_the_cart_panel_reads_stock_in_a_fixed_number_of_queries(self):
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes import cart as cart_data
+
+        counts = []
+        for lines in (1, 5):
+            products = [self.product] + [
+                stock_product(self.store, f"Extra {lines}-{n}", f"EX-{lines}-{n}", "10.00", 5, self.location)[0]
+                for n in range(lines - 1)
+            ]
+            cart = self.cart_of(f"panel-count-{lines}-aaaaaaaa", products)
+            with CaptureQueriesContext(connection) as queries:
+                cart_data.view_data(cart, "/s/shop")
+            counts.append(len(queries))
+        self.assertEqual(counts[0], counts[1], counts)  # not one more query per line

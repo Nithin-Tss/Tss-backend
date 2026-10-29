@@ -651,3 +651,66 @@ class TaxRulesTests(CommerceTestBase):
         given = order_services.create_order(self.store, line, tax_amount=Decimal("5.00"))
         self.assertEqual(given.tax_amount, Decimal("5.00"))
         self.assertEqual(given.items.get().tax_amount, Decimal("5.00"))
+
+
+class CartMergeRulesTests(CommerceTestBase):
+    """Signing in merges the guest cart into the customer's: the same stock rules as everywhere else."""
+
+    def setUp(self):
+        super().setUp()
+        self.customer = Customer.objects.create(
+            store=self.store, email="merge@example.com", email_subscription_status="not_subscribed"
+        )
+        self.guest = services.get_or_create_cart(self.store, session_id="guest-merge-aaaaaaaa")
+        self.target = services.get_or_create_cart(self.store, customer=self.customer)
+
+    def sells_past_its_stock(self, stock=0):
+        set_available(self.variant, self.location, stock)
+        self.variant.continue_selling = True
+        self.variant.save()
+
+    def lines(self):
+        return {i.product.title: i.quantity for i in services.active_items(self.target)}
+
+    def test_a_line_that_keeps_selling_past_its_stock_is_carried_over_whole(self):
+        self.sells_past_its_stock(0)
+        services.add_item(self.guest, self.product, 3)  # allowed: it keeps selling
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 3})  # not dropped for having no stock
+
+    def test_a_line_that_keeps_selling_adds_up_past_its_stock(self):
+        self.sells_past_its_stock(0)
+        services.add_item(self.target, self.product, 2)
+        services.add_item(self.guest, self.product, 3)
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 5})  # not capped at the stock of 0
+
+    def test_a_line_that_does_not_keep_selling_is_still_capped_by_stock(self):
+        set_available(self.variant, self.location, 4)
+        services.add_item(self.target, self.product, 2)
+        services.add_item(self.guest, self.product, 4)
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {"Tee": 4})
+
+    def test_a_product_that_is_no_longer_for_sale_is_not_carried_over(self):
+        services.add_item(self.guest, self.product, 2)
+        Product.objects.filter(pk=self.product.pk).update(status="draft")
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {})
+        self.assertEqual(list(services.active_items(self.guest)), [])
+
+    def test_a_product_taken_off_the_online_store_is_not_carried_over(self):
+        services.add_item(self.guest, self.product, 2)
+        ProductSalesChannel.objects.filter(product=self.product).delete()
+
+        services.merge_carts(self.guest, self.target)
+
+        self.assertEqual(self.lines(), {})

@@ -89,7 +89,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 43
+STARTER_REVISION = 44
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -214,6 +214,8 @@ STARTER_UPGRADES = {
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
     "sections/main-product.liquid": {
+        "f2e87477d18719a79f68bff217b82ce6415d3fbbefed5ebfea20a3b6f6c65a31",  # revision 44: before options that keep selling stay orderable
+        "3c8b55dc638fb076f8c8e49a63c993ddeea59e6708c9c0eed86a63743cd8e1ae",  # revision 44: same, with CRLF line endings
         "a06239b4053ab69f9e0b19ca518ad3d1f6980250da33e609b95648dbb6317b19",  # revision 40: before tier cards, image zoom and badges
         "f683ef5ba444617bc7095bbee0a9cdf06cc5fb8a5064020ecf5492fd80c606e2",  # revision 40: before tier cards, image zoom and badges (CRLF)
         "2685ec1e87b5219e6e06820aa4ae289a5535386e223a2224b03bf6fe4908eb44",  # revision 28: before the cart icon block on the product page

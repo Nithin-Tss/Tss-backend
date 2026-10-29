@@ -99,18 +99,29 @@ def merge_carts(source, target):
         raise ValidationError("Only open carts can be merged.")
 
     now = timezone.now()
-    for item in list(active_items(source)):
+    lines = list(active_items(source))
+    # What is still for sale on the store (Active and on the Online Store): the rest is not carried over
+    for_sale = set(
+        published_products(target.store).prefetch_related(None)
+        .filter(pk__in={i.product_id for i in lines}).values_list("pk", flat=True)
+    )
+    for item in lines:
+        # A variant that keeps selling past its stock is not capped by it (only by the per-line limit)
+        sells_on = item.variant is not None and item.variant.continue_selling
         in_stock = sellable(item.variant) if item.variant is not None else 0
         existing = CartItem.objects.filter(
             cart=target, product=item.product, variant=item.variant, is_deleted=False
         ).first()
 
-        if existing:
-            existing.quantity = min(existing.quantity + item.quantity, max(in_stock, existing.quantity))
+        if item.product_id not in for_sale:
+            pass
+        elif existing:
+            cap = MAX_LINE_QUANTITY if sells_on else max(in_stock, existing.quantity)
+            existing.quantity = min(existing.quantity + item.quantity, cap)
             existing.save(update_fields=["quantity", "updated_at"])
-        elif in_stock > 0:
+        elif sells_on or in_stock > 0:
             item.cart = target
-            item.quantity = min(item.quantity, in_stock)
+            item.quantity = min(item.quantity, MAX_LINE_QUANTITY if sells_on else in_stock)
             item.save(update_fields=["cart", "quantity", "updated_at"])
             continue
         item.is_deleted, item.deleted_at = True, now

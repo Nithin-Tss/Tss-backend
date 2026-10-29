@@ -99,6 +99,32 @@ class StripeTests(base_tests.CommerceTestBase):
         self.client_mock.v1.payment_intents.create.assert_not_called()
         self.assertEqual(Payment.objects.count(), 0)
 
+    def test_payment_session_refuses_a_product_that_is_no_longer_for_sale(self):
+        from apps.catalog.models import Product, ProductSalesChannel
+
+        checkout = self.checkout()
+        intents = self.client_mock.v1.payment_intents
+        intents.create.return_value = intent(checkout, status="requires_payment_method")
+        url = f"{self.base}/checkout/{checkout.pk}/stripe/"
+        self.assertEqual(self.client.post(url, **self.h).status_code, 200)  # for sale: the session starts
+        intents.create.reset_mock()
+        intents.retrieve.reset_mock()
+
+        for status in ("draft", "archived"):
+            Product.objects.filter(pk=self.product.pk).update(status=status)
+            r = self.client.post(url, **self.h)
+            self.assertEqual(r.status_code, 400, status)
+            self.assertIn("Tee isn't available.", str(r.data))
+        Product.objects.filter(pk=self.product.pk).update(status="active")
+        self.assertEqual(self.client.post(url, **self.h).status_code, 200)
+
+        intents.create.reset_mock()
+        ProductSalesChannel.objects.filter(product=self.product).delete()  # off the Online Store
+        r = self.client.post(url, **self.h)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Tee isn't available.", str(r.data))
+        intents.create.assert_not_called()  # no payment was started for it
+
     def test_paid_intent_places_one_captured_order_even_if_finalized_twice(self):
         checkout = self.checkout()
         paid = intent(checkout)
