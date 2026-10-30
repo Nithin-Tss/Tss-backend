@@ -197,3 +197,80 @@ class MediaBucketStorageTest(StoreClientMixin, APITestCase):
         self.assertIsNone(asset.data)
         self.assertEqual(self.objects[asset.storage_key], CLEAN_PNG)
         self.assertEqual(self.client.get(f"/s/_img/{asset.id}").status_code, 302)
+
+
+class MediaLibraryJourneyTest(StoreClientMixin, APITestCase):
+    """Journey 7: upload a picture, use it in the theme, see it on the storefront, rename it, and delete it safely."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("mediajourney@example.com", "Media Journey Shop")
+        self.slug = self.store["storeSlug"]
+
+    def upload(self):
+        r = self.client.post("/api/v1/media/", {"image": png("hero.png")}, format="multipart")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def home(self):
+        return self.client.get(f"/s/{self.slug}/").content.decode()
+
+    def path_of(self, asset):
+        return asset["url"].split("testserver", 1)[-1]
+
+    def show_in_banner(self, url):
+        """A promotion card (a section block) whose picture is `url`, on the home page."""
+        index = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]
+        blocks = [{"type": "promotion", "settings": {"heading": "Big sale", "image_url": url}}] if url else []
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": index["order"] if "banner" in index["order"] else index["order"] + ["banner"],
+            "sections": {"banner": {"type": "promotions", "settings": {}, "blocks": blocks}},
+        }}})
+
+    def save_code(self, content):
+        r = self.client.post("/api/v1/themes/files/", {"path": "snippets/media-note.liquid", "content": content}, format="json")
+        self.assertIn(r.status_code, (200, 201), r.content)
+
+    def delete(self, asset):
+        return self.client.delete(f"/api/v1/media/{asset['id']}/")
+
+    def test_7_a_picture_goes_from_the_library_to_the_storefront_and_can_be_renamed(self):
+        asset = self.upload()
+        self.assertEqual(self.client.get(self.path_of(asset)).status_code, 200)
+
+        self.show_in_banner(asset["url"])
+
+        self.assertIn(f'<img src="{asset["url"]}"', self.home())  # the card shows the library picture
+
+        renamed = self.ok("patch", f"/api/v1/media/{asset['id']}/", {"name": "Spring banner", "alt_text": "A red banner"})
+        self.assertEqual((renamed["name"], renamed["url"]), ("Spring banner", asset["url"]))  # the address never changes
+        served = self.client.get(self.path_of(asset))
+        self.assertEqual((served.status_code, served["Content-Type"]), (200, "image/png"))
+        self.assertIn(f'<img src="{asset["url"]}"', self.home())
+        self.assertEqual([row["name"] for row in self.ok("get", "/api/v1/media/?q=spring")], ["Spring banner"])
+
+    def test_7_a_picture_used_in_a_section_block_or_in_theme_code_cannot_be_deleted_until_it_is_removed(self):
+        asset = self.upload()
+        path = self.path_of(asset)
+        self.show_in_banner(asset["url"])
+
+        # in use in a section block today: refused, and nothing changes
+        refused = self.delete(asset)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("This picture is used in your online store. Remove it there first.", str(refused.json()))
+        self.assertTrue(MediaAsset.objects.filter(pk=asset["id"]).exists())
+        self.assertEqual(self.client.get(path).status_code, 200)
+
+        # taken out of the block but still written in the theme's code: refused again
+        self.save_code(f'<img src="{path}" alt="note">')
+        self.show_in_banner(None)
+        self.assertNotIn(asset["url"], self.home())
+        self.assertEqual(self.delete(asset).status_code, 400)
+        self.assertTrue(MediaAsset.objects.filter(pk=asset["id"]).exists())
+
+        # removed everywhere: now it can go, and it is no longer served
+        self.save_code("<!-- no picture here -->")
+        self.assertEqual(self.client.get(path).status_code, 200)  # (and is cached while it is still in the library)
+        self.assertEqual(self.delete(asset).status_code, 204)
+        self.assertFalse(MediaAsset.objects.filter(pk=asset["id"]).exists())
+        self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.delete(asset).status_code, 404)

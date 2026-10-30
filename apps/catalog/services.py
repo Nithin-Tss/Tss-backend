@@ -1,3 +1,4 @@
+import re
 import threading
 from decimal import Decimal, InvalidOperation
 
@@ -409,16 +410,59 @@ def save_product(store, data, product=None, user=None):
     return product
 
 
+_UPLOAD_ADDRESS = re.compile(r"/s/_img/([0-9a-fA-F-]{36})$")
+
+
+def _delete_unused_uploads(store_id, urls):
+    """
+    The pictures a product form uploaded (ThemeImage) at these addresses are deleted with their product, unless another
+    product still shows the same one. Pictures from the media library are never touched. Call it after the product's
+    own picture rows are gone, inside the transaction that deleted them.
+    """
+    from urllib.parse import urlsplit
+    from uuid import UUID
+
+    from django.core.cache import cache
+    from django.db.models import Q
+
+    from apps.themes.models import ThemeImage
+
+    ids = set()
+    for url in urls:
+        try:
+            found = _UPLOAD_ADDRESS.search(urlsplit(url).path)
+            if found:
+                ids.add(UUID(found.group(1)))
+        except ValueError:
+            continue
+    if not ids:
+        return
+    shown = Q()
+    for image_id in ids:
+        shown |= Q(url__endswith=f"/s/_img/{image_id}")
+    still_used = {
+        UUID(_UPLOAD_ADDRESS.search(url.split("?")[0]).group(1))
+        for url in ProductImage.objects.filter(shown).values_list("url", flat=True)
+        if _UPLOAD_ADDRESS.search(url.split("?")[0])
+    }
+    gone = ids - still_used
+    ThemeImage.objects.filter(store_id=store_id, pk__in=gone).delete()
+    for image_id in gone:
+        cache.delete(f"theme-image:{image_id}")  # a deleted picture is no longer served
+
+
 def delete_product(product):
     """Delete a product and everything hanging off it, or raise ProductInUse (nothing is removed then)."""
     try:
         with transaction.atomic():
+            urls = list(product.images.values_list("url", flat=True))
             product.product_collections.all().delete()
             product.product_tags.all().delete()
             product.product_sales_channels.all().delete()
             product.images.all().delete()
             product.variants.all().delete()
             product.delete()
+            _delete_unused_uploads(product.store_id, urls)
     except ProtectedError:
         raise ProductInUse("This product is used by orders or inventory. Set it to Draft instead.")
 
@@ -451,9 +495,11 @@ def delete_products(store, ids):
     if free:
         note_deleted([p for p in found if p.pk in set(free)])
         with transaction.atomic():
+            urls = list(ProductImage.objects.filter(product__in=free).values_list("url", flat=True))
             for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
                 model.objects.filter(product__in=free).delete()
             Product.objects.filter(pk__in=free).delete()
+            _delete_unused_uploads(store.pk, urls)
     return len(free), sorted(products[pk] for pk in blocked)
 
 

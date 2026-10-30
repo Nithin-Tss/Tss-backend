@@ -58,6 +58,27 @@ def is_own_image_url(url, request=None):
     return storage.is_configured() and url.startswith(storage.public_url("uploads/"))
 
 
+def _upload_of_store(url, store):
+    """
+    For a /s/_img/<id> address: whether the id is a picture this store uploaded (a product photo or a media library
+    picture). Not another store's, and not one that does not exist. Other addresses are not judged here.
+    """
+    from apps.media.models import MediaAsset
+    from apps.themes.models import ThemeImage
+
+    try:
+        found = OWN_IMAGE_PATH.match(urlsplit(url).path)
+    except ValueError:
+        return False
+    if not found:
+        return True
+    image_id = found.group(0).rsplit("/", 1)[-1]
+    return (
+        ThemeImage.objects.filter(pk=image_id, store_id=store.pk).exists()
+        or MediaAsset.objects.filter(pk=image_id, store_id=store.pk).exists()
+    )
+
+
 def _is_plain_url(url, scheme):
     """An absolute address with this scheme and a host, no login part and no spaces or control characters."""
     try:
@@ -171,8 +192,13 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         request = self.context.get("request")
         kept = self.context.get("kept_images", ())  # a product's current pictures stay valid when the form is saved again
         external = self.context.get("external_images", False)  # imports may point at other sites, over https only
+        store = getattr(request, "store", None)
         for url in value:
-            if url in kept or is_own_image_url(url, request):
+            if url in kept:
+                continue
+            if is_own_image_url(url, request):
+                if store is not None and not _upload_of_store(url, store):
+                    raise serializers.ValidationError("Each image must be an uploaded image URL.")
                 continue
             if external and _is_plain_url(url, "https"):
                 continue

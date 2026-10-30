@@ -50,7 +50,7 @@ from .customizer import read_settings, save_settings, validate_settings
 from . import presets
 from . import section_sync as sync
 from .rendering import (
-    _catalog, dead_menu_urls, parse_collection_filters, published_pages, published_posts, render_cart_html,
+    _catalog, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
     render_page, render_synced_section_fast, shop_url,
 )
 from apps.catalog.models import Product, ProductVariant
@@ -1848,12 +1848,8 @@ REDIRECT_HOPS = 5  # a redirect that leads to another one is followed this far, 
 
 
 def _redirect_forms(store, path):
-    """The ways a redirect from `path` may have been saved: with or without /s/<store>, with or without a final /."""
-    base = shop_url(store)
-    relative = path[len(base):] if path.startswith(base) else path
-    plain = "/" + relative.strip("/")
-    forms = {plain} if plain == "/" else {plain, plain + "/"}
-    return plain, sorted(forms | {base + f for f in forms})
+    """The ways a redirect from `path` may have been saved (see rendering.redirect_forms)."""
+    return redirect_forms(store, path)
 
 
 def _store_redirect(store, path, query=""):
@@ -2124,9 +2120,7 @@ def storefront_wishlist(store, request, params):
 
     products = _catalog(store).filter(pk__in=valid_ids)
     ordered_products = {str(product.pk): product for product in products}
-    visible_ids = [product_id for product_id in valid_ids if product_id in ordered_products]
-    if visible_ids != valid_ids:
-        cart_data.put_wishlist(store, request, cart_session, visible_ids)
+    visible_ids = [product_id for product_id in valid_ids if product_id in ordered_products]  # saved ones stay saved
     return render_page(
         store,
         "index",

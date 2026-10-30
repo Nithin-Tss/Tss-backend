@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from liquid import DictLoader, Environment
 from liquid.exceptions import LiquidError
@@ -35,7 +35,7 @@ from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
-from .models import BlogPost, Menu, StorePage, ThemeFile
+from .models import BlogPost, Menu, StorePage, ThemeFile, UrlRedirect
 from .services import _editing_theme, get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
@@ -711,6 +711,15 @@ def _menu_links(text, base_url, dead=()):
     ]
 
 
+def redirect_forms(store, path):
+    """(the plain path, every way a redirect from `path` may have been saved): with or without /s/<store> and a final /."""
+    base = shop_url(store)
+    relative = path[len(base):] if path.startswith(base) else path
+    plain = "/" + relative.strip("/")
+    forms = {plain} if plain == "/" else {plain, plain + "/"}
+    return plain, sorted(forms | {base + f for f in forms})
+
+
 _PRODUCT_LINK = re.compile(r"^/products/([^/?#]+)/?(?:[?#].*)?$")
 _COLLECTION_LINK = re.compile(r"^/collections/([^/?#]+)/?(?:[?#].*)?$")
 
@@ -718,8 +727,9 @@ _COLLECTION_LINK = re.compile(r"^/collections/([^/?#]+)/?(?:[?#].*)?$")
 def dead_menu_urls(store, urls):
     """
     The links among `urls` (as saved in a menu) that go to a product or collection of this store that shoppers
-    can't open: deleted, Draft, Archived or off the Online Store. Other links are never judged. Two queries for
-    any number of links.
+    can't open: deleted, Draft, Archived or off the Online Store. A link whose address has a redirect in this store
+    is not dead: following it still ends at a page. Other links are never judged. Two queries for any number of
+    links, three when some of them are dead.
     """
     base = shop_url(store)
     products, collections = {}, {}
@@ -756,6 +766,16 @@ def dead_menu_urls(store, urls):
             number = as_uuid(value)
             if (number not in live_ids) if number is not None else (value not in live_handles):
                 dead.add(url)
+
+    if dead:
+        by_form = {}
+        for url in dead:
+            path = str(url or "").strip()
+            path = path[len(base):] if path.startswith(base + "/") else path
+            for form in redirect_forms(store, urlsplit(path).path)[1]:
+                by_form.setdefault(form, set()).add(url)
+        for form in UrlRedirect.objects.filter(store=store, path__in=list(by_form)).values_list("path", flat=True):
+            dead -= by_form[form]
     return dead
 
 
@@ -2280,13 +2300,15 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                     continue
                 if product_id not in wishlist_ids:
                     wishlist_ids.append(product_id)
+        # What was saved stays saved: only entries that are not ids at all, or repeated, are tidied away. A product
+        # that is not for sale right now is left out of what is shown and counted, and is back when it is for sale.
+        if wishlist_ids != stored_ids:
+            cart_data.put_wishlist(store, request, cart_session, wishlist_ids)
         available_ids = set(
             str(product_id)
             for product_id in published_products(store).filter(pk__in=wishlist_ids).values_list("pk", flat=True)
         )
         wishlist_ids = [product_id for product_id in wishlist_ids if product_id in available_ids]
-        if wishlist_ids != stored_ids:
-            cart_data.put_wishlist(store, request, cart_session, wishlist_ids)
 
     cart_count = cart_data.item_count(store, cart_session)
 

@@ -1,4 +1,6 @@
 from django.core.cache import cache
+import unittest
+import re
 from django.test import TestCase
 from rest_framework.test import APIClient, APITestCase
 
@@ -1662,8 +1664,9 @@ class CatalogNavigationTests(APITestCase):
         from apps.themes.rendering import dead_menu_urls
 
         links, _ = self.dead_and_live()
-        few = ["/blog", f"/products/{self.product('One')['id']}", "/collections/live-shelf"]
-        many = list(links.values())
+        live_only = ["/blog", f"/products/{self.product('One')['id']}", "/collections/live-shelf"]
+        few = live_only + ["/collections/never-made"]  # one dead link
+        many = list(links.values())  # many dead links
 
         counts = []
         for urls in (few, many):
@@ -1671,7 +1674,10 @@ class CatalogNavigationTests(APITestCase):
                 dead_menu_urls(self.store, urls)
             counts.append(len(queries))
         self.assertEqual(counts[0], counts[1])
-        self.assertLessEqual(counts[0], 2)
+        self.assertLessEqual(counts[0], 3)  # products, collections, and the redirects of the dead ones
+        with CaptureQueriesContext(connection) as queries:
+            dead_menu_urls(self.store, live_only)
+        self.assertLessEqual(len(queries), 2)  # nothing dead: no redirects to look up
         with CaptureQueriesContext(connection) as queries:
             dead_menu_urls(self.store, ["/blog", "https://example.org"])
         self.assertEqual(len(queries), 0)  # nothing to look up
@@ -1786,8 +1792,9 @@ class ProductPhotoRulesTests(APITestCase):
 
     def test_form_accepts_only_our_own_image_urls(self):
         uploaded = self.upload().json()["url"]
-        for url in (uploaded, f"/s/_img/{self.UUID}", f"http://testserver/s/_img/{self.UUID}",
-                    f"https://testserver/s/_img/{self.UUID}", "/media/uploads/a.png"):
+        real = uploaded.rsplit("/", 1)[-1]  # a picture this store really uploaded
+        for url in (uploaded, f"/s/_img/{real}", f"http://testserver/s/_img/{real}",
+                    f"https://testserver/s/_img/{real}", "/media/uploads/a.png"):
             r = self.create([url])
             self.assertEqual(r.status_code, 201, (url, r.content))
 
@@ -1823,7 +1830,8 @@ class ProductPhotoRulesTests(APITestCase):
         return self.client.post(f"{URL}bulk/", {"products": rows}, format="json").json()
 
     def test_imports_may_use_https_pictures_from_other_sites(self):
-        body = self.import_rows("https://cdn.example.com/photo.png", f"/s/_img/{self.UUID}")
+        real = self.upload().json()["url"].rsplit("/", 1)[-1]
+        body = self.import_rows("https://cdn.example.com/photo.png", f"/s/_img/{real}")
         self.assertEqual((body["created"], body["errors"]), (2, []))
 
     def test_imports_refuse_http_and_other_schemes(self):
@@ -1847,3 +1855,679 @@ class ProductPhotoRulesTests(APITestCase):
         # ... but a new outside address is still refused
         r = self.client.patch(f"{URL}{product.pk}/", {"images": [url, "https://other.example/b.png"]}, format="json")
         self.assertEqual(r.status_code, 400)
+
+
+class JourneyHelpers:
+    """The shared set-up of the storefront journey tests below: a signed-in store with a stocked location."""
+
+    EMAIL = "journey@example.com"
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, self.EMAIL)
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.slug = self.store.store_slug
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    def product(self, title, client=None, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"JRN-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = (client or self.client).post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def collection(self, name, products=(), **extra):
+        r = self.client.post("/api/v1/catalog/collections/", {"name": name, "products": list(products), **extra}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def get(self, path, client=None, slug=None):
+        return (client or self.client).get(f"/s/{slug or self.slug}/{path}")
+
+    def html(self, path, **kwargs):
+        return self.get(path, **kwargs).content.decode()
+
+    def card(self, listing, title):
+        start = listing.rindex('<a class="product-card', 0, listing.index(f'product-card__title">{title}<'))
+        return listing[start:listing.index("</a>", start)]
+
+    def upload_photo(self, content, name="photo.jpg", content_type="image/jpeg", client=None):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        r = (client or self.client).post(
+            f"{URL}images/", {"image": SimpleUploadedFile(name, content, content_type=content_type)}, format="multipart"
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()["url"]
+
+
+class ProductPhotoJourneyTests(JourneyHelpers, APITestCase):
+    """Journeys 1, 2 and 10: a product's uploaded photos, from upload to the storefront and back out again."""
+
+    EMAIL = "photos@example.com"
+
+    def test_1_an_uploaded_photo_shows_on_the_product_page_and_card_and_is_served_without_gps(self):
+        from io import BytesIO
+        from urllib.parse import urlsplit
+
+        from PIL import Image
+
+        from apps.media.tests import make_image
+
+        exif = Image.Exif()
+        exif[0x010F] = "TestCam"
+        exif[0x8825] = {1: "N", 2: (12.0, 58.0, 30.0), 3: "E", 4: (77.0, 35.0, 10.0)}  # where the photo was taken
+        jpeg = make_image("JPEG", exif=exif)
+        self.assertEqual(dict(Image.open(BytesIO(jpeg)).getexif().get_ifd(0x8825))[1], "N")  # the test picture has GPS
+
+        url = self.upload_photo(jpeg)
+        shirt = self.product("Photo shirt", images=[url])
+
+        page = self.html(f"products/{shirt['id']}")
+        self.assertRegex(page, r'<img src="' + re.escape(url) + r'"[^>]*data-main-image')
+        self.assertIn(f'src="{url}"', self.card(self.html("collections/all"), "Photo shirt"))
+
+        served = self.client.get(urlsplit(url).path)
+        self.assertEqual((served.status_code, served["Content-Type"]), (200, "image/jpeg"))
+        self.assertNotIn(b"Exif\x00\x00", served.content)  # no EXIF block at all
+        picture = Image.open(BytesIO(served.content))
+        self.assertEqual(dict(picture.getexif()), {})
+        self.assertEqual(dict(picture.getexif().get_ifd(0x8825)), {})  # and no GPS
+
+    def test_2_replacing_and_reordering_photos_changes_the_page_and_the_card(self):
+        from apps.media.tests import make_image
+
+        first, second, third = (self.upload_photo(make_image("PNG", size=(8 + i, 8)), f"p{i}.png", "image/png") for i in range(3))
+        shirt = self.product("Photo shirt", images=[first, second, third])
+        self.assertEqual([i["url"] for i in self.client.get(f"{URL}{shirt['id']}/").json()["images"]], [first, second, third])
+        page = self.html(f"products/{shirt['id']}")
+        self.assertRegex(page, r'<img src="' + re.escape(first) + r'"[^>]*data-main-image')
+        self.assertIn(f'src="{first}"', self.card(self.html("collections/all"), "Photo shirt"))
+
+        r = self.client.patch(f"{URL}{shirt['id']}/", {"images": [third, first]}, format="json")  # reordered, and one removed
+        self.assertEqual(r.status_code, 200, r.content)
+
+        self.assertEqual([i["url"] for i in self.client.get(f"{URL}{shirt['id']}/").json()["images"]], [third, first])
+        page = self.html(f"products/{shirt['id']}")
+        self.assertRegex(page, r'<img src="' + re.escape(third) + r'"[^>]*data-main-image')
+        self.assertNotIn(second, page)  # the removed photo is gone from the page
+        card = self.card(self.html("collections/all"), "Photo shirt")
+        self.assertIn(f'src="{third}"', card)
+        self.assertNotIn(first, card)
+        self.assertNotIn(second, card)
+
+    def test_10_deleting_a_product_removes_its_uploaded_picture(self):
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        url = self.upload_photo(make_image("PNG"), "gone.png", "image/png")
+        image_id = url.rsplit("/", 1)[-1]
+        product = self.product("Photo gone", images=[url], location=None, quantity=None)  # no stock, so it can be deleted
+        self.assertTrue(ThemeImage.objects.filter(pk=image_id).exists())
+
+        self.assertEqual(self.client.delete(f"{URL}{product['id']}/").status_code, 204)
+
+        self.assertFalse(ThemeImage.objects.filter(pk=image_id).exists())
+
+    def test_10_deleting_a_product_removes_its_photo_list(self):
+        from apps.media.tests import make_image
+
+        from .models import ProductImage
+
+        url = self.upload_photo(make_image("PNG"), "x.png", "image/png")
+        product = self.product("Photo list", images=[url], location=None, quantity=None)
+        self.assertEqual(ProductImage.objects.filter(product_id=product["id"]).count(), 1)
+        self.client.delete(f"{URL}{product['id']}/")
+        self.assertFalse(ProductImage.objects.filter(product_id=product["id"]).exists())
+
+    def test_10_bulk_delete_removes_the_pictures_of_every_deleted_product_but_not_of_a_kept_one(self):
+        from urllib.parse import urlsplit
+        from uuid import UUID
+
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        urls = [self.upload_photo(make_image("PNG", size=(8 + i, 8)), f"b{i}.png", "image/png") for i in range(3)]
+        ids = [u.rsplit("/", 1)[-1] for u in urls]
+        free = [self.product(f"Bulk {i}", images=[urls[i]], location=None, quantity=None)["id"] for i in range(2)]
+        stocked = self.product("Bulk stocked", images=[urls[2]])  # has stock: it cannot be deleted
+        for url in urls:
+            self.assertEqual(self.client.get(urlsplit(url).path).status_code, 200)  # (and now they are cached)
+
+        r = self.client.post(f"{URL}bulk-delete/", {"ids": free + [stocked["id"]]}, format="json")
+
+        self.assertEqual((r.status_code, r.json()["deleted"], r.json()["blocked"]), (200, 2, ["Bulk stocked"]), r.content)
+        self.assertEqual(set(ThemeImage.objects.filter(pk__in=ids).values_list("pk", flat=True)), {UUID(ids[2])})
+        self.assertEqual(self.client.get(urlsplit(urls[0]).path).status_code, 404)  # no longer served
+        self.assertEqual(self.client.get(urlsplit(urls[2]).path).status_code, 200)  # the kept product still has its photo
+
+    def test_10_a_picture_two_products_share_stays_until_the_last_one_is_deleted(self):
+        from urllib.parse import urlsplit
+
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        url = self.upload_photo(make_image("PNG"), "shared.png", "image/png")
+        image_id = url.rsplit("/", 1)[-1]
+        one = self.product("Shared one", images=[url], location=None, quantity=None)
+        two = self.product("Shared two", images=[url], location=None, quantity=None)
+
+        self.client.delete(f"{URL}{one['id']}/")
+        self.assertTrue(ThemeImage.objects.filter(pk=image_id).exists())  # the other product still shows it
+        self.assertEqual(self.client.get(urlsplit(url).path).status_code, 200)
+        self.client.delete(f"{URL}{two['id']}/")
+        self.assertFalse(ThemeImage.objects.filter(pk=image_id).exists())
+        self.assertEqual(self.client.get(urlsplit(url).path).status_code, 404)
+
+    def test_10_library_pictures_and_other_stores_pictures_are_never_deleted_with_a_product(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.media.models import MediaAsset
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        other = type(self.client)()
+        token, other_id = signup(other, "delete-other@example.com")
+        other.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+        theirs = self.upload_photo(make_image("PNG", size=(9, 9)), "t.png", "image/png", client=other)
+        asset = self.client.post("/api/v1/media/", {"image": SimpleUploadedFile("lib.png", make_image("PNG"))}, format="multipart").json()
+        mine = self.product("Library user", images=[asset["url"]], location=None, quantity=None)
+
+        self.client.delete(f"{URL}{mine['id']}/")
+
+        self.assertTrue(MediaAsset.objects.filter(pk=asset["id"]).exists())  # the media library keeps its pictures
+        self.assertTrue(ThemeImage.objects.filter(pk=theirs.rsplit("/", 1)[-1]).exists())  # and so does the other store
+
+    def test_10_a_delete_that_is_refused_keeps_the_picture(self):
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        url = self.upload_photo(make_image("PNG"), "kept.png", "image/png")
+        stocked = self.product("Stocked photo", images=[url])  # stock: used by inventory, so it cannot be deleted
+
+        self.assertEqual(self.client.delete(f"{URL}{stocked['id']}/").status_code, 400)
+
+        self.assertTrue(ThemeImage.objects.filter(pk=url.rsplit("/", 1)[-1]).exists())
+
+    def test_extra_an_unknown_picture_id_is_refused_with_the_usual_message(self):
+        r = self.client.post(URL, {"title": "Made up", "status": "draft", "sku": "MADE-1",
+                                   "images": ["/s/_img/0b9e6a52-6d0c-4f0e-9a52-7a2d0c1f8e11"]}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json(), {"images": ["Each image must be an uploaded image URL."]})
+
+    def test_extra_this_stores_own_pictures_are_accepted_in_every_form(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.media.tests import make_image
+
+        photo = self.upload_photo(make_image("PNG"), "own.png", "image/png")
+        asset = self.client.post("/api/v1/media/", {"image": SimpleUploadedFile("lib.png", make_image("PNG", size=(9, 9)))}, format="multipart").json()
+        for number, url in enumerate((photo, photo.replace("http://testserver", ""), asset["url"], asset["url"].replace("http://testserver", ""))):
+            r = self.client.post(URL, {"title": f"Own {number}", "status": "draft", "sku": f"OWN-{number}", "images": [url]}, format="json")
+            self.assertEqual(r.status_code, 201, (url, r.content))
+
+    def test_extra_a_picture_that_is_already_on_the_product_stays_valid_when_it_is_saved_again(self):
+        from apps.media.tests import make_image
+        from apps.themes.models import ThemeImage
+
+        url = self.upload_photo(make_image("PNG"), "stays.png", "image/png")
+        product = self.product("Keeps its photo", images=[url], location=None, quantity=None)
+        ThemeImage.objects.filter(pk=url.rsplit("/", 1)[-1]).delete()  # the picture row is gone (an old clean-up)
+
+        r = self.client.patch(f"{URL}{product['id']}/", {"title": "Renamed", "images": [url]}, format="json")
+
+        self.assertEqual(r.status_code, 200, r.content)  # a kept picture is not checked again
+
+    def test_extra_an_import_row_with_another_stores_picture_is_refused(self):
+        from apps.media.tests import make_image
+
+        other = type(self.client)()
+        token, other_id = signup(other, "import-other@example.com")
+        other.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+        theirs = self.upload_photo(make_image("PNG"), "t.png", "image/png", client=other)
+
+        body = self.client.post(f"{URL}bulk/", {"products": [
+            {"title": "Borrowing", "status": "draft", "sku": "IMPB-1", "images": [theirs]},
+        ]}, format="json").json()
+
+        self.assertEqual(body["created"], 0)
+        self.assertEqual(body["errors"], [{"index": 0, "message": "images: Each image must be an uploaded image URL."}])
+
+    def test_extra_a_photo_uploaded_by_another_store_is_refused(self):
+        from apps.media.tests import make_image
+
+        other = type(self.client)()
+        token, other_id = signup(other, "photos-other@example.com")
+        other.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+        theirs = self.upload_photo(make_image("PNG"), "theirs.png", "image/png", client=other)
+
+        r = self.client.post(URL, {"title": "Borrowed", "status": "draft", "sku": "BORROW-1", "images": [theirs]}, format="json")
+
+        self.assertEqual(r.status_code, 400, r.content)
+
+    def test_extra_a_media_library_picture_of_another_store_is_refused(self):
+        from apps.media.tests import make_image
+
+        other = type(self.client)()
+        token, other_id = signup(other, "media-other@example.com")
+        other.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        asset = other.post("/api/v1/media/", {"image": SimpleUploadedFile("m.png", make_image("PNG"))}, format="multipart").json()
+
+        r = self.client.post(
+            URL, {"title": "Borrowed 2", "status": "draft", "sku": "BORROW-2", "images": [asset["url"]]}, format="json"
+        )
+
+        self.assertEqual(r.status_code, 400, r.content)
+
+
+class AutomatedCollectionJourneyTests(JourneyHelpers, APITestCase):
+    """Journey 3: products join and leave automated collections as their price, tags, stock or status change."""
+
+    EMAIL = "automated@example.com"
+
+    def auto(self, name, field, operator, value):
+        return self.collection(name, type="automated", match="all", rules=[{"field": field, "operator": operator, "value": value}])
+
+    def change(self, call):
+        """One request, with the work that is queued for after the save done (as it is once it is committed)."""
+        from django.db import connection
+
+        from . import services
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = call()
+        # A test never really commits, so the queued check would stay "scheduled" for good: drop it as a commit does
+        connection.run_on_commit[:] = [c for c in connection.run_on_commit if c[1] is not services._flush_refresh]
+        return result
+
+    def count(self, collection):
+        return self.client.get(f"/api/v1/catalog/collections/{collection['id']}/").json()["products_count"]
+
+    def listed(self, collection, title):
+        return title in self.html(f"collections/{collection['handle']}")
+
+    def test_3_products_join_and_leave_as_they_change_and_the_collection_page_follows(self):
+        tagged = self.auto("On sale", "tag", "equals", "sale")
+        cheap = self.auto("Cheap", "price", "less_than", "20")
+        stocked = self.auto("In stock", "inventory_stock", "greater_than", "0")
+        live = self.auto("Live", "status", "equals", "active")
+        for collection in (tagged, cheap, stocked, live):
+            self.assertEqual(self.count(collection), 0)
+
+        lamp = self.change(lambda: self.product("Reading lamp", tags=["sale"], price="15"))  # matches all four
+        counts = lambda: [self.count(c) for c in (tagged, cheap, stocked, live)]  # noqa: E731
+        self.assertEqual(counts(), [1, 1, 1, 1])
+        for collection in (tagged, cheap, stocked):
+            self.assertTrue(self.listed(collection, "Reading lamp"), collection["name"])
+        patch = lambda body: self.change(lambda: self.client.patch(f"{URL}{lamp['id']}/", body, format="json"))  # noqa: E731
+
+        patch({"tags": []})  # the tag is taken off
+        self.assertEqual(counts(), [0, 1, 1, 1])
+        self.assertFalse(self.listed(tagged, "Reading lamp"))
+        patch({"tags": ["sale"]})
+        self.assertEqual(counts(), [1, 1, 1, 1])
+        self.assertTrue(self.listed(tagged, "Reading lamp"))
+
+        patch({"price": "25"})  # no longer under 20
+        self.assertEqual(counts(), [1, 0, 1, 1])
+        self.assertFalse(self.listed(cheap, "Reading lamp"))
+        patch({"price": "15"})
+        self.assertEqual(counts(), [1, 1, 1, 1])
+        self.assertTrue(self.listed(cheap, "Reading lamp"))
+
+        variant = self.client.get(f"{URL}{lamp['id']}/").json()["variants"][0]["id"]
+
+        def stock(quantity):
+            body = {"variant": variant, "location": self.location["id"], "available": quantity}
+            return self.change(lambda: self.client.post("/api/v1/inventory/items/set/", body, format="json"))
+
+        stock(0)  # sold out
+        self.assertEqual(counts(), [1, 1, 0, 1])
+        self.assertFalse(self.listed(stocked, "Reading lamp"))
+        stock(3)
+        self.assertEqual(counts(), [1, 1, 1, 1])
+        self.assertTrue(self.listed(stocked, "Reading lamp"))
+
+        patch({"status": "draft"})  # taken off sale: it leaves the "active" collection, the others still hold it
+        self.assertEqual(counts(), [1, 1, 1, 0])
+        for collection in (tagged, cheap, stocked):
+            self.assertFalse(self.listed(collection, "Reading lamp"), collection["name"])  # but shoppers do not see it
+        patch({"status": "active"})
+        self.assertEqual(counts(), [1, 1, 1, 1])
+        for collection in (tagged, cheap, stocked):
+            self.assertTrue(self.listed(collection, "Reading lamp"), collection["name"])
+
+    def test_3_a_new_product_joins_only_the_collections_it_matches(self):
+        tagged = self.auto("On sale", "tag", "equals", "sale")
+        cheap = self.auto("Cheap", "price", "less_than", "20")
+
+        self.change(lambda: self.product("Pricey plain", price="50"))
+        cheap_one = self.change(lambda: self.product("Cheap plain", price="5"))
+
+        self.assertEqual((self.count(tagged), self.count(cheap)), (0, 1))
+        self.assertTrue(self.listed(cheap, "Cheap plain"))
+        self.assertFalse(self.listed(cheap, "Pricey plain"))
+        self.assertFalse(self.listed(tagged, "Cheap plain"))
+        self.assertEqual(self.client.get(f"{URL}{cheap_one['id']}/").json()["status"], "active")
+
+
+class UnavailableProductJourneyTests(JourneyHelpers, APITestCase):
+    """Journeys 4 and 8: a product that is Draft, Archived or off the Online Store is hidden everywhere, and back again."""
+
+    EMAIL = "unavailable@example.com"
+
+    def setUp(self):
+        super().setUp()
+        self.gadget = self.product("Gadget zeta")
+        self.shelf = self.collection("Shelf", [self.gadget["id"]])
+        index = self.client.get("/api/v1/themes/settings/").json()["templates"]["index"]
+        r = self.client.patch("/api/v1/themes/settings/", {"templates": {"index": {
+            "order": index["order"] + ["offers"],
+            "sections": {"offers": {"type": "promotions", "settings": {"view_all_collection": self.shelf["handle"]}, "blocks": []}},
+        }}}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        added = self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": self.gadget["id"]},
+                                 HTTP_ACCEPT="application/json")
+        self.assertEqual(added.json()["count"], 1)
+
+    def promotions(self):
+        found = re.search(r'<section id="section-offers".*?</section>', self.html(""), re.S)
+        return found.group(0) if found else ""
+
+    def where_it_shows(self):
+        """Every place the Gadget can show: a dict of place -> True/False (the product page by its status code)."""
+        title = "Gadget zeta"
+        return {
+            "product page": self.get(f"products/{self.gadget['id']}").status_code == 200,
+            "all products": title in self.html("collections/all"),
+            "its collection": title in self.html("collections/shelf"),
+            "search": title in self.html("collections/all?q=Gadget"),
+            "home page": title in self.html(""),
+            "promotions section": title in self.promotions(),
+        }
+
+    def hide(self, how):
+        from .models import Product, ProductSalesChannel
+
+        if how == "draft":
+            Product.objects.filter(pk=self.gadget["id"]).update(status="draft")
+        elif how == "archived":
+            Product.objects.filter(pk=self.gadget["id"]).update(status="archived")
+        else:
+            ProductSalesChannel.objects.filter(product_id=self.gadget["id"]).delete()
+
+    def show(self, how):
+        from .models import Product, ProductSalesChannel, SalesChannel
+
+        if how == "off the Online Store":
+            ProductSalesChannel.objects.create(
+                product_id=self.gadget["id"], sales_channel=SalesChannel.objects.get(pk=self.channels["online"])
+            )
+        else:
+            Product.objects.filter(pk=self.gadget["id"]).update(status="active")
+
+    def test_4_a_product_that_is_not_for_sale_shows_nowhere_and_comes_back_when_it_is(self):
+        self.assertEqual(set(self.where_it_shows().values()), {True})  # for sale: everywhere
+
+        for how in ("draft", "archived", "off the Online Store"):
+            self.hide(how)
+            where = self.where_it_shows()
+            self.assertEqual(set(where.values()), {False}, (how, where))
+            self.assertNotIn("Gadget zeta", self.html("wishlist/"), how)  # and not in the shopper's wishlist
+
+            self.show(how)
+            where = self.where_it_shows()
+            self.assertEqual(set(where.values()), {True}, (how, where))
+
+    def test_4_the_wishlist_has_the_product_again_when_it_is_published_again(self):
+        self.hide("draft")
+        self.get("")  # the shopper browses while it is hidden
+        self.show("draft")
+
+        self.assertIn("Gadget zeta", self.html("wishlist/"))
+
+    def test_4_the_wishlist_keeps_its_order_and_shows_only_what_is_for_sale_meanwhile(self):
+        from .models import Product
+
+        second = self.product("Gadget omega")
+        self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
+        Product.objects.filter(pk=self.gadget["id"]).update(status="draft")
+
+        page = self.html("wishlist/")
+        self.assertIn("Gadget omega", page)
+        self.assertNotIn("Gadget zeta", page)  # not shown while it is not for sale
+        header = page[page.index("<header"):page.index("</header>")]
+        self.assertNotIn("Gadget zeta", header)
+        count = self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
+        self.assertEqual(count.json()["count"], 1)  # and not counted
+
+        Product.objects.filter(pk=self.gadget["id"]).update(status="active")
+        page = self.html("wishlist/")
+        self.assertLess(page.index("Gadget zeta"), page.index("Gadget omega"))  # back, where it was saved
+        self.assertEqual(self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]},
+                                          HTTP_ACCEPT="application/json").json()["count"], 2)
+
+    def test_8_a_hidden_product_stays_out_of_a_filtered_page(self):
+        from .models import Product, ProductSalesChannel
+
+        category = self.client.post("/api/v1/catalog/categories/", {"name": "Toys"}, format="json").json()
+        shown = self.product("Toy shown", category_id=category["id"])
+        draft = self.product("Toy draft", category_id=category["id"], status="draft")
+        offline = self.product("Toy offline", category_id=category["id"])
+        ProductSalesChannel.objects.filter(product_id=offline["id"]).delete()
+        archived = self.product("Toy archived", category_id=category["id"])
+        Product.objects.filter(pk=archived["id"]).update(status="archived")
+
+        for query in (f"category={category['id']}", "category=Toys"):  # by id, and by name as older links do
+            page = self.html(f"collections/all?{query}")
+            self.assertIn("Toy shown", page, query)
+            for hidden in ("Toy draft", "Toy offline", "Toy archived"):
+                self.assertNotIn(hidden, page, (query, hidden))
+
+        self.client.patch(f"{URL}{draft['id']}/", {"status": "active"}, format="json")
+        self.assertIn("Toy draft", self.html(f"collections/all?category={category['id']}"))
+        self.assertEqual(shown["status"], "active")
+
+
+class MenuOldHandleJourneyTests(JourneyHelpers, APITestCase):
+    """Journey 5: a menu item that points at a collection's old handle, after the handle is changed."""
+
+    EMAIL = "oldhandle@example.com"
+
+    def setUp(self):
+        super().setUp()
+        self.summer = self.collection("Summer sale", [self.product("Sun hat")["id"]])
+        self.menu = self.client.post("/api/v1/themes/menus/", {"name": "Main menu", "items": [
+            {"title": "Sale link", "url": "/collections/summer-sale"}, {"title": "Blog", "url": "/blog"}]}, format="json").json()
+        self.client.patch(f"/api/v1/catalog/collections/{self.summer['id']}/", {"handle": "winter"}, format="json")
+
+    def test_5_the_old_link_still_leads_to_the_collection_through_a_redirect(self):
+        old = self.get("collections/summer-sale")
+        self.assertEqual((old.status_code, old["Location"]), (301, f"/s/{self.slug}/collections/winter"))
+        self.assertIn("Sun hat", self.html("collections/winter"))
+
+    def test_5_the_menu_keeps_the_link_and_does_not_call_it_broken(self):
+        header = re.search(r"<header.*?</header>", self.html(""), re.S).group(0)
+        self.assertIn(">Sale link</a>", header)
+        items = {i["title"]: i["broken"] for i in self.client.get("/api/v1/themes/menus/").json()[0]["items"]}
+        self.assertFalse(items["Sale link"])
+
+
+    def test_5_a_link_to_a_gone_collection_without_a_redirect_is_still_hidden_and_marked(self):
+        header = lambda: re.search(r"<header.*?</header>", self.html(""), re.S).group(0)  # noqa: E731
+        self.assertIn(">Sale link</a>", header())  # the old address redirects, so the link stays
+        rows = self.client.get("/api/v1/themes/redirects/").json()
+        self.assertEqual([r["path"] for r in rows], ["/collections/summer-sale"])
+
+        self.client.delete(f"/api/v1/themes/redirects/{rows[0]['id']}/")  # the redirect is taken away
+
+        self.assertNotIn(">Sale link</a>", header())  # nothing leads anywhere now
+        items = {i["title"]: i["broken"] for i in self.client.get("/api/v1/themes/menus/").json()[0]["items"]}
+        self.assertTrue(items["Sale link"])
+
+    def test_5_a_redirect_saved_with_the_store_prefix_keeps_the_link_alive_too(self):
+        from apps.themes.models import UrlRedirect
+
+        self.client.post("/api/v1/themes/menus/", {"name": "Footer links", "items": [
+            {"title": "Gone page", "url": "/collections/long-gone"}]}, format="json")
+        items = lambda: {i["title"]: i["broken"] for m in self.client.get("/api/v1/themes/menus/").json() for i in m["items"]}  # noqa: E731
+        self.assertTrue(items()["Gone page"])
+        UrlRedirect.objects.create(store=self.store, path=f"/s/{self.slug}/collections/long-gone/", target="/collections/all")
+        self.assertFalse(items()["Gone page"])
+
+    def test_5_the_menus_text_lines_keep_a_link_with_a_redirect_as_well(self):
+        from apps.themes.rendering import _menu_lines, dead_menu_urls, layout_data
+
+        settings = {"header_menu": "Old shelf | /collections/summer-sale\nGone | /collections/nowhere", "footer_menu": "", "header_collections": 0}
+        urls = [u for _, u in _menu_lines(settings["header_menu"])]
+        data = layout_data(settings, "/s/x", [], [], dead=dead_menu_urls(self.store, urls))
+        self.assertEqual([l["label"] for l in data["header_links"]], ["Old shelf"])  # the redirect keeps it, the other is dead
+
+    def test_5_redirects_of_dead_links_are_looked_up_together_not_one_by_one(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from apps.themes.models import UrlRedirect
+        from apps.themes.rendering import dead_menu_urls
+
+        for number in range(6):
+            UrlRedirect.objects.create(store=self.store, path=f"/collections/gone-{number}", target="/collections/all")
+        counts = []
+        for how_many in (1, 6):
+            urls = [f"/collections/gone-{n}" for n in range(how_many)] + ["/collections/other-gone"]
+            with CaptureQueriesContext(connection) as queries:
+                dead = dead_menu_urls(self.store, urls)
+            counts.append(len(queries))
+            self.assertEqual(dead, {"/collections/other-gone"})
+        self.assertEqual(counts[0], counts[1])
+
+
+class ImportJourneyTests(JourneyHelpers, APITestCase):
+    """Journey 6: one import with priced, unpriced and https-picture rows."""
+
+    EMAIL = "importjourney@example.com"
+
+    def test_6_priced_rows_are_created_with_their_pictures_and_the_unpriced_active_row_is_refused(self):
+        rows = [
+            {"title": "Priced with picture", "status": "active", "sku": "IMPJ-1", "price": "12.50",
+             "images": ["https://cdn.example.com/priced.png"], "quantity": 3},
+            {"title": "Unpriced active", "status": "active", "sku": "IMPJ-2", "images": ["https://cdn.example.com/u.png"]},
+            {"title": "Unpriced draft", "status": "draft", "sku": "IMPJ-3"},
+            {"title": "Priced with a plain http picture", "status": "active", "sku": "IMPJ-4", "price": "9",
+             "images": ["http://cdn.example.com/insecure.png"]},
+            {"title": "Priced no picture", "status": "active", "sku": "IMPJ-5", "price": "7", "quantity": 1},
+        ]
+
+        body = self.client.post(f"{URL}bulk/", {"products": rows}, format="json").json()
+
+        self.assertEqual(body["created"], 3, body)
+        messages = {e["index"]: e["message"] for e in body["errors"]}
+        self.assertEqual(sorted(messages), [1, 3])
+        self.assertEqual(messages[1], "price: Enter a price for every option before making this product active.")
+        self.assertEqual(messages[3], "images: Each image URL must start with https://.")
+
+        listing = self.html("collections/all")
+        self.assertIn("Priced with picture", listing)
+        self.assertIn('src="https://cdn.example.com/priced.png"', self.card(listing, "Priced with picture"))
+        self.assertIn("Priced no picture", listing)
+        for refused in ("Unpriced active", "Unpriced draft", "plain http picture"):
+            self.assertNotIn(refused, listing)  # refused, or only a Draft
+
+        from .models import Product
+
+        made = Product.objects.get(title="Priced with picture")
+        page = self.html(f"products/{made.pk}")
+        self.assertRegex(page, r'<img src="https://cdn\.example\.com/priced\.png"[^>]*data-main-image')
+        self.assertIn("12.50", page)
+        self.assertEqual(
+            set(Product.objects.filter(store_id=self.store_id).values_list("title", flat=True)),
+            {"Priced with picture", "Unpriced draft", "Priced no picture"},
+        )
+
+
+class TwoStoresJourneyTests(JourneyHelpers, APITestCase):
+    """Journey 9: two stores with the same titles, SKUs, handles, menu names and redirect paths never mix."""
+
+    EMAIL = "twostores-a@example.com"
+
+    def setUp(self):
+        super().setUp()
+        from apps.media.tests import make_image
+        from apps.tenancy.models import Store
+
+        self.other = type(self.client)()
+        token, other_id = signup(self.other, "twostores-b@example.com")
+        self.other.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+        self.other_store = Store.objects.get(pk=other_id)
+        self.other_slug = self.other_store.store_slug
+        self.other_location = self.other.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+
+        self.stores = {}
+        for key, client, slug, location, price in (
+            ("a", self.client, self.slug, self.location, "10"), ("b", self.other, self.other_slug, self.other_location, "20"),
+        ):
+            photo = self.upload_photo(make_image("PNG", size=(8, 8 if key == "a" else 9)), f"{key}.png", "image/png", client=client)
+            mug = client.post(URL, {"title": "Hero mug", "status": "active", "price": price, "sku": "MUG-1",
+                                    "location": location["id"], "quantity": 4, "images": [photo]}, format="json").json()
+            shelf = client.post("/api/v1/catalog/collections/", {"name": "Mugs", "products": [mug["id"]]}, format="json").json()
+            menu = client.post("/api/v1/themes/menus/", {"name": "Main menu", "items": [
+                {"title": "All mugs", "url": "/collections/mugs"}, {"title": "The hero mug", "url": f"/products/{mug['id']}"}]},
+                format="json").json()
+            from apps.themes.models import UrlRedirect
+
+            UrlRedirect.objects.create(
+                store=Store.objects.get(store_slug=slug), path="/old-mugs",
+                target="/collections/mugs" if key == "a" else "/collections/all",
+            )
+            self.stores[key] = {"client": client, "slug": slug, "mug": mug, "shelf": shelf, "menu": menu, "photo": photo}
+
+    def page(self, key, path):
+        return self.html(path, client=self.stores[key]["client"], slug=self.stores[key]["slug"])
+
+    def test_9_each_stores_pages_show_only_its_own_things(self):
+        self.assertEqual(self.stores["a"]["shelf"]["handle"], self.stores["b"]["shelf"]["handle"])  # the same address in both
+        for me, other in (("a", "b"), ("b", "a")):
+            mine, theirs = self.stores[me], self.stores[other]
+            for path in ("", "collections/all", "collections/mugs", f"products/{mine['mug']['id']}"):
+                page = self.page(me, path)
+                self.assertNotIn(theirs["mug"]["id"], page, (me, path))
+                self.assertNotIn(theirs["photo"].rsplit("/", 1)[-1], page, (me, path))  # their picture never appears
+                self.assertNotIn(f"/s/{theirs['slug']}/", page, (me, path))
+            self.assertIn(mine["mug"]["id"], self.page(me, "collections/mugs"))
+            self.assertIn(mine["photo"], self.page(me, f"products/{mine['mug']['id']}"))
+            # a page of the other store's under my address is not found
+            self.assertEqual(self.get(f"products/{theirs['mug']['id']}", client=mine["client"], slug=mine["slug"]).status_code, 404)
+            self.assertEqual(self.get(f"collections/{theirs['shelf']['id']}", client=mine["client"], slug=mine["slug"]).status_code, 404)
+        a_price, b_price = self.page("a", "collections/mugs"), self.page("b", "collections/mugs")
+        self.assertIn("10.00", a_price)
+        self.assertNotIn("20.00", a_price)
+        self.assertIn("20.00", b_price)
+        self.assertNotIn("10.00", b_price)
+
+    def test_9_each_stores_menu_links_stay_inside_its_own_store(self):
+        for key in ("a", "b"):
+            store = self.stores[key]
+            header = re.search(r"<header.*?</header>", self.page(key, ""), re.S).group(0)
+            self.assertIn(f'href="/s/{store["slug"]}/collections/mugs"', header)
+            self.assertIn(f'href="/s/{store["slug"]}/products/{store["mug"]["id"]}"', header)
+            self.assertNotIn("/s/" + self.stores["b" if key == "a" else "a"]["slug"], header)
+            listed = store["client"].get("/api/v1/themes/menus/").json()
+            self.assertEqual([m["id"] for m in listed], [store["menu"]["id"]])  # only its own menu
+            self.assertEqual({i["broken"] for i in listed[0]["items"]}, {False})
+        self.assertNotEqual(self.stores["a"]["menu"]["id"], self.stores["b"]["menu"]["id"])
+
+    def test_9_the_same_redirect_path_leads_each_store_to_its_own_target(self):
+        a = self.get("old-mugs", client=self.stores["a"]["client"], slug=self.stores["a"]["slug"])
+        b = self.get("old-mugs", client=self.stores["b"]["client"], slug=self.stores["b"]["slug"])
+        self.assertEqual((a.status_code, a["Location"]), (301, f"/s/{self.stores['a']['slug']}/collections/mugs"))
+        self.assertEqual((b.status_code, b["Location"]), (301, f"/s/{self.stores['b']['slug']}/collections/all"))
+        for key in ("a", "b"):
+            rows = self.stores[key]["client"].get("/api/v1/themes/redirects/").json()
+            self.assertEqual([r["path"] for r in rows], ["/old-mugs"])  # its own, not the other store's too
