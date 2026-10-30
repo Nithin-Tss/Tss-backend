@@ -6,6 +6,7 @@ orders app's job (orders.services.create_order).
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
+from django.dispatch import Signal
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -22,6 +23,8 @@ from . import tax as tax_rules
 from .models import Cart, CartItem, Checkout, CheckoutItem
 
 CART_OPEN, CART_CHECKED_OUT, CART_MERGED, CART_EXPIRED = "open", "checked_out", "merged", "expired"
+checkout_abandoned = Signal()  # sender=Checkout, checkout=...
+
 CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "abandoned"
 
 ZERO = Decimal("0.00")
@@ -595,13 +598,19 @@ def _place_order(checkout, payment_method, payment_reference=None):
 def mark_abandoned(store, idle_for):
     """Flag open checkouts untouched for `idle_for` (a timedelta). Returns how many."""
     now = timezone.now()
-    return Checkout.objects.filter(
+    stale = Checkout.objects.filter(
         store=store,
         status=CHECKOUT_OPEN,
         is_deleted=False,
         abandoned_at__isnull=True,
         updated_at__lt=now - idle_for,
-    ).update(abandoned_at=now, recovery_status="pending")
+    )
+    with transaction.atomic():
+        flagged = list(stale.select_for_update())
+        Checkout.objects.filter(pk__in=[c.pk for c in flagged]).update(abandoned_at=now, recovery_status="pending")
+        for checkout in flagged:
+            transaction.on_commit(lambda checkout=checkout: checkout_abandoned.send(sender=Checkout, checkout=checkout))
+    return len(flagged)
 
 
 def expire_carts(store, idle_for):

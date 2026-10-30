@@ -4,6 +4,14 @@ Outbound webhooks: events are queued as WebhookDelivery rows (`emit`) and sent b
 
 Each request is a JSON POST signed like Stripe's: the header X-TSS-Signature is
 "t=<unix time>,v1=<hex>", where v1 is HMAC-SHA256 of "<t>.<raw body>" with the endpoint's secret.
+For a while after a secret is rotated the header carries a second ",v1=<hex>" made with the old secret:
+a receiver accepts the request if any v1 matches. `verify_signature` below is a reference receiver:
+
+    from apps.webhooks.services import verify_signature
+    if not verify_signature(secret, request.headers["X-TSS-Signature"], request.body):
+        return HttpResponse(status=400)
+
+It also rejects a timestamp more than 5 minutes old, so a captured request can't be replayed later.
 """
 import hashlib
 import hmac
@@ -20,7 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .events import PING
-from .models import FAILED, PENDING, SUCCEEDED, WebhookDelivery, WebhookEndpoint
+from .models import FAILED, PENDING, SUCCEEDED, WebhookDelivery, WebhookEndpoint, new_secret
 from .security import UnsafeURL, check_url
 
 logger = logging.getLogger(__name__)
@@ -33,11 +41,39 @@ TIMEOUT_SECONDS = 10
 DISABLE_AFTER = 15
 # How long a worker owns a delivery it picked up; if it dies, the delivery becomes due again after this
 LEASE = timedelta(minutes=5)
+# How long the old secret keeps signing after rotate-secret
+SECRET_OVERLAP = timedelta(hours=24)
+# How far a signature's timestamp may be from the receiver's clock
+SIGNATURE_TOLERANCE_SECONDS = 300
 
 
 def sign(secret, timestamp, body):
-    mac = hmac.new(secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256)
-    return f"t={timestamp},v1={mac.hexdigest()}"
+    """The header value; `secret` may be one secret or a list (current first, then the one being retired)."""
+    secrets_ = [secret] if isinstance(secret, str) else secret
+    macs = [hmac.new(s.encode(), f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest() for s in secrets_]
+    return f"t={timestamp}," + ",".join(f"v1={m}" for m in macs)
+
+
+def verify_signature(secret, header, body, tolerance=SIGNATURE_TOLERANCE_SECONDS, now=None):
+    """What a receiver does: True if `header` holds a v1 signature of `body` made with `secret` and is recent."""
+    try:
+        parts = [p.split("=", 1) for p in header.split(",")]
+        timestamp = int([v for k, v in parts if k == "t"][0])
+    except (AttributeError, IndexError, ValueError):
+        return False
+    if abs((now if now is not None else time.time()) - timestamp) > tolerance:
+        return False
+    expected = sign(secret, timestamp, body).split("v1=")[1]
+    return any(hmac.compare_digest(expected, v) for k, v in parts if k == "v1")
+
+
+def rotate_secret(endpoint, overlap=SECRET_OVERLAP):
+    """New secret now; the old one keeps signing for `overlap` so the receiver can be updated without dropping events."""
+    endpoint.previous_secret = endpoint.secret
+    endpoint.previous_secret_expires_at = timezone.now() + overlap
+    endpoint.secret = new_secret()
+    endpoint.save(update_fields=["secret", "previous_secret", "previous_secret_expires_at", "updated_at"])
+    return endpoint
 
 
 def emit(store, event_type, data):
@@ -106,7 +142,7 @@ def attempt(delivery):
         "User-Agent": "TSS-Webhooks/1",
         "X-TSS-Event": delivery.event_type,
         "X-TSS-Delivery": str(delivery.pk),
-        "X-TSS-Signature": sign(endpoint.secret, int(time.time()), body),
+        "X-TSS-Signature": sign(endpoint.signing_secrets(), int(time.time()), body),
     }
     status_code, error = None, ""
     try:
@@ -144,7 +180,33 @@ def _track_health(endpoint, ok):
     if endpoint.consecutive_failures >= DISABLE_AFTER and endpoint.is_active:
         endpoint.is_active = False
         endpoint.disabled_reason = f"Switched off after {DISABLE_AFTER} failed deliveries in a row."
+        disabled = True
+    else:
+        disabled = False
     endpoint.save(update_fields=["consecutive_failures", "is_active", "disabled_reason", "updated_at"])
+    if disabled:
+        _notify_disabled(endpoint)
+
+
+def _notify_disabled(endpoint):
+    """Email the store's owners: nothing else tells them their endpoint stopped receiving events."""
+    from apps.core.tasks import send_email_async
+    from apps.tenancy.models import StoreMembership
+    from apps.tenancy.services import ACTIVE, OWNER
+
+    try:
+        owners = StoreMembership.objects.filter(store_id=endpoint.store_id, role=OWNER, status=ACTIVE).select_related("user")
+        recipients = sorted({m.user.email for m in owners if m.user.email})
+        if recipients:
+            send_email_async(
+                f"Webhook endpoint switched off: {endpoint.url}",
+                f"{endpoint.disabled_reason}\n\nEndpoint: {endpoint.url}\n"
+                "Fix the receiving server, then turn the endpoint back on in the webhook settings. "
+                "Failed deliveries can be retried from the deliveries list.",
+                recipients,
+            )
+    except Exception:
+        logger.exception("Could not tell the owners of store %s that %s was switched off", endpoint.store_id, endpoint.pk)
 
 
 def claim_due(limit=50):
@@ -173,3 +235,9 @@ def deliver_due(limit=50):
         except Exception:
             logger.exception("Webhook delivery %s crashed", delivery.pk)
     return len(deliveries)
+
+
+def prune_deliveries(older_than_days):
+    """Delete finished (succeeded or failed) deliveries older than the cutoff; pending ones are never touched. Returns how many."""
+    cutoff = timezone.now() - timedelta(days=older_than_days)
+    return WebhookDelivery.objects.filter(status__in=(SUCCEEDED, FAILED), created_at__lt=cutoff).delete()[0]

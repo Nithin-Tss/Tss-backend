@@ -32,9 +32,11 @@ class WebhookEndpointViewSet(StoreScopedViewSet):
     @action(detail=True, methods=["post"], url_path="rotate-secret")
     def rotate_secret(self, request, pk=None):
         endpoint = self.get_object()
-        endpoint.secret = type(endpoint)._meta.get_field("secret").get_default()
-        endpoint.save(update_fields=["secret", "updated_at"])
-        return Response({"secret": endpoint.secret})
+        services.rotate_secret(endpoint)
+        return Response({
+            "secret": endpoint.secret,
+            "previous_secret_valid_until": endpoint.previous_secret_expires_at,
+        })
 
     @action(detail=True, methods=["post"])
     def test(self, request, pk=None):

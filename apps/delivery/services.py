@@ -3,10 +3,13 @@ Shipments. Creating a shipment, adding tracking events and marking it
 delivered also update the order's delivery status (orders app).
 """
 from django.db import transaction
+from django.dispatch import Signal
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import Shipment, ShipmentItem, TrackingEvent
+
+shipment_delivered = Signal()  # sender=Shipment, shipment=...
 
 IN_TRANSIT, DELIVERED = "in_transit", "delivered"
 ORDER_SHIPPED, ORDER_DELIVERED = "shipped", "delivered"
@@ -64,6 +67,7 @@ def add_event(shipment, status, location=None, description=None, event_at=None):
         shipment.delivered_at = event.event_at
         shipment.save(update_fields=["status", "delivered_at", "updated_at"])
         _set_order_status(shipment, ORDER_DELIVERED)
+        transaction.on_commit(lambda: shipment_delivered.send(sender=Shipment, shipment=shipment))
     elif status != shipment.status:
         shipment.status = status
         shipment.save(update_fields=["status", "updated_at"])

@@ -2,6 +2,7 @@ import secrets
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 PENDING, SUCCEEDED, FAILED = "pending", "succeeded", "failed"
 
@@ -22,6 +23,9 @@ class WebhookEndpoint(models.Model):
     # Event names such as "order.created"; "*" means every event
     events = models.JSONField(default=list)
     secret = models.CharField(max_length=80, default=new_secret)
+    # After a rotation the old secret keeps signing too until this time, so a receiver can switch over without a gap
+    previous_secret = models.CharField(max_length=80, blank=True, default="")
+    previous_secret_expires_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     # Deliveries that failed for good in a row; the endpoint is switched off at the limit
     consecutive_failures = models.PositiveIntegerField(default=0)
@@ -34,6 +38,13 @@ class WebhookEndpoint(models.Model):
 
     def __str__(self):
         return self.url
+
+    def signing_secrets(self, now=None):
+        """The current secret, then the previous one while its overlap lasts."""
+        secrets_ = [self.secret]
+        if self.previous_secret and self.previous_secret_expires_at and self.previous_secret_expires_at > (now or timezone.now()):
+            secrets_.append(self.previous_secret)
+        return secrets_
 
     def wants(self, event_type):
         return "*" in self.events or event_type in self.events

@@ -54,3 +54,10 @@ def prune_audit_logs():
     from apps.audit.models import AuditLog
 
     return AuditLog.objects.purge_older_than(settings.AUDIT_LOG_RETENTION_DAYS)
+
+
+@shared_task
+def prune_webhook_deliveries():
+    from apps.webhooks import services
+
+    return services.prune_deliveries(settings.WEBHOOK_DELIVERY_RETENTION_DAYS)

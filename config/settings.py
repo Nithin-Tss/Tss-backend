@@ -323,6 +323,7 @@ CORS_URLS_REGEX = r'^/(?!s/).*$'
 # Audit log: how long entries are kept (manage.py prune_audit_logs), and whether the
 # client address comes from the proxy's X-Forwarded-For (only when behind one).
 AUDIT_LOG_RETENTION_DAYS = int(os.getenv('AUDIT_LOG_RETENTION_DAYS', 365))
+WEBHOOK_DELIVERY_RETENTION_DAYS = int(os.getenv('WEBHOOK_DELIVERY_RETENTION_DAYS', 30))
 AUDIT_TRUST_FORWARDED_FOR = env_bool('DJANGO_BEHIND_PROXY', default=False)
 
 API_MAX_REQUEST_BYTES = int(os.getenv('API_MAX_REQUEST_BYTES', 25 * 1024 * 1024))
