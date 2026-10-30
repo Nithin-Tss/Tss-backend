@@ -1001,7 +1001,8 @@ print(json.dumps({{
                  if not k.startswith(("DJANGO_", "DATABASE_")) and k not in ("SECRET_KEY",)}
         return subprocess.run(
             [sys.executable, "-I", "-c", self.PROBE.format(base=str(settings.BASE_DIR))],
-            env={**clean, **env}, capture_output=True, text=True, timeout=120,
+            # Production refuses to start without a broker; the probe never connects to it.
+            env={**clean, "REDIS_URL": "redis://127.0.0.1:6379/1", **env}, capture_output=True, text=True, timeout=120,
         )
 
     def production(self, **env):
