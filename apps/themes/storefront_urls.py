@@ -1,6 +1,7 @@
 """Public storefront pages, rendered from each store's theme."""
 from django.urls import path
 
+from .sitemap_views import storefront_robots_txt_view, storefront_sitemap_view
 from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
@@ -43,6 +44,8 @@ urlpatterns = [
     path("<slug:store_slug>/blog", storefront_blog, name="storefront-blog"),
     path("<slug:store_slug>/blog/<slug:kind>/<slug:handle>", storefront_blog, name="storefront-blog-filter"),
     path("<slug:store_slug>/blog/<slug:handle>", storefront_article, name="storefront-article"),
+    path("<slug:store_slug>/sitemap.xml", storefront_sitemap_view, name="storefront-sitemap"),
+    path("<slug:store_slug>/robots.txt", storefront_robots_txt_view, name="storefront-robots"),
     # Anything else under a store: its redirect if it has one, else the not-found page. Keep this last.
     path("<slug:store_slug>/<path:rest>", storefront_not_found, name="storefront-not-found"),
 ]

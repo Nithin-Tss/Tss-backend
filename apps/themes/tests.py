@@ -6200,3 +6200,155 @@ class ProductSEOTest(StoreClientMixin, APITestCase):
         self.assertIn("<title>Backpack · SEO Store</title>", html)
         self.assertNotIn("SEO Store · SEO Store", html)
 
+
+
+class StorefrontSitemapAndRobotsTest(StoreClientMixin, APITestCase):
+    def setUp(self):
+        import datetime
+        from django.utils import timezone
+        from apps.tenancy.models import Store
+        from apps.themes.models import BlogPost
+        self.datetime = datetime
+        self.timezone = timezone
+        self.Store = Store
+        self.BlogPost = BlogPost
+        self.token, self.store = self.sign_up("sitemap_test@example.com", "Sitemap Store")
+        self.store_obj = Store.objects.get(pk=self.store["storeId"])
+
+    def test_storefront_sitemap_includes_active_products_and_excludes_draft_and_archived(self):
+        p_active = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Active Product",
+            "sku": "ACT-1",
+            "status": "active",
+            "price": "29.99",
+        }, expect=201)
+
+        p_draft = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Draft Product",
+            "sku": "DRF-1",
+            "status": "draft",
+            "price": "19.99",
+        }, expect=201)
+
+        p_archived = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Archived Product",
+            "sku": "ARC-1",
+            "status": "archived",
+            "price": "39.99",
+        }, expect=201)
+
+        r = self.client.get(f"/s/{self.store['storeSlug']}/sitemap.xml")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers.get("Content-Type"), "application/xml; charset=utf-8")
+
+        content = r.content.decode("utf-8")
+        self.assertIn('xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"', content)
+        self.assertIn(f"/s/{self.store['storeSlug']}/", content)
+        self.assertIn(f"/s/{self.store['storeSlug']}/collections/all", content)
+        self.assertIn(f"/s/{self.store['storeSlug']}/products/{p_active['id']}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/products/{p_draft['id']}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/products/{p_archived['id']}", content)
+
+    def test_storefront_sitemap_includes_active_collections_and_excludes_draft(self):
+        c_active = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Summer Collection",
+            "status": "active",
+        }, expect=201)
+
+        c_draft = self.ok("post", "/api/v1/catalog/collections/", {
+            "name": "Winter Draft Collection",
+            "status": "draft",
+        }, expect=201)
+
+        r = self.client.get(f"/s/{self.store['storeSlug']}/sitemap.xml")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode("utf-8")
+        self.assertIn(f"/s/{self.store['storeSlug']}/collections/{c_active['handle']}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/collections/{c_draft['handle']}", content)
+
+    def test_storefront_sitemap_includes_visible_pages_and_excludes_hidden(self):
+        page_vis = self.ok("post", "/api/v1/themes/pages/", {
+            "title": "About Our Team",
+            "body": "<p>About us content</p>",
+            "status": "visible",
+        }, expect=201)
+
+        page_hid = self.ok("post", "/api/v1/themes/pages/", {
+            "title": "Secret Hidden Page",
+            "body": "<p>Hidden content</p>",
+            "status": "hidden",
+        }, expect=201)
+
+        r = self.client.get(f"/s/{self.store['storeSlug']}/sitemap.xml")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode("utf-8")
+        self.assertIn(f"/s/{self.store['storeSlug']}/pages/{page_vis['handle']}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/pages/{page_hid['handle']}", content)
+
+    def test_storefront_sitemap_includes_published_posts_and_excludes_draft_and_future(self):
+        now = self.timezone.now()
+        post_pub = self.BlogPost.objects.create(
+            store=self.store_obj,
+            title="Published Post",
+            handle="published-post",
+            status=self.BlogPost.PUBLISHED,
+            published_at=now - self.datetime.timedelta(days=1),
+        )
+        post_draft = self.BlogPost.objects.create(
+            store=self.store_obj,
+            title="Draft Post",
+            handle="draft-post",
+            status=self.BlogPost.DRAFT,
+            published_at=now,
+        )
+        post_future = self.BlogPost.objects.create(
+            store=self.store_obj,
+            title="Future Post",
+            handle="future-post",
+            status=self.BlogPost.PUBLISHED,
+            published_at=now + self.datetime.timedelta(days=5),
+        )
+
+        r = self.client.get(f"/s/{self.store['storeSlug']}/sitemap.xml")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode("utf-8")
+        self.assertIn(f"/s/{self.store['storeSlug']}/blog", content)
+        self.assertIn(f"/s/{self.store['storeSlug']}/blog/{post_pub.handle}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/blog/{post_draft.handle}", content)
+        self.assertNotIn(f"/s/{self.store['storeSlug']}/blog/{post_future.handle}", content)
+
+    def test_storefront_sitemap_and_robots_return_404_for_closed_or_invalid_store(self):
+        r_invalid_sitemap = self.client.get("/s/non-existent-store-slug/sitemap.xml")
+        self.assertEqual(r_invalid_sitemap.status_code, 404)
+
+        r_invalid_robots = self.client.get("/s/non-existent-store-slug/robots.txt")
+        self.assertEqual(r_invalid_robots.status_code, 404)
+
+        # Close store
+        self.Store.objects.filter(pk=self.store["storeId"]).update(status="closed")
+
+        r_closed_sitemap = self.client.get(f"/s/{self.store['storeSlug']}/sitemap.xml")
+        self.assertEqual(r_closed_sitemap.status_code, 404)
+
+        r_closed_robots = self.client.get(f"/s/{self.store['storeSlug']}/robots.txt")
+        self.assertEqual(r_closed_robots.status_code, 404)
+
+    def test_storefront_robots_txt_contains_correct_rules_and_sitemap(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/robots.txt")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers.get("Content-Type"), "text/plain; charset=utf-8")
+
+        content = r.content.decode("utf-8")
+        self.assertIn("User-agent: *", content)
+        self.assertIn(f"Disallow: /s/{self.store['storeSlug']}/cart/", content)
+        self.assertIn(f"Disallow: /s/{self.store['storeSlug']}/checkout/", content)
+        self.assertIn(f"Disallow: /s/{self.store['storeSlug']}/account/", content)
+        self.assertIn(f"Disallow: /s/{self.store['storeSlug']}/wishlist/", content)
+        self.assertIn(f"Sitemap: http://testserver/s/{self.store['storeSlug']}/sitemap.xml", content)
+
+    def test_existing_storefront_routes_continue_working(self):
+        r_home = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r_home.status_code, 200)
+
+        r_col = self.client.get(f"/s/{self.store['storeSlug']}/collections/all")
+        self.assertEqual(r_col.status_code, 200)
