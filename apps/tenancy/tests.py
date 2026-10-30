@@ -610,3 +610,47 @@ class StoreTaxConstraintTests(TestCase):
 
         self.assertEqual(zero_rate.tax_rate, Decimal("0.00"))
         self.assertEqual(maximum_rate.tax_rate, Decimal("100.00"))
+
+
+class StoreShippingConstraintTests(TestCase):
+    """The database refuses negative flat shipping fees and free-shipping thresholds."""
+
+    def make_store(self, number, **fields):
+        return Store.objects.create(
+            store_name=f"Shipping Store {number}",
+            store_slug=f"shipping-store-{number}",
+            status="active",
+            **fields,
+        )
+
+    def test_database_accepts_zero_and_positive_flat_rate(self):
+        zero = self.make_store(1, shipping_flat_rate=Decimal("0.00"))
+        positive = self.make_store(2, shipping_flat_rate=Decimal("49.99"))
+
+        self.assertEqual(zero.shipping_flat_rate, Decimal("0.00"))
+        self.assertEqual(positive.shipping_flat_rate, Decimal("49.99"))
+
+    def test_database_rejects_negative_flat_rate(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.make_store(3, shipping_flat_rate=Decimal("-0.01"))
+
+    def test_database_rejects_negative_flat_rate_on_update(self):
+        store = self.make_store(4)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Store.objects.filter(pk=store.pk).update(shipping_flat_rate=Decimal("-5.00"))
+
+    def test_database_accepts_null_zero_and_positive_threshold(self):
+        for number, threshold in ((10, None), (11, Decimal("0.00")), (12, Decimal("500.00"))):
+            with self.subTest(threshold=threshold):
+                store = self.make_store(number, free_shipping_threshold=threshold)
+                store.refresh_from_db()
+                self.assertEqual(store.free_shipping_threshold, threshold)
+
+    def test_database_rejects_negative_threshold(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.make_store(13, free_shipping_threshold=Decimal("-0.01"))
+
+    def test_database_rejects_negative_threshold_on_update(self):
+        store = self.make_store(14, free_shipping_threshold=Decimal("100.00"))
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Store.objects.filter(pk=store.pk).update(free_shipping_threshold=Decimal("-1.00"))

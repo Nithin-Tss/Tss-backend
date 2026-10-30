@@ -68,6 +68,14 @@ class Store(models.Model):
                 condition=models.Q(tax_rate__gte=0) & models.Q(tax_rate__lte=100),
                 name="ck_store_tax_rate_range",
             ),
+            models.CheckConstraint(
+                condition=models.Q(shipping_flat_rate__gte=0),
+                name="ck_store_shipping_flat_rate_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(free_shipping_threshold__isnull=True) | models.Q(free_shipping_threshold__gte=0),
+                name="ck_store_free_shipping_threshold_nonneg",
+            ),
         ]
 
     def __str__(self):
