@@ -636,6 +636,7 @@ def api_routes():
     return found
 
 
+@override_settings(ASSISTANT_REAL_MODE=True)  # the assistant answers 404 before any check unless this is on
 class RouteAuditTest(StoreClientMixin, APITestCase):
     """
     Every API route is classified. A new public route, or a new route that skips the store
@@ -663,6 +664,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     METHODS = ("get", "post", "put", "patch", "delete")
     STORE_PERMISSIONS = ["IsAuthenticated", "IsStoreMember", "HasStorePermission"]
     PLATFORM_PERMISSIONS = ["IsAuthenticated", "IsPlatformAdmin"]
+    # The AI assistant: any member of the store may ask, but no API key may (it reads store data)
+    ASSISTANT_PERMISSIONS = ["IsAuthenticated", "NoApiKeys", "IsStoreMember"]
 
     def classified(self):
         public, account_only, store_scoped, other = {}, {}, {}, {}
@@ -677,6 +680,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
                 account_only[route] = (cls, url)
             elif perms[:3] == self.STORE_PERMISSIONS and all(p.startswith("FeatureEnabled_") for p in perms[3:]):
                 store_scoped[route] = (cls, url)  # a feature flag may gate a store route further
+            elif perms == self.ASSISTANT_PERMISSIONS:
+                store_scoped[route] = (cls, url)
             elif perms == self.PLATFORM_PERMISSIONS:
                 account_only[route] = (cls, url)  # sign-in only as far as the store checks go; admins only (own test)
             else:
