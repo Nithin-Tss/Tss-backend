@@ -4181,7 +4181,7 @@ class CustomizerTokenTest(StoreClientMixin, APITestCase):
         css = self.token_css(self.store_html())
         self.assertNotIn("--accent:", css)
         self.assertNotIn("--text:", css)
-        self.assertIn("--b-r:6px", css)  # the theme's slightly rounded buttons
+        self.assertIn("--b-r:6px", css)  # the theme's default (slight) button corners
 
     def test_saved_tokens_reach_store_and_preview_and_persist(self):
         self.assertEqual(self.ok("post", "/api/v1/themes/customizer/", self.TOKENS), self.TOKENS)
