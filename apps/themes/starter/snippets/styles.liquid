@@ -10,17 +10,17 @@
     --page: 1200px;
     /* Product card & grid: change these here (a theme preset may override them) */
     --card-padding: 16px;
-    --card-border: 1px solid #e5e5e5;
+    --card-border: 1px solid var(--line);
     --card-radius: 6px;
-    --card-bg: #fff;
+    --card-bg: var(--bg);
     --card-media-padding: 8px;
-    --card-media-bg: #fff;
+    --card-media-bg: var(--soft);
     --card-media-fit: contain;
     --card-gap: 4px;
     --card-title-size: 14px;
     --card-title-weight: 400;
     --card-price-size: 22px;
-    --card-price-color: #a51c30;
+    --card-price-color: var(--text);
     --card-compare-size: 15px;
     --grid-gap-y: 24px;
     --section-spacing: 48px;
@@ -35,7 +35,7 @@
   }
   img { max-width: 100%; display: block; }
   a { color: inherit; }
-  h1, h2, h3 { line-height: 1.15; margin: 0 0 .5em; letter-spacing: -0.01em; }
+  h1, h2, h3 { line-height: 1.1; margin: 0 0 .5em; letter-spacing: -0.02em; font-weight: 500; }
   .page-width { max-width: var(--page); margin: 0 auto; padding: 0 20px; }
   .section { padding: 56px 0; }
   .section-heading { font-size: clamp(22px, 3vw, 30px); margin-bottom: 24px; }
@@ -51,7 +51,7 @@
   .button:disabled { opacity: .45; cursor: not-allowed; }
 
   .placeholder {
-    background: linear-gradient(135deg, var(--soft), color-mix(in srgb, var(--accent) 18%, var(--bg)));
+    background: color-mix(in srgb, var(--text) 7%, var(--bg));
     display: flex; align-items: center; justify-content: center;
     color: var(--muted); font-size: 13px;
   }

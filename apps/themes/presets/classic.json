@@ -7,19 +7,19 @@
     "Electronics"
   ],
   "swatches": [
-    "#161C2C",
-    "#FFFFFF",
-    "#E5E9EF"
+    "#1A1916",
+    "#FAF9F6",
+    "#E7E4DC"
   ],
   "settings": {
-    "accent_color": "#161C2C",
-    "background_color": "#FFFFFF",
-    "text_color": "#161C2C",
-    "heading_font": "system",
+    "accent_color": "#1A1916",
+    "background_color": "#FAF9F6",
+    "text_color": "#1A1916",
+    "heading_font": "playfair",
     "body_font": "system",
     "base_font_size": 16,
     "button_style": "filled",
-    "button_radius": "pill",
+    "button_radius": "slight",
     "button_hover": "darken",
     "header_layout": "left",
     "header_sticky": true,
