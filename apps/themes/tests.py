@@ -2896,9 +2896,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn(f'href="{self.base}/collections/all">Continue shopping</a>', html)
         self.assertIn(f'href="{self.base}/wishlist/" aria-label="Wishlist"', html)
         self.assertIn('class="wishlist-page__empty"', html)
-        from .rendering import SECTION_CSS
-        self.assertIn(".wishlist-page__grid{display:grid;grid-template-columns:repeat(2", SECTION_CSS)
-        self.assertIn("@media (min-width:750px){.wishlist-page__grid", SECTION_CSS)
+        self.assertIn(".product-list__grid, .wishlist-page__grid { display: grid;", html)
 
     def test_add_displays_product_and_session_retains_it_until_removed(self):
         from apps.catalog.models import ProductImage
@@ -2921,8 +2919,10 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn("Blue mug", html)
         self.assertIn('<img src="/media/blue-mug.png" alt="Blue mug" loading="lazy">', html)
         self.assertIn("12.50", html)
-        self.assertIn("product-card__media--portrait", html)
-        self.assertIn(".wishlist-page__grid{display:grid;grid-template-columns:repeat(2", html)
+        # Wishlist cards use the shared square image box, not the old portrait ratio
+        wishlist_grid = html[html.index('class="wishlist-page__grid"'):]
+        self.assertNotIn("product-card__media--portrait", wishlist_grid)
+        self.assertIn(".product-list__grid, .wishlist-page__grid { display: grid;", html)
         self.assertIn(".product-card__wishlist-add.is-wishlisted svg", html)
         self.assertIn('.product-card__wishlist-add[aria-pressed="true"] svg', html)
         self.assertIn('.product__wishlist-add[aria-pressed="true"] svg', html)
