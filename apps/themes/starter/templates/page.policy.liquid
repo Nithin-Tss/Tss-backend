@@ -4,6 +4,33 @@
 {%- endcomment -%}
 {{ sections }}
 <style>
-  .page__body { font-size: 16px; line-height: 1.7; }
-  .page__body :is(h2, h3) { margin-top: 1.4em; }
+  .page { --page-w: 740px; }
+  .page__body {
+    font-size: 16.5px;
+    line-height: 1.75;
+    color: color-mix(in srgb, var(--text) 92%, var(--bg));
+  }
+  .page__body :is(h2, h3) {
+    margin-top: 1.8em;
+    margin-bottom: 0.6em;
+    color: var(--text);
+  }
+  .page__body h2 {
+    font-size: 22px;
+    font-weight: 700;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .page__body h3 {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .page__body ol, .page__body ul {
+    padding-left: 1.6em;
+    margin-bottom: 1.6em;
+  }
+  .page__body li {
+    margin-bottom: 0.5em;
+    line-height: 1.7;
+  }
 </style>

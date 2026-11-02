@@ -5,13 +5,133 @@
 {{ sections }}
 <section class="section contact-details">
   <div class="page-width">
-    <h2 class="section-heading">Contact {{ shop.name }}</h2>
-    <p>Email: <a href="mailto:hello@example.com">hello@example.com</a></p>
-    <p>Phone: <a href="tel:+910000000000">+91 00000 00000</a></p>
-    <p>Hours: Monday to Saturday, 10am to 6pm</p>
+    <div class="contact-details__container">
+      <h2 class="section-heading contact-details__heading">Get in touch with {{ shop.name }}</h2>
+      <p class="contact-details__sub">We're here to help. Reach out to us through any of the channels below.</p>
+
+      <div class="contact-details__grid">
+        <div class="contact-card">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+              <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+            </svg>
+          </div>
+          <h3 class="contact-card__title">Email us</h3>
+          <p class="contact-card__text">Our friendly team is here to help.</p>
+          <a class="contact-card__link" href="mailto:hello@example.com">hello@example.com</a>
+        </div>
+
+        <div class="contact-card">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+            </svg>
+          </div>
+          <h3 class="contact-card__title">Call us</h3>
+          <p class="contact-card__text">Mon-Sat from 10am to 6pm.</p>
+          <a class="contact-card__link" href="tel:+910000000000">+91 00000 00000</a>
+        </div>
+
+        <div class="contact-card">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </div>
+          <h3 class="contact-card__title">Working hours</h3>
+          <p class="contact-card__text">We are open and ready to assist.</p>
+          <span class="contact-card__info">Monday to Saturday, 10am to 6pm</span>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 <style>
-  .contact-details { text-align: center; }
-  .contact-details p { margin: 6px 0; color: var(--muted); }
+  .contact-details {
+    padding-top: 24px;
+    padding-bottom: 72px;
+  }
+  .contact-details__container {
+    max-width: 960px;
+    margin: 0 auto;
+    text-align: center;
+  }
+  .contact-details__heading {
+    margin-bottom: 8px;
+  }
+  .contact-details__sub {
+    margin: 0 auto 40px;
+    max-width: 540px;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  .contact-details__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 24px;
+    text-align: left;
+  }
+  .contact-card {
+    padding: 28px 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg);
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .contact-card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+    box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.06);
+  }
+  .contact-card__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: calc(var(--radius) - 4px);
+    background: var(--soft);
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+  .contact-card__icon svg {
+    width: 22px;
+    height: 22px;
+  }
+  .contact-card__title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 6px;
+    color: var(--text);
+  }
+  .contact-card__text {
+    margin: 0 0 14px;
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .contact-card__link {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    margin-top: auto;
+    transition: opacity 0.15s ease;
+  }
+  .contact-card__link:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+  }
+  .contact-card__info {
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text);
+    margin-top: auto;
+  }
 </style>

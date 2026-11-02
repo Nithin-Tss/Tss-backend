@@ -8,14 +8,14 @@
   <div class="page-width">
     {%- if s.show_header -%}
       <header class="blog__header">
-        <h1 class="section-heading">{{ blog.title }}</h1>
+        <h1 class="section-heading blog__title">{{ blog.title }}</h1>
         {%- if blog.description != blank -%}<p class="blog__description">{{ blog.description }}</p>{%- endif -%}
       </header>
     {%- endif -%}
 
     {%- if s.show_filters and blog.categories.size > 0 -%}
       <nav class="blog__filters" aria-label="Categories">
-        <a href="{{ blog.all_url }}" aria-current="page">All</a>
+        <a href="{{ blog.all_url }}"{% if blog.filter == nil %} aria-current="page"{% endif %}>All</a>
         {%- for category in blog.categories -%}
           <a href="{{ category.url }}"{% if category.active %} aria-current="page"{% endif %}>{{ category.name }}</a>
         {%- endfor -%}
@@ -23,7 +23,20 @@
     {%- endif -%}
 
     {%- if blog.articles.size == 0 -%}
-      <div class="empty-state">No posts yet. Posts you publish will appear here.</div>
+      <div class="empty-state">
+        <div class="empty-state__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+            <path d="M8 7h8M8 11h8M8 15h5"></path>
+          </svg>
+        </div>
+        <p class="empty-state__text">No posts yet. Posts you publish will appear here.</p>
+        {%- if blog.filter -%}
+          <div style="margin-top: 16px;">
+            <a class="button button--outline" href="{{ blog.all_url }}">View all posts</a>
+          </div>
+        {%- endif -%}
+      </div>
     {%- else -%}
       <div class="post-list post-list--{{ s.layout }}{% if s.layout == 'grid' and s.columns == 1 %} post-list--cols-1{% endif %}" style="--cols: {{ s.columns }}">
         {%- for article in blog.articles -%}
@@ -36,11 +49,11 @@
       {%- if blog.pages > 1 -%}
         <nav class="pagination" aria-label="Pages">
           {%- if blog.page > 1 -%}
-            <a class="button button--outline" href="{{ blog.url }}?page={{ blog.page | minus: 1 }}">Newer posts</a>
+            <a class="button button--outline pagination__prev" href="{{ blog.url }}?page={{ blog.page | minus: 1 }}">&larr; Newer posts</a>
           {%- endif -%}
-          <span>Page {{ blog.page }} of {{ blog.pages }}</span>
+          <span class="pagination__info">Page {{ blog.page }} of {{ blog.pages }}</span>
           {%- if blog.page < blog.pages -%}
-            <a class="button button--outline" href="{{ blog.url }}?page={{ blog.page | plus: 1 }}">Older posts</a>
+            <a class="button button--outline pagination__next" href="{{ blog.url }}?page={{ blog.page | plus: 1 }}">Older posts &rarr;</a>
           {%- endif -%}
         </nav>
       {%- endif -%}
@@ -48,9 +61,106 @@
   </div>
 </section>
 <style>
-  .blog__header { margin-bottom: 28px; }
-  .blog__description { max-width: 640px; margin: -12px 0 0; color: var(--muted); font-size: 18px; }
-  .blog__filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 32px; }
-  .blog__filters a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; text-decoration: none; color: var(--muted); }
-  .blog__filters a:hover, .blog__filters a[aria-current="page"] { border-color: var(--text); color: var(--text); }
+  .blog__header {
+    margin-bottom: 32px;
+  }
+  .blog__title {
+    margin-bottom: 12px;
+  }
+  .blog__description {
+    max-width: 680px;
+    margin: 0;
+    color: var(--muted);
+    font-size: 17px;
+    line-height: 1.6;
+  }
+  .blog__filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 36px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .blog__filters a {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 16px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 13.5px;
+    font-weight: 500;
+    text-decoration: none;
+    color: var(--muted);
+    background: var(--bg);
+    transition: all 0.2s ease;
+  }
+  .blog__filters a:hover {
+    border-color: var(--text);
+    color: var(--text);
+    background: var(--soft);
+  }
+  .blog__filters a[aria-current="page"] {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+  }
+  .blog__filters a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Empty state */
+  .blog .empty-state {
+    text-align: center;
+    padding: 64px 24px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    background: var(--soft);
+    color: var(--muted);
+    max-width: 580px;
+    margin: 40px auto;
+  }
+  .blog .empty-state__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+  .blog .empty-state__text {
+    margin: 0;
+    font-size: 15.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  /* Pagination */
+  .pagination {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 56px;
+    padding-top: 32px;
+    border-top: 1px solid var(--line);
+    font-size: 14.5px;
+    color: var(--muted);
+  }
+  .pagination .button {
+    min-height: 40px;
+    padding: 0 20px;
+    font-size: 14px;
+  }
+  .pagination__info {
+    font-weight: 500;
+    padding: 0 4px;
+  }
 </style>

@@ -8,14 +8,30 @@
 {%- else -%}
 {% render 'article-card', styles: true %}
 <article id="section-{{ section.id }}" class="section article article--{{ s.content_width }}">
+  <div class="page-width">
+    <nav class="article__breadcrumbs" aria-label="Breadcrumb">
+      <a href="{{ shop.url }}/">Home</a>
+      <span class="article__breadcrumbs-sep" aria-hidden="true">/</span>
+      <a href="{{ shop.blog_url | default: '/blog' }}">Blog</a>
+      {%- if article.category -%}
+        <span class="article__breadcrumbs-sep" aria-hidden="true">/</span>
+        <a href="{{ article.category.url }}">{{ article.category.name }}</a>
+      {%- endif -%}
+    </nav>
+  </div>
+
   <header class="page-width article__header">
     {%- if article.category -%}
       <a class="post-card__category" href="{{ article.category.url }}">{{ article.category.name }}</a>
     {%- endif -%}
     <h1 class="article__title">{{ article.title }}</h1>
     <div class="article__byline">
-      {%- if s.show_author and article.author and article.author.avatar -%}
-        <img class="article__avatar" src="{{ article.author.avatar }}" alt="">
+      {%- if s.show_author and article.author -%}
+        {%- if article.author.avatar -%}
+          <img class="article__avatar" src="{{ article.author.avatar }}" alt="{{ article.author.name }}">
+        {%- else -%}
+          <span class="article__avatar article__avatar--initial" aria-hidden="true">{{ article.author.name | slice: 0, 1 }}</span>
+        {%- endif -%}
       {%- endif -%}
       <p class="post-meta">
         {%- if s.show_author and article.author -%}<a href="{{ article.author.url }}">{{ article.author.name }}</a>{%- endif -%}
@@ -27,7 +43,7 @@
 
   {%- if s.show_cover and article.cover_image -%}
     <figure class="article__cover article__cover--{{ s.cover_style }}{% if s.cover_style != 'full' %} page-width{% endif %}">
-      <img src="{{ article.cover_image }}" alt="{{ article.title }}">
+      <img src="{{ article.cover_image }}" alt="{{ article.title }}" loading="eager">
     </figure>
   {%- endif -%}
 
@@ -35,25 +51,35 @@
     <div class="article__body">{{ article.body }}</div>
 
     {%- if s.show_tags and article.tags.size > 0 -%}
-      <ul class="article__tags" aria-label="Tags">
-        {%- for tag in article.tags -%}<li><a href="{{ tag.url }}">#{{ tag.name }}</a></li>{%- endfor -%}
-      </ul>
+      <div class="article__tags-wrap">
+        <span class="article__tags-label">Tags:</span>
+        <ul class="article__tags" aria-label="Tags">
+          {%- for tag in article.tags -%}<li><a href="{{ tag.url }}">#{{ tag.name }}</a></li>{%- endfor -%}
+        </ul>
+      </div>
     {%- endif -%}
 
     {%- if s.show_share -%}
       <div class="article__share" data-share-title="{{ article.title }}">
-        <span>Share</span>
-        <a data-share="x" target="_blank" rel="noopener" href="#">X</a>
-        <a data-share="facebook" target="_blank" rel="noopener" href="#">Facebook</a>
-        <a data-share="linkedin" target="_blank" rel="noopener" href="#">LinkedIn</a>
-        <a data-share="email" href="#">Email</a>
+        <span class="article__share-label">Share article</span>
+        <div class="article__share-links">
+          <a data-share="x" target="_blank" rel="noopener" href="#" aria-label="Share on X">X</a>
+          <a data-share="facebook" target="_blank" rel="noopener" href="#" aria-label="Share on Facebook">Facebook</a>
+          <a data-share="linkedin" target="_blank" rel="noopener" href="#" aria-label="Share on LinkedIn">LinkedIn</a>
+          <a data-share="email" href="#" aria-label="Share via Email">Email</a>
+        </div>
       </div>
     {%- endif -%}
 
     {%- if s.show_author_bio and article.author and article.author.bio != blank -%}
       <aside class="article__author">
-        {%- if article.author.avatar -%}<img class="article__avatar article__avatar--large" src="{{ article.author.avatar }}" alt="">{%- endif -%}
-        <div>
+        {%- if article.author.avatar -%}
+          <img class="article__avatar article__avatar--large" src="{{ article.author.avatar }}" alt="{{ article.author.name }}">
+        {%- else -%}
+          <span class="article__avatar article__avatar--large article__avatar--initial" aria-hidden="true">{{ article.author.name | slice: 0, 1 }}</span>
+        {%- endif -%}
+        <div class="article__author-info">
+          <span class="article__author-kicker">Written by</span>
           <p class="article__author-name"><a href="{{ article.author.url }}">{{ article.author.name }}</a></p>
           <p class="article__author-bio">{{ article.author.bio }}</p>
         </div>
@@ -63,8 +89,20 @@
     {%- if s.show_prev_next -%}
       {%- if article.previous or article.next -%}
         <nav class="article__pager" aria-label="More posts">
-          {%- if article.previous -%}<a href="{{ article.previous.url }}"><small>&larr; Previous</small>{{ article.previous.title }}</a>{%- else -%}<span></span>{%- endif -%}
-          {%- if article.next -%}<a class="article__pager-next" href="{{ article.next.url }}"><small>Next &rarr;</small>{{ article.next.title }}</a>{%- endif -%}
+          {%- if article.previous -%}
+            <a class="article__pager-link article__pager-prev" href="{{ article.previous.url }}">
+              <span class="article__pager-label">&larr; Previous article</span>
+              <span class="article__pager-title">{{ article.previous.title }}</span>
+            </a>
+          {%- else -%}
+            <span></span>
+          {%- endif -%}
+          {%- if article.next -%}
+            <a class="article__pager-link article__pager-next" href="{{ article.next.url }}">
+              <span class="article__pager-label">Next article &rarr;</span>
+              <span class="article__pager-title">{{ article.next.title }}</span>
+            </a>
+          {%- endif -%}
         </nav>
       {%- endif -%}
     {%- endif -%}
@@ -72,7 +110,10 @@
 
   {%- if s.related_count > 0 and article.related.size > 0 -%}
     <div class="page-width article__related">
-      <h2 class="section-heading">Keep reading</h2>
+      <div class="article__related-header">
+        <h2 class="section-heading">Keep reading</h2>
+        <p class="article__related-sub">More articles you might enjoy</p>
+      </div>
       <div class="post-list post-list--grid" style="--cols: 3">
         {%- for post in article.related limit: s.related_count -%}
           {% render 'article-card', article: post, show_image: true, show_category: true, show_date: true %}
@@ -82,38 +123,425 @@
   {%- endif -%}
 </article>
 <style>
-  .article { --article-w: 720px; }
-  .article--narrow { --article-w: 600px; } .article--wide { --article-w: 880px; }
-  .article__header, .article .page-width > .article__body, .article__tags, .article__share, .article__author, .article__pager { max-width: var(--article-w); margin-left: auto; margin-right: auto; }
-  .article__header { text-align: center; display: grid; justify-items: center; gap: 12px; }
-  .article__title { font-size: clamp(30px, 5vw, 48px); margin: 0; }
-  .article__byline { display: flex; align-items: center; gap: 10px; }
-  .article__byline a { text-decoration: none; color: var(--text); font-weight: 600; }
-  .article__avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
-  .article__avatar--large { width: 64px; height: 64px; flex: none; }
-  .article__cover { margin: 32px auto; }
-  .article__cover img { width: 100%; max-height: 640px; object-fit: cover; border-radius: var(--radius); }
-  .article__cover--full img { border-radius: 0; max-height: 75vh; }
-  .article__body { margin-top: 32px; font-size: 18px; line-height: 1.75; overflow-wrap: anywhere; }
+  .article { --article-w: 760px; }
+  .article--narrow { --article-w: 640px; }
+  .article--wide { --article-w: 920px; }
+
+  /* Breadcrumbs */
+  .article__breadcrumbs {
+    max-width: var(--article-w);
+    margin: 0 auto 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  .article__breadcrumbs a {
+    text-decoration: none;
+    color: inherit;
+    transition: color 0.15s ease;
+  }
+  .article__breadcrumbs a:hover {
+    color: var(--text);
+  }
+  .article__breadcrumbs-sep {
+    opacity: 0.5;
+  }
+
+  /* Header & Byline */
+  .article__header {
+    max-width: var(--article-w);
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .article__title {
+    font-size: clamp(28px, 4.5vw, 46px);
+    margin: 0;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+  .article__byline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding-top: 4px;
+  }
+  .article__byline a {
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .article__byline a:hover {
+    color: var(--accent);
+  }
+  .article__avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--soft);
+  }
+  .article__avatar--initial {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--soft);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 14px;
+    text-transform: uppercase;
+  }
+  .article__avatar--large {
+    width: 64px;
+    height: 64px;
+    font-size: 22px;
+    flex: none;
+  }
+
+  /* Cover image */
+  .article__cover {
+    margin: 36px auto;
+  }
+  .article__cover img {
+    width: 100%;
+    max-height: 580px;
+    object-fit: cover;
+    border-radius: var(--radius);
+    display: block;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+  }
+  .article__cover--full {
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .article__cover--full img {
+    border-radius: 0;
+    max-height: 70vh;
+  }
+
+  /* Body content */
+  .article .page-width > .article__body {
+    max-width: var(--article-w);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .article__body {
+    margin-top: 36px;
+    font-size: 18px;
+    line-height: 1.8;
+    color: color-mix(in srgb, var(--text) 92%, var(--bg));
+    overflow-wrap: anywhere;
+  }
   .article__body > :first-child { margin-top: 0; }
-  .article__body :is(h2, h3, h4) { margin: 1.6em 0 .5em; }
-  .article__body img, .article__body iframe { max-width: 100%; height: auto; border-radius: var(--radius); }
-  .article__body blockquote { margin: 1.5em 0; padding-left: 20px; border-left: 3px solid var(--accent); font-style: italic; color: var(--muted); }
-  .article__body pre { overflow-x: auto; padding: 16px; border-radius: 10px; background: var(--soft); font-size: 15px; }
-  .article__body table { width: 100%; border-collapse: collapse; } .article__body :is(td, th) { border: 1px solid var(--line); padding: 8px; }
-  .article__tags { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; margin-bottom: 0; }
-  .article__tags a { display: inline-block; padding: 4px 12px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 14px; text-decoration: none; }
-  .article__share { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
-  .article__share span { font-weight: 600; margin-right: 4px; }
-  .article__share a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }
-  .article__author { display: flex; gap: 16px; margin-top: 32px; padding: 20px; border-radius: var(--radius); background: var(--soft); }
-  .article__author p { margin: 0; } .article__author-name a { font-weight: 700; text-decoration: none; }
-  .article__author-bio { margin-top: 4px !important; color: var(--muted); }
-  .article__pager { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 40px; }
-  .article__pager a { display: grid; gap: 4px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); text-decoration: none; font-weight: 600; }
-  .article__pager small { color: var(--muted); font-weight: 400; }
-  .article__pager-next { text-align: right; grid-column: 2; }
-  .article__related { margin-top: 64px; }
+  .article__body p {
+    margin: 0 0 1.6em;
+  }
+  .article__body :is(h2, h3, h4) {
+    margin: 2em 0 0.6em;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    color: var(--text);
+  }
+  .article__body h2 {
+    font-size: clamp(24px, 3.2vw, 30px);
+    font-weight: 700;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .article__body h3 {
+    font-size: clamp(20px, 2.5vw, 24px);
+    font-weight: 600;
+  }
+  .article__body h4 {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .article__body a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: opacity 0.15s ease;
+  }
+  .article__body a:hover {
+    opacity: 0.8;
+  }
+  .article__body ul, .article__body ol {
+    margin: 0 0 1.6em;
+    padding-left: 1.6em;
+  }
+  .article__body li {
+    margin-bottom: 0.5em;
+    line-height: 1.7;
+  }
+  .article__body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius);
+    margin: 2em auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    display: block;
+  }
+  .article__body iframe {
+    max-width: 100%;
+    border-radius: var(--radius);
+    margin: 1.8em 0;
+  }
+  .article__body blockquote {
+    margin: 2em 0;
+    padding: 20px 24px;
+    border-left: 4px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--soft);
+    font-style: italic;
+    font-size: 1.05em;
+    line-height: 1.7;
+    color: var(--text);
+  }
+  .article__body blockquote p:last-child {
+    margin-bottom: 0;
+  }
+  .article__body pre {
+    overflow-x: auto;
+    padding: 20px;
+    border-radius: 10px;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    font-size: 14.5px;
+    line-height: 1.6;
+    margin: 1.8em 0;
+  }
+  .article__body code {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--soft);
+    font-size: 0.9em;
+  }
+  .article__body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2em 0;
+    font-size: 15px;
+  }
+  .article__body th {
+    background: var(--soft);
+    font-weight: 600;
+    text-align: left;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    border-bottom: 2px solid var(--line);
+  }
+  .article__body td {
+    border: 1px solid var(--line);
+    padding: 12px 16px;
+  }
+
+  /* Tags */
+  .article__tags-wrap {
+    max-width: var(--article-w);
+    margin: 36px auto 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .article__tags-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .article__tags {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .article__tags a {
+    display: inline-block;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: var(--soft);
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.2s ease;
+  }
+  .article__tags a:hover {
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    color: var(--accent);
+  }
+
+  /* Share section */
+  .article__share {
+    max-width: var(--article-w);
+    margin: 32px auto 0;
+    padding-top: 28px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+  .article__share-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-right: 4px;
+  }
+  .article__share-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .article__share a {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 14px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    color: var(--muted);
+    background: var(--bg);
+    transition: all 0.2s ease;
+  }
+  .article__share a:hover {
+    border-color: var(--text);
+    color: var(--text);
+    background: var(--soft);
+  }
+
+  /* Author bio */
+  .article__author {
+    max-width: var(--article-w);
+    margin: 40px auto 0;
+    padding: 24px;
+    border-radius: var(--radius);
+    background: var(--soft);
+    border: 1px solid var(--line);
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  .article__author-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .article__author-kicker {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .article__author-name {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .article__author-name a {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .article__author-name a:hover {
+    color: var(--accent);
+  }
+  .article__author-bio {
+    margin: 6px 0 0 !important;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  /* Pager */
+  .article__pager {
+    max-width: var(--article-w);
+    margin: 48px auto 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .article__pager-link {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    text-decoration: none;
+    background: var(--bg);
+    transition: all 0.2s ease;
+  }
+  .article__pager-link:hover {
+    border-color: var(--accent);
+    box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.06);
+    transform: translateY(-2px);
+  }
+  .article__pager-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .article__pager-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.35;
+  }
+  .article__pager-next {
+    text-align: right;
+    grid-column: 2;
+  }
+
+  /* Related section */
+  .article__related {
+    margin-top: 80px;
+    padding-top: 48px;
+    border-top: 1px solid var(--line);
+  }
+  .article__related-header {
+    margin-bottom: 32px;
+  }
+  .article__related-header .section-heading {
+    margin-bottom: 6px;
+  }
+  .article__related-sub {
+    margin: 0;
+    color: var(--muted);
+    font-size: 15.5px;
+  }
+
+  @media (max-width: 640px) {
+    .article__pager {
+      grid-template-columns: 1fr;
+    }
+    .article__pager-next {
+      grid-column: 1;
+      text-align: left;
+    }
+    .article__author {
+      flex-direction: column;
+      gap: 14px;
+    }
+  }
 </style>
 <script>
   (function () {
@@ -127,7 +555,10 @@
       linkedin: "https://www.linkedin.com/sharing/share-offsite/?url=" + url,
       email: "mailto:?subject=" + title + "&body=" + url
     };
-    box.querySelectorAll("[data-share]").forEach(function (a) { a.href = links[a.getAttribute("data-share")]; });
+    box.querySelectorAll("[data-share]").forEach(function (a) {
+      var key = a.getAttribute("data-share");
+      if (links[key]) a.href = links[key];
+    });
   })();
 </script>
 {%- endif -%}

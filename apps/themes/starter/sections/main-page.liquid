@@ -11,23 +11,180 @@
     {%- if s.show_title -%}
       <header class="page__header">
         <h1 class="page__title">{{ page.title }}</h1>
-        {%- if s.show_updated -%}<p class="post-meta">Last updated <time datetime="{{ page.updated_at | date: '%Y-%m-%d' }}">{{ page.date }}</time></p>{%- endif -%}
+        {%- if s.show_updated -%}
+          <p class="post-meta page__meta">Last updated <time datetime="{{ page.updated_at | date: '%Y-%m-%d' }}">{{ page.date }}</time></p>
+        {%- endif -%}
       </header>
     {%- endif -%}
     <div class="page__body">{{ page.body }}</div>
   </div>
 </article>
 <style>
-  .page { --page-w: 720px; }
-  .page--narrow { --page-w: 600px; } .page--wide { --page-w: 960px; }
-  .page__header, .page__body { max-width: var(--page-w); margin-left: auto; margin-right: auto; }
-  .page--title-center .page__header { text-align: center; }
-  .page__title { font-size: clamp(30px, 5vw, 44px); margin: 0 0 8px; }
-  .page__body { margin-top: 24px; font-size: 17px; line-height: 1.75; overflow-wrap: anywhere; }
+  .page { --page-w: 780px; }
+  .page--narrow { --page-w: 640px; }
+  .page--wide { --page-w: 1000px; }
+  .page__header, .page__body {
+    max-width: var(--page-w);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .page--title-center .page__header {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .page__header {
+    margin-bottom: 32px;
+  }
+  .page__title {
+    font-size: clamp(28px, 4.5vw, 44px);
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+    margin: 0 0 10px;
+    color: var(--text);
+  }
+  .page__meta {
+    margin: 0;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  /* Page body typography */
+  .page__body {
+    font-size: 17.5px;
+    line-height: 1.8;
+    color: color-mix(in srgb, var(--text) 92%, var(--bg));
+    overflow-wrap: anywhere;
+  }
   .page__body > :first-child { margin-top: 0; }
-  .page__body :is(h2, h3, h4) { margin: 1.6em 0 .5em; }
-  .page__body img, .page__body iframe { max-width: 100%; height: auto; border-radius: var(--radius); }
-  .page__body blockquote { margin: 1.5em 0; padding-left: 20px; border-left: 3px solid var(--accent); font-style: italic; color: var(--muted); }
-  .page__body table { width: 100%; border-collapse: collapse; } .page__body :is(td, th) { border: 1px solid var(--line); padding: 8px; }
+  .page__body p {
+    margin: 0 0 1.6em;
+  }
+  .page__body :is(h2, h3, h4) {
+    margin: 2em 0 0.6em;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    color: var(--text);
+  }
+  .page__body h2 {
+    font-size: clamp(22px, 3vw, 28px);
+    font-weight: 700;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .page__body h3 {
+    font-size: clamp(19px, 2.4vw, 22px);
+    font-weight: 600;
+  }
+  .page__body h4 {
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .page__body a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: opacity 0.15s ease;
+  }
+  .page__body a:hover {
+    opacity: 0.8;
+  }
+  .page__body ul, .page__body ol {
+    margin: 0 0 1.6em;
+    padding-left: 1.6em;
+  }
+  .page__body li {
+    margin-bottom: 0.5em;
+    line-height: 1.7;
+  }
+  .page__body blockquote {
+    margin: 2em 0;
+    padding: 20px 24px;
+    border-left: 4px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    background: var(--soft);
+    font-style: italic;
+    color: var(--text);
+    font-size: 1.05em;
+    line-height: 1.7;
+  }
+  .page__body blockquote p:last-child {
+    margin-bottom: 0;
+  }
+  .page__body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius);
+    margin: 2em auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    display: block;
+  }
+  .page__body iframe {
+    max-width: 100%;
+    border-radius: var(--radius);
+    margin: 1.8em 0;
+  }
+  .page__body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2em 0;
+    font-size: 15px;
+  }
+  .page__body th {
+    background: var(--soft);
+    font-weight: 600;
+    text-align: left;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    border-bottom: 2px solid var(--line);
+  }
+  .page__body td {
+    border: 1px solid var(--line);
+    padding: 12px 16px;
+  }
+
+  /* Accordion support inside page content */
+  .page__body details {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 14px;
+    background: var(--bg);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .page__body details[open] {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+  }
+  .page__body summary {
+    font-size: 16.5px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text);
+  }
+  .page__body summary::-webkit-details-marker { display: none; }
+  .page__body summary::after {
+    content: "+";
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--muted);
+    transition: transform 0.2s ease;
+    margin-left: 12px;
+  }
+  .page__body details[open] summary::after {
+    content: "−";
+  }
+  .page__body details > :not(summary) {
+    margin-top: 12px;
+    color: color-mix(in srgb, var(--text) 85%, var(--bg));
+    line-height: 1.7;
+    font-size: 15px;
+  }
 </style>
 {%- endif -%}

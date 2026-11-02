@@ -1,5 +1,51 @@
 {%- comment -%}
   FAQ page template (page.faq). `sections` is the HTML of this template's sections;
-  `page` is the page being shown. Questions live in the "Frequently asked questions" section.
+  `page` is the page being shown. Questions live in the "Frequently asked questions" section or in page content.
 {%- endcomment -%}
 {{ sections }}
+<style>
+  .page { --page-w: 800px; }
+  .page__body details {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin-bottom: 14px;
+    background: var(--bg);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .page__body details[open] {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+    box-shadow: 0 6px 20px -2px rgba(0, 0, 0, 0.05);
+  }
+  .page__body summary {
+    font-size: 17px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text);
+  }
+  .page__body summary::-webkit-details-marker { display: none; }
+  .page__body summary::after {
+    content: "+";
+    font-size: 22px;
+    font-weight: 400;
+    color: var(--muted);
+    transition: transform 0.2s ease;
+    margin-left: 14px;
+    line-height: 1;
+  }
+  .page__body details[open] summary::after {
+    content: "−";
+  }
+  .page__body details > :not(summary) {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    color: color-mix(in srgb, var(--text) 85%, var(--bg));
+    line-height: 1.75;
+    font-size: 15.5px;
+  }
+</style>
