@@ -171,6 +171,19 @@ DATABASES = {
 }
 
 
+# AI assistant (apps/assistant): read-only, local machine only. It is off here and can only be turned on
+# by config/assistant_local_settings.py, never from the environment. While False the endpoint answers 404.
+ASSISTANT_REAL_MODE = False
+ASSISTANT_OLLAMA_URL = "http://localhost:11434"
+ASSISTANT_OLLAMA_MODEL = "qwen2.5:7b"
+ASSISTANT_OLLAMA_TIMEOUT = 300  # seconds to wait for one model reply (a CPU-only laptop needs 30-120)
+# Context window in tokens. Ollama's default is small; theme code in a tool result would push the rules out of it.
+ASSISTANT_OLLAMA_NUM_CTX = 8192
+# Ask PostgreSQL for a read-only session when connecting. Turn off if a connection pooler rejects startup
+# options; the connection_created hook in apps/assistant still sets the same thing after connecting.
+ASSISTANT_RO_STARTUP_OPTIONS = True
+
+
 # Cache (Redis)
 # Set REDIS_URL (e.g. redis://127.0.0.1:6379/1) to share one cache between all gunicorn workers.
 # Without it Django falls back to a per-process in-memory cache, so nothing breaks if Redis is missing.

@@ -19,6 +19,8 @@ urlpatterns = [
     path("members/", include(members_urlpatterns)),
     path("roles/", include(roles_urlpatterns)),
     path("audit/", include("apps.audit.urls")),
+    # AI assistant: answers 404 unless config/assistant_local_settings.py is the settings module
+    path("assistant/", include("apps.assistant.urls")),
     path("", include("apps.platform_admin.urls")),
     path("catalog/", include("apps.catalog.urls")),
     path("customers/", include("apps.customers.urls")),
