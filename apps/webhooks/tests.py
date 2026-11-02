@@ -3,19 +3,28 @@
 """
 import hashlib
 import hmac
+import io
 import json
+import time
+import uuid
 from datetime import timedelta
 from unittest import mock
 
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import IntegrityError, transaction
 from django.test import override_settings
 from django.utils import timezone
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.tenancy.models import Store
 
-from . import services
-from .models import FAILED, PENDING, SUCCEEDED, WebhookDelivery, WebhookEndpoint
+from . import crypto, incoming, services
+from .models import (
+    DISPATCHED, FAILED, PENDING, PROCESSED, RECEIVED, SUCCEEDED,
+    IncomingWebhookReceipt, WebhookDelivery, WebhookEndpoint, WebhookEvent,
+)
 
 URL = "https://hooks.example.com/tss"
 BASE = "/api/v1/webhooks/endpoints/"
@@ -102,7 +111,7 @@ class DeliveryTest(WebhookTestBase):
         self.assertEqual(self.deliveries()[1].payload["data"]["object"]["refunded"], "10.00")
 
     def test_signed_request_is_sent_and_recorded(self):
-        created = self.endpoint()
+        created = self.endpoint(["order.created"])
         self.place_order()
         sent = {}
 
@@ -123,7 +132,7 @@ class DeliveryTest(WebhookTestBase):
         self.assertEqual(services.deliver_due(), 0)
 
     def test_failure_is_retried_with_backoff_then_gives_up(self):
-        endpoint = self.endpoint()
+        endpoint = self.endpoint(["order.created"])
         self.place_order()
         with mock.patch.object(services, "post", return_value=500):
             services.deliver_due()
@@ -140,7 +149,7 @@ class DeliveryTest(WebhookTestBase):
         self.assertEqual(WebhookEndpoint.objects.get(pk=endpoint["id"]).consecutive_failures, 1)
 
     def test_network_error_is_a_failed_attempt(self):
-        self.endpoint()
+        self.endpoint(["order.created"])
         self.place_order()
         with mock.patch.object(services, "post", side_effect=TimeoutError("timed out")):
             services.deliver_due()
@@ -344,3 +353,388 @@ class SecretAndHousekeepingTest(WebhookTestBase):
         self.assertEqual(len(sent), 1)
         self.assertIn("owner@example.com", sent[0].to)
         self.assertIn(URL, sent[0].subject)
+
+
+# ---- outbox, secret encryption, leases/fencing, incoming receipts ----
+# The suite runs on SQLite, so row locks (skip_locked) are not exercised; claims and leases are tested by calling
+# the workers one after another and by moving the lease clock.
+
+KEYS = "v1:" + "a" * 40
+KEYS_V2 = "v2:" + "b" * 40 + ",v1:" + "a" * 40
+
+
+class OutboxTest(WebhookTestBase):
+    def setUp(self):
+        super().setUp()
+        self.row = Store.objects.get(pk=self.store["storeId"])
+        self.endpoint_id = self.endpoint(["order.created"])["id"]
+
+    def test_rollback_removes_the_event(self):
+        try:
+            with transaction.atomic():
+                services.emit(self.row, "order.created", {"x": 1}, dedupe_key="order.created:1")
+                raise RuntimeError("business operation failed")
+        except RuntimeError:
+            pass
+        self.assertEqual(WebhookEvent.objects.count(), 0)
+
+    def test_committed_event_is_dispatched_into_deliveries(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            event = services.emit(self.row, "order.created", {"x": 1}, dedupe_key="order.created:1")
+        event.refresh_from_db()
+        self.assertEqual(event.status, DISPATCHED)
+        delivery = WebhookDelivery.objects.get()
+        self.assertEqual((delivery.event_id, delivery.outbox_event_id), (event.pk, event.pk))
+        self.assertEqual(delivery.payload["id"], str(event.pk))
+        self.assertEqual(delivery.payload["data"]["object"], {"x": 1})
+
+    def test_unsubscribed_event_is_not_recorded(self):
+        self.assertIsNone(services.emit(self.row, "product.created", {}, dedupe_key="product.created:1"))
+        self.assertEqual(WebhookEvent.objects.count(), 0)
+
+    def test_same_business_operation_makes_one_event_and_one_delivery(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            first = services.emit(self.row, "order.created", {"x": 1}, dedupe_key="order.created:7")
+            second = services.emit(self.row, "order.created", {"x": 1}, dedupe_key="order.created:7")
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual((WebhookEvent.objects.count(), WebhookDelivery.objects.count()), (1, 1))
+
+    def test_database_refuses_a_second_event_with_the_same_key(self):
+        services.emit(self.row, "order.created", {}, dedupe_key="order.created:9")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            WebhookEvent.objects.create(store=self.row, event_type="order.created", dedupe_key="order.created:9", payload={})
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            WebhookEvent.objects.create(store=self.row, event_type="order.created", dedupe_key="", payload={})
+
+    def test_losing_a_creation_race_returns_the_winner(self):
+        winner = WebhookEvent.objects.create(store=self.row, event_type="order.created", dedupe_key="k", payload={"type": "x"})
+        real = WebhookEvent.objects.filter
+        calls = {"n": 0}
+
+        def blind_first_lookup(*args, **kwargs):
+            calls["n"] += 1
+            return WebhookEvent.objects.none() if calls["n"] == 1 else real(*args, **kwargs)
+
+        with mock.patch.object(WebhookEvent.objects, "filter", side_effect=blind_first_lookup), \
+                mock.patch.object(WebhookEvent.objects, "get", side_effect=lambda **kw: real(**kw).get()):
+            event = services.emit(self.row, "order.created", {}, dedupe_key="k")
+        self.assertEqual(event.pk, winner.pk)
+        self.assertEqual(WebhookEvent.objects.count(), 1)
+
+    def test_broker_outage_loses_nothing(self):
+        from . import tasks
+
+        with mock.patch.object(tasks.dispatch_event_task, "delay", side_effect=ConnectionError("redis down")):
+            with self.captureOnCommitCallbacks(execute=True):
+                event = services.emit(self.row, "order.created", {"x": 1}, dedupe_key="order.created:2")
+        event.refresh_from_db()
+        self.assertEqual((event.status, WebhookDelivery.objects.count()), (PENDING, 0))
+        # Redis is back: the sweeper (also run by deliver_due) finishes the job
+        with mock.patch.object(services, "post", return_value=200):
+            self.assertEqual(services.deliver_due(), 1)
+        event.refresh_from_db()
+        self.assertEqual((event.status, WebhookDelivery.objects.get().status), (DISPATCHED, SUCCEEDED))
+
+    def test_dispatching_twice_adds_nothing(self):
+        event = services.emit(self.row, "order.created", {}, dedupe_key="order.created:3")
+        self.assertEqual(services.dispatch_event(event.pk), 1)
+        self.assertEqual(services.dispatch_event(event.pk), 0)
+        self.assertEqual(WebhookDelivery.objects.count(), 1)
+
+    def test_unbuildable_event_is_parked_not_lost(self):
+        event = WebhookEvent.objects.create(
+            store=self.row, event_type="order.created", dedupe_key="lazy", payload=None, resource_model="nope.Nothing", resource_id="1",
+        )
+        for _ in range(services.MAX_DISPATCH_ATTEMPTS):
+            services.dispatch_event(event.pk)
+        event.refresh_from_db()
+        self.assertEqual((event.status, event.dispatch_attempts), (FAILED, services.MAX_DISPATCH_ATTEMPTS))
+
+    def test_event_is_only_delivered_inside_its_own_store(self):
+        self.sign_up("other@example.com", "Other Shop")
+        other = WebhookEndpoint.objects.exclude(pk=self.endpoint_id).first()
+        self.assertIsNone(other)  # the second owner has no endpoint yet
+        other_store = Store.objects.exclude(pk=self.row.pk).get()
+        WebhookEndpoint.objects.create(store=other_store, url=URL, events=["*"])
+        event = services.emit(self.row, "order.created", {}, dedupe_key="order.created:5")
+        services.dispatch_event(event.pk)
+        self.assertEqual(list(WebhookDelivery.objects.values_list("endpoint_id", flat=True)), [uuid.UUID(self.endpoint_id)])
+
+    def test_customer_creation_records_event_in_the_same_transaction(self):
+        self.endpoint(["customer.created"])
+        with self.captureOnCommitCallbacks(execute=True):
+            self.ok("post", "/api/v1/customers/", {"email": "buyer@example.com", "first_name": "A", "last_name": "B"}, expect=201)
+        event = WebhookEvent.objects.get(event_type="customer.created")
+        self.assertTrue(event.dedupe_key.startswith("customer.created:"))
+        self.assertEqual(event.status, DISPATCHED)
+        self.assertEqual(event.payload["data"]["object"]["email"], "buyer@example.com")
+
+
+class SecretEncryptionTest(WebhookTestBase):
+    @override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS)
+    def test_round_trip_and_tamper_detection(self):
+        sealed = crypto.encrypt("whsec_abc", "row:secret")
+        self.assertNotIn("whsec_abc", sealed)
+        self.assertEqual(crypto.decrypt(sealed, "row:secret"), "whsec_abc")
+        self.assertNotEqual(sealed, crypto.encrypt("whsec_abc", "row:secret"))  # fresh nonce
+        with self.assertRaises(crypto.CryptoError):
+            crypto.decrypt(sealed, "other-row:secret")
+        head, key_id, blob = sealed.split(":")
+        flipped = blob[:-4] + ("AAAA" if not blob.endswith("AAAA") else "BBBB")
+        with self.assertRaises(crypto.CryptoError):
+            crypto.decrypt(f"{head}:{key_id}:{flipped}", "row:secret")
+
+    def test_new_endpoint_gets_an_encrypted_copy_and_signing_still_works(self):
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            created = self.endpoint(["*"])
+            endpoint = WebhookEndpoint.objects.get(pk=created["id"])
+            self.assertTrue(endpoint.secret_encrypted.startswith("enc1:v1:"))
+            self.assertEqual(endpoint.get_secret(), created["secret"])
+            self.assertEqual(endpoint.signing_secrets(), [created["secret"]])
+            self.assertNotIn(created["secret"], endpoint.secret_encrypted)
+
+    def test_api_never_returns_secret_material(self):
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            created = self.endpoint(["*"])
+            detail = self.ok("get", f"{BASE}{created['id']}/")
+            listing = json.dumps(self.ok("get", BASE))
+        for text in (json.dumps(detail), listing):
+            self.assertNotIn(created["secret"], text)
+            self.assertNotIn("enc1:", text)
+            self.assertNotIn("secret_encrypted", text)
+
+    def test_legacy_endpoint_without_encrypted_copy_keeps_working(self):
+        endpoint = WebhookEndpoint.objects.create(store=Store.objects.get(pk=self.store["storeId"]), url=URL, events=["*"], secret="whsec_legacy")
+        WebhookEndpoint.objects.filter(pk=endpoint.pk).update(secret_encrypted="", secret_key_id="")
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            endpoint.refresh_from_db()
+            self.assertEqual(endpoint.get_secret(), "whsec_legacy")
+            self.assertEqual(endpoint.signing_secrets(), ["whsec_legacy"])
+
+    def test_backfill_encrypts_verifies_and_leaves_plaintext_alone(self):
+        store = Store.objects.get(pk=self.store["storeId"])
+        endpoint = WebhookEndpoint.objects.create(store=store, url=URL, events=["*"], secret="whsec_old", previous_secret="whsec_older")
+        WebhookEndpoint.objects.filter(pk=endpoint.pk).update(secret_encrypted="", previous_secret_encrypted="", secret_key_id="")
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            call_command("encrypt_webhook_secrets", "--dry-run", stdout=io.StringIO())
+            endpoint.refresh_from_db()
+            self.assertEqual(endpoint.secret_encrypted, "")
+            call_command("encrypt_webhook_secrets", stdout=io.StringIO())
+            endpoint.refresh_from_db()
+            self.assertEqual((endpoint.secret, endpoint.previous_secret), ("whsec_old", "whsec_older"))
+            self.assertEqual(crypto.decrypt(endpoint.secret_encrypted, endpoint._aad("secret")), "whsec_old")
+            self.assertEqual(crypto.decrypt(endpoint.previous_secret_encrypted, endpoint._aad("previous_secret")), "whsec_older")
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS_V2):  # key rotation
+            call_command("encrypt_webhook_secrets", stdout=io.StringIO())
+            endpoint.refresh_from_db()
+            self.assertEqual(endpoint.secret_key_id, "v2")
+            self.assertEqual(endpoint.get_secret(), "whsec_old")
+
+    def test_backfill_refuses_without_a_key(self):
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS="", DEBUG=False), self.assertRaises(CommandError):
+            call_command("encrypt_webhook_secrets", stdout=io.StringIO())
+
+    def test_rotation_keeps_both_secrets_encrypted_and_signing(self):
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            created = self.endpoint(["*"])
+            rotated = self.ok("post", f"{BASE}{created['id']}/rotate-secret/")
+            endpoint = WebhookEndpoint.objects.get(pk=created["id"])
+            self.assertEqual(endpoint.signing_secrets(), [rotated["secret"], created["secret"]])
+            self.assertTrue(endpoint.previous_secret_encrypted.startswith("enc1:"))
+
+    def test_undecryptable_value_falls_back_to_plaintext_without_logging_it(self):
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS=KEYS):
+            created = self.endpoint(["*"])
+        endpoint = WebhookEndpoint.objects.get(pk=created["id"])
+        with override_settings(WEBHOOK_SECRET_ENCRYPTION_KEYS="v9:" + "z" * 40):
+            with self.assertLogs("apps.webhooks.models", level="ERROR") as logs:
+                self.assertEqual(endpoint.get_secret(), created["secret"])
+        self.assertNotIn(created["secret"], "\n".join(logs.output))
+
+
+class DeliveryLeaseTest(WebhookTestBase):
+    def setUp(self):
+        super().setUp()
+        self.row = Store.objects.get(pk=self.store["storeId"])
+        self.ep = WebhookEndpoint.objects.create(store=self.row, url=URL, events=["*"])
+
+    def due(self, **kw):
+        return services.queue_ping(self.ep)
+
+    def test_destination_is_frozen_when_the_delivery_is_created(self):
+        delivery = self.due()
+        self.assertEqual(delivery.destination_url, URL)
+        WebhookEndpoint.objects.filter(pk=self.ep.pk).update(url="https://changed.example.com/new")
+        sent = {}
+        with mock.patch.object(services, "post", lambda url, body, headers: sent.update(url=url) or 200):
+            services.deliver_due()
+        self.assertEqual(sent["url"], URL)
+
+    def test_legacy_delivery_without_snapshot_uses_the_endpoint_url(self):
+        delivery = self.due()
+        WebhookDelivery.objects.filter(pk=delivery.pk).update(destination_url="")
+        sent = {}
+        with mock.patch.object(services, "post", lambda url, body, headers: sent.update(url=url) or 200):
+            services.deliver_due()
+        self.assertEqual(sent["url"], URL)
+        self.assertEqual(WebhookDelivery.objects.get().destination_url, "")  # history is not rewritten
+
+    def test_two_workers_never_claim_the_same_delivery(self):
+        self.due()
+        first, second = services.claim_due(), services.claim_due()
+        self.assertEqual((len(first), len(second)), (1, 0))
+        self.assertIsNotNone(first[0].lease_token)
+        self.assertGreater(first[0].locked_until, timezone.now())
+
+    def test_expired_lease_is_recovered(self):
+        self.due()
+        services.claim_due()
+        WebhookDelivery.objects.update(locked_until=timezone.now() - timedelta(seconds=1), next_attempt_at=timezone.now() - timedelta(seconds=1))
+        again = services.claim_due()
+        self.assertEqual(len(again), 1)
+
+    def test_stale_worker_cannot_overwrite_the_new_owner(self):
+        self.due()
+        (stale,) = services.claim_due()
+        WebhookDelivery.objects.update(locked_until=timezone.now() - timedelta(seconds=1), next_attempt_at=timezone.now() - timedelta(seconds=1))
+        (current,) = services.claim_due()
+        self.assertNotEqual(stale.lease_token, current.lease_token)
+        with mock.patch.object(services, "post", return_value=200):
+            services.attempt(current)
+        with mock.patch.object(services, "post", return_value=500):
+            services.attempt(stale)  # slow worker finishing late
+        row = WebhookDelivery.objects.get()
+        self.assertEqual((row.status, row.attempts, row.last_status_code), (SUCCEEDED, 1, 200))
+        self.assertIsNone(row.lease_token)
+
+    def test_stale_worker_cannot_write_after_a_retry_reset_the_row(self):
+        self.due()
+        (stale,) = services.claim_due()
+        services.retry(WebhookDelivery.objects.get())
+        with mock.patch.object(services, "post", return_value=200):
+            services.attempt(stale)
+        self.assertEqual(WebhookDelivery.objects.get().status, PENDING)
+
+    def test_result_clears_the_lease(self):
+        self.due()
+        with mock.patch.object(services, "post", return_value=500):
+            services.deliver_due()
+        row = WebhookDelivery.objects.get()
+        self.assertEqual((row.status, row.attempts, row.lease_token, row.locked_until), (PENDING, 1, None, None))
+
+    def test_database_refuses_half_a_lease_and_duplicate_event_rows(self):
+        delivery = self.due()
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            WebhookDelivery.objects.filter(pk=delivery.pk).update(lease_token="11111111-1111-1111-1111-111111111111")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            WebhookDelivery.objects.create(endpoint=self.ep, event_id=delivery.event_id, event_type="ping", payload={})
+
+    def test_delivery_api_shows_the_destination_but_no_lease(self):
+        self.due()
+        data = self.ok("get", "/api/v1/webhooks/deliveries/")
+        row = data["results"][0] if isinstance(data, dict) else data[0]
+        self.assertEqual(row["destination_url"], URL)
+        self.assertNotIn("lease_token", row)
+
+
+STRIPE_SECRET = "whsec_test_incoming"
+
+
+@override_settings(STRIPE_WEBHOOK_SECRET=STRIPE_SECRET, STRIPE_SECRET_KEY="sk_test")
+class IncomingReceiptTest(APITestCase):
+    URL = "/api/v1/payments/stripe/webhook/"
+
+    def body(self, event_id="evt_100", type="account.updated"):
+        return json.dumps({"id": event_id, "object": "event", "type": type, "data": {"object": {"id": "acct_1"}}})
+
+    def post(self, payload, secret=STRIPE_SECRET, stamp=None):
+        stamp = int(time.time()) if stamp is None else stamp
+        digest = hmac.new(secret.encode(), f"{stamp}.{payload}".encode(), hashlib.sha256).hexdigest()
+        return APIClient().generic("POST", self.URL, payload.encode(), content_type="application/json",
+                                   HTTP_STRIPE_SIGNATURE=f"t={stamp},v1={digest}")
+
+    def test_bad_or_stale_signature_stores_nothing(self):
+        payload = self.body()
+        self.assertEqual(self.post(payload, secret="whsec_wrong").status_code, 400)
+        self.assertEqual(self.post(payload, stamp=1000).status_code, 400)
+        self.assertEqual(APIClient().generic("POST", self.URL, payload.encode(), content_type="application/json").status_code, 400)
+        self.assertEqual(IncomingWebhookReceipt.objects.count(), 0)
+
+    def test_verified_event_is_stored_then_processed(self):
+        handled = []
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": handled.append}):
+            self.assertEqual(self.post(self.body()).status_code, 200)
+        receipt = IncomingWebhookReceipt.objects.get()
+        self.assertEqual((receipt.provider, receipt.external_event_id, receipt.status), ("stripe", "evt_100", PROCESSED))
+        self.assertEqual(handled[0]["id"], "evt_100")
+        self.assertIsNotNone(receipt.processed_at)
+
+    def test_duplicate_event_is_stored_and_processed_once(self):
+        handled = []
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": handled.append}):
+            self.assertEqual(self.post(self.body()).status_code, 200)
+            self.assertEqual(self.post(self.body()).status_code, 200)
+        self.assertEqual((IncomingWebhookReceipt.objects.count(), len(handled)), (1, 1))
+
+    def test_database_refuses_a_second_receipt_for_the_same_event(self):
+        incoming.record_receipt("stripe", {"id": "evt_1", "type": "x"})
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            IncomingWebhookReceipt.objects.create(provider="stripe", external_event_id="evt_1", payload={})
+        incoming.record_receipt("other", {"id": "evt_1", "type": "x"})  # same id, other provider
+        self.assertEqual(IncomingWebhookReceipt.objects.count(), 2)
+
+    def test_losing_a_creation_race_returns_the_stored_receipt(self):
+        first, created = incoming.record_receipt("stripe", {"id": "evt_2", "type": "x"})
+        again, created_again = incoming.record_receipt("stripe", {"id": "evt_2", "type": "x"})
+        self.assertEqual((created, created_again, first.pk), (True, False, again.pk))
+
+    def test_event_survives_a_broker_outage_and_is_processed_by_the_sweeper(self):
+        from . import tasks
+
+        handled = []
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_3", "type": "x"})
+        with override_settings(CELERY_TASK_ALWAYS_EAGER=False), \
+                mock.patch.object(tasks.process_receipt_task, "delay", side_effect=ConnectionError("redis down")):
+            incoming.enqueue(receipt)  # must not raise: the receipt is safe in PostgreSQL
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, RECEIVED)
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": handled.append}):
+            self.assertEqual(incoming.process_pending(), 1)
+        receipt.refresh_from_db()
+        self.assertEqual((receipt.status, len(handled)), (PROCESSED, 1))
+
+    def test_failure_is_recorded_retried_later_and_finally_parked(self):
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_4", "type": "x"})
+        boom = mock.Mock(side_effect=ConnectionError("db hiccup"))
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": boom}):
+            with self.assertRaises(ConnectionError):
+                incoming.process_receipt(receipt.pk)
+            receipt.refresh_from_db()
+            self.assertEqual((receipt.status, receipt.attempts, receipt.lease_token), (RECEIVED, 1, None))
+            self.assertGreater(receipt.next_attempt_at, timezone.now())
+            self.assertEqual(incoming.process_pending(), 0)  # back-off not over
+            IncomingWebhookReceipt.objects.update(attempts=incoming.MAX_ATTEMPTS - 1)
+            with self.assertRaises(ConnectionError):
+                incoming.process_receipt(receipt.pk)
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, FAILED)
+
+    def test_permanent_error_is_parked_at_once(self):
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_5", "type": "x"})
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": mock.Mock(side_effect=KeyError("bad"))}), \
+                self.assertLogs("apps.webhooks.incoming", level="CRITICAL"):
+            with self.assertRaises(KeyError):
+                incoming.process_receipt(receipt.pk)
+        self.assertEqual(IncomingWebhookReceipt.objects.get().status, FAILED)
+
+    def test_leased_receipt_is_not_taken_twice_and_stale_worker_is_fenced(self):
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_6", "type": "x"})
+        claimed = incoming.claim_receipt(receipt.pk)
+        self.assertIsNotNone(claimed)
+        self.assertIsNone(incoming.claim_receipt(receipt.pk))
+        IncomingWebhookReceipt.objects.update(locked_until=timezone.now() - timedelta(seconds=1))
+        reclaimed = incoming.claim_receipt(receipt.pk)
+        self.assertNotEqual(claimed.lease_token, reclaimed.lease_token)
+        # the old owner finishing late changes nothing
+        self.assertEqual(IncomingWebhookReceipt.objects.filter(pk=receipt.pk, lease_token=claimed.lease_token).update(status=PROCESSED), 0)
+        self.assertEqual(IncomingWebhookReceipt.objects.get().status, RECEIVED)

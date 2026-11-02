@@ -41,6 +41,6 @@ class WebhookDeliverySerializer(serializers.ModelSerializer):
         model = WebhookDelivery
         fields = [
             "id", "endpoint", "event_id", "event_type", "payload", "status", "attempts", "next_attempt_at",
-            "last_status_code", "last_error", "delivered_at", "created_at",
+            "last_status_code", "last_error", "delivered_at", "created_at", "destination_url",
         ]
         read_only_fields = fields

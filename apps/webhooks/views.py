@@ -26,7 +26,7 @@ class WebhookEndpointViewSet(StoreScopedViewSet):
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
-        response.data["secret"] = WebhookEndpoint.objects.get(pk=response.data["id"]).secret
+        response.data["secret"] = WebhookEndpoint.objects.get(pk=response.data["id"]).get_secret()
         return response
 
     @action(detail=True, methods=["post"], url_path="rotate-secret")
@@ -34,7 +34,7 @@ class WebhookEndpointViewSet(StoreScopedViewSet):
         endpoint = self.get_object()
         services.rotate_secret(endpoint)
         return Response({
-            "secret": endpoint.secret,
+            "secret": endpoint.get_secret(),
             "previous_secret_valid_until": endpoint.previous_secret_expires_at,
         })
 

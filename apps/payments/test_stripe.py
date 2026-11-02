@@ -409,7 +409,7 @@ class StripeTests(base_tests.CommerceTestBase):
         )
 
     def real_event(self, type, obj, account=ACCOUNT):
-        return json.dumps({"id": "evt_1", "object": "event", "type": type, "account": account, "data": {"object": obj}})
+        return json.dumps({"id": f"evt_{type}_{obj.get('id')}", "object": "event", "type": type, "account": account, "data": {"object": obj}})
 
     def paid_intent_object(self, checkout):
         paid = intent(checkout)

@@ -22,8 +22,11 @@ from apps.commerce.storefront_views import CheckoutDetailView
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.core.rbac import PAYMENTS_MANAGE, PAYMENTS_VIEW
 
+from apps.webhooks import incoming
+from apps.webhooks.models import RECEIVED
+
 from . import stripe_service
-from .tasks import process_event
+from .tasks import process_event  # noqa: F401  (kept importable; the webhook now goes through apps.webhooks.incoming)
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +91,11 @@ class StripeWebhookView(APIView):
         except (ValueError, stripe.SignatureVerificationError):
             return HttpResponse(status=400)
 
-        # Signature is checked; the work happens in a background job (retried if it fails)
-        process_event.delay(json.dumps(event.to_dict() if hasattr(event, "to_dict") else event, default=vars))
+        # Signature is checked. Store the event in PostgreSQL first (a repeat of the same event id is stored once), then
+        # answer; the work happens from the stored receipt in a background job, retried if it fails.
+        receipt, _ = incoming.record_receipt(incoming.STRIPE, event.to_dict() if hasattr(event, "to_dict") else event)
+        if receipt.status == RECEIVED:
+            incoming.enqueue(receipt)
         return HttpResponse(status=200)
 
 

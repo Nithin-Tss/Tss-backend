@@ -323,6 +323,9 @@ CORS_URLS_REGEX = r'^/(?!s/).*$'
 # Audit log: how long entries are kept (manage.py prune_audit_logs), and whether the
 # client address comes from the proxy's X-Forwarded-For (only when behind one).
 AUDIT_LOG_RETENTION_DAYS = int(os.getenv('AUDIT_LOG_RETENTION_DAYS', 365))
+# Keys that encrypt webhook endpoint secrets: "<id>:<key>,<id>:<key>"; the first encrypts, all can decrypt.
+# Use at least 32 random characters per key. Unset: secrets stay plaintext-only (in DEBUG a key is derived from SECRET_KEY).
+WEBHOOK_SECRET_ENCRYPTION_KEYS = os.getenv('WEBHOOK_SECRET_ENCRYPTION_KEYS', '')
 WEBHOOK_DELIVERY_RETENTION_DAYS = int(os.getenv('WEBHOOK_DELIVERY_RETENTION_DAYS', 30))
 AUDIT_TRUST_FORWARDED_FOR = env_bool('DJANGO_BEHIND_PROXY', default=False)
 

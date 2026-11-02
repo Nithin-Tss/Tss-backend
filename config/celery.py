@@ -20,6 +20,7 @@ app.autodiscover_tasks()
 
 app.conf.beat_schedule = {
     "deliver-webhooks": {"task": "apps.core.tasks.deliver_webhooks", "schedule": 5.0},
+    "sweep-webhooks": {"task": "apps.webhooks.tasks.sweep_webhooks", "schedule": 10.0},
     "expire-stock-reservations": {"task": "apps.core.tasks.expire_reservations", "schedule": 120.0},
     "sweep-carts": {"task": "apps.core.tasks.sweep_carts", "schedule": crontab(minute=7)},
     "prune-webhook-deliveries": {"task": "apps.core.tasks.prune_webhook_deliveries", "schedule": crontab(hour=3, minute=50)},
