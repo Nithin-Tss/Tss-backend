@@ -4127,7 +4127,7 @@ class StylesSyncTest(StoreClientMixin, APITestCase):
 
     def test_theme_colours_fill_the_css_variables(self):
         html = self.store_html()
-        for line in ("--accent: #161C2C;", "--bg: #FFFFFF;", "--text: #161C2C;"):  # the defaults
+        for line in ("--accent: #1A1916;", "--bg: #FAF9F6;", "--text: #1A1916;"):  # the defaults
             self.assertIn(line, html)
 
         data = self.ok("get", "/api/v1/themes/settings/")
@@ -4181,7 +4181,7 @@ class CustomizerTokenTest(StoreClientMixin, APITestCase):
         css = self.token_css(self.store_html())
         self.assertNotIn("--accent:", css)
         self.assertNotIn("--text:", css)
-        self.assertIn("--b-r:999px", css)  # the theme's pill buttons
+        self.assertIn("--b-r:6px", css)  # the theme's default (slight) button corners
 
     def test_saved_tokens_reach_store_and_preview_and_persist(self):
         self.assertEqual(self.ok("post", "/api/v1/themes/customizer/", self.TOKENS), self.TOKENS)
@@ -4194,7 +4194,7 @@ class CustomizerTokenTest(StoreClientMixin, APITestCase):
             for line in expected:
                 self.assertIn(line, css)
             # Comes after styles.liquid's :root, so the token wins over settings.accent_color
-            self.assertLess(html.index("--accent: #161C2C;"), html.index("--accent:#FF5500"))
+            self.assertLess(html.index("--accent: #1A1916;"), html.index("--accent:#FF5500"))
         self.assertEqual(self.store_html().count("--accent:#FF5500"), 1)  # loaded once
 
     def test_theme_settings_colours_still_work_next_to_tokens(self):
