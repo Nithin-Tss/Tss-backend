@@ -48,9 +48,9 @@ def base_page(key):
 COMMERCE_PAGES = ("index", "product", "collection")
 
 THEME_SETTINGS = {
-    "accent_color": {"type": "color", "label": "Accent color", "default": "#161C2C"},
-    "background_color": {"type": "color", "label": "Background color", "default": "#FFFFFF"},
-    "text_color": {"type": "color", "label": "Text color", "default": "#161C2C"},
+    "accent_color": {"type": "color", "label": "Accent color", "default": "#1A1916"},
+    "background_color": {"type": "color", "label": "Background color", "default": "#FAF9F6"},
+    "text_color": {"type": "color", "label": "Text color", "default": "#1A1916"},
     "currency_symbol": {"type": "text", "label": "Currency symbol", "default": "₹", "max": 4},
     "announcement": {"type": "text", "label": "Announcement text", "default": ""},
 }
@@ -1886,7 +1886,7 @@ def button_settings():
 
 # Theme-wide defaults new sections and blocks start with
 THEME_SETTINGS.update({
-    "heading_font": {"type": "font", "label": "Heading font", "default": "system"},
+    "heading_font": {"type": "font", "label": "Heading font", "default": "playfair"},
     "body_font": {"type": "font", "label": "Body font", "default": "system"},
     "base_font_size": {"type": "number", "label": "Base font size", "default": 16, "min": 12, "max": 22, "unit": "px",
                        "help": "The size of normal text across the store."},
@@ -1895,7 +1895,7 @@ THEME_SETTINGS.update({
                      "labels": {"soft": "Soft (light background)", "text": "Text only", "link": "Link style"}},
     "button_bg": {"type": "color_optional", "label": "Button colour", "default": "", "help": "None uses the accent colour."},
     "button_text": {"type": "color_optional", "label": "Button text colour", "default": ""},
-    "button_radius": {"type": "select", "label": "Button corners", "default": "pill", "ui": "segmented",
+    "button_radius": {"type": "select", "label": "Button corners", "default": "slight", "ui": "segmented",
                       "options": ["square", "slight", "rounded", "pill"], "labels": {"slight": "Slight"}},
     "button_hover": {"type": "select", "label": "Button hover effect", "default": "darken",
                      "options": ["none", "lift", "darken", "grow"]},

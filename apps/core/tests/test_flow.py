@@ -241,7 +241,8 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
         self.assertLess(html.index("Staff picks"), html.index("Lookbook"))
         self.assertIn("<strong>Hand made</strong>", html)
         self.assertNotIn("alert(1)", html)
-        self.assertNotIn("javascript:", html)
+        # the header's own script compares against 'javascript:void(0)', so check link attributes only
+        self.assertNotRegex(html, r"""(?i)(href|src)\s*=\s*["']?\s*javascript:""")
         self.assertNotIn("Secret sale", html)
         self.assertIn("Picked lamp", html)
         self.assertNotIn("Other chair", html)  # only the chosen product
