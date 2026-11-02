@@ -234,8 +234,8 @@ STARTER_UPGRADES = {
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
         "2a4098b38d89db4b74379ed9d6bdbf7e344864db5bac20b2c9e96abf5c5f5db2",  # revision 41: before the announcement bar
-        "21010ea6743143bf2281d7893c1326b12c47cd7a7a0f020ea2cbe8708b9e3271",  # revision 20: legacy wishlist block fixture
-        "93f271e89641e62c17fbffebc7ff2ddf6dffb168fbbfa7d732a7b317af884848",  # revision 18: legacy Show Wishlist fixture
+        "9d15d2135de541b6cdc494c32c325e490d151d8e984f222015cc80b017843685",  # revision 20: legacy wishlist block fixture
+        "1d988651e7e347b5e4eba971acebc1e7a11a49d8a4f9974ba3d74ea8b35ef3de",  # revision 18: legacy Show Wishlist fixture
         # Revision 40: before the header Search block
         "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",  # revision 40: before the Search block
         "0f1b0c1d6442b03d7604b4a82f00e99d6d7a05685b312a621f07aace30925b8a",  # revision 39: before the sign-in icon
