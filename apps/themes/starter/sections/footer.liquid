@@ -5,9 +5,23 @@
   {{ block.attrs }} lets the customizer's Edit mode select a block; it is empty on the store.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
-<footer class="site-footer" style="{% if s.background != blank %}background:{{ s.background }};{% endif %}{% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}">
+{%- capture heading_attr -%}{% if s.heading_color != blank %} style="color:{{ s.heading_color }}"{% endif %}{%- endcapture -%}
+{%- capture link_attr -%}{% if s.link_color != blank %} style="color:{{ s.link_color }}"{% endif %}{%- endcapture -%}
+{%- capture social_attr -%}{% if s.social_color != blank %} style="color:{{ s.social_color }}"{% endif %}{%- endcapture -%}
+{%- capture footer_style -%}
+  {% if s.background != blank %}background:{{ s.background }};{% endif %}
+  {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
+  {% if s.padding_top and s.padding_top != 0 %}padding-top:{{ s.padding_top }}px;{% endif %}
+  {% if s.padding_bottom and s.padding_bottom != 0 %}padding-bottom:{{ s.padding_bottom }}px;{% endif %}
+  {% if s.text_align == 'center' or s.text_align == 'right' %}text-align:{{ s.text_align }};{% endif %}
+{%- endcapture -%}
+{%- capture top_style -%}
+  {% if s.max_width and s.max_width != 0 %}max-width:{{ s.max_width }}px;margin-left:auto;margin-right:auto;{% endif %}
+  {% if s.column_gap and s.column_gap != 0 %}gap:{{ s.column_gap }}px;{% endif %}
+{%- endcapture -%}
+<footer class="site-footer" data-mobile-align="{{ s.mobile_align | default: 'same' }}" style="{{ footer_style | strip }}">
   {%- if section.blocks.size > 0 -%}
-    <div class="page-width site-footer__top">
+    <div class="page-width site-footer__top"{% if top_style contains ':' %} style="{{ top_style | strip }}"{% endif %}>
       {%- for block in section.blocks -%}
         {%- assign b = block.settings -%}
         {%- case block.type -%}
@@ -31,7 +45,7 @@
                   <img src="{{ block_image }}" alt="{{ b.heading | default: shop.name | escape }}" loading="lazy">
                 </div>
               {%- endif -%}
-              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- if b.heading != blank -%}<strong{{ heading_attr }}>{{ b.heading }}</strong>{%- endif -%}
               {%- if b.text != blank -%}<p>{{ b.text }}</p>{%- endif -%}
             </div>
           {%- when 'links' -%}
@@ -42,24 +56,24 @@
                   <img src="{{ link_image }}" alt="{{ b.heading | default: shop.name | escape }}" loading="lazy">
                 </div>
               {%- endif -%}
-              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- if b.heading != blank -%}<strong{{ heading_attr }}>{{ b.heading }}</strong>{%- endif -%}
               {%- for link in b.menu -%}
-                <a href="{{ link.url }}">{{ link.label }}</a>
+                <a href="{{ link.url }}"{{ link_attr }}>{{ link.label }}</a>
               {%- endfor -%}
             </nav>
           {%- when 'social' -%}
             <div class="site-footer__social"{{ block.attrs }}>
-              {%- if b.instagram != blank -%}<a href="{{ b.instagram }}" target="_blank" rel="noopener">Instagram</a>{%- endif -%}
-              {%- if b.facebook != blank -%}<a href="{{ b.facebook }}" target="_blank" rel="noopener">Facebook</a>{%- endif -%}
-              {%- if b.x != blank -%}<a href="{{ b.x }}" target="_blank" rel="noopener">X</a>{%- endif -%}
-              {%- if b.tiktok != blank -%}<a href="{{ b.tiktok }}" target="_blank" rel="noopener">TikTok</a>{%- endif -%}
-              {%- if b.youtube != blank -%}<a href="{{ b.youtube }}" target="_blank" rel="noopener">YouTube</a>{%- endif -%}
-              {%- if b.pinterest != blank -%}<a href="{{ b.pinterest }}" target="_blank" rel="noopener">Pinterest</a>{%- endif -%}
-              {%- if b.linkedin != blank -%}<a href="{{ b.linkedin }}" target="_blank" rel="noopener">LinkedIn</a>{%- endif -%}
+              {%- if b.instagram != blank -%}<a href="{{ b.instagram }}" target="_blank" rel="noopener"{{ social_attr }}>Instagram</a>{%- endif -%}
+              {%- if b.facebook != blank -%}<a href="{{ b.facebook }}" target="_blank" rel="noopener"{{ social_attr }}>Facebook</a>{%- endif -%}
+              {%- if b.x != blank -%}<a href="{{ b.x }}" target="_blank" rel="noopener"{{ social_attr }}>X</a>{%- endif -%}
+              {%- if b.tiktok != blank -%}<a href="{{ b.tiktok }}" target="_blank" rel="noopener"{{ social_attr }}>TikTok</a>{%- endif -%}
+              {%- if b.youtube != blank -%}<a href="{{ b.youtube }}" target="_blank" rel="noopener"{{ social_attr }}>YouTube</a>{%- endif -%}
+              {%- if b.pinterest != blank -%}<a href="{{ b.pinterest }}" target="_blank" rel="noopener"{{ social_attr }}>Pinterest</a>{%- endif -%}
+              {%- if b.linkedin != blank -%}<a href="{{ b.linkedin }}" target="_blank" rel="noopener"{{ social_attr }}>LinkedIn</a>{%- endif -%}
             </div>
           {%- when 'newsletter' -%}
             <form class="site-footer__newsletter" onsubmit="event.preventDefault(); this.querySelector('p').textContent = 'Thanks! Sign-ups are coming soon.';"{{ block.attrs }}>
-              {%- if b.heading != blank -%}<strong>{{ b.heading }}</strong>{%- endif -%}
+              {%- if b.heading != blank -%}<strong{{ heading_attr }}>{{ b.heading }}</strong>{%- endif -%}
               {%- if b.text != blank -%}<span>{{ b.text }}</span>{%- endif -%}
               <div class="site-footer__signup">
                 <input type="email" name="email" placeholder="Email address" aria-label="Email address" required>
@@ -71,6 +85,7 @@
       {%- endfor -%}
     </div>
   {%- endif -%}
+  {%- if s.show_copyright != false -%}
   <div class="page-width site-footer__legal">
     {%- if s.copyright != blank -%}
       {{ s.copyright }}
@@ -78,9 +93,20 @@
       &copy; {{ 'now' | date: '%Y' }} {{ shop.name }}
     {%- endif -%}
   </div>
+  {%- endif -%}
   {%- if s.utility_show -%}
-    <div class="site-footer__utility" style="{% if s.utility_bg != blank %}background:{{ s.utility_bg }};{% endif %}{% if s.utility_color != blank %}color:{{ s.utility_color }};{% endif %}">
-      <div class="page-width site-footer__utility-inner">
+    {%- capture utility_style -%}
+      {% if s.utility_bg != blank %}background:{{ s.utility_bg }};{% endif %}
+      {% if s.utility_color != blank %}color:{{ s.utility_color }};{% endif %}
+      {% if s.utility_size and s.utility_size != 0 %}font-size:{{ s.utility_size }}px;{% endif %}
+      {% if s.utility_case == 'uppercase' or s.utility_case == 'capitalize' %}text-transform:{{ s.utility_case }};{% endif %}
+      {% if s.utility_divider == false %}border-top:0;{% elsif s.utility_divider_color != blank %}border-top-color:{{ s.utility_divider_color }};{% endif %}
+    {%- endcapture -%}
+    {%- capture utility_pad -%}
+      {% if s.utility_padding and s.utility_padding != 0 %}padding-top:{{ s.utility_padding }}px;padding-bottom:{{ s.utility_padding }}px;{% endif %}
+    {%- endcapture -%}
+    <div class="site-footer__utility" style="{{ utility_style | strip }}">
+      <div class="page-width site-footer__utility-inner"{% if utility_pad contains ':' %} style="{{ utility_pad | strip }}"{% endif %}>
         <span>{{ s.utility_left }}</span>
         <nav aria-label="Contact">
           {%- if s.utility_phone != blank -%}
@@ -89,9 +115,25 @@
           {%- if s.utility_email != blank -%}
             <a href="mailto:{{ s.utility_email }}">{{ s.utility_email }}</a>
           {%- endif -%}
-          {%- for link in s.utility_menu -%}
-            <a href="{{ link.url }}">{{ link.label }}</a>
-          {%- endfor -%}
+          {%- if s.utility_show_links != false -%}
+            {%- for link in s.utility_menu -%}
+              <a href="{{ link.url }}">{{ link.label }}</a>
+            {%- endfor -%}
+          {%- endif -%}
+          {%- if s.utility_show_social -%}
+            {%- for block in section.blocks -%}
+              {%- if block.type == 'social' -%}
+                {%- assign b = block.settings -%}
+                {%- if b.instagram != blank -%}<a href="{{ b.instagram }}" target="_blank" rel="noopener">Instagram</a>{%- endif -%}
+                {%- if b.facebook != blank -%}<a href="{{ b.facebook }}" target="_blank" rel="noopener">Facebook</a>{%- endif -%}
+                {%- if b.x != blank -%}<a href="{{ b.x }}" target="_blank" rel="noopener">X</a>{%- endif -%}
+                {%- if b.tiktok != blank -%}<a href="{{ b.tiktok }}" target="_blank" rel="noopener">TikTok</a>{%- endif -%}
+                {%- if b.youtube != blank -%}<a href="{{ b.youtube }}" target="_blank" rel="noopener">YouTube</a>{%- endif -%}
+                {%- if b.pinterest != blank -%}<a href="{{ b.pinterest }}" target="_blank" rel="noopener">Pinterest</a>{%- endif -%}
+                {%- if b.linkedin != blank -%}<a href="{{ b.linkedin }}" target="_blank" rel="noopener">LinkedIn</a>{%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endif -%}
         </nav>
       </div>
     </div>
@@ -101,6 +143,11 @@
   .site-footer__utility { border-top: 1px solid var(--line); font-size: 13px; }
   .site-footer__utility-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; min-height: 34px; padding-top: 4px; padding-bottom: 4px; }
   .site-footer__utility nav { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  @media (max-width: 640px) {
+    .site-footer[data-mobile-align="left"] { text-align: left; }
+    .site-footer[data-mobile-align="center"] { text-align: center; }
+    .site-footer[data-mobile-align="center"] .site-footer__social, .site-footer[data-mobile-align="center"] .site-footer__nav { justify-content: center; align-items: center; }
+  }
   .site-footer__utility a { color: inherit; text-decoration: none; }
   .site-footer__utility a:hover { text-decoration: underline; }
   @media (max-width: 640px) { .site-footer__utility-inner { justify-content: center; text-align: center; } }
@@ -134,9 +181,26 @@
     {"type": "menu", "id": "utility_menu", "label": "Utility bar links", "default": "", "info": "One link per line: Label | /page"},
     {"type": "color", "id": "utility_bg", "label": "Utility bar colour", "default": ""},
     {"type": "color", "id": "utility_color", "label": "Utility bar text colour", "default": ""},
+    {"type": "checkbox", "id": "utility_show_links", "label": "Utility bar: show links", "default": true},
+    {"type": "checkbox", "id": "utility_show_social", "label": "Utility bar: show social links", "default": false, "info": "Uses the links of the Social links block."},
+    {"type": "range", "id": "utility_size", "label": "Utility bar text size", "min": 10, "max": 20, "step": 1, "unit": "px", "default": 13},
+    {"type": "radio", "id": "utility_case", "label": "Utility bar text case", "options": [{"value": "none", "label": "As typed"}, {"value": "uppercase", "label": "UPPERCASE"}, {"value": "capitalize", "label": "Capitalised"}], "default": "none"},
+    {"type": "checkbox", "id": "utility_divider", "label": "Utility bar: line above", "default": true},
+    {"type": "color", "id": "utility_divider_color", "label": "Utility bar line colour", "default": ""},
+    {"type": "range", "id": "utility_padding", "label": "Utility bar spacing above and below", "min": 0, "max": 40, "step": 1, "unit": "px", "default": 0, "info": "0 keeps the theme's spacing."},
+    {"type": "checkbox", "id": "show_copyright", "label": "Show the copyright line", "default": true},
     {"type": "text", "id": "copyright", "label": "Copyright line", "default": "", "info": "Empty shows the year and the store name."},
     {"type": "color", "id": "background", "label": "Background colour", "default": ""},
-    {"type": "color", "id": "text_color", "label": "Text colour", "default": ""}
+    {"type": "color", "id": "text_color", "label": "Text colour", "default": ""},
+    {"type": "color", "id": "heading_color", "label": "Heading colour", "default": ""},
+    {"type": "color", "id": "link_color", "label": "Link colour", "default": ""},
+    {"type": "color", "id": "social_color", "label": "Social link colour", "default": ""},
+    {"type": "radio", "id": "text_align", "label": "Text alignment", "options": [{"value": "left", "label": "Left"}, {"value": "center", "label": "Centre"}, {"value": "right", "label": "Right"}], "default": "left"},
+    {"type": "range", "id": "padding_top", "label": "Space above", "min": 0, "max": 160, "step": 4, "unit": "px", "default": 0, "info": "0 keeps the theme's spacing."},
+    {"type": "range", "id": "padding_bottom", "label": "Space below", "min": 0, "max": 160, "step": 4, "unit": "px", "default": 0, "info": "0 keeps the theme's spacing."},
+    {"type": "range", "id": "column_gap", "label": "Space between columns", "min": 0, "max": 120, "step": 4, "unit": "px", "default": 0, "info": "0 keeps the theme's spacing."},
+    {"type": "range", "id": "max_width", "label": "Content width", "min": 0, "max": 1600, "step": 20, "unit": "px", "default": 0, "info": "0 uses the page width."},
+    {"type": "radio", "id": "mobile_align", "label": "Text alignment on phones", "options": [{"value": "same", "label": "Same as desktop"}, {"value": "left", "label": "Left"}, {"value": "center", "label": "Centre"}], "default": "same"}
   ],
   "blocks": [
     {

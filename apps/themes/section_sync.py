@@ -66,6 +66,9 @@ SYNCED_SECTIONS = {
     "footer": {
         "path": "sections/footer.liquid", "label": "Footer", "snippet": "footer",
         "originals": {
+            # starter before the footer style, utility and mobile settings
+            "2c9bc12df53d8dbeba97ced10cbee17a107be0ca18dd58822bb09cc6cc6825bc",  # LF
+            "8fc8359490e9824b2d4c442e6793f72113569e865840dd0ca11653cbf419024e",  # CRLF
             # updated starter with image upload field in text and links blocks
             "f37dffa266ec5f3a173bf9eec4b7a87547bd9389118ffa9597aeeacf4d32ff3d",  # LF
             "eeca0f463889779efd6e6417edb464edccc3f6b4d4de769e647e8ff68ab920db",  # CRLF
@@ -108,7 +111,7 @@ SYNCED_FILES = {
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 6: show the guest wishlist item count beside existing header hearts
-ORIGINALS_REVISION = 8
+ORIGINALS_REVISION = 9
 
 
 def is_original_snippet(name, content):
