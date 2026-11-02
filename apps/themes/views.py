@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import time
@@ -1785,6 +1786,9 @@ class ThemePreviewView(StoreThemeView):
         return Response({"html": html})
 
 
+_schema_etag = None
+
+
 class ThemeSchemaView(APIView):
     """
     GET /api/v1/themes/schema/
@@ -1795,9 +1799,15 @@ class ThemeSchemaView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(
-            public_schema()
-        )
+        # The same for every store and unchanged until the next deploy: the browser keeps it and asks only
+        # whether it changed (If-None-Match), instead of downloading it on every editor load.
+        global _schema_etag
+        if _schema_etag is None:
+            _schema_etag = '"%s"' % hashlib.sha1(json.dumps(public_schema(), sort_keys=True, default=str).encode()).hexdigest()
+        headers = {"ETag": _schema_etag, "Cache-Control": "private, max-age=300, must-revalidate"}
+        if _schema_etag in [tag.strip() for tag in request.headers.get("If-None-Match", "").split(",")]:
+            return Response(status=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return Response(public_schema(), headers=headers)
 
 
 # ------------------------------------------------------------

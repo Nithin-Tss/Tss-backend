@@ -906,6 +906,27 @@ def currency_symbol(store, theme_symbol):
     return CURRENCY_SYMBOLS.get(code, f"{code} " if code else DEFAULT_CURRENCY_SYMBOL)
 
 
+class _ParsedOnceLoader(DictLoader):
+    """A DictLoader that parses each template once (the source never changes under a cached environment)."""
+
+    def __init__(self, templates):
+        super().__init__(templates)
+        self._parsed = {}
+
+    def load(self, env, name, *, globals=None, context=None, **kwargs):  # noqa: A002
+        # {% render %} passes the tag and the render context; they don't change which source is loaded
+        template = self._parsed.get(name)
+        if template is None:
+            template = self._parsed[name] = super().load(env, name, globals=globals, context=context, **kwargs)
+        return template
+
+
+# Environments by what they load (a digest of every file) and the shop's url and currency, so a page is parsed
+# once, not on every render. Editing any file changes the digest, so the next render builds a fresh one.
+_ENVIRONMENTS = {}
+_ENVIRONMENTS_MAX = 64
+
+
 def _environment(files, base_url, currency, overrides=None):
     loader = {}
     for path, content in files.items():
@@ -916,7 +937,15 @@ def _environment(files, base_url, currency, overrides=None):
     # e.g. the footer snippet name pointing at the synced footer section's output
     loader.update(overrides or {})
 
-    env = Environment(loader=DictLoader(loader), autoescape=True)
+    digest = hashlib.sha1()
+    for path in sorted(loader):
+        digest.update(f"{path}|{loader[path]}|".encode("utf-8"))
+    key = (digest.hexdigest(), base_url, currency)
+    cached = _ENVIRONMENTS.get(key)
+    if cached is not None:
+        return cached
+
+    env = Environment(loader=_ParsedOnceLoader(loader), autoescape=True)
 
     def money(value):
         if value is None or value == "":
@@ -928,6 +957,9 @@ def _environment(files, base_url, currency, overrides=None):
 
     env.filters["money"] = money
     env.filters["link"] = link
+    if len(_ENVIRONMENTS) >= _ENVIRONMENTS_MAX:
+        _ENVIRONMENTS.pop(next(iter(_ENVIRONMENTS)), None)
+    _ENVIRONMENTS[key] = env
     return env
 
 

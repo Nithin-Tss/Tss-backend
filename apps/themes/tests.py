@@ -6757,3 +6757,149 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         self.assertIn('role="menuitem"', nav)
         self.assertIn('class="site-nav__dropdown-header"', nav)
         self.assertIn('class="site-nav__dropdown-toggle"', nav)
+
+
+class ThemePerformanceCacheTest(StoreClientMixin, APITestCase):
+    """The per-request work that was cut: preparing a theme, loading its files, parsing its templates, the schema."""
+
+    def setUp(self):
+        from . import services
+
+        services.clear_theme_caches()
+        self.token, self.store = self.sign_up("perf@example.com", "Perf Store")
+
+    def theme(self):
+        from .models import StoreTheme
+
+        return StoreTheme.objects.select_related("theme").get(store_id=self.store["storeId"], is_active=True)
+
+    def prepares(self, call):
+        from unittest import mock
+
+        from . import services
+
+        with mock.patch.object(services, "_prepare", wraps=services._prepare) as prepare:
+            call()
+        return prepare.call_count
+
+    def test_theme_is_prepared_once_until_it_changes(self):
+        self.ok("get", "/api/v1/themes/settings/")
+        self.ok("get", "/api/v1/themes/settings/")  # settles anything the first preparation saved
+        self.assertEqual(self.prepares(lambda: self.ok("get", "/api/v1/themes/settings/")), 0)
+
+        # A file is saved: the next request prepares again
+        file = self.theme().theme.files.get(file_path="layout/theme.liquid")
+        file.content += "\n"
+        file.file_size = len(file.content.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        self.assertEqual(self.prepares(lambda: self.ok("get", "/api/v1/themes/settings/")), 1)
+
+    def test_a_missing_starter_file_is_still_added_for_an_existing_store(self):
+        self.ok("get", "/api/v1/themes/settings/")
+        self.ok("get", "/api/v1/themes/settings/")
+        theme = self.theme().theme
+        theme.files.filter(file_path="templates/product.liquid").delete()
+        self.ok("get", "/api/v1/themes/settings/")
+        self.assertTrue(theme.files.filter(file_path="templates/product.liquid").exists())
+
+    def test_settings_changes_prepare_again(self):
+        self.ok("get", "/api/v1/themes/settings/")
+        self.ok("get", "/api/v1/themes/settings/")
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {}})
+        self.ok("get", "/api/v1/themes/settings/")  # settles
+        self.assertEqual(self.prepares(lambda: self.ok("get", "/api/v1/themes/settings/")), 0)
+
+    def test_files_are_loaded_once_and_follow_edits(self):
+        from .services import theme_files
+
+        self.ok("get", "/api/v1/themes/settings/")
+        store_theme = self.theme()
+        first = theme_files(store_theme)
+        first["layout/theme.liquid"] = "mutated by a caller"
+        again = theme_files(store_theme)
+        self.assertNotEqual(again["layout/theme.liquid"], "mutated by a caller")
+
+        with self.assertNumQueries(1):  # only the check that nothing changed
+            theme_files(store_theme)
+
+        file = store_theme.theme.files.get(file_path="snippets/product-card.liquid")
+        file.content = file.content + "<!-- edited -->"
+        file.file_size = len(file.content.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        self.assertTrue(theme_files(store_theme)["snippets/product-card.liquid"].endswith("<!-- edited -->"))
+
+        store_theme.theme.files.filter(file_path="snippets/product-card.liquid").delete()
+        self.assertNotIn("snippets/product-card.liquid", theme_files(store_theme))
+
+    def test_files_of_two_stores_stay_apart(self):
+        from .services import theme_files
+
+        self.ok("get", "/api/v1/themes/settings/")
+        mine = self.theme()
+        edited = mine.theme.files.get(file_path="layout/theme.liquid")
+        edited.content = "STORE ONE"
+        edited.file_size = 9
+        edited.save(update_fields=["content", "file_size", "updated_at"])
+        self.assertEqual(theme_files(mine)["layout/theme.liquid"], "STORE ONE")
+
+        token, other = self.sign_up("perf2@example.com", "Other Store")
+        self.ok("get", "/api/v1/themes/settings/")
+        from .models import StoreTheme
+
+        theirs = StoreTheme.objects.select_related("theme").get(store_id=other["storeId"], is_active=True)
+        self.assertNotEqual(theirs.theme_id, mine.theme_id)
+        self.assertNotEqual(theme_files(theirs)["layout/theme.liquid"], "STORE ONE")
+
+    def test_environment_is_reused_for_the_same_files_and_rebuilt_for_changed_ones(self):
+        from . import rendering
+
+        files = {"snippets/a.liquid": "A {{ 1 | money }}", "layout/theme.liquid": "{% render 'a' %}"}
+        env = rendering._environment(files, "/s/x", "$")
+        self.assertIs(env, rendering._environment(dict(files), "/s/x", "$"))
+        self.assertIsNot(env, rendering._environment(files, "/s/x", "â‚¹"))  # the money filter is bound to the currency
+        self.assertIsNot(env, rendering._environment(files, "/s/y", "$"))
+        changed = {**files, "snippets/a.liquid": "B {{ 1 | money }}"}
+        edited = rendering._environment(changed, "/s/x", "$")
+        self.assertIsNot(env, edited)
+        self.assertEqual(edited.get_template("layout/theme.liquid").render(), "B $1.00")
+        self.assertEqual(env.get_template("layout/theme.liquid").render(), "A $1.00")
+
+    def test_preview_shows_an_edited_snippet_straight_away(self):
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        first = self.client.post("/api/v1/themes/preview/?page=index", settings, format="json")
+        self.assertEqual(first.status_code, 200)
+        file = self.theme().theme.files.get(file_path="layout/theme.liquid")
+        file.content = file.content.replace("</body>", "<!-- perf-marker --></body>", 1)
+        file.file_size = len(file.content.encode("utf-8"))
+        file.save(update_fields=["content", "file_size", "updated_at"])
+        second = self.client.post("/api/v1/themes/preview/?page=index", settings, format="json")
+        self.assertIn("perf-marker", second.json()["html"])
+        self.assertNotIn("perf-marker", first.json()["html"])
+
+    def test_schema_is_cacheable_and_revalidates(self):
+        first = self.client.get("/api/v1/themes/schema/")
+        self.assertEqual(first.status_code, 200)
+        etag = first["ETag"]
+        self.assertIn("max-age", first["Cache-Control"])
+        again = self.client.get("/api/v1/themes/schema/", HTTP_IF_NONE_MATCH=etag)
+        self.assertEqual(again.status_code, 304)
+        stale = self.client.get("/api/v1/themes/schema/", HTTP_IF_NONE_MATCH='"other"')
+        self.assertEqual(stale.status_code, 200)
+        self.assertEqual(stale.json(), first.json())
+
+    def test_a_snippet_rendered_in_a_loop_is_parsed_once(self):
+        from unittest import mock
+
+        from liquid import Environment
+
+        from . import rendering
+
+        files = {
+            "snippets/card.liquid": "[{{ item }}]",
+            "layout/theme.liquid": "{% for i in (1..5) %}{% render 'card', item: i %}{% endfor %}",
+        }
+        env = rendering._environment(files, "/s/loop", "$")
+        with mock.patch.object(Environment, "from_string", autospec=True, side_effect=Environment.from_string) as parse:
+            self.assertEqual(env.get_template("layout/theme.liquid").render(), "[1][2][3][4][5]")
+            self.assertEqual(env.get_template("layout/theme.liquid").render(), "[1][2][3][4][5]")
+        self.assertEqual(parse.call_count, 2)  # the layout and the card, once each

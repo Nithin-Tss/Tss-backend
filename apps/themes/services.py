@@ -22,6 +22,8 @@ from types import SimpleNamespace
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Max, Sum
+from django.utils import timezone
 from liquid import Environment
 from liquid.exceptions import LiquidError
 from rest_framework import exceptions
@@ -403,6 +405,54 @@ def _prepare(store_theme, new_store=False):
     _upgrade_footer_icon(store_theme.theme)
 
 
+# A theme is brought up to date (_prepare) once per state of its files and settings, not on every request.
+# The state is read in one cheap query; any save of a file or of the theme's settings changes it, so the
+# next request prepares again. A new deploy starts with an empty cache, so starter upgrades still run, and the
+# short lifetime bounds how long another worker's edit (or a write that skips updated_at) can go unseen.
+_CACHE_TTL = 60
+_CACHE_MAX = 256
+_prepared = {}
+_files_cache = {}
+
+
+def _files_state(theme):
+    """(file count, newest save, total size) of a theme's files: changes whenever one is added, saved or removed."""
+    row = theme.files.aggregate(n=Count("pk"), newest=Max("updated_at"), size=Sum("file_size"))
+    return (row["n"], row["newest"], row["size"])
+
+
+def _remember(cache, key, value):
+    if len(cache) >= _CACHE_MAX:
+        cache.pop(next(iter(cache)), None)
+    cache[key] = (time.monotonic(), value)
+
+
+def _recall(cache, key):
+    hit = cache.get(key)
+    if hit is None or time.monotonic() - hit[0] > _CACHE_TTL:
+        return None
+    return hit[1]
+
+
+def clear_theme_caches():
+    """Forget what was prepared and loaded (tests, and after changes made behind the ORM's back)."""
+    _prepared.clear()
+    _files_cache.clear()
+
+
+def _prepare_once(store_theme, new_store=False):
+    theme = store_theme.theme
+    key = (store_theme.pk, store_theme.theme_id)
+    state = (store_theme.updated_at, theme.updated_at, _files_state(theme))
+    if _recall(_prepared, key) == state:
+        return
+    _prepare(store_theme, new_store=new_store)
+    # _prepare may have saved things: remember the state it left, read again
+    store_theme.refresh_from_db(fields=["updated_at"])
+    theme.refresh_from_db(fields=["updated_at"])
+    _remember(_prepared, key, (store_theme.updated_at, theme.updated_at, _files_state(theme)))
+
+
 def get_store_theme(store):
     """
     The theme being used: the one the admin is editing (a draft or the published one, see
@@ -417,7 +467,7 @@ def get_store_theme(store):
             found = None
         if found is None or not is_private(store, found.theme):
             raise exceptions.NotFound("That theme doesn't exist.")
-        _prepare(found)
+        _prepare_once(found)
         return found
 
     current = (
@@ -427,7 +477,7 @@ def get_store_theme(store):
     )
 
     if current and is_private(store, current.theme):
-        _prepare(current)
+        _prepare_once(current)
         return current
 
     if current:
@@ -859,7 +909,13 @@ def _keep_wishlist_hearts(store_theme, new_store=False):
 
 def theme_files(store_theme):
     """The theme's Liquid files (what the renderer loads)."""
-    return {f.file_path: f.content for f in store_theme.theme.files.order_by("file_path")}
+    theme = store_theme.theme
+    state = _files_state(theme)
+    hit = _recall(_files_cache, theme.pk)
+    if hit is None or hit[0] != state:
+        hit = (state, {f.file_path: f.content for f in theme.files.order_by("file_path")})
+        _remember(_files_cache, theme.pk, hit)
+    return dict(hit[1])  # callers add and replace entries
 
 
 # ------------------------------------------------- settings as code
@@ -1726,7 +1782,9 @@ def _convert_template(theme, name, content, custom_data):
     entries = sync.template_entries(resolve(custom_data or {})["templates"][config["page"]])
     new = sync.template_from_entries(entries, "\r\n" if "\r\n" in content else "\n")
     sync.record_version(theme, name, content, "upgrade")
-    theme.files.filter(file_path=config["path"]).update(content=new, file_size=len(new.encode("utf-8")))
+    theme.files.filter(file_path=config["path"]).update(
+        content=new, file_size=len(new.encode("utf-8")), updated_at=timezone.now()
+    )
 
 
 def _seed_header(s, store_name):
