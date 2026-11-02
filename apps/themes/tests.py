@@ -4112,7 +4112,7 @@ class StylesSyncTest(StoreClientMixin, APITestCase):
 
     def test_css_edit_reaches_preview_and_store_and_persists(self):
         original = self.files()[STYLES]
-        old_rule, new_rule = ".product-card__title { font-weight: 600; }", ".product-card__title { font-weight: 700; }"
+        old_rule, new_rule = "--card-title-weight: 400;", "--card-title-weight: 700;"  # the editable card variable
         self.assertIn(old_rule, original)
         self.save_file(STYLES, original.replace(old_rule, new_rule))  # the temporary change
         self.assertIn(new_rule, self.files()[STYLES])  # what reopening the code editor shows
