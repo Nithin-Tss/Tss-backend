@@ -5990,6 +5990,172 @@ class MenusApiTest(StoreClientMixin, APITestCase):
                 {"title": f"t{i}", "url": "/", "children": [{"title": "c", "url": "/"}]} for i in range(5)]}, expect=201)
         self.assertEqual(list_queries(), small)
 
+    def test_mega_menu_fields_and_three_level_nesting_crud(self):
+        payload = {
+            "name": "Mega Navigation",
+            "handle": "mega-nav",
+            "items": [
+                {
+                    "title": "Products",
+                    "url": "/collections/all",
+                    "is_mega": True,
+                    "badge": "Hot",
+                    "promo_image": "https://example.com/banner.jpg",
+                    "promo_title": "Mega Sale",
+                    "promo_subtitle": "Up to 50% Off",
+                    "promo_url": "/collections/sale",
+                    "children": [
+                        {
+                            "title": "Wine",
+                            "url": "/collections/wine",
+                            "badge": "Popular",
+                            "children": [
+                                {"title": "Red Wine", "url": "/collections/red-wine"},
+                                {"title": "White Wine", "url": "/collections/white-wine"},
+                            ],
+                        },
+                        {
+                            "title": "Spirits",
+                            "url": "/collections/spirits",
+                            "children": [
+                                {"title": "Whisky", "url": "/collections/whisky"},
+                                {"title": "Gin", "url": "/collections/gin"},
+                            ],
+                        },
+                    ],
+                },
+                {"title": "About", "url": "/pages/about"},
+            ],
+        }
+
+        created = self.ok("post", self.URL, payload, expect=201)
+        self.assertEqual(created["name"], "Mega Navigation")
+        self.assertEqual(created["items_count"], 8)  # 1 top + 2 columns + 4 column links + 1 standalone = 8
+
+        top_item = created["items"][0]
+        self.assertEqual(top_item["title"], "Products")
+        self.assertTrue(top_item["is_mega"])
+        self.assertEqual(top_item["badge"], "Hot")
+        self.assertEqual(top_item["promo_image"], "https://example.com/banner.jpg")
+        self.assertEqual(top_item["promo_title"], "Mega Sale")
+        self.assertEqual(top_item["promo_subtitle"], "Up to 50% Off")
+        self.assertEqual(top_item["promo_url"], "/collections/sale")
+        self.assertEqual(len(top_item["children"]), 2)
+
+        wine_col = top_item["children"][0]
+        self.assertEqual(wine_col["title"], "Wine")
+        self.assertEqual(wine_col["badge"], "Popular")
+        self.assertEqual(len(wine_col["children"]), 2)
+        self.assertEqual(wine_col["children"][0]["title"], "Red Wine")
+        self.assertEqual(wine_col["children"][1]["title"], "White Wine")
+        # Level 3 items have no children
+        self.assertEqual(wine_col["children"][0]["children"], [])
+
+        # Retrieve via GET /<id>/
+        detail_url = f"{self.URL}{created['id']}/"
+        fetched = self.ok("get", detail_url)
+        self.assertEqual(fetched["items_count"], 8)
+        self.assertTrue(fetched["items"][0]["is_mega"])
+        self.assertEqual(fetched["items"][0]["children"][0]["children"][0]["title"], "Red Wine")
+
+        # Update via PUT with modified Level 3 items
+        payload["items"][0]["children"][0]["children"].append({"title": "Rose Wine", "url": "/collections/rose"})
+        updated = self.ok("put", detail_url, payload)
+        self.assertEqual(updated["items_count"], 9)
+        self.assertEqual(len(updated["items"][0]["children"][0]["children"]), 3)
+
+    def test_menu_rejects_nesting_deeper_than_three_levels(self):
+        payload = {
+            "name": "Too Deep",
+            "items": [
+                {
+                    "title": "Level 1",
+                    "url": "/l1",
+                    "children": [
+                        {
+                            "title": "Level 2",
+                            "url": "/l2",
+                            "children": [
+                                {
+                                    "title": "Level 3",
+                                    "url": "/l3",
+                                    "children": [
+                                        {"title": "Level 4", "url": "/l4"}
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        res = self.client.post(self.URL, payload, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("items", res.data)
+
+    def test_model_clean_rejects_nesting_deeper_than_three_levels(self):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from apps.themes.models import Menu, MenuItem
+        from apps.tenancy.models import Store
+
+        store = Store.objects.get(store_name="Menu Store")
+        menu = Menu.objects.create(store=store, name="Depth Check", handle="depth-check")
+        l1 = MenuItem.objects.create(menu=menu, title="L1")
+        l2 = MenuItem.objects.create(menu=menu, parent=l1, title="L2")
+        l3 = MenuItem.objects.create(menu=menu, parent=l2, title="L3")
+        l4 = MenuItem(menu=menu, parent=l3, title="L4")
+
+        with self.assertRaises(DjangoValidationError):
+            l4.clean()
+
+    def test_mega_menu_field_validation(self):
+        # Badge too long (> 30 chars)
+        res = self.client.post(self.URL, {
+            "name": "Badge Test",
+            "items": [{"title": "Item", "url": "/", "badge": "A" * 31}],
+        }, format="json")
+        self.assertEqual(res.status_code, 400)
+
+        # Unsafe promo image
+        res = self.client.post(self.URL, {
+            "name": "Promo Image Test",
+            "items": [{"title": "Item", "url": "/", "promo_image": "javascript:alert(1)"}],
+        }, format="json")
+        self.assertEqual(res.status_code, 400)
+
+        # Unsafe promo destination url
+        res = self.client.post(self.URL, {
+            "name": "Promo URL Test",
+            "items": [{"title": "Item", "url": "/", "promo_url": "data:text/html,bad"}],
+        }, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_backward_compatibility_with_flat_and_two_level_menus(self):
+        # 1. Flat menu (no children, no mega fields)
+        flat = self.ok("post", self.URL, {
+            "name": "Simple Flat",
+            "items": [{"title": "Home", "url": "/"}, {"title": "Contact", "url": "/pages/contact"}],
+        }, expect=201)
+        self.assertEqual(flat["items_count"], 2)
+        self.assertFalse(flat["items"][0]["is_mega"])
+        self.assertEqual(flat["items"][0]["badge"], "")
+        self.assertEqual(flat["items"][0]["children"], [])
+
+        # 2. 2-level menu without mega fields
+        nested = self.ok("post", self.URL, {
+            "name": "Standard Nested",
+            "items": [
+                {
+                    "title": "Shop",
+                    "url": "/collections/all",
+                    "children": [{"title": "New Arrivals", "url": "/collections/new"}],
+                }
+            ],
+        }, expect=201)
+        self.assertEqual(nested["items_count"], 2)
+        self.assertFalse(nested["items"][0]["is_mega"])
+        self.assertEqual(nested["items"][0]["children"][0]["children"], [])
+
 
 class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
     """Stores get the product page that respects options which keep selling, unless they edited their own copy."""
@@ -6352,3 +6518,242 @@ class StorefrontSitemapAndRobotsTest(StoreClientMixin, APITestCase):
 
         r_col = self.client.get(f"/s/{self.store['storeSlug']}/collections/all")
         self.assertEqual(r_col.status_code, 200)
+
+
+
+class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
+    """Storefront Liquid template rendering tests for Mega Menu and dropdowns."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+        from .models import Menu, MenuItem
+
+        self.Store = Store
+        self.Menu = Menu
+        self.MenuItem = MenuItem
+        self.token, self.store = self.sign_up("megamenu_shopper@example.com", "MegaMenu Store")
+        self.store_obj = Store.objects.get(pk=self.store["storeId"])
+        self.slug = self.store["storeSlug"]
+
+    def nav_html(self, html):
+        start = html.index('<nav class="site-header__nav"')
+        end = html.index('</nav>', start) + len('</nav>')
+        return html[start:end]
+
+    def test_mega_menu_3_level_hierarchy_with_promo_and_badges(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Catalog", url="/collections/all", order=0,
+            is_mega=True, badge="New",
+            promo_image="https://example.com/promo.jpg",
+            promo_title="Special Offer",
+            promo_subtitle="Get 20% off all beverages",
+            promo_url="/collections/all",
+        )
+        col1 = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Beverages", url="/collections/all", order=0, badge="Hot",
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col1, title="Coffee", url="/pages/coffee", order=0,
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col1, title="Tea", url="/pages/tea", order=1, badge="Best",
+        )
+
+        col2 = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Bakery", url="/collections/all", order=1,
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col2, title="Croissant", url="/pages/croissant", order=0,
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        # Mega menu container in navbar
+        self.assertIn("site-header__item--mega", nav)
+        self.assertIn('class="mega-menu"', nav)
+        # Level 1 badge
+        self.assertIn('Catalog<span class="menu-badge">New</span>', nav)
+        # Level 2 columns
+        self.assertIn("Beverages", nav)
+        self.assertIn('Beverages<span class="menu-badge">Hot</span>', nav)
+        self.assertIn("Bakery", nav)
+        # Level 3 links
+        self.assertIn("Coffee", nav)
+        self.assertIn('Tea<span class="menu-badge">Best</span>', nav)
+        self.assertIn("Croissant", nav)
+        # Promo banner in navbar
+        self.assertIn("https://example.com/promo.jpg", nav)
+        self.assertIn("Special Offer", nav)
+        self.assertIn("Get 20% off all beverages", nav)
+        self.assertIn(f"/s/{self.slug}/collections/all", nav)
+
+    def test_mega_menu_without_promo_banner(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Shop", url="/collections/all", order=0, is_mega=True,
+        )
+        col = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Clothing", url="/collections/all", order=0,
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col, title="Jackets", url="/pages/jackets", order=0,
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        self.assertIn("site-header__item--mega", nav)
+        self.assertIn("Clothing", nav)
+        self.assertIn("Jackets", nav)
+        self.assertNotIn("mega-menu__promo", nav)
+
+    def test_standard_dropdown_when_is_mega_false(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Explore", url="/collections/all", order=0, is_mega=False,
+        )
+        col = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Guides", url="/pages/guides", order=0, badge="Pro",
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col, title="Quickstart", url="/pages/quickstart", order=0,
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        self.assertIn("site-header__item--has-dropdown", nav)
+        self.assertIn('class="site-nav__dropdown"', nav)
+        self.assertNotIn("site-header__item--mega", nav)
+        self.assertNotIn('class="mega-menu"', nav)
+        self.assertIn("Guides", nav)
+        self.assertIn('Guides<span class="menu-badge">Pro</span>', nav)
+        self.assertIn("Quickstart", nav)
+
+    def test_flat_item_when_no_children_and_not_mega(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        self.MenuItem.objects.create(
+            menu=menu, title="Contact", url="/pages/contact", order=0, is_mega=False,
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        self.assertNotIn("site-header__item--mega", nav)
+        self.assertNotIn("site-header__item--has-dropdown", nav)
+        self.assertIn(f'href="/s/{self.slug}/pages/contact">Contact</a>', nav)
+
+    def test_all_five_presets_render_mega_menu_properly(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Menu", url="/collections/all", order=0,
+            is_mega=True, badge="VIP",
+            promo_image="https://example.com/banner.png",
+            promo_title="Banner Title",
+            promo_subtitle="Banner Subtitle",
+            promo_url="/collections/all",
+        )
+        col = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Category 1", url="/collections/all", order=0, badge="Hot",
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col, title="SubItem 1", url="/pages/p1", order=0,
+        )
+
+        presets = ["bold", "boutique", "classic", "fresh", "minimal"]
+        for preset_name in presets:
+            created = self.ok("post", "/api/v1/themes/library/", {"source": preset_name}, expect=201)
+            self.ok("post", f"/api/v1/themes/library/{created['id']}/publish/")
+            r = self.client.get(f"/s/{self.slug}/")
+            self.assertEqual(r.status_code, 200, f"Preset {preset_name} failed with status {r.status_code}")
+            html = r.content.decode("utf-8")
+            nav = self.nav_html(html)
+            self.assertIn("site-header__item--mega", nav, f"Preset {preset_name} missing mega menu class")
+            self.assertIn("Category 1", nav, f"Preset {preset_name} missing column title")
+            self.assertIn("SubItem 1", nav, f"Preset {preset_name} missing subitem")
+            self.assertIn("Banner Title", nav, f"Preset {preset_name} missing promo title")
+
+    def test_mega_menu_desktop_and_mobile_responsive_markup_and_aria(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Shop", url="/collections/all", order=0,
+            is_mega=True, badge="Popular",
+            promo_image="https://example.com/promo.png",
+            promo_title="Exclusive Summer Drop",
+            promo_subtitle="Explore now",
+            promo_url="/collections/all",
+        )
+        col = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Menswear", url="/collections/all", order=0,
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col, title="Jackets", url="/pages/jackets", order=0, badge="Warm",
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        # Trigger button and link ARIA
+        self.assertIn('aria-haspopup="true"', nav)
+        self.assertIn('aria-expanded="false"', nav)
+        self.assertIn('aria-controls="mega-menu-', nav)
+        self.assertIn('class="site-header__mobile-toggle"', nav)
+        self.assertIn('class="site-header__toggle-icon"', nav)
+
+        # Mega menu container ARIA
+        self.assertIn('role="region"', nav)
+        self.assertIn('aria-label="Shop"', nav)
+
+        # Level 2 column toggle for mobile accordion
+        self.assertIn('class="mega-menu__column-header"', nav)
+        self.assertIn('class="mega-menu__col-toggle"', nav)
+        self.assertIn('class="mega-menu__toggle-icon"', nav)
+        self.assertIn('aria-controls="mega-col-', nav)
+
+        # Level 3 links container
+        self.assertIn('id="mega-col-', nav)
+        self.assertIn('class="mega-menu__sublinks"', nav)
+        self.assertIn('Jackets<span class="menu-badge">Warm</span>', nav)
+
+        # Scripts and styles for Desktop & Mobile UX
+        self.assertIn("initMegaMenus", html)
+        self.assertIn("leaveTimer", html)
+        self.assertIn("Escape", html)
+        self.assertIn("@media (max-width: 768px)", html)
+
+    def test_dropdown_responsive_markup_and_aria(self):
+        menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
+        l1 = self.MenuItem.objects.create(
+            menu=menu, title="Pages", url="/collections/all", order=0, is_mega=False,
+        )
+        col = self.MenuItem.objects.create(
+            menu=menu, parent=l1, title="Company", url="/pages/company", order=0,
+        )
+        self.MenuItem.objects.create(
+            menu=menu, parent=col, title="About Us", url="/pages/about", order=0,
+        )
+
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        html = r.content.decode("utf-8")
+        nav = self.nav_html(html)
+
+        self.assertIn('aria-haspopup="true"', nav)
+        self.assertIn('aria-controls="dropdown-', nav)
+        self.assertIn('class="site-header__mobile-toggle"', nav)
+        self.assertIn('role="menu"', nav)
+        self.assertIn('role="menuitem"', nav)
+        self.assertIn('class="site-nav__dropdown-header"', nav)
+        self.assertIn('class="site-nav__dropdown-toggle"', nav)

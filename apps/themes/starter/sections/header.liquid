@@ -50,7 +50,251 @@
       <nav class="site-header__nav" aria-label="Main">
         {%- if link_blocks.size > 0 -%}
           {%- for block in link_blocks -%}
-            <a href="{{ block.settings.url | default: '#' }}"{{ block.attrs }}>{{ block.settings.label }}</a>
+            {%- assign item = nil -%}
+            {%- for m in menu_links -%}
+              {%- if m.label == block.settings.label -%}
+                {%- assign item = m -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- assign render_mega = false -%}
+            {%- if item and item.is_mega -%}
+              {%- if item.columns.size > 0 or item.promo -%}
+                {%- assign render_mega = true -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- if render_mega -%}
+              <div class="site-header__item site-header__item--mega" data-nav-item{{ block.attrs }}>
+                <a class="site-header__link" href="{{ item.url | default: block.settings.url | default: '#' }}" aria-haspopup="true" aria-expanded="false" id="nav-item-{{ forloop.index }}" aria-controls="mega-menu-{{ forloop.index }}">{{ block.settings.label }}{%- if item.badge != blank -%}<span class="menu-badge">{{ item.badge }}</span>{%- endif -%}<svg class="site-header__chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                <button class="site-header__mobile-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ block.settings.label | escape }} menu" aria-controls="mega-menu-{{ forloop.index }}">
+                  <svg class="site-header__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="mega-menu" id="mega-menu-{{ forloop.index }}" role="region" aria-label="{{ block.settings.label | escape }}">
+                  <div class="page-width mega-menu__inner">
+                    {%- if item.columns.size > 0 -%}
+                      <div class="mega-menu__columns">
+                        {%- for col in item.columns -%}
+                          <div class="mega-menu__column{% if col.links.size > 0 %} mega-menu__column--has-sublinks{% endif %}">
+                            <div class="mega-menu__column-header">
+                              {%- if col.url != blank and col.url != '#' -%}
+                                <a class="mega-menu__column-title mega-menu__column-title--link" href="{{ col.url }}">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
+                              {%- else -%}
+                                <div class="mega-menu__column-title">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</div>
+                              {%- endif -%}
+                              {%- if col.links.size > 0 -%}
+                                <button class="mega-menu__col-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ col.label | escape }} sublinks" aria-controls="mega-col-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                                  <svg class="mega-menu__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                              {%- endif -%}
+                            </div>
+                            {%- if col.links.size > 0 -%}
+                              <ul class="mega-menu__sublinks" id="mega-col-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                                {%- for sub in col.links -%}
+                                  <li class="mega-menu__sublink-item">
+                                    <a class="mega-menu__sublink" href="{{ sub.url | default: '#' }}">{{ sub.label }}{%- if sub.badge != blank -%}<span class="menu-badge">{{ sub.badge }}</span>{%- endif -%}</a>
+                                  </li>
+                                {%- endfor -%}
+                              </ul>
+                            {%- endif -%}
+                          </div>
+                        {%- endfor -%}
+                      </div>
+                    {%- endif -%}
+                    {%- if item.promo -%}
+                      {%- assign show_promo = false -%}
+                      {%- if item.promo.image != blank or item.promo.title != blank or item.promo.subtitle != blank -%}
+                        {%- assign show_promo = true -%}
+                      {%- endif -%}
+                      {%- if show_promo -%}
+                        <div class="mega-menu__promo">
+                          {%- if item.promo.url != blank and item.promo.url != '#' -%}
+                            <a class="mega-menu__promo-link" href="{{ item.promo.url }}">
+                          {%- else -%}
+                            <div class="mega-menu__promo-link">
+                          {%- endif -%}
+                            {%- if item.promo.image != blank -%}
+                              <div class="mega-menu__promo-image-wrap">
+                                <img class="mega-menu__promo-image" src="{{ item.promo.image }}" alt="{{ item.promo.title | escape }}" loading="lazy" />
+                              </div>
+                            {%- endif -%}
+                            {%- if item.promo.title != blank or item.promo.subtitle != blank -%}
+                              <div class="mega-menu__promo-content">
+                                {%- if item.promo.title != blank -%}
+                                  <div class="mega-menu__promo-title">{{ item.promo.title }}</div>
+                                {%- endif -%}
+                                {%- if item.promo.subtitle != blank -%}
+                                  <div class="mega-menu__promo-subtitle">{{ item.promo.subtitle }}</div>
+                                {%- endif -%}
+                              </div>
+                            {%- endif -%}
+                          {%- if item.promo.url != blank and item.promo.url != '#' -%}
+                            </a>
+                          {%- else -%}
+                            </div>
+                          {%- endif -%}
+                        </div>
+                      {%- endif -%}
+                    {%- endif -%}
+                  </div>
+                </div>
+              </div>
+            {%- elsif item and item.has_dropdown -%}
+              <div class="site-header__item site-header__item--has-dropdown" data-nav-item{{ block.attrs }}>
+                <a class="site-header__link" href="{{ item.url | default: block.settings.url | default: '#' }}" aria-haspopup="true" aria-expanded="false" id="nav-item-dropdown-{{ forloop.index }}" aria-controls="dropdown-{{ forloop.index }}">{{ block.settings.label }}{%- if item.badge != blank -%}<span class="menu-badge">{{ item.badge }}</span>{%- endif -%}<svg class="site-header__chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                <button class="site-header__mobile-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ block.settings.label | escape }} submenu" aria-controls="dropdown-{{ forloop.index }}">
+                  <svg class="site-header__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="site-nav__dropdown" id="dropdown-{{ forloop.index }}" role="menu">
+                  <ul class="site-nav__dropdown-list">
+                    {%- for col in item.columns -%}
+                      <li class="site-nav__dropdown-item{% if col.links.size > 0 %} site-nav__dropdown-item--has-sub{% endif %}" role="none">
+                        <div class="site-nav__dropdown-header">
+                          <a class="site-nav__dropdown-link" href="{{ col.url | default: '#' }}" role="menuitem">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
+                          {%- if col.links.size > 0 -%}
+                            <button class="site-nav__dropdown-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ col.label | escape }} sublinks" aria-controls="dropdown-sub-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                              <svg class="site-nav__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                          {%- endif -%}
+                        </div>
+                        {%- if col.links.size > 0 -%}
+                          <ul class="site-nav__subdropdown-list" id="dropdown-sub-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                            {%- for sub in col.links -%}
+                              <li class="site-nav__subdropdown-item">
+                                <a class="site-nav__subdropdown-link" href="{{ sub.url | default: '#' }}">{{ sub.label }}{%- if sub.badge != blank -%}<span class="menu-badge">{{ sub.badge }}</span>{%- endif -%}</a>
+                              </li>
+                            {%- endfor -%}
+                          </ul>
+                        {%- endif -%}
+                      </li>
+                    {%- endfor -%}
+                  </ul>
+                </div>
+              </div>
+            {%- elsif item and item.badge != blank -%}
+              <a href="{{ block.settings.url | default: '#' }}"{{ block.attrs }}>{{ block.settings.label }}<span class="menu-badge">{{ item.badge }}</span></a>
+            {%- else -%}
+              <a href="{{ block.settings.url | default: '#' }}"{{ block.attrs }}>{{ block.settings.label }}</a>
+            {%- endif -%}
+          {%- endfor -%}
+        {%- elsif menu_links.size > 0 -%}
+          {%- for item in menu_links -%}
+            {%- assign render_mega = false -%}
+            {%- if item.is_mega -%}
+              {%- if item.columns.size > 0 or item.promo -%}
+                {%- assign render_mega = true -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- if render_mega -%}
+              <div class="site-header__item site-header__item--mega" data-nav-item>
+                <a class="site-header__link" href="{{ item.url | default: '#' }}" aria-haspopup="true" aria-expanded="false" id="nav-item-sec-{{ forloop.index }}" aria-controls="mega-menu-sec-{{ forloop.index }}">{{ item.label }}{%- if item.badge != blank -%}<span class="menu-badge">{{ item.badge }}</span>{%- endif -%}<svg class="site-header__chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                <button class="site-header__mobile-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ item.label | escape }} menu" aria-controls="mega-menu-sec-{{ forloop.index }}">
+                  <svg class="site-header__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="mega-menu" id="mega-menu-sec-{{ forloop.index }}" role="region" aria-label="{{ item.label | escape }}">
+                  <div class="page-width mega-menu__inner">
+                    {%- if item.columns.size > 0 -%}
+                      <div class="mega-menu__columns">
+                        {%- for col in item.columns -%}
+                          <div class="mega-menu__column{% if col.links.size > 0 %} mega-menu__column--has-sublinks{% endif %}">
+                            <div class="mega-menu__column-header">
+                              {%- if col.url != blank and col.url != '#' -%}
+                                <a class="mega-menu__column-title mega-menu__column-title--link" href="{{ col.url }}">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
+                              {%- else -%}
+                                <div class="mega-menu__column-title">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</div>
+                              {%- endif -%}
+                              {%- if col.links.size > 0 -%}
+                                <button class="mega-menu__col-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ col.label | escape }} sublinks" aria-controls="mega-col-sec-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                                  <svg class="mega-menu__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                              {%- endif -%}
+                            </div>
+                            {%- if col.links.size > 0 -%}
+                              <ul class="mega-menu__sublinks" id="mega-col-sec-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                                {%- for sub in col.links -%}
+                                  <li class="mega-menu__sublink-item">
+                                    <a class="mega-menu__sublink" href="{{ sub.url | default: '#' }}">{{ sub.label }}{%- if sub.badge != blank -%}<span class="menu-badge">{{ sub.badge }}</span>{%- endif -%}</a>
+                                  </li>
+                                {%- endfor -%}
+                              </ul>
+                            {%- endif -%}
+                          </div>
+                        {%- endfor -%}
+                      </div>
+                    {%- endif -%}
+                    {%- if item.promo -%}
+                      {%- assign show_promo = false -%}
+                      {%- if item.promo.image != blank or item.promo.title != blank or item.promo.subtitle != blank -%}
+                        {%- assign show_promo = true -%}
+                      {%- endif -%}
+                      {%- if show_promo -%}
+                        <div class="mega-menu__promo">
+                          {%- if item.promo.url != blank and item.promo.url != '#' -%}
+                            <a class="mega-menu__promo-link" href="{{ item.promo.url }}">
+                          {%- else -%}
+                            <div class="mega-menu__promo-link">
+                          {%- endif -%}
+                            {%- if item.promo.image != blank -%}
+                              <div class="mega-menu__promo-image-wrap">
+                                <img class="mega-menu__promo-image" src="{{ item.promo.image }}" alt="{{ item.promo.title | escape }}" loading="lazy" />
+                              </div>
+                            {%- endif -%}
+                            {%- if item.promo.title != blank or item.promo.subtitle != blank -%}
+                              <div class="mega-menu__promo-content">
+                                {%- if item.promo.title != blank -%}
+                                  <div class="mega-menu__promo-title">{{ item.promo.title }}</div>
+                                {%- endif -%}
+                                {%- if item.promo.subtitle != blank -%}
+                                  <div class="mega-menu__promo-subtitle">{{ item.promo.subtitle }}</div>
+                                {%- endif -%}
+                              </div>
+                            {%- endif -%}
+                          {%- if item.promo.url != blank and item.promo.url != '#' -%}
+                            </a>
+                          {%- else -%}
+                            </div>
+                          {%- endif -%}
+                        </div>
+                      {%- endif -%}
+                    {%- endif -%}
+                  </div>
+                </div>
+              </div>
+            {%- elsif item.has_dropdown -%}
+              <div class="site-header__item site-header__item--has-dropdown" data-nav-item>
+                <a class="site-header__link" href="{{ item.url | default: '#' }}" aria-haspopup="true" aria-expanded="false" id="nav-item-dropdown-sec-{{ forloop.index }}" aria-controls="dropdown-sec-{{ forloop.index }}">{{ item.label }}{%- if item.badge != blank -%}<span class="menu-badge">{{ item.badge }}</span>{%- endif -%}<svg class="site-header__chevron" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+                <button class="site-header__mobile-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ item.label | escape }} submenu" aria-controls="dropdown-sec-{{ forloop.index }}">
+                  <svg class="site-header__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="site-nav__dropdown" id="dropdown-sec-{{ forloop.index }}" role="menu">
+                  <ul class="site-nav__dropdown-list">
+                    {%- for col in item.columns -%}
+                      <li class="site-nav__dropdown-item{% if col.links.size > 0 %} site-nav__dropdown-item--has-sub{% endif %}" role="none">
+                        <div class="site-nav__dropdown-header">
+                          <a class="site-nav__dropdown-link" href="{{ col.url | default: '#' }}" role="menuitem">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
+                          {%- if col.links.size > 0 -%}
+                            <button class="site-nav__dropdown-toggle" type="button" aria-expanded="false" aria-label="Toggle {{ col.label | escape }} sublinks" aria-controls="dropdown-sub-sec-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                              <svg class="site-nav__toggle-icon" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                          {%- endif -%}
+                        </div>
+                        {%- if col.links.size > 0 -%}
+                          <ul class="site-nav__subdropdown-list" id="dropdown-sub-sec-{{ forloop.parentloop.index }}-{{ forloop.index }}">
+                            {%- for sub in col.links -%}
+                              <li class="site-nav__subdropdown-item">
+                                <a class="site-nav__subdropdown-link" href="{{ sub.url | default: '#' }}">{{ sub.label }}{%- if sub.badge != blank -%}<span class="menu-badge">{{ sub.badge }}</span>{%- endif -%}</a>
+                              </li>
+                            {%- endfor -%}
+                          </ul>
+                        {%- endif -%}
+                      </li>
+                    {%- endfor -%}
+                  </ul>
+                </div>
+              </div>
+            {%- elsif item.badge != blank -%}
+              <a href="{{ item.url }}">{{ item.label }}<span class="menu-badge">{{ item.badge }}</span></a>
+            {%- else -%}
+              <a href="{{ item.url }}">{{ item.label }}</a>
+            {%- endif -%}
           {%- endfor -%}
         {%- else -%}
           <a href="{{ shop.url }}/">Home</a>
@@ -148,6 +392,866 @@
     {%- endif -%}
   </div>
 </header>
+
+<style>
+    body .site-header {
+      position: sticky;
+      z-index: 1000;
+    }
+    body .site-header:has(.mega-menu) {
+      overflow: visible;
+    }
+    body .site-header__inner:has(.mega-menu) {
+      overflow: visible;
+    }
+    body .site-header__nav .site-header__item {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    body .site-header__nav .site-header__chevron {
+      width: 9px;
+      height: 6px;
+      margin-left: 6px;
+      transition: transform 0.2s ease;
+      pointer-events: none;
+      opacity: 0.7;
+    }
+    body .site-header__nav .site-header__item:hover .site-header__chevron,
+    body .site-header__nav .site-header__item.is-open .site-header__chevron,
+    body .site-header__nav .site-header__item:focus-within .site-header__chevron {
+      transform: rotate(180deg);
+    }
+    body .site-header__nav .menu-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: var(--bg);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    /* Accessible focus states */
+    body .site-header__nav a:focus-visible,
+    body .site-header__nav button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    /* Desktop navigation styles */
+    @media (min-width: 769px) {
+      body .site-header__nav {
+        display: flex;
+        align-items: stretch;
+      }
+      body .site-header__nav .site-header__item {
+        display: inline-flex;
+        align-items: center;
+        align-self: stretch;
+        min-height: 48px;
+      }
+      body .site-header__nav .site-header__link {
+        display: inline-flex;
+        align-items: center;
+        height: 100%;
+      }
+      body .site-header__nav .site-header__mobile-toggle,
+      body .site-header__nav .mega-menu__col-toggle,
+      body .site-header__nav .site-nav__dropdown-toggle {
+        display: none !important;
+      }
+      /* Hover bridge to prevent dead zones between trigger and menu */
+      body .site-header__nav .site-nav__dropdown::before,
+      body .site-header__nav .mega-menu::before {
+        content: "";
+        position: absolute;
+        top: -24px;
+        left: 0;
+        right: 0;
+        height: 24px;
+      }
+    }
+    /* Standard dropdown */
+    body .site-header__nav .site-nav__dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      min-width: 220px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+      padding: 8px 0;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      transform: translateY(8px);
+      text-align: left;
+    }
+    body .site-header__nav .site-header__item--has-dropdown:hover .site-nav__dropdown,
+    body .site-header__nav .site-header__item--has-dropdown.is-open .site-nav__dropdown,
+    body .site-header__nav .site-header__item--has-dropdown:focus-within .site-nav__dropdown {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    body .site-header__nav .site-nav__dropdown-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    body .site-header__nav .site-nav__dropdown-item {
+      position: relative;
+      margin: 0;
+      padding: 0;
+    }
+    body .site-header__nav a.site-nav__dropdown-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: normal;
+      color: var(--text);
+      opacity: 0.85;
+      border-radius: 0;
+      transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+    }
+    body .site-header__nav a.site-nav__dropdown-link:hover {
+      background: var(--soft);
+      color: var(--accent);
+      opacity: 1;
+    }
+    body .site-header__nav .site-nav__subdropdown-list {
+      list-style: none;
+      margin: 4px 0 6px 18px;
+      padding: 0 0 0 12px;
+      border-left: 2px solid var(--line);
+    }
+    body .site-header__nav .site-nav__subdropdown-item {
+      margin: 0;
+      padding: 0;
+    }
+    body .site-header__nav a.site-nav__subdropdown-link {
+      display: flex;
+      align-items: center;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: normal;
+      color: var(--muted);
+      opacity: 0.8;
+      border-radius: 0;
+      transition: color 0.15s ease, opacity 0.15s ease;
+    }
+    body .site-header__nav a.site-nav__subdropdown-link:hover {
+      color: var(--text);
+      opacity: 1;
+    }
+    /* Mega menu container */
+    body .site-header__nav .site-header__item--mega {
+      position: static;
+    }
+    body .site-header__nav .mega-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      width: 100%;
+      max-width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      transform: translateY(8px);
+      text-align: left;
+      box-sizing: border-box;
+      overflow-x: clip;
+    }
+    body .site-header__nav .site-header__item--mega:hover .mega-menu,
+    body .site-header__nav .site-header__item--mega.is-open .mega-menu,
+    body .site-header__nav .site-header__item--mega:focus-within .mega-menu {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    body .site-header__nav .mega-menu__inner {
+      display: flex;
+      gap: 32px;
+      padding-top: 24px;
+      padding-bottom: 28px;
+      align-items: flex-start;
+      justify-content: space-between;
+      box-sizing: border-box;
+      max-width: var(--page);
+      width: 100%;
+    }
+    body .site-header__nav .mega-menu__columns {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 24px 32px;
+      align-content: start;
+      max-width: 100%;
+    }
+    body .site-header__nav .mega-menu__column {
+      min-width: 130px;
+    }
+    body .site-header__nav .mega-menu__column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    body .site-header__nav .mega-menu__column-title,
+    body .site-header__nav a.mega-menu__column-title {
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 1;
+      border-radius: 0;
+      padding: 0;
+      margin: 0;
+      text-decoration: none;
+    }
+    body .site-header__nav a.mega-menu__column-title:hover {
+      color: var(--accent);
+    }
+    body .site-header__nav .mega-menu__sublinks {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    body .site-header__nav .mega-menu__sublink-item {
+      margin: 0;
+      padding: 0;
+    }
+    body .site-header__nav a.mega-menu__sublink {
+      display: inline-flex;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 400;
+      color: var(--muted);
+      text-decoration: none;
+      text-transform: none;
+      letter-spacing: normal;
+      opacity: 0.85;
+      padding: 3px 0;
+      border-radius: 0;
+      background: transparent;
+      transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+    }
+    body .site-header__nav a.mega-menu__sublink:hover {
+      color: var(--text);
+      opacity: 1;
+      transform: translateX(2px);
+      background: transparent;
+    }
+    /* Promo banner */
+    body .site-header__nav .mega-menu__promo {
+      width: 250px;
+      max-width: 260px;
+      flex-shrink: 0;
+      margin-left: auto;
+      align-self: flex-start;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    body .site-header__nav .mega-menu__promo:hover {
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+      transform: translateY(-2px);
+    }
+    body .site-header__nav .mega-menu__inner > .mega-menu__promo:only-child {
+      margin: 0 auto;
+      max-width: 320px;
+    }
+    body .site-header__nav a.mega-menu__promo-link,
+    body .site-header__nav div.mega-menu__promo-link {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      text-decoration: none;
+      color: inherit;
+      border-radius: 0;
+      padding: 0;
+      opacity: 1;
+    }
+    body .site-header__nav a.mega-menu__promo-link:hover {
+      opacity: 0.98;
+    }
+    body .site-header__nav .mega-menu__promo-image-wrap {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      max-height: 155px;
+      min-height: 110px;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.04);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    body .site-header__nav .mega-menu__promo-image {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      display: block;
+      transition: transform 0.3s ease;
+    }
+    body .site-header__nav a.mega-menu__promo-link:hover .mega-menu__promo-image {
+      transform: scale(1.03);
+    }
+    body .site-header__nav .mega-menu__promo-content {
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      background: var(--bg);
+    }
+    body .site-header__nav .mega-menu__promo-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: normal;
+      text-transform: none;
+      line-height: 1.3;
+    }
+    body .site-header__nav .mega-menu__promo-subtitle {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      letter-spacing: normal;
+      text-transform: none;
+    }
+    @media (min-width: 769px) and (max-width: 960px) {
+      body .site-header__nav .mega-menu__promo {
+        width: 200px;
+        max-width: 220px;
+      }
+      body .site-header__nav .mega-menu__inner {
+        gap: 20px;
+      }
+    }
+
+    /* Mobile Responsive Styles & Accordion (max-width: 768px) */
+    @media (max-width: 768px) {
+      body .site-header__inner {
+        flex-wrap: wrap;
+      }
+      body .site-header__nav {
+        order: 3;
+        flex: 1 0 100%;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        gap: 0;
+        margin-top: 10px;
+        padding-top: 4px;
+        border-top: 1px solid var(--line);
+        box-sizing: border-box;
+      }
+      body .site-header__nav .site-header__item,
+      body .site-header__nav > a {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        min-height: 44px;
+        box-sizing: border-box;
+        border-bottom: 1px solid var(--line);
+        margin: 0;
+      }
+      body .site-header__nav .site-header__item {
+        flex-wrap: wrap;
+        position: static;
+      }
+      body .site-header__nav .site-header__link {
+        flex: 1 1 auto;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        padding: 8px 0;
+      }
+      body .site-header__nav .site-header__chevron {
+        display: none !important;
+      }
+      body .site-header__nav .site-header__mobile-toggle {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+        opacity: 0.8;
+        padding: 0;
+        margin-left: auto;
+        transition: transform 0.2s ease, opacity 0.2s ease;
+      }
+      body .site-header__nav .site-header__mobile-toggle:hover {
+        opacity: 1;
+      }
+      body .site-header__nav .site-header__mobile-toggle svg {
+        width: 11px;
+        height: 7px;
+        transition: transform 0.2s ease;
+      }
+      body .site-header__nav .site-header__item.is-open .site-header__mobile-toggle svg {
+        transform: rotate(180deg);
+      }
+      /* Accordion Panel */
+      body .site-header__nav .mega-menu,
+      body .site-header__nav .site-nav__dropdown {
+        position: static;
+        width: 100%;
+        max-width: 100%;
+        box-shadow: none;
+        border: 0;
+        border-radius: 0;
+        transform: none;
+        transition: none;
+        opacity: 1;
+        visibility: visible;
+        display: none;
+        padding: 0 0 12px 14px;
+        box-sizing: border-box;
+      }
+      body .site-header__nav .site-header__item.is-open > .mega-menu,
+      body .site-header__nav .site-header__item.is-open > .site-nav__dropdown {
+        display: block;
+      }
+      body .site-header__nav .mega-menu__inner {
+        flex-direction: column;
+        gap: 16px;
+        padding: 8px 0;
+        box-sizing: border-box;
+      }
+      body .site-header__nav .mega-menu__columns {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+      }
+      body .site-header__nav .mega-menu__column {
+        width: 100%;
+        border-bottom: 1px dashed var(--line);
+        padding-bottom: 8px;
+        box-sizing: border-box;
+      }
+      body .site-header__nav .mega-menu__column:last-child {
+        border-bottom: none;
+      }
+      body .site-header__nav .mega-menu__column-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        width: 100%;
+        margin-bottom: 0;
+        cursor: pointer;
+      }
+      body .site-header__nav .mega-menu__column-title,
+      body .site-header__nav a.mega-menu__column-title {
+        flex: 1 1 auto;
+        min-height: 40px;
+        margin-bottom: 0;
+        display: flex;
+        align-items: center;
+      }
+      body .site-header__nav .mega-menu__col-toggle {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+        opacity: 0.7;
+        padding: 0;
+        transition: transform 0.2s ease;
+      }
+      body .site-header__nav .mega-menu__col-toggle svg {
+        width: 10px;
+        height: 6px;
+        transition: transform 0.2s ease;
+      }
+      body .site-header__nav .mega-menu__column.is-col-open .mega-menu__col-toggle svg {
+        transform: rotate(180deg);
+      }
+      body .site-header__nav .mega-menu__column--has-sublinks .mega-menu__sublinks {
+        display: none;
+        padding-left: 14px;
+        padding-top: 4px;
+        padding-bottom: 8px;
+        gap: 6px;
+      }
+      body .site-header__nav .mega-menu__column.is-col-open .mega-menu__sublinks {
+        display: flex;
+      }
+      body .site-header__nav a.mega-menu__sublink {
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        padding: 6px 0;
+        font-size: 14px;
+      }
+      body .site-header__nav .mega-menu__promo {
+        width: 100%;
+        max-width: 100%;
+        margin: 16px 0 8px;
+        align-self: stretch;
+        box-sizing: border-box;
+      }
+      body .site-header__nav .mega-menu__promo-image-wrap {
+        aspect-ratio: 16 / 9;
+        height: auto;
+        max-height: 140px;
+      }
+      /* Standard dropdown on mobile */
+      body .site-header__nav .site-nav__dropdown-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        width: 100%;
+        cursor: pointer;
+      }
+      body .site-header__nav .site-nav__dropdown-link {
+        flex: 1 1 auto;
+        min-height: 40px;
+        padding: 8px 0;
+      }
+      body .site-header__nav .site-nav__dropdown-toggle {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        cursor: pointer;
+        opacity: 0.7;
+      }
+      body .site-header__nav .site-nav__dropdown-toggle svg {
+        width: 10px;
+        height: 6px;
+        transition: transform 0.2s ease;
+      }
+      body .site-header__nav .site-nav__dropdown-item.is-sub-open .site-nav__dropdown-toggle svg {
+        transform: rotate(180deg);
+      }
+      body .site-header__nav .site-nav__dropdown-item--has-sub .site-nav__subdropdown-list {
+        display: none;
+        padding-left: 14px;
+      }
+      body .site-header__nav .site-nav__dropdown-item.is-sub-open .site-nav__subdropdown-list {
+        display: block;
+      }
+    }
+  </style>
+
+  <script>
+    (function () {
+      function initMegaMenus() {
+        var headers = document.querySelectorAll('.site-header');
+        headers.forEach(function (header) {
+          var navItems = header.querySelectorAll('[data-nav-item]');
+          navItems.forEach(function (item) {
+            var trigger = item.querySelector('.site-header__link');
+            var mobileToggle = item.querySelector('.site-header__mobile-toggle');
+            var panel = item.querySelector('.mega-menu, .site-nav__dropdown');
+            if (!panel) return;
+
+            var leaveTimer = null;
+
+            function openItem() {
+              if (leaveTimer) {
+                clearTimeout(leaveTimer);
+                leaveTimer = null;
+              }
+              navItems.forEach(function (other) {
+                if (other !== item && other.classList.contains('is-open')) {
+                  other.classList.remove('is-open');
+                  var ot = other.querySelector('.site-header__link');
+                  if (ot) ot.setAttribute('aria-expanded', 'false');
+                  var omt = other.querySelector('.site-header__mobile-toggle');
+                  if (omt) omt.setAttribute('aria-expanded', 'false');
+                }
+              });
+              item.classList.add('is-open');
+              if (trigger) trigger.setAttribute('aria-expanded', 'true');
+              if (mobileToggle) mobileToggle.setAttribute('aria-expanded', 'true');
+
+              if (panel.classList.contains('site-nav__dropdown')) {
+                var rect = panel.getBoundingClientRect();
+                var docWidth = window.innerWidth || document.documentElement.clientWidth;
+                if (rect.right > docWidth - 10) {
+                  panel.style.left = 'auto';
+                  panel.style.right = '0';
+                } else {
+                  panel.style.left = '';
+                  panel.style.right = '';
+                }
+              }
+            }
+
+            function closeItem(restoreFocus) {
+              if (leaveTimer) {
+                clearTimeout(leaveTimer);
+                leaveTimer = null;
+              }
+              item.classList.remove('is-open');
+              if (trigger) trigger.setAttribute('aria-expanded', 'false');
+              if (mobileToggle) mobileToggle.setAttribute('aria-expanded', 'false');
+              if (restoreFocus && trigger) {
+                trigger.focus();
+              }
+            }
+
+            // Desktop hover with debounce
+            item.addEventListener('mouseenter', function () {
+              if (window.matchMedia('(min-width: 769px)').matches) {
+                openItem();
+              }
+            });
+
+            item.addEventListener('mouseleave', function () {
+              if (window.matchMedia('(min-width: 769px)').matches) {
+                leaveTimer = setTimeout(function () {
+                  closeItem(false);
+                }, 280);
+              }
+            });
+
+            // Focus management
+            item.addEventListener('focusin', function () {
+              if (window.matchMedia('(min-width: 769px)').matches) {
+                openItem();
+              }
+            });
+
+            item.addEventListener('focusout', function () {
+              setTimeout(function () {
+                if (!item.contains(document.activeElement)) {
+                  closeItem(false);
+                }
+              }, 15);
+            });
+
+            // Trigger link interaction
+            if (trigger) {
+              trigger.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown' || e.key === ' ' || e.key === 'Enter') {
+                  if (!item.classList.contains('is-open')) {
+                    e.preventDefault();
+                    openItem();
+                    var firstInteractive = panel.querySelector('a, button');
+                    if (firstInteractive) {
+                      firstInteractive.focus();
+                    }
+                  }
+                }
+              });
+
+              trigger.addEventListener('click', function (e) {
+                var href = trigger.getAttribute('href');
+                var isDummy = !href || href === '#' || href === 'javascript:void(0)';
+                var isMobile = window.matchMedia('(max-width: 768px)').matches;
+
+                if (isMobile) {
+                  if (isDummy) {
+                    e.preventDefault();
+                    if (item.classList.contains('is-open')) {
+                      closeItem(false);
+                    } else {
+                      openItem();
+                    }
+                  } else {
+                    if (!item.classList.contains('is-open')) {
+                      e.preventDefault();
+                      openItem();
+                    }
+                  }
+                } else {
+                  if (isDummy) {
+                    e.preventDefault();
+                    if (item.classList.contains('is-open')) {
+                      closeItem(false);
+                    } else {
+                      openItem();
+                    }
+                  } else {
+                    if (!item.classList.contains('is-open')) {
+                      e.preventDefault();
+                      openItem();
+                    }
+                  }
+                }
+              });
+            }
+
+            // Mobile toggle button
+            if (mobileToggle) {
+              mobileToggle.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (item.classList.contains('is-open')) {
+                  closeItem(false);
+                } else {
+                  openItem();
+                }
+              });
+            }
+
+            // Escape key closes menu and restores focus
+            item.addEventListener('keydown', function (e) {
+              if (e.key === 'Escape') {
+                if (item.classList.contains('is-open')) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closeItem(true);
+                }
+              }
+            });
+
+            // Sublinks navigation closes menu
+            panel.addEventListener('click', function (e) {
+              var link = e.target.closest('a');
+              if (link && link.getAttribute('href') && link.getAttribute('href') !== '#') {
+                closeItem(false);
+              }
+            });
+
+            // Column sublinks accordion (Level 2 -> Level 3)
+            var colToggles = panel.querySelectorAll('.mega-menu__col-toggle');
+            colToggles.forEach(function (btn) {
+              btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var col = btn.closest('.mega-menu__column');
+                if (!col) return;
+                var isColOpen = col.classList.toggle('is-col-open');
+                btn.setAttribute('aria-expanded', isColOpen ? 'true' : 'false');
+              });
+            });
+
+            // Header title click on mobile to toggle sublinks if heading has no custom link
+            var colHeaders = panel.querySelectorAll('.mega-menu__column-header');
+            colHeaders.forEach(function (hdr) {
+              hdr.addEventListener('click', function (e) {
+                if (e.target.closest('.mega-menu__col-toggle')) return;
+                var link = e.target.closest('a');
+                var href = link ? link.getAttribute('href') : null;
+                var isDummy = !href || href === '#' || href === 'javascript:void(0)';
+                if (!link || isDummy) {
+                  if (window.matchMedia('(max-width: 768px)').matches) {
+                    var col = hdr.closest('.mega-menu__column');
+                    if (col && col.classList.contains('mega-menu__column--has-sublinks')) {
+                      var isColOpen = col.classList.toggle('is-col-open');
+                      var btn = col.querySelector('.mega-menu__col-toggle');
+                      if (btn) btn.setAttribute('aria-expanded', isColOpen ? 'true' : 'false');
+                    }
+                  }
+                }
+              });
+            });
+
+            // Standard dropdown item accordion
+            var dropToggles = panel.querySelectorAll('.site-nav__dropdown-toggle');
+            dropToggles.forEach(function (btn) {
+              btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var dropItem = btn.closest('.site-nav__dropdown-item');
+                if (!dropItem) return;
+                var isSubOpen = dropItem.classList.toggle('is-sub-open');
+                btn.setAttribute('aria-expanded', isSubOpen ? 'true' : 'false');
+              });
+            });
+
+            var dropHeaders = panel.querySelectorAll('.site-nav__dropdown-header');
+            dropHeaders.forEach(function (hdr) {
+              hdr.addEventListener('click', function (e) {
+                if (e.target.closest('.site-nav__dropdown-toggle')) return;
+                var link = e.target.closest('a');
+                var href = link ? link.getAttribute('href') : null;
+                var isDummy = !href || href === '#' || href === 'javascript:void(0)';
+                if (!link || isDummy) {
+                  if (window.matchMedia('(max-width: 768px)').matches) {
+                    var dropItem = hdr.closest('.site-nav__dropdown-item');
+                    if (dropItem && dropItem.classList.contains('site-nav__dropdown-item--has-sub')) {
+                      var isSubOpen = dropItem.classList.toggle('is-sub-open');
+                      var btn = dropItem.querySelector('.site-nav__dropdown-toggle');
+                      if (btn) btn.setAttribute('aria-expanded', isSubOpen ? 'true' : 'false');
+                    }
+                  }
+                }
+              });
+            });
+          });
+
+          // Document click outside closes open menus
+          document.addEventListener('pointerdown', function (e) {
+            navItems.forEach(function (item) {
+              if (item.classList.contains('is-open') && !item.contains(e.target)) {
+                item.classList.remove('is-open');
+                var t = item.querySelector('.site-header__link');
+                if (t) t.setAttribute('aria-expanded', 'false');
+                var mt = item.querySelector('.site-header__mobile-toggle');
+                if (mt) mt.setAttribute('aria-expanded', 'false');
+              }
+            });
+          });
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMegaMenus);
+      } else {
+        initMegaMenus();
+      }
+    })();
+  </script>
 
 {% schema %}
 {

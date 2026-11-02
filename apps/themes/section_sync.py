@@ -54,7 +54,19 @@ SYNCED_SECTIONS = {
     "header": {
         "path": "sections/header.liquid", "label": "Header", "snippet": "header",
         "originals": {
-            # current starter (a590775)
+            # updated starter with mega menu promo banner positioning fixes
+            "8481aa5f4caa9a1613845c03495d2da44ecf84e6d40d3182a30ab7ee7b36b13f",  # LF
+            "b032320da08033cfe341492498a1848dc5d8d29bbacb03b58b1ca3974f074995",  # CRLF
+            # updated starter with mega menu condition & hover/click fixes
+            "d7cf4a94d59561bd67070a5f281e22375017d74703d7c195a035de70f9363fca",  # LF
+            "8665d55aa1def0d046228040b50826591f9870e23156942f9d2486f4d0bf5af2",  # CRLF
+            # updated starter with mega menu responsive & mobile accordion
+            "8864eca8c15e3358f2bd0ab1efeb86f6f0878f2af1c785221975255ef0384dab",  # LF
+            "8cf0d761ee1170124c1fe68071d15590e66fd528bf078bde13bb125d3d95128d",  # CRLF
+            # updated starter with mega menu & dropdowns
+            "a3d2b6890203e6eb770de24bf32921dce277e102a2e58401082953b6c682bb30",  # LF
+            "353583eae94c78d34e7091824d79860b1f203b9b5e827efaef8763b527b7b667",  # CRLF
+            # previous starter (a590775)
             "87b238125f2423a74a44f72907f6c497819e57a91cf2c93aa1d55a96a652e53d",  # LF
             "7abacf47fa6285eae383b52aae6d89225e54e00be5f583da939ec1b7d359df37",  # CRLF
             # first starter, before the header followed Theme settings (2df94aa)
@@ -111,7 +123,7 @@ SYNCED_FILES = {
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 6: show the guest wishlist item count beside existing header hearts
-ORIGINALS_REVISION = 9
+ORIGINALS_REVISION = 12
 
 
 def is_original_snippet(name, content):

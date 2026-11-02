@@ -768,9 +768,10 @@ NOT_NAVBAR = ("footer", "account")
 
 def navbar_menu_links(store, base_url):
     """
-    [{"label", "url"}] from the store's navbar menu in Admin > Menus, [] when it has none.
+    [{"label", "url", ...}] from the store's navbar menu in Admin > Menus, [] when it has none.
     The menu is the one with handle main-menu/header/navbar/main, else the oldest that is not a
-    footer or account menu. Only top-level items show: the header has no dropdowns.
+    footer or account menu. Supports 3-level menu hierarchy (main links, columns, sublinks),
+    mega menus, badges, and promotional banners.
     """
     menus = list(Menu.objects.filter(store=store).prefetch_related("items").order_by("created_at"))
     menu = next((m for h in NAVBAR_MENU_HANDLES for m in menus if m.handle == h), None) or next(
@@ -778,10 +779,91 @@ def navbar_menu_links(store, base_url):
     )
     if menu is None:
         return []
-    items = sorted((i for i in menu.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
-    items = [i for i in items if i.title and i.url]
-    dead = dead_menu_urls(store, [i.url for i in items])  # links to products and collections shoppers can't open are hidden
-    return [{"label": i.title, "url": _resolve_link(base_url, i.url), "raw": i.url} for i in items if i.url not in dead]
+
+    all_items = list(menu.items.all())
+    urls_to_check = [i.url for i in all_items if i.url]
+    urls_to_check += [i.promo_url for i in all_items if getattr(i, "promo_url", None)]
+    dead = dead_menu_urls(store, urls_to_check)
+
+    by_parent = {}
+    for item in all_items:
+        by_parent.setdefault(item.parent_id, []).append(item)
+    for pid in by_parent:
+        by_parent[pid].sort(key=lambda i: (i.order, i.created_at))
+
+    top_items = by_parent.get(None, [])
+    result = []
+    for top in top_items:
+        if not top.title:
+            continue
+        children_l2 = by_parent.get(top.id, [])
+        top_url_dead = top.url in dead
+        if (top_url_dead or not top.url) and not children_l2:
+            continue
+
+        top_url = "" if top_url_dead else _resolve_link(base_url, top.url)
+        top_raw = "" if top_url_dead else (top.url or "")
+
+        columns = []
+        for l2 in children_l2:
+            if not l2.title:
+                continue
+            children_l3 = by_parent.get(l2.id, [])
+            l2_url_dead = l2.url in dead
+            if (l2_url_dead or not l2.url) and not children_l3:
+                continue
+
+            l2_url = "" if l2_url_dead else _resolve_link(base_url, l2.url)
+            l2_raw = "" if l2_url_dead else (l2.url or "")
+
+            links = []
+            for l3 in children_l3:
+                if not l3.title or l3.url in dead:
+                    continue
+                links.append({
+                    "id": l3.id,
+                    "label": l3.title,
+                    "url": _resolve_link(base_url, l3.url),
+                    "raw": l3.url,
+                    "badge": l3.badge or "",
+                })
+
+            columns.append({
+                "id": l2.id,
+                "label": l2.title,
+                "url": l2_url,
+                "raw": l2_raw,
+                "badge": l2.badge or "",
+                "links": links,
+            })
+
+        has_promo = bool(top.promo_image or top.promo_title or top.promo_subtitle)
+        promo = None
+        if has_promo:
+            promo_url = top.promo_url or ""
+            resolved_promo_url = "" if promo_url in dead else _resolve_link(base_url, promo_url)
+            promo = {
+                "image": top.promo_image or "",
+                "title": top.promo_title or "",
+                "subtitle": top.promo_subtitle or "",
+                "url": resolved_promo_url,
+                "raw_url": promo_url,
+            }
+
+        is_mega = bool(top.is_mega)
+        has_dropdown = len(columns) > 0
+        result.append({
+            "id": top.id,
+            "label": top.title,
+            "url": top_url,
+            "raw": top_raw,
+            "badge": top.badge or "",
+            "is_mega": is_mega,
+            "has_dropdown": has_dropdown,
+            "columns": columns,
+            "promo": promo,
+        })
+    return result
 
 
 def layout_data(settings, base_url, nav, menu_links=None, dead=()):
@@ -1703,7 +1785,9 @@ def _synced_html(store, store_theme, name, section, data, env, env_key, context,
         if unique_blocks != blocks:
             values = dict(values, blocks=unique_blocks)
             raw = values
-        if not any(b.get("type") == "link" and not b.get("hidden") for b in blocks) and context.get("menu_links"):
+        has_custom_links = any(b.get("type") == "link" and not b.get("hidden") for b in blocks)
+        context["has_custom_links"] = has_custom_links
+        if not has_custom_links and context.get("menu_links"):
             link = [{"type": "link", "settings": {"label": m["label"], "url": m["raw"]}} for m in context["menu_links"]]
             raw = dict(values, blocks=link + unique_blocks)
     return sync.render_section(

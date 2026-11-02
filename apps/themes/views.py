@@ -1164,29 +1164,49 @@ class MenuItemSerializer(serializers.ModelSerializer):
     url = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
     order = serializers.IntegerField(default=0)
     parent = serializers.PrimaryKeyRelatedField(queryset=MenuItem.objects.all(), required=False, allow_null=True)
+    is_mega = serializers.BooleanField(required=False, default=False)
+    badge = serializers.CharField(max_length=30, required=False, allow_blank=True, default="")
+    promo_image = serializers.CharField(max_length=1000, required=False, allow_blank=True, default="")
+    promo_title = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    promo_subtitle = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    promo_url = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
     children = serializers.SerializerMethodField()
     broken = serializers.SerializerMethodField()
 
     class Meta:
         model = MenuItem
-        fields = ["id", "title", "url", "order", "parent", "children", "broken"]
+        fields = [
+            "id", "title", "url", "order", "parent",
+            "is_mega", "badge", "promo_image", "promo_title", "promo_subtitle", "promo_url",
+            "children", "broken",
+        ]
 
     def get_broken(self, obj):
         """True when the link goes to a product or collection that shoppers can't open now (see dead_menu_urls)."""
         return obj.url in self.context.get("broken_urls", ())
 
     def get_children(self, obj):
-        if obj.parent_id is not None:  # menus nest one level deep
+        depth = self.context.get("_depth", None)
+        if depth is None:
+            depth = 1
+            curr = obj
+            while curr.parent_id is not None:
+                depth += 1
+                curr = curr.parent
+                if depth >= 3:
+                    break
+        if depth >= 3:
             return []
+        child_context = {**self.context, "_depth": depth + 1}
         children = sorted(obj.children.all(), key=lambda c: (c.order, c.created_at))
-        return MenuItemSerializer(children, many=True, context=self.context).data
+        return MenuItemSerializer(children, many=True, context=child_context).data
 
 
 MAX_MENU_ITEMS = 100
 
 
 def _clean_menu_link(raw, field):
-    """One {title, url, order?} entry as stored; None when it has no title (the admin drops blank rows)."""
+    """One {title, url, order?, is_mega?, badge?, promo_image?, promo_title?, promo_subtitle?, promo_url?} entry as stored; None when it has no title (the admin drops blank rows)."""
     if not isinstance(raw, dict):
         raise ValidationError({field: "Each menu item must be an object."})
     title = str(raw.get("title") or "").strip()
@@ -1198,11 +1218,48 @@ def _clean_menu_link(raw, field):
         raise ValidationError({field: f'Link "{title}" must start with /, #, http(s)://, mailto: or tel:.'})
     if len(title) > 255 or len(url) > 500:
         raise ValidationError({field: f'Link "{title[:40]}" is too long.'})
-    return {"title": title, "url": url, "order": raw.get("order")}
+
+    badge = str(raw.get("badge") or "").strip()
+    if len(badge) > 30:
+        raise ValidationError({field: f'Badge "{badge[:20]}" is too long (max 30 characters).'})
+
+    promo_image = str(raw.get("promo_image") or "").strip()
+    if promo_image:
+        if not sync._SAFE_URL.match(promo_image):
+            raise ValidationError({field: 'Promo image URL must start with /, #, or http(s)://.'})
+        if len(promo_image) > 1000:
+            raise ValidationError({field: "Promo image link is too long."})
+
+    promo_title = str(raw.get("promo_title") or "").strip()
+    if len(promo_title) > 255:
+        raise ValidationError({field: "Promo title is too long."})
+
+    promo_subtitle = str(raw.get("promo_subtitle") or "").strip()
+    if len(promo_subtitle) > 255:
+        raise ValidationError({field: "Promo subtitle is too long."})
+
+    promo_url = str(raw.get("promo_url") or "").strip()
+    if promo_url:
+        if not sync._SAFE_URL.match(promo_url):
+            raise ValidationError({field: 'Promo destination link must start with /, #, http(s)://, mailto: or tel:.'})
+        if len(promo_url) > 500:
+            raise ValidationError({field: "Promo link is too long."})
+
+    return {
+        "title": title,
+        "url": url,
+        "order": raw.get("order"),
+        "is_mega": bool(raw.get("is_mega")),
+        "badge": badge,
+        "promo_image": promo_image,
+        "promo_title": promo_title,
+        "promo_subtitle": promo_subtitle,
+        "promo_url": promo_url,
+    }
 
 
 def _clean_menu_items(items_data):
-    """Validated [{title, url, order, children: [...]}] from the request; menus nest one level deep."""
+    """Validated [{title, url, order, children: [...]}] from the request; menus nest up to three levels deep."""
     if items_data is None:
         return []
     if not isinstance(items_data, list):
@@ -1215,9 +1272,37 @@ def _clean_menu_items(items_data):
         children = item.get("children") or []
         if not isinstance(children, list):
             raise ValidationError({"items": "Children must be a list."})
-        link["children"] = [c for c in (_clean_menu_link(child, "items") for child in children) if c]
-        total += 1 + len(link["children"])
+
+        cleaned_children = []
+        for child in children:
+            child_link = _clean_menu_link(child, "items")
+            if child_link is None:
+                continue
+            subchildren = child.get("children") or []
+            if not isinstance(subchildren, list):
+                raise ValidationError({"items": "Children must be a list."})
+
+            cleaned_subchildren = []
+            for subchild in subchildren:
+                sub_link = _clean_menu_link(subchild, "items")
+                if sub_link is None:
+                    continue
+                level4 = subchild.get("children")
+                if level4 is not None:
+                    if not isinstance(level4, list):
+                        raise ValidationError({"items": "Children must be a list."})
+                    if len(level4) > 0:
+                        raise ValidationError({"items": "Menu items cannot be nested more than 3 levels deep."})
+                cleaned_subchildren.append(sub_link)
+
+            child_link["children"] = cleaned_subchildren
+            total += len(cleaned_subchildren)
+            cleaned_children.append(child_link)
+
+        link["children"] = cleaned_children
+        total += 1 + len(cleaned_children)
         cleaned.append(link)
+
     if total > MAX_MENU_ITEMS:
         raise ValidationError({"items": f"A menu can have at most {MAX_MENU_ITEMS} items."})
     return cleaned
@@ -1271,12 +1356,49 @@ def _sync_menu_items(menu, items):
         menu.items.all().delete()
         for idx, item in enumerate(items):
             parent = MenuItem.objects.create(
-                menu=menu, title=item["title"], url=item["url"], order=_order(item["order"], idx)
+                menu=menu,
+                title=item["title"],
+                url=item["url"],
+                order=_order(item["order"], idx),
+                is_mega=item.get("is_mega", False),
+                badge=item.get("badge", ""),
+                promo_image=item.get("promo_image", ""),
+                promo_title=item.get("promo_title", ""),
+                promo_subtitle=item.get("promo_subtitle", ""),
+                promo_url=item.get("promo_url", ""),
             )
-            MenuItem.objects.bulk_create([
-                MenuItem(menu=menu, parent=parent, title=c["title"], url=c["url"], order=_order(c["order"], c_idx))
-                for c_idx, c in enumerate(item["children"])
-            ])
+            for c_idx, child in enumerate(item.get("children", [])):
+                col = MenuItem.objects.create(
+                    menu=menu,
+                    parent=parent,
+                    title=child["title"],
+                    url=child["url"],
+                    order=_order(child["order"], c_idx),
+                    is_mega=child.get("is_mega", False),
+                    badge=child.get("badge", ""),
+                    promo_image=child.get("promo_image", ""),
+                    promo_title=child.get("promo_title", ""),
+                    promo_subtitle=child.get("promo_subtitle", ""),
+                    promo_url=child.get("promo_url", ""),
+                )
+                subchildren = child.get("children", [])
+                if subchildren:
+                    MenuItem.objects.bulk_create([
+                        MenuItem(
+                            menu=menu,
+                            parent=col,
+                            title=s["title"],
+                            url=s["url"],
+                            order=_order(s["order"], s_idx),
+                            is_mega=s.get("is_mega", False),
+                            badge=s.get("badge", ""),
+                            promo_image=s.get("promo_image", ""),
+                            promo_title=s.get("promo_title", ""),
+                            promo_subtitle=s.get("promo_subtitle", ""),
+                            promo_url=s.get("promo_url", ""),
+                        )
+                        for s_idx, s in enumerate(subchildren)
+                    ])
 
 
 class MenuSerializer(serializers.ModelSerializer):
@@ -1295,6 +1417,16 @@ class MenuSerializer(serializers.ModelSerializer):
         return sorted((i for i in obj.items.all() if i.parent_id is None), key=lambda i: (i.order, i.created_at))
 
     def get_items(self, obj):
+        all_items = list(obj.items.all())
+        by_parent = {}
+        for item in all_items:
+            by_parent.setdefault(item.parent_id, []).append(item)
+        for item in all_items:
+            if not hasattr(item, "_prefetched_objects_cache"):
+                item._prefetched_objects_cache = {}
+            item._prefetched_objects_cache["children"] = sorted(
+                by_parent.get(item.id, []), key=lambda c: (c.order, c.created_at)
+            )
         return MenuItemSerializer(self._top_items(obj), many=True, context=self.context).data
 
     def get_items_summary(self, obj):

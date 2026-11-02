@@ -291,6 +291,12 @@ class MenuItem(models.Model):
     title = models.CharField(max_length=255)
     url = models.CharField(max_length=500, blank=True, default="")
     order = models.PositiveIntegerField(default=0)
+    is_mega = models.BooleanField(default=False)
+    badge = models.CharField(max_length=30, blank=True, default="")
+    promo_image = models.CharField(max_length=1000, blank=True, default="")
+    promo_title = models.CharField(max_length=255, blank=True, default="")
+    promo_subtitle = models.CharField(max_length=255, blank=True, default="")
+    promo_url = models.CharField(max_length=500, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -312,9 +318,13 @@ class MenuItem(models.Model):
             raise ValidationError({"parent": "The parent item must belong to the same menu."})
 
         visited = set()
+        depth = 1
         while parent is not None:
+            depth += 1
             if parent.pk == self.pk or parent.pk in visited:
                 raise ValidationError({"parent": "Menu items cannot form a parent cycle."})
+            if depth > 3:
+                raise ValidationError({"parent": "Menu items cannot be nested more than 3 levels deep."})
             visited.add(parent.pk)
             parent = parent.parent
 
