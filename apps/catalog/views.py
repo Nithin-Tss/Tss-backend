@@ -76,7 +76,7 @@ from .services import (
 
 # Product photos: JPG, PNG or WEBP up to 1MB, checked and cleaned in apps/media/images.py
 # (MAX_IMAGE_SIZE and image_extension are importable from here as before)
-from apps.media.images import MAX_IMAGE_SIZE, clean_image, image_extension  # noqa: E402,F401
+from apps.media.images import MAX_IMAGE_SIZE, clean_image, image_extension, public_image_url  # noqa: E402,F401
 
 MAX_BULK_ROWS = 500
 
@@ -327,7 +327,7 @@ class ProductViewSet(StoreScopedViewSet):
         image = ThemeImage.objects.create(
             store_id=request.store.store_id, content_type=ctype, data=data, size=len(data),
         )
-        url = request.build_absolute_uri(f"/s/_img/{image.id}")
+        url = public_image_url(request, f"/s/_img/{image.id}")
 
         return Response({"url": url}, status=status.HTTP_201_CREATED)
 

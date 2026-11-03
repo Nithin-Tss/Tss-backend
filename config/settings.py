@@ -285,6 +285,10 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@localhost')
 # Links in those emails open the frontend (see apps/identity/email_links.py)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 
+# Public address of this backend (e.g. https://api.example.com), used for the picture URLs saved at upload time.
+# Set it in production; unset, the address of the upload request is used (http://localhost:8000 while developing).
+PUBLIC_API_URL = os.getenv('PUBLIC_API_URL', '').strip().rstrip('/')
+
 # How long the links work
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', 60 * 60))  # 1 hour
 EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60 * 24 * 3))  # 3 days

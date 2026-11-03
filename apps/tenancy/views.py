@@ -1,3 +1,5 @@
+import logging
+
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import mixins, viewsets
@@ -14,6 +16,8 @@ from .access import membership_permissions
 from .models import Store
 from .serializers import StoreSerializer
 from .services import ACTIVE, CLOSED, OWNER, close_store, create_store, delete_store, reopen_store
+
+logger = logging.getLogger(__name__)
 
 
 _STORE_ID = OpenApiParameter("id", OpenApiTypes.UUID, OpenApiParameter.PATH, description="Store id")
@@ -108,6 +112,7 @@ class StoreViewSet(
 
     def perform_destroy(self, instance):
         self.check_owner(instance)
+        logger.warning("Store %s (%s) closed by user %s", instance.store_slug, instance.store_id, self.request.user.email)
         close_store(instance)
 
     @action(detail=True, methods=["post"])

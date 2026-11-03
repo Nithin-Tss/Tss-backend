@@ -39,6 +39,19 @@ KEPT_INFO = ("icc_profile", "transparency", "duration", "loop")
 LOSSY_QUALITIES = (92, 85, 75, 65)
 
 
+def public_image_url(request, url):
+    """Absolute address to save for an uploaded picture: on PUBLIC_API_URL when set, else on the request's own host."""
+    from django.conf import settings
+
+    if url.startswith("/") and settings.PUBLIC_API_URL:
+        return settings.PUBLIC_API_URL + url
+    url = request.build_absolute_uri(url)
+    # Behind a proxy Django sees plain http; an http image on the https storefront is blocked by the browser
+    if not settings.DEBUG and url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
+    return url
+
+
 def image_extension(head):
     """The kind of picture a file starts like ('jpg', 'png', 'webp') or None. Only a first, cheap check."""
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":

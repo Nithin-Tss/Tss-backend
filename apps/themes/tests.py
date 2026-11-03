@@ -5822,6 +5822,54 @@ class ThemeImageUrlTest(StoreClientMixin, APITestCase):
             self.assertTrue(self.upload().startswith("https://"))
 
 
+class PublicImageUrlAndCorsTest(StoreClientMixin, APITestCase):
+    from apps.media.tests import PNG
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("imgcors@example.com", "Cors Store")
+
+    def upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        r = self.client.post("/api/v1/themes/images/", {"image": SimpleUploadedFile("a.png", self.PNG)}, format="multipart")
+        self.assertEqual(r.status_code, 201)
+        return r.json()["url"]
+
+    def test_upload_url_uses_public_api_url_when_set(self):
+        from django.test import override_settings
+        with override_settings(PUBLIC_API_URL="https://api.example.com"):
+            self.assertRegex(self.upload(), r"^https://api\.example\.com/s/_img/[0-9a-f-]{36}$")
+
+    def test_upload_url_falls_back_to_request_host(self):
+        from django.test import override_settings
+        with override_settings(PUBLIC_API_URL=""):
+            self.assertRegex(self.upload(), r"^https?://testserver/s/_img/[0-9a-f-]{36}$")
+
+    def test_image_is_readable_from_a_sandboxed_page_without_credentials(self):
+        path = self.upload().split("testserver")[-1]
+        r = self.client.get(path, HTTP_ORIGIN="null")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+        self.assertEqual(r["Cross-Origin-Resource-Policy"], "cross-origin")
+        self.assertNotIn("Access-Control-Allow-Credentials", r)
+
+    def test_bucket_redirect_carries_the_same_headers(self):
+        from apps.media.models import MediaAsset
+        asset = MediaAsset.objects.filter(store_id=self.store["storeId"]).first() or MediaAsset.objects.create(
+            store_id=self.store["storeId"], mime_type="image/png", file_size=1, data=self.PNG, original_name="a.png")
+        MediaAsset.objects.filter(pk=asset.pk).update(storage_key="k/a.png", data=None)
+        from unittest import mock
+        with mock.patch.object(MediaAsset, "url", new_callable=mock.PropertyMock, return_value="https://cdn.example.com/k/a.png"):
+            r = self.client.get(f"/s/_img/{asset.pk}", HTTP_ORIGIN="null")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+        self.assertNotIn("Access-Control-Allow-Credentials", r)
+
+    def test_api_cors_stays_restricted(self):
+        r = self.client.get("/api/v1/themes/sections/", HTTP_ORIGIN="null")
+        self.assertNotEqual(r.get("Access-Control-Allow-Origin"), "*")
+        self.assertNotEqual(r.get("Access-Control-Allow-Origin"), "null")
+
+
 class MenusApiTest(StoreClientMixin, APITestCase):
     URL = "/api/v1/themes/menus/"
 

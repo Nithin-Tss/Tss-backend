@@ -44,6 +44,7 @@ from apps.customers import services as customer_services
 
 from apps.tenancy.models import Store, StoreMembership
 
+from apps.media.images import public_image_url
 from apps.media.models import MediaAsset
 from apps.media.services import upload_image
 from .models import BlogPost, Menu, MenuItem, StorePage, StoreTheme, ThemeImage, UrlRedirect
@@ -475,11 +476,15 @@ class ThemeImageView(StoreThemeView):
     def post(self, request):
         # Kept in the database and listed in the store's media assets (product photos are not)
         asset = upload_image(request.store.store_id, request.FILES.get("image"), request.user)
-        url = request.build_absolute_uri(asset.url)
-        # Behind a proxy Django sees plain http; an http image on the https storefront is blocked by the browser
-        if not settings.DEBUG and url.startswith("http://"):
-            url = "https://" + url[len("http://"):]
-        return Response({"url": url}, status=status.HTTP_201_CREATED)
+        return Response({"url": public_image_url(request, asset.url)}, status=status.HTTP_201_CREATED)
+
+
+def _public_image_headers(response):
+    """Pictures are public and read-only (found by their random id, no cookies): any page, even a sandboxed one
+    whose origin is "null", may load or read them. Only this route; the rest of the API keeps its allow-list."""
+    response["Access-Control-Allow-Origin"] = "*"
+    response["Cross-Origin-Resource-Policy"] = "cross-origin"
+    return response
 
 
 THEME_IMAGE_CACHE_SECONDS = 60 * 60
@@ -496,7 +501,7 @@ def theme_image(request, image_id):
         if stored is not None:  # kept in the bucket: older /s/_img/ links keep working by redirecting there
             response = HttpResponseRedirect(stored.url)
             response["Cache-Control"] = "public, max-age=3600"
-            return response
+            return _public_image_headers(response)
         asset = MediaAsset.objects.filter(pk=image_id, data__isnull=False).only("data", "mime_type").first()
         if asset is not None:
             cached = (bytes(asset.data), asset.mime_type)
@@ -508,8 +513,7 @@ def theme_image(request, image_id):
     data, content_type = cached
     response = HttpResponse(data, content_type=content_type)
     response["Cache-Control"] = "public, max-age=31536000, immutable"
-    response["Cross-Origin-Resource-Policy"] = "cross-origin"
-    return response
+    return _public_image_headers(response)
 
 
 # Added to the customizer preview only (the Home page). The page has no access to
