@@ -99,6 +99,9 @@ class VariantInputSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+    compare_at_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True,
+    )
     weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
     continue_selling = serializers.BooleanField(required=False)
 
@@ -107,8 +110,10 @@ class VariantInputSerializer(serializers.Serializer):
 
     def to_internal_value(self, data):
         # The admin form sends "" for an empty price
-        if isinstance(data, dict) and data.get("price") == "":
-            data = {**data, "price": None}
+        if isinstance(data, dict):
+            blanks = {k: None for k in ("price", "compare_at_price") if data.get(k) == ""}
+            if blanks:
+                data = {**data, **blanks}
         return super().to_internal_value(data)
 
 
@@ -132,6 +137,9 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         min_value=0,
         required=False,
         allow_null=True,
+    )
+    compare_at_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True,
     )
     sku = serializers.CharField(required=False, allow_blank=True, max_length=100)
     weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
@@ -175,7 +183,7 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         if hasattr(data, "get"):
             blanks = {
                 k: None
-                for k in ("price", "quantity", "location", "category_id", "theme_template")
+                for k in ("price", "compare_at_price", "quantity", "location", "category_id", "theme_template")
                 if data.get(k) == ""
             }
             if blanks:
@@ -276,6 +284,7 @@ class ProductSerializer(serializers.ModelSerializer):
                 "id": str(v.id),
                 "sku": v.sku or "",
                 "price": str(v.price),
+                "compare_at_price": str(v.compare_at_price) if v.compare_at_price is not None else "",
                 "weight": str(v.weight),
                 "continue_selling": v.continue_selling,
                 "quantity": sum(i.available for i in v.inventory_items.all()),

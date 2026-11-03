@@ -539,6 +539,8 @@ def _apply_variant(variant, row, default_price=None):
     elif "price" in row or variant._state.adding:
         variant.price = _price(None)  # sent empty (a Draft may keep it) or a new option: 0.00
     # else: no price was sent for this option: it keeps the one it has
+    if "compare_at_price" in row:
+        variant.compare_at_price = row["compare_at_price"]
     if "continue_selling" in row:
         variant.continue_selling = bool(row["continue_selling"])
     if row.get("weight") is not None:
@@ -561,6 +563,7 @@ def _replace_variants(product, data):
     rows = data.get("variants") or [
         {
             **({"price": data["price"]} if "price" in data else {}),
+            **({"compare_at_price": data["compare_at_price"]} if "compare_at_price" in data else {}),
             **({"sku": data["sku"]} if "sku" in data else {}),
             **({"weight": data["weight"]} if "weight" in data else {}),
             **({"continue_selling": data["continue_selling"]} if "continue_selling" in data else {}),

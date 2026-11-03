@@ -55,7 +55,7 @@
         <div class="product__cart-icon" style="text-align:{{ section.cart_icon.align | default: 'left' }}">{% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: section.cart_icon %}</div>
       {%- endif -%}
       {%- if s.show_price -%}
-        <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.is_sold_out %} <span class="price price--muted">{{ s.sold_out_label | default: 'Sold out' }}</span>{% endif %}</div>
+        <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.on_sale and product.price != nil %} <span class="price price--compare product__compare">{{ product.compare_at_price | money }}</span>{% endif %}{% if product.is_sold_out %} <span class="price price--muted">{{ s.sold_out_label | default: 'Sold out' }}</span>{% endif %}</div>
       {%- endif -%}
       {%- if s.show_stock -%}
         <p class="product__stock{% if shown_out %} product__stock--out{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock %} product__stock--few{% endif %}" data-stock data-low="{{ low_stock }}">
@@ -86,7 +86,7 @@
             <span>Option</span>
             <select name="variant" data-variant>
               {%- for variant in product.variants -%}
-                <option value="{{ variant.id }}"{% if variant.id == shown_variant.id %} selected{% endif %} data-variant-price="{{ variant.price | money }}" data-variant-sku="{{ variant.sku }}" data-variant-available="{{ variant.available_total }}" data-variant-continue="{{ variant.continue_selling }}">
+                <option value="{{ variant.id }}"{% if variant.id == shown_variant.id %} selected{% endif %} data-variant-price="{{ variant.price | money }}"{% if variant.on_sale %} data-variant-compare="{{ variant.compare_at_price | money }}"{% endif %} data-variant-sku="{{ variant.sku }}" data-variant-available="{{ variant.available_total }}" data-variant-continue="{{ variant.continue_selling }}">
                   {{ variant.sku | default: 'Option' }}{% if variant.sku == blank %} {{ forloop.index }}{% endif %}{% if variant.price != nil %} — {{ variant.price | money }}{% endif %}
                 </option>
               {%- endfor -%}
@@ -124,6 +124,7 @@
   </div>
 </section>
 <style>
+  .product__price .product__compare { display: inline; margin-left: 6px; font-size: .8em; font-weight: 400; color: #888; text-decoration: line-through; }
   #section-{{ section.id }} .product__main-image { position: relative; overflow: hidden; }
   #section-{{ section.id }} .product__main-image--zoom-hover img { transition: transform .15s ease-out; }
   #section-{{ section.id }} .product__main-image--zoom-hover.is-zooming { cursor: zoom-in; }
@@ -195,6 +196,13 @@
         var price = priceBox.querySelector(".price");
         if (option.dataset.variantPrice) price.textContent = option.dataset.variantPrice;
         else { price.textContent = "Price on request"; price.className = "price price--muted"; }
+        if (option.dataset.variantCompare) {
+          var compare = document.createElement("span");
+          compare.className = "price price--compare product__compare";
+          compare.textContent = option.dataset.variantCompare;
+          priceBox.appendChild(document.createTextNode(" "));
+          priceBox.appendChild(compare);
+        }
       }
       var skuRow = root.querySelector("[data-sku-row]");
       if (skuRow) {
