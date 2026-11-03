@@ -3,8 +3,19 @@ Reports and overview endpoints.
 
     python manage.py test apps.core.tests.test_reports --settings=config.test_settings
 """
+from datetime import date, datetime, timezone as dt_timezone
+from decimal import Decimal
+from unittest import mock
+
+from celery.exceptions import Retry
+
+from django.db import IntegrityError, OperationalError, connection, transaction
+from django.utils import timezone
+
+from apps.core import reports, tasks
 from apps.customers.models import Customer
-from apps.orders.models import Order
+from apps.orders.models import Order, OrderItem, StoreDailyMetric
+from apps.payments.models import Payment, PaymentTransaction
 from apps.tenancy.models import Store
 
 from .test_rbac import RbacTestBase
@@ -103,3 +114,178 @@ class CatalogueApiTest(RbacTestBase):
     def test_staff_without_product_access_is_refused(self):
         self.staff("support@example.com", "online_store_editor")
         self.assertEqual(self.client.get("/api/v1/catalog/catalogues/").status_code, 403)
+
+
+class DailyMetricsTest(RbacTestBase):
+    """analytics.store_daily_metrics, the aggregation task and /reports/daily-metrics/."""
+
+    def setUp(self):
+        super().setUp()
+        Store.objects.filter(pk=self.store_id).update(timezone="UTC")
+        self.shop = Store.objects.get(pk=self.store_id)
+        self.product_id = self.ok("post", "/api/v1/catalog/products/",
+                                  {"title": "Hat", "price": "10", "sku": "HAT-1"}, expect=201)["id"]
+        self.numbers = 0
+
+    def order(self, total, at, status="open", currency="INR", units=1, store=None):
+        self.numbers += 1
+        order = Order.objects.create(
+            store=store or self.shop, order_number=str(self.numbers), currency_code=currency, subtotal=total,
+            discount_amount=0, tax_amount=0, shipping_amount=0, total=total, status=status,
+            fulfillment_status="unfulfilled")
+        Order.objects.filter(pk=order.pk).update(created_at=at)
+        if store is None:
+            OrderItem.objects.create(order=order, product_id=self.product_id, product_name="Hat", quantity=units,
+                                     unit_price=total, discount_amount=0, tax_amount=0, total=total, is_deleted=False)
+        return order
+
+    def refund(self, order, amount, status="success"):
+        payment = Payment.objects.create(store=order.store, order=order, currency=order.currency_code,
+                                         amount=order.total, status="captured", provider="manual", is_deleted=False)
+        PaymentTransaction.objects.create(payment=payment, transaction_type="refund", amount=amount, status=status)
+
+    def run_days(self, start, end):
+        return tasks.aggregate_daily_metrics.delay(store_id=str(self.shop.pk), start=start, end=end).get()
+
+    def metric(self, day, currency="INR"):
+        return StoreDailyMetric.objects.get(store=self.shop, metric_date=day, currency_code=currency)
+
+    def test_table_is_created_in_the_analytics_schema(self):
+        self.assertEqual(StoreDailyMetric._meta.db_table, '"analytics"."store_daily_metrics"')
+        self.assertIn("analytics__store_daily_metrics", connection.introspection.table_names())
+
+    def test_orders_sales_refunds_net_items_and_average(self):
+        day = datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc)
+        first = self.order("30.00", day, units=2)
+        self.order("10.00", day, units=3)
+        self.refund(first, "5.00")
+        self.refund(first, "7.00", status="failed")  # only successful refunds count
+
+        self.run_days("2026-10-01", "2026-10-01")
+
+        m = self.metric(date(2026, 10, 1))
+        self.assertEqual((m.total_orders, m.items_sold), (2, 5))
+        self.assertEqual((m.gross_sales, m.total_refunds, m.net_sales, m.average_order_value),
+                         (Decimal("40.00"), Decimal("5.00"), Decimal("35.00"), Decimal("20.00")))
+
+    def test_cancelled_orders_and_their_refunds_are_left_out(self):
+        day = datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc)
+        self.order("30.00", day)
+        cancelled = self.order("99.00", day, status="cancelled")
+        self.refund(cancelled, "99.00")
+
+        self.run_days("2026-10-01", "2026-10-01")
+
+        m = self.metric(date(2026, 10, 1))
+        self.assertEqual((m.total_orders, m.gross_sales, m.total_refunds), (1, Decimal("30.00"), Decimal("0.00")))
+
+    def test_currencies_get_separate_rows(self):
+        day = datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc)
+        self.order("30.00", day)
+        self.order("5.00", day, currency="USD")
+
+        self.run_days("2026-10-01", "2026-10-01")
+
+        self.assertEqual(self.metric(date(2026, 10, 1)).gross_sales, Decimal("30.00"))
+        self.assertEqual(self.metric(date(2026, 10, 1), "USD").gross_sales, Decimal("5.00"))
+
+    def test_days_follow_the_store_timezone(self):
+        Store.objects.filter(pk=self.store_id).update(timezone="Asia/Kolkata")
+        self.shop.refresh_from_db()
+        self.order("30.00", datetime(2026, 10, 1, 20, tzinfo=dt_timezone.utc))  # 01:30 on 2 Oct in India
+
+        self.run_days("2026-10-01", "2026-10-02")
+
+        self.assertEqual(self.metric(date(2026, 10, 2)).total_orders, 1)
+        self.assertFalse(StoreDailyMetric.objects.filter(store=self.shop, metric_date=date(2026, 10, 1)).exists())
+
+    def test_running_twice_does_not_double_count_and_later_cancellations_zero_the_day(self):
+        order = self.order("30.00", datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc))
+        self.run_days("2026-10-01", "2026-10-01")
+        self.run_days("2026-10-01", "2026-10-01")
+        self.assertEqual(StoreDailyMetric.objects.filter(store=self.shop).count(), 1)
+        self.assertEqual(self.metric(date(2026, 10, 1)).gross_sales, Decimal("30.00"))
+
+        Order.objects.filter(pk=order.pk).update(status="cancelled")
+        self.run_days("2026-10-01", "2026-10-01")
+        m = self.metric(date(2026, 10, 1))
+        self.assertEqual((m.total_orders, m.gross_sales, m.items_sold), (0, Decimal("0.00"), 0))
+
+    def test_stores_are_kept_apart(self):
+        _, other = self.sign_up("other@example.com", "Other shop")
+        other_store = Store.objects.get(pk=other["storeId"])
+        Store.objects.filter(pk__in=[self.shop.pk, other_store.pk]).update(timezone="UTC", status="active")
+        self.order("30.00", timezone.now())
+        self.order("500.00", timezone.now(), store=other_store)
+
+        tasks.aggregate_daily_metrics.delay(lookback_days=2).get()  # every active store
+
+        mine = StoreDailyMetric.objects.get(store=self.shop)
+        theirs = StoreDailyMetric.objects.get(store=other_store)
+        self.assertEqual((mine.gross_sales, theirs.gross_sales), (Decimal("30.00"), Decimal("500.00")))
+        self.as_owner()
+        data = self.ok("get", "/api/v1/reports/daily-metrics/?days=7")
+        self.assertEqual([float(r["gross_sales"]) for r in data["rows"]], [30.0])
+
+    def test_backfill_covers_a_historical_range(self):
+        for day in (1, 5, 20):
+            self.order("10.00", datetime(2026, 9, day, 12, tzinfo=dt_timezone.utc))
+
+        written = self.run_days("2026-09-01", "2026-09-10")
+
+        self.assertEqual(written, 2)
+        self.assertEqual(sorted(StoreDailyMetric.objects.values_list("metric_date", flat=True)),
+                         [date(2026, 9, 1), date(2026, 9, 5)])
+
+    def test_task_retries_after_a_database_error(self):
+        self.order("30.00", datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc))
+        real = reports.aggregate_daily_metrics
+        calls = []
+
+        def flaky(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise OperationalError("connection lost")
+            return real(*args)
+
+        # Eager mode raises Retry where a worker would re-queue the task; run it again as the worker would.
+        with mock.patch.object(reports, "aggregate_daily_metrics", side_effect=flaky):
+            with self.assertRaises(Retry):
+                self.run_days("2026-10-01", "2026-10-01")
+            self.assertFalse(StoreDailyMetric.objects.exists())
+            self.run_days("2026-10-01", "2026-10-01")
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(tasks.aggregate_daily_metrics.max_retries, 5)
+        self.assertEqual(self.metric(date(2026, 10, 1)).total_orders, 1)
+
+    def test_database_constraints(self):
+        values = {"store": self.shop, "metric_date": date(2026, 10, 1), "currency_code": "INR"}
+        StoreDailyMetric.objects.create(**values)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            StoreDailyMetric.objects.create(**values)  # one row per store, day and currency
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            StoreDailyMetric.objects.create(**{**values, "currency_code": "USD"},
+                                            gross_sales=10, total_refunds=2, net_sales=9)  # net must be gross - refunds
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            StoreDailyMetric.objects.create(**{**values, "currency_code": "EUR"}, gross_sales=-1, net_sales=-1)
+
+    def test_metrics_match_the_live_reports(self):
+        now = timezone.now()
+        self.order("30.00", now)
+        self.order("10.00", now, units=4)
+        self.order("99.00", now, status="cancelled")
+        tasks.aggregate_daily_metrics.delay(store_id=str(self.shop.pk), lookback_days=30).get()
+
+        live = self.ok("get", "/api/v1/reports/overview/?days=30")["totals"]
+        stored = self.ok("get", "/api/v1/reports/daily-metrics/?days=30")["totals"]["INR"]
+        top = self.ok("get", "/api/v1/reports/top-products/?days=30")["total"]
+
+        self.assertEqual(stored["total_orders"], live["orders"])
+        self.assertEqual(Decimal(str(stored["gross_sales"])), Decimal(str(live["sales"])))
+        self.assertEqual(Decimal(str(stored["average_order_value"])), Decimal(str(live["average_order_value"])))
+        self.assertEqual(stored["items_sold"], top)
+
+    def test_daily_metrics_endpoint_needs_the_reports_permission(self):
+        self.staff("support@example.com", "customer_support")
+        self.assertEqual(self.client.get("/api/v1/reports/daily-metrics/").status_code, 403)
