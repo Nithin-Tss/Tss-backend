@@ -9,8 +9,44 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import OperationalError
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+# --- Job tracking (orders.BackgroundJob): a row per run of a tracked task -------------------
+
+def job_start(job_type, task, store_id=None, params=None):
+    """
+    Mark a run as started. `task` is the bound Celery task (self). A retry of the same Celery task
+    (same request id) reuses its row and counts the retry; a plain call (no request id) gets a new row.
+    """
+    from apps.orders.models import BackgroundJob
+
+    task_id = getattr(task.request, "id", None)
+    values = {
+        "job_type": job_type, "task_name": task.name, "store_id": store_id, "params": params or {},
+        "status": BackgroundJob.RUNNING, "started_at": timezone.now(), "finished_at": None, "error": "",
+        "retries": getattr(task.request, "retries", 0) or 0,
+    }
+    if task_id:
+        return BackgroundJob.objects.update_or_create(celery_task_id=task_id, defaults=values)[0]
+    return BackgroundJob.objects.create(**values)
+
+
+def job_progress(job, percent):
+    job.progress = min(max(int(percent), 0), 100)
+    job.save(update_fields=["progress", "updated_at"])
+
+
+def job_succeed(job, result=None):
+    job.status, job.result, job.progress, job.finished_at = job.SUCCEEDED, result, 100, timezone.now()
+    job.save(update_fields=["status", "result", "progress", "finished_at", "updated_at"])
+
+
+def job_fail(job, error):
+    job.status, job.error, job.finished_at = job.FAILED, f"{type(error).__name__}: {error}"[:5000], timezone.now()
+    job.save(update_fields=["status", "error", "finished_at", "updated_at"])
 
 
 @shared_task(bind=True, autoretry_for=(OSError,), retry_backoff=True, retry_backoff_max=600, max_retries=5)
@@ -76,11 +112,19 @@ def aggregate_daily_metrics(self, store_id=None, start=None, end=None, lookback_
     from apps.core import reports
     from apps.tenancy.models import Store
 
-    stores = Store.objects.filter(pk=store_id) if store_id else Store.objects.filter(status="active")
-    written = 0
-    for store in stores:
-        last = date.fromisoformat(end) if end else reports.local_today(store)
-        first = date.fromisoformat(start) if start else last - timedelta(days=lookback_days - 1)
-        written += reports.aggregate_daily_metrics(store, first, last)
+    job = job_start("daily_metrics", self, store_id=store_id,
+                    params={"start": start, "end": end, "lookback_days": lookback_days})
+    try:
+        stores = list(Store.objects.filter(pk=store_id) if store_id else Store.objects.filter(status="active"))
+        written = 0
+        for done, store in enumerate(stores, 1):
+            last = date.fromisoformat(end) if end else reports.local_today(store)
+            first = date.fromisoformat(start) if start else last - timedelta(days=lookback_days - 1)
+            written += reports.aggregate_daily_metrics(store, first, last)
+            job_progress(job, done * 100 // len(stores))
+    except Exception as exc:
+        job_fail(job, exc)
+        raise
+    job_succeed(job, result={"rows_written": written, "stores": len(stores)})
     logger.info("Wrote %s daily metric row(s).", written)
     return written

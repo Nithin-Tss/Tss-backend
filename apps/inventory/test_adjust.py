@@ -4,17 +4,19 @@ adjust_inventory(): the one function behind every stock change.
     python manage.py test apps.inventory.test_adjust --settings=config.test_settings
 """
 import unittest
+import uuid
 from unittest import mock
 # from django.db import transaction
-from django.db import DatabaseError, connection, transaction
+from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.test import TransactionTestCase
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
 
 from apps.catalog.models import ProductVariant
 from apps.catalog.tests import signup
 from apps.inventory import services
-from apps.inventory.models import InventoryHistory, InventoryItem, Location
+from apps.inventory.models import InventoryHistory, InventoryItem, Location, StockReservation
 from apps.inventory.services import adjust_inventory
 from apps.tenancy.models import Store
 
@@ -540,3 +542,40 @@ class ConcurrentOrderTests(TransactionTestCase):
         self.assertEqual(sorted(results), ["ok", "refused"])
         row = InventoryItem.objects.get(variant=variant)
         self.assertEqual((row.available, row.committed, row.on_hand), (0, 1, 1))
+
+
+class InventoryConstraintTests(StockBase):
+    """Database checks behind the stock numbers (migration 0006); the service rules already keep to them."""
+
+    def bad(self, **fields):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            InventoryItem.objects.filter(pk=self.item.pk).update(**fields)
+
+    def test_counts_cannot_go_below_zero(self):
+        _, variant = self.variant_with_stock(5)
+        self.item = self.row(variant)
+        self.bad(committed=-1, on_hand=4)
+        self.bad(unavailable=-1, on_hand=4)
+        self.bad(incoming=-1)
+
+    def test_on_hand_must_match_its_parts(self):
+        _, variant = self.variant_with_stock(5)
+        self.item = self.row(variant)
+        self.bad(on_hand=6)
+
+    def test_available_may_go_negative_when_selling_past_stock(self):
+        _, variant = self.variant_with_stock(0)
+        ProductVariant.objects.filter(pk=variant.pk).update(continue_selling=True)
+        variant.refresh_from_db()
+        self.adjust(variant, delta=-2)
+        row = self.row(variant)
+        self.assertEqual((row.available, row.on_hand), (-2, -2))
+
+    def test_reservation_quantity_and_status(self):
+        _, variant = self.variant_with_stock(5)
+        hold = dict(store_id=self.store_id, variant=variant, expires_at=timezone.now())
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            StockReservation.objects.create(checkout_id=uuid.uuid4(), quantity=0, **hold)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            StockReservation.objects.create(checkout_id=uuid.uuid4(), quantity=1, status="lost", **hold)
+        StockReservation.objects.create(checkout_id=uuid.uuid4(), quantity=1, **hold)

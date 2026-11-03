@@ -75,11 +75,20 @@ class InventoryItem(models.Model):
         verbose_name = "Inventory Item"
         verbose_name_plural = "Inventory Items"
 
+        # available (and so on_hand) may go below 0 when the variant has continue_selling on
         constraints = [
             models.UniqueConstraint(
                 fields=["variant", "location"],
                 name="uq_inventory_item_variant_location",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(committed__gte=0) & models.Q(unavailable__gte=0) & models.Q(incoming__gte=0),
+                name="ck_inventory_item_counts_nonneg",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(on_hand=models.F("available") + models.F("committed") + models.F("unavailable")),
+                name="ck_inventory_item_on_hand_eq",
+            ),
         ]
 
     
@@ -308,6 +317,11 @@ class StockReservation(models.Model):
         verbose_name_plural = "Stock Reservations"
         constraints = [
             models.UniqueConstraint(fields=["checkout_id", "variant"], name="uq_stock_reservation_checkout_variant"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="ck_stock_reservation_quantity_positive"),
+            models.CheckConstraint(
+                condition=models.Q(status__in=["active", "converted", "released"]),
+                name="ck_stock_reservation_status_valid",
+            ),
         ]
         indexes = [models.Index(fields=["variant", "status", "expires_at"], name="idx_stock_resv_variant_live")]
 

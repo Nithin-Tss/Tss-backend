@@ -3,7 +3,7 @@ Reports and overview endpoints.
 
     python manage.py test apps.core.tests.test_reports --settings=config.test_settings
 """
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from unittest import mock
 
@@ -14,7 +14,7 @@ from django.utils import timezone
 
 from apps.core import reports, tasks
 from apps.customers.models import Customer
-from apps.orders.models import Order, OrderItem, StoreDailyMetric
+from apps.orders.models import BackgroundJob, Order, OrderItem, StoreDailyMetric
 from apps.payments.models import Payment, PaymentTransaction
 from apps.tenancy.models import Store
 
@@ -289,3 +289,43 @@ class DailyMetricsTest(RbacTestBase):
     def test_daily_metrics_endpoint_needs_the_reports_permission(self):
         self.staff("support@example.com", "customer_support")
         self.assertEqual(self.client.get("/api/v1/reports/daily-metrics/").status_code, 403)
+
+    def test_each_run_is_tracked_as_a_job(self):
+        self.order("30.00", datetime(2026, 10, 1, 10, tzinfo=dt_timezone.utc))
+        self.run_days("2026-10-01", "2026-10-01")
+
+        job = BackgroundJob.objects.get()
+        self.assertEqual((job.job_type, job.task_name), ("daily_metrics", "apps.core.tasks.aggregate_daily_metrics"))
+        self.assertEqual((job.status, job.progress, job.retries, job.error), (BackgroundJob.SUCCEEDED, 100, 0, ""))
+        self.assertEqual(job.store_id, self.shop.pk)
+        self.assertEqual(job.params["start"], "2026-10-01")
+        self.assertEqual(job.result, {"rows_written": 1, "stores": 1})
+        self.assertIsNotNone(job.celery_task_id)
+        self.assertLessEqual(job.started_at, job.finished_at)
+
+    def test_a_failed_run_records_its_error(self):
+        with mock.patch.object(reports, "aggregate_daily_metrics", side_effect=ValueError("bad day")):
+            with self.assertRaises(ValueError):
+                self.run_days("2026-10-01", "2026-10-01")
+        job = BackgroundJob.objects.get()
+        self.assertEqual((job.status, job.error), (BackgroundJob.FAILED, "ValueError: bad day"))
+        self.assertIsNotNone(job.finished_at)
+
+    def test_a_retry_updates_the_same_job(self):
+        job = BackgroundJob.objects.create(job_type="daily_metrics", task_name="t", celery_task_id="abc",
+                                           status=BackgroundJob.FAILED, error="boom")
+        task = mock.Mock(request=mock.Mock(id="abc", retries=1))
+        task.name = "t"
+        again = tasks.job_start("daily_metrics", task, store_id=self.shop.pk)
+        self.assertEqual(again.pk, job.pk)
+        self.assertEqual((again.status, again.retries, again.error), (BackgroundJob.RUNNING, 1, ""))
+        self.assertEqual(BackgroundJob.objects.count(), 1)
+
+    def test_job_database_constraints(self):
+        for bad in ({"status": "lost"}, {"progress": 101},
+                    {"started_at": timezone.now(), "finished_at": timezone.now() - timedelta(minutes=1)}):
+            with self.assertRaises(IntegrityError), transaction.atomic():
+                BackgroundJob.objects.create(job_type="x", task_name="x", **bad)
+        BackgroundJob.objects.create(job_type="x", task_name="x", celery_task_id="same")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            BackgroundJob.objects.create(job_type="x", task_name="x", celery_task_id="same")

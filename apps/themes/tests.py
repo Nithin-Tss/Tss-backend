@@ -2087,9 +2087,12 @@ class CartTest(StoreClientMixin, APITestCase):
         return __import__("re").search(r'data-line="([0-9a-f-]{36})"', self.call("get", "fragment").json()["html"]).group(1)
 
     def set_stock(self, product, available):
+        from django.db.models import F
+
         from apps.inventory.models import InventoryItem
 
-        InventoryItem.objects.filter(variant_id=product["variants"][0]["id"]).update(available=available)
+        InventoryItem.objects.filter(variant_id=product["variants"][0]["id"]).update(
+            available=available, on_hand=available + F("committed") + F("unavailable"))
 
     def test_change_refuses_bad_quantities_and_lines(self):
         self.add(self.mug, 2)
@@ -5548,6 +5551,8 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         import re
         from unittest import mock
 
+        from django.db.models import F
+
         from apps.commerce import services as commerce_services
         from apps.inventory.models import InventoryItem
 
@@ -5565,7 +5570,8 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         place_order = commerce_services.place_order
 
         def run_out_then_place(checkout, payment_method="cod"):
-            InventoryItem.objects.filter(variant_id=self.product["variants"][0]["id"]).update(available=1)
+            InventoryItem.objects.filter(variant_id=self.product["variants"][0]["id"]).update(
+                available=1, on_hand=1 + F("committed") + F("unavailable"))
             return place_order(checkout, payment_method=payment_method)
 
         with mock.patch("apps.themes.views.commerce_services.place_order", side_effect=run_out_then_place):
