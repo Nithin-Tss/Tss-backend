@@ -82,14 +82,44 @@
       count.textContent = String(Math.max(0, value));
     });
   }
-  // The navbar link carries the cart id the page was given: the sandboxed page cannot send its cookie
-  document.addEventListener("click", function (event) {
-    var link = event.target.closest && event.target.closest("a.site-header__wishlist");
-    if (!link) return;
+  // The sandboxed page cannot send its cookie, and the shopper's list is found by the cart id the page was given.
+  // So every link inside this store carries that id (any page can be the next one), and so does this page's own
+  // address: Back then asks the server for this same page with the same shopper, not for a new one.
+  var shopPath = "{{ shop.url }}/";
+  function cartId() {
     var holder = document.querySelector("[data-cart-session]");
-    var id = holder ? holder.getAttribute("data-cart-session") : "";
+    return holder ? holder.getAttribute("data-cart-session") : "";
+  }
+  function tag(link) {
+    var id = cartId();
     var href = link.getAttribute("href");
-    if (id && href && !/[?&]cart=/.test(href)) link.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "cart=" + id);
+    if (!id || !href || href.charAt(0) === "#" || /[?&]cart=/.test(href)) return;
+    if (!/^https?:$/.test(link.protocol) || link.host !== window.location.host) return;
+    if ((link.pathname + "/").indexOf(shopPath) !== 0) return;
+    var hash = href.indexOf("#");
+    var rest = hash === -1 ? "" : href.slice(hash);
+    var base = hash === -1 ? href : href.slice(0, hash);
+    link.setAttribute("href", base + (base.indexOf("?") === -1 ? "?" : "&") + "cart=" + id + rest);
+  }
+  function tagAll() {
+    document.querySelectorAll("a[href]").forEach(tag);
+    var id = cartId();
+    if (id && !/[?&]cart=/.test(window.location.search) && window.history && history.replaceState) {
+      try { history.replaceState(history.state, "", window.location.pathname + (window.location.search ? window.location.search + "&" : "?") + "cart=" + id + window.location.hash); } catch (e) {}
+    }
+  }
+  tagAll();
+  document.addEventListener("DOMContentLoaded", tagAll);
+  ["click", "auxclick", "contextmenu", "mousedown", "touchstart", "focusin"].forEach(function (name) {
+    document.addEventListener(name, function (event) {
+      var link = event.target.closest && event.target.closest("a[href]");
+      if (link) tag(link);
+    }, true);
+  });
+  // A page brought back by Back/Forward (the browser's back/forward cache) may show hearts and a count from before
+  // the list changed on another page: load it again, so the server says what the list is now
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) window.location.reload();
   });
   document.addEventListener("click", function (event) {
     var button = event.target.closest && event.target.closest("[data-wishlist-toggle]");
