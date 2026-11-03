@@ -43,9 +43,6 @@
         <span data-wishlist-label>{% if is_wishlisted %}Remove from wishlist{% else %}{{ add_text }}{% endif %}</span>
       {%- endif -%}
     </button>
-    {%- if wishlist_action == 'remove' -%}
-      <button class="product-card__wishlist-remove" type="submit" data-wishlist-remove>Remove</button>
-    {%- endif -%}
   </form>
 {%- elsif mode == 'page' -%}
   <section class="wishlist-page"><div class="page-width">
@@ -95,7 +92,7 @@
     if (id && href && !/[?&]cart=/.test(href)) link.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "cart=" + id);
   });
   document.addEventListener("click", function (event) {
-    var button = event.target.closest && event.target.closest("[data-wishlist-toggle], [data-wishlist-remove]");
+    var button = event.target.closest && event.target.closest("[data-wishlist-toggle]");
     if (!button) return;
     var form = button.closest("form[data-wishlist-form]");
     if (!form) return;
@@ -103,8 +100,9 @@
     var action = form.querySelector("[data-wishlist-action]");
     var toggles = document.querySelectorAll('[data-wishlist-toggle][data-product-id="' + productId + '"]');
     var wasSaved = toggles.length > 0 && toggles[0].getAttribute("aria-pressed") === "true";
-    var removing = button.hasAttribute("data-wishlist-remove");
-    var saved = removing ? false : !wasSaved;
+    var saved = !wasSaved;
+    // on the wishlist page the filled heart removes the card
+    var removing = !saved && !!form.closest(".wishlist-page__grid");
     action.value = saved ? "add" : "remove";
     if (!window.fetch || !window.FormData || !window.URLSearchParams) return; // plain form post
     event.preventDefault();

@@ -2927,7 +2927,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn('.product-card__wishlist-add[aria-pressed="true"] svg', html)
         self.assertIn('.product__wishlist-add[aria-pressed="true"] svg', html)
         self.assertIn('button.closest("form[data-wishlist-form]")', html)  # the script now lives in snippets/wishlist.liquid
-        self.assertIn('class="product-card__wishlist-remove"', html)
+        self.assertNotIn('product-card__wishlist-remove', html)  # the filled heart removes, no Remove button
         self.assertIn('class="product-card__wishlist-add is-wishlisted"', html)
         self.assertIn('aria-pressed="true"', html)
         self.assertIn('data-wishlist-count aria-live="polite">1</span>', header)
@@ -3011,7 +3011,8 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn("Blue mug", page)
         self.assertIn('data-wishlist-count aria-live="polite">1</span>', header)
         self.assertIn('class="button product-card__cta">Add to cart</span>', page)  # the saved list has Add to cart
-        self.assertIn('data-wishlist-remove', page)
+        self.assertNotIn('data-wishlist-remove', page)
+        self.assertIn('class="product-card__wishlist-add is-wishlisted"', page)
 
         self.assertEqual(self.post(slug, "remove", self.product["id"]).json()["count"], 0)
         page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
@@ -3176,8 +3177,8 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.client.post(f"/s/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
         page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
         self.assertIn("Blue mug", page)
-        self.assertIn('class="product-card__wishlist-remove"', page)
-        self.assertIn("data-wishlist-remove", page)
+        self.assertNotIn('class="product-card__wishlist-remove"', page)
+        self.assertIn('class="product-card__wishlist-add is-wishlisted"', page)  # the filled heart removes it
         self.assertIn('aria-label="Wishlist"', page[page.index("<header"):page.index("</header>")])
 
     def test_adding_the_heart_block_shows_the_hearts_and_writes_the_block_into_the_code(self):
@@ -3620,15 +3621,14 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
                 "<form class=\"product-card__wishlist-form\" data-wishlist-form method=\"post\" "
                 "action=\"{{ shop.url }}/wishlist/items/\"><input type=\"hidden\" name=\"product_id\" value=\"{{ product.id }}\">"
                 "<input type=\"hidden\" name=\"action\" value=\"remove\" data-wishlist-action>"
-                "{% if wishlist_action == 'remove' %}<button class=\"product-card__wishlist-remove\" type=\"submit\" "
-                "data-wishlist-remove>Remove</button>{% endif %}</form></div>\n")
+                "</form></div>\n")
         self.theme().theme.files.filter(file_path="snippets/product-card.liquid").update(content=mine, file_size=len(mine))
         self.assertEqual(self.file("snippets/product-card.liquid"), mine)  # the upgrade does not touch it
         self.client.post(f"{self.base}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
         page = self.client.get(f"{self.base}/wishlist/").content.decode()
         self.assertIn("<!-- my card -->", page)
         self.assertIn("Clay mug", page)
-        self.assertIn('class="product-card__wishlist-remove"', page)  # still removable from the wishlist page
+        self.assertNotIn('class="product-card__wishlist-remove"', page)
 
     def test_a_header_and_product_section_the_owner_edited_are_left_alone(self):
         from . import section_sync as sync
