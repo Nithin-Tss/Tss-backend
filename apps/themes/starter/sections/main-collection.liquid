@@ -1,7 +1,7 @@
 {%- assign s = section.settings -%}
 <section id="section-{{ section.id }}"
   class="section product-list card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
-  style="--cols: {{ s.columns }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
+  style="--cols: {{ s.columns | default: 5 }}; --cols-mobile: {{ s.columns_mobile }}; --gap: {{ s.gap }}px;{% if s.card_background != blank %} --card-bg: {{ s.card_background }};{% endif %}">
   <div class="page-width">
     <!-- Back to Home Link -->
     <a href="{{ shop.url }}/" class="collection-back-link">
@@ -31,6 +31,52 @@
       .collection-description > :first-child { margin-top: 0; }
       .collection-description > :last-child { margin-bottom: 0; }
       @media (max-width: 749px) { .collection-hero { aspect-ratio: 2 / 1; } }
+
+      /* Numbered pagination: < 1 2 3 ... 99 > */
+      #section-{{ section.id }} .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 40px;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      }
+      #section-{{ section.id }} .pagination__num,
+      #section-{{ section.id }} .pagination__arrow,
+      #section-{{ section.id }} .pagination__dots {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 36px;
+        height: 36px;
+        padding: 0 6px;
+        border-radius: 6px;
+        font-size: 15px;
+        line-height: 1;
+        color: #222222;
+        text-decoration: none;
+      }
+      #section-{{ section.id }} a.pagination__num:hover,
+      #section-{{ section.id }} a.pagination__arrow:hover {
+        background: #f1f1f1;
+      }
+      #section-{{ section.id }} .pagination__num.is-current {
+        background: #000000;
+        color: #ffffff;
+      }
+      #section-{{ section.id }} .pagination__arrow.is-disabled {
+        color: #bdbdbd;
+        pointer-events: none;
+      }
+      #section-{{ section.id }} .pagination__arrow svg {
+        width: 16px;
+        height: 16px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
     </style>
 
     {%- comment -%} Search: the header's magnifier opens this page; ?q= lists the products that match {%- endcomment -%}
@@ -155,7 +201,7 @@
               <button type="button" class="collection-grid-btn" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '2')" title="2 columns" aria-label="2 columns">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="18" rx="1.5"></rect><rect x="14" y="3" width="7" height="18" rx="1.5"></rect></svg>
               </button>
-              <button type="button" class="collection-grid-btn is-active" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '{{ s.columns | default: 4 }}')" title="Default columns" aria-label="Default columns">
+              <button type="button" class="collection-grid-btn is-active" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '{{ s.columns | default: 5 }}')" title="Default columns" aria-label="Default columns">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9.5" y="2" width="5" height="5" rx="1"></rect><rect x="17" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9.5" width="5" height="5" rx="1"></rect><rect x="9.5" y="9.5" width="5" height="5" rx="1"></rect><rect x="17" y="9.5" width="5" height="5" rx="1"></rect><rect x="2" y="17" width="5" height="5" rx="1"></rect><rect x="9.5" y="17" width="5" height="5" rx="1"></rect><rect x="17" y="17" width="5" height="5" rx="1"></rect></svg>
               </button>
             </div>
@@ -203,13 +249,58 @@
       </div>
 
       {%- if collection.pages > 1 -%}
+        {%- assign cur = collection.page -%}
+        {%- assign last = collection.pages -%}
+        {%- assign last_before = last | minus: 1 -%}
+        {%- assign win_start = cur | minus: 1 -%}
+        {%- assign win_end = cur | plus: 1 -%}
+        {%- if cur == 1 -%}{%- assign win_end = 3 -%}{%- endif -%}
+        {%- if cur == last -%}{%- assign win_start = last | minus: 2 -%}{%- endif -%}
+        {%- if win_start < 1 -%}{%- assign win_start = 1 -%}{%- endif -%}
+        {%- if win_end > last -%}{%- assign win_end = last -%}{%- endif -%}
+        {%- capture page_base -%}{{ collection.url }}?{{ f.query | escape }}&amp;page={%- endcapture -%}
+
         <nav class="pagination" aria-label="Pages">
-          {%- if collection.page > 1 -%}
-            <a class="button button--outline" href="{{ collection.url }}?{{ f.query | escape }}&amp;page={{ collection.page | minus: 1 }}">Previous</a>
+          {%- if cur > 1 -%}
+            <a class="pagination__arrow" href="{{ page_base }}{{ cur | minus: 1 }}" aria-label="Previous page">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+            </a>
+          {%- else -%}
+            <span class="pagination__arrow is-disabled" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+            </span>
           {%- endif -%}
-          <span>Page {{ collection.page }} of {{ collection.pages }}</span>
-          {%- if collection.page < collection.pages -%}
-            <a class="button button--outline" href="{{ collection.url }}?{{ f.query | escape }}&amp;page={{ collection.page | plus: 1 }}">Next</a>
+
+          {%- if win_start > 1 -%}
+            <a class="pagination__num" href="{{ page_base }}1">1</a>
+          {%- endif -%}
+          {%- if win_start > 2 -%}
+            <span class="pagination__dots" aria-hidden="true">&hellip;</span>
+          {%- endif -%}
+
+          {%- for p in (win_start..win_end) -%}
+            {%- if p == cur -%}
+              <span class="pagination__num is-current" aria-current="page">{{ p }}</span>
+            {%- else -%}
+              <a class="pagination__num" href="{{ page_base }}{{ p }}">{{ p }}</a>
+            {%- endif -%}
+          {%- endfor -%}
+
+          {%- if win_end < last_before -%}
+            <span class="pagination__dots" aria-hidden="true">&hellip;</span>
+          {%- endif -%}
+          {%- if win_end < last -%}
+            <a class="pagination__num" href="{{ page_base }}{{ last }}">{{ last }}</a>
+          {%- endif -%}
+
+          {%- if cur < last -%}
+            <a class="pagination__arrow" href="{{ page_base }}{{ cur | plus: 1 }}" aria-label="Next page">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </a>
+          {%- else -%}
+            <span class="pagination__arrow is-disabled" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+            </span>
           {%- endif -%}
         </nav>
       {%- endif -%}

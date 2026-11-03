@@ -98,6 +98,25 @@ class ProductApiTests(APITestCase):
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": []}, format="json").status_code, 400)
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": ["x"]}, format="json").status_code, 400)
 
+    def test_bulk_status_and_delete_by_filter_reach_every_match(self):
+        shirts = [self.create(title=f"Shirt {i}") for i in range(3)]
+        self.create(title="Hat")
+        r = self.client.post(URL + "bulk-status/", {"filter": {"status": "all", "q": "shirt"}, "status": "draft"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {"updated": 3})
+        self.assertEqual(Product.objects.filter(status="draft").count(), 3)
+        self.assertEqual(Product.objects.get(title="Hat").status, "active")
+        r = self.client.post(URL + "bulk-status/", {"filter": {"status": "draft"}, "status": "archived"}, format="json")
+        self.assertEqual(r.json(), {"updated": 3})
+        self.assertEqual(
+            self.client.post(URL + "bulk-status/", {"filter": {"status": "bogus"}, "status": "draft"}, format="json").status_code, 400
+        )
+        r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "archived", "q": shirts[0]["title"]}}, format="json")
+        self.assertEqual(r.json(), {"deleted": 1, "blocked": []})
+        r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "all", "q": ""}}, format="json")
+        self.assertEqual(r.json(), {"deleted": 3, "blocked": []})
+        self.assertFalse(Product.objects.exists())
+
     def test_delete_all_removes_stocked_products(self):
         stocked, plain = self.create(title="Stocked", collections=["C"]), self.create(title="Plain")
         self.stock(ProductVariant.objects.get(pk=stocked["variants"][0]["id"]))
