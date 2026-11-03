@@ -5139,8 +5139,57 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertIn("Welcome, Samuel Cook", self.client.get(saved.url).content.decode())
 
         # A wrong or foreign token does not sign anyone in
+        self.client.cookies.clear()
         bad = self.client.get(f"{self.base}/account?ct=nonsense")
         self.assertIn(f"{self.base}/account/login", bad.url)
+
+    def test_a_browser_that_dropped_the_login_cookie_stays_signed_in_on_its_next_visit(self):
+        """The login form is a cross-site POST (the page is sandboxed), so a browser may refuse its cookie.
+        The page the token opens gives the cookie again; a later visit without the token is still signed in."""
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Ria", "last_name": "Shah", "email": "ria.shah@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        self.client.cookies.clear()
+        ok = self.client.post(f"{self.base}/account/login", {
+            "email": "ria.shah@example.com", "password": "Password123!",
+        })
+        self.client.cookies.clear()  # the browser refused the cookie set on the POST response
+
+        account = self.client.get(ok.url)  # the redirect: a top-level GET with ?ct=
+        self.assertEqual(account.status_code, 200)
+        cookie = account.cookies.get(f"tss_cust_{self.slug}")
+        self.assertIsNotNone(cookie)
+        self.assertEqual(cookie["path"], f"{self.base}/")
+        self.assertTrue(cookie["httponly"])
+
+        # Coming back later: no ?ct= in the address (the script removed it), only the cookie
+        later = self.client.get(f"{self.base}/account")
+        self.assertEqual(later.status_code, 200)
+        self.assertIn("Welcome, Ria Shah", later.content.decode())
+
+        # A shopper who already sends a valid cookie isn't given a new one on every page
+        self.assertNotIn(f"tss_cust_{self.slug}", later.cookies)
+
+    def test_the_customizer_previews_the_signed_in_account_page_with_sample_data(self):
+        """The preview is the store owner's: the account page shows sample customer data, never the shopper
+        signed in to the store in the same browser (the customizer sends that shopper to the real store)."""
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Ria", "last_name": "Shah", "email": "ria.preview@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        self.assertIn(f"tss_cust_{self.slug}", self.client.cookies)
+
+        self.use(self.token, self.store["storeId"])
+        data = self.ok("get", "/api/v1/themes/settings/")
+        html = self.ok("post", "/api/v1/themes/preview/?customer=account", data)["html"]
+        self.assertIn("customer-account-section", html)
+        self.assertIn("Jane Doe", html)
+        self.assertNotIn("Ria", html)
+
+        # Other values still show the page being edited
+        home = self.ok("post", "/api/v1/themes/preview/?customer=orders", data)["html"]
+        self.assertNotIn("customer-account-section", home)
 
     def test_address_double_save_delete_and_customer_sync(self):
         from apps.customers.models import Customer, CustomerAddress

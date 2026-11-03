@@ -1743,9 +1743,10 @@ class ThemePreviewView(StoreThemeView):
                 preview_data["templates"].pop("cart")
         clean = validate_custom_data(preview_data)
         page, target, message = _preview_target(request)
-        # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
+        # ?customer=login|register|account: the customer page (templates/login.liquid) with the theme's header and
+        # footer. The account page shows sample customer data (the editor never uses a real shopper's sign-in).
         customer_page = request.query_params.get("customer")
-        if customer_page in ("login", "register"):
+        if customer_page in ("login", "register", "account"):
             page, target, message = "index", {"customer_page": customer_page}, None
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
@@ -2110,6 +2111,7 @@ def _storefront(render):
         )
 
         response["Cache-Control"] = "no-store"
+        _restore_customer_cookie(response, request, store)
 
         # A page with the cart on it gives the shopper's browser their cart id (see cart.py)
         pending = getattr(request, "_cart_session", None)
@@ -2708,6 +2710,11 @@ def get_storefront_customer(store, request):
     if user is None:
         return None, None
 
+    # Known only by the link's 24-hour token: the browser refused or lost the cookie (the login form is a
+    # cross-site POST from the sandboxed page). The page's response gives it again (see _restore_customer_cookie).
+    if max_age == CUSTOMER_LINK_AGE:
+        request._customer_cookie_user = user
+
     customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
     if customer is None:
         try:
@@ -2789,6 +2796,14 @@ def clear_storefront_customer_cookie(response, store):
     response.delete_cookie(customer_cookie_name(store), path=f"{shop_url(store)}/")
 
 
+def _restore_customer_cookie(response, request, store):
+    """A shopper signed in only by the link's token gets the 30-day cookie back, so their next visit
+    (no token in the address) is still signed in. A top-level GET's cookie is kept even from the sandbox."""
+    user = getattr(request, "_customer_cookie_user", None)
+    if user is not None:
+        set_storefront_customer_cookie(response, store, user)
+
+
 def _storefront_response(html, status=200, request=None, store=None):
     if request is not None and store is not None:
         visit = _admin_visit(request, store)
@@ -2801,6 +2816,7 @@ def _storefront_response(html, status=200, request=None, store=None):
     )
     response["Cache-Control"] = "no-store"
     if request is not None and store is not None:
+        _restore_customer_cookie(response, request, store)
         pending = getattr(request, "_cart_session", None)
         if pending and pending[1] and ("data-cart-session=" in html or "cart_session" in html):
             response.set_cookie(
