@@ -831,11 +831,19 @@ def merge_for_new_code(old_schema, new_schema, saved, name):
     def same_type(old_fields, new_fields, key):
         return key in old_fields and old_fields[key]["type"] == new_fields[key]["type"]
 
+    def follows_default(old_field, value):
+        """True when the saved value is still the old default (the owner never changed it)."""
+        return _clean(old_field, value, False, "") == old_field["default"]
+
     settings = {}
     saved_settings = (saved or {}).get("settings") or {}
     for key, field in new_spec["settings"].items():
         if key in saved_settings and same_type(old_spec["settings"], new_spec["settings"], key):
-            settings[key] = _clean(field, saved_settings[key], False, key)
+            old_field = old_spec["settings"][key]
+            if old_field["default"] != field["default"] or follows_default(old_field, saved_settings[key]):
+                settings[key] = field["default"]  # default edited in the code, or untouched: the new default wins
+            else:
+                settings[key] = _clean(field, saved_settings[key], False, key)
         else:
             settings[key] = field["default"]
 
@@ -852,7 +860,21 @@ def merge_for_new_code(old_schema, new_schema, saved, name):
     elif json.dumps(old_default, sort_keys=True) != json.dumps(new_default, sort_keys=True):
         blocks = clean_blocks(new_spec, new_default or [], strict=False)
     else:
-        blocks = clean_blocks(new_spec, (saved or {}).get("blocks") or [], strict=False)
+        saved_blocks = []
+        for block in (saved or {}).get("blocks") or []:
+            old_block = old_spec["blocks"].get(block.get("type")) if isinstance(block, dict) else None
+            new_block = new_spec["blocks"].get(block.get("type")) if old_block else None
+            raw = block.get("settings") if new_block and isinstance(block.get("settings"), dict) else None
+            if raw is not None:
+                raw = dict(raw)
+                for key, value in list(raw.items()):
+                    if (key in old_block["settings"] and same_type(old_block["settings"], new_block["settings"], key)
+                            and (new_block["settings"][key]["default"] != old_block["settings"][key]["default"]
+                                 or follows_default(old_block["settings"][key], value))):
+                        del raw[key]  # untouched: falls back to the new default
+                block = {**block, "settings": raw}
+            saved_blocks.append(block)
+        blocks = clean_blocks(new_spec, saved_blocks, strict=False)
     return {"settings": settings, "blocks": blocks}
 
 

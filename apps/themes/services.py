@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 45
+STARTER_REVISION = 46
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -124,6 +124,8 @@ STARTER_UPGRADES = {
     },
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
+        "81f0d8ce1e90b5ab748dad8930cf4a713f6479f523fa349adced708e26a7a762",  # revision 46: before every store link carried the cart id (CRLF)
+        "6130a9dd14a1f6261a71ff5812dc036304933b6e658114225732a9857fb9f6c1",  # revision 46: before every store link carried the cart id
         "bacf2337cd2d3e93a4ab383cb933621ab0d032e6e1dc8c7cd43355da5e06aff6",  # revision 35: before the heart script read form.getAttribute("action")
         "9a483173a5c6859cd41f92b60b4418e554ab51eb1807574b3f4b4234892146c0",  # revision 35: before the heart script read form.getAttribute("action") (CRLF)
         "c25c619e33d40a7df100870fea1e0d6da00f84e484197a3d44397c83dd77b339",  # revision 34: before the heart was always visible

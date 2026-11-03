@@ -192,7 +192,7 @@
       </style>
 
       {%- if collection.products_count == 0 -%}
-        <div class="empty-state">No products match these filters. <a href="{{ collection.url }}">Clear filters</a></div>
+        <div class="empty-state">No products match these filters{% if collection.filters.q != blank %} for &ldquo;{{ collection.filters.q }}&rdquo;{% endif %}. <a href="{{ collection.url }}">Clear {% if collection.filters.q != blank %}search{% else %}filters{% endif %}</a></div>
       {%- endif -%}
       <div class="product-list__grid">
         {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}

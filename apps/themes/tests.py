@@ -2499,7 +2499,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 45)
+        self.assertEqual(theme.theme_data["starter_revision"], 46)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2709,7 +2709,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 45)
+        self.assertEqual(STARTER_REVISION, 46)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3053,6 +3053,11 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         from .services import starter_files
 
         self.assertIn('fetch(form.getAttribute("action")', starter_files()["snippets/wishlist.liquid"])
+        # every store link (not only the wishlist one) and the page's own address carry the id, and Back re-fetches
+        script = starter_files()["snippets/wishlist.liquid"]
+        self.assertIn('document.querySelectorAll("a[href]").forEach(tag)', script)
+        self.assertIn("history.replaceState", script)
+        self.assertIn("event.persisted", script)
         # and a click can remove it again
         gone = APIClient().post(f"/s/{slug}/wishlist/items/", {
             "action": "remove", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
@@ -3521,7 +3526,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 45)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 46)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5761,6 +5766,45 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertNotIn("Red scarf", html)
         none = self.client.get(f"{self.base}/collections/all?q=zzzz").content.decode()
         self.assertIn("No products match these filters", none)
+
+    def test_common_search_functionality_across_storefront_and_preview(self):
+        # 1. Direct /search route
+        res = self.client.get(f"{self.base}/search?q=mug")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn("Blue mug", html)
+        self.assertNotIn("Red scarf", html)
+
+        # 2. Case-insensitivity and whitespace trimming
+        res = self.client.get(f"{self.base}/search?q=  MuG  ")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Blue mug", res.content.decode())
+
+        # 3. Partial keyword matching
+        res = self.client.get(f"{self.base}/search?q=carf")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Red scarf", res.content.decode())
+        self.assertNotIn("Blue mug", res.content.decode())
+
+        # 4. JSON endpoint format
+        res_json = self.client.get(f"{self.base}/search?q=mug&format=json")
+        self.assertEqual(res_json.status_code, 200)
+        data = res_json.json()
+        self.assertEqual(data.get("q"), "mug")
+        self.assertEqual(len(data.get("products", [])), 1)
+        self.assertEqual(data["products"][0]["title"], "Blue mug")
+
+        # 5. Empty search results
+        none = self.client.get(f"{self.base}/search?q=nonexistent123")
+        self.assertEqual(none.status_code, 200)
+        self.assertIn("No products match these filters", none.content.decode())
+        self.assertIn("Clear search", none.content.decode())
+
+        # 6. Theme customizer preview query support
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        prev_html = self.ok("post", "/api/v1/themes/preview/?page=collection&q=mug", settings)["html"]
+        self.assertIn("Blue mug", prev_html)
+        self.assertNotIn("Red scarf", prev_html)
 
     def test_product_cards_carry_badges(self):
         html = self.client.get(f"{self.base}/collections/all").content.decode()
