@@ -389,3 +389,48 @@ class OrderIdempotencyKey(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["store", "key"], name="uq_order_idem_store_key"),
         ]
+
+
+class StoreDailyMetric(models.Model):
+    """
+    One store's sales for one day (in the store's timezone) in one currency, rebuilt from
+    orders and refunds by apps.core.reports.aggregate_daily_metrics(). Derived data: safe
+    to recompute any time. Lives in its own "analytics" schema.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        db_column="store_id",
+        related_name="daily_metrics",
+        db_index=False,  # the unique (store, metric_date, currency_code) index covers it
+    )
+    metric_date = models.DateField()
+    currency_code = models.CharField(max_length=3)
+    total_orders = models.PositiveIntegerField(default=0)
+    gross_sales = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    total_refunds = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    net_sales = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    items_sold = models.PositiveIntegerField(default=0)
+    average_order_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"analytics"."store_daily_metrics"'
+        verbose_name = "Store daily metric"
+        ordering = ["metric_date", "currency_code"]
+        constraints = [
+            models.UniqueConstraint(fields=["store", "metric_date", "currency_code"], name="uq_metric_store_date_currency"),
+            models.CheckConstraint(condition=models.Q(gross_sales__gte=0), name="ck_metric_gross_nonneg"),
+            models.CheckConstraint(condition=models.Q(total_refunds__gte=0), name="ck_metric_refunds_nonneg"),
+            models.CheckConstraint(condition=models.Q(average_order_value__gte=0), name="ck_metric_aov_nonneg"),
+            models.CheckConstraint(
+                condition=models.Q(net_sales=models.F("gross_sales") - models.F("total_refunds")),
+                name="ck_metric_net_eq",
+            ),
+        ]
+        indexes = [models.Index(fields=["metric_date"], name="idx_metric_date")]
+
+    def __str__(self):
+        return f"{self.store_id} {self.metric_date} {self.currency_code}"

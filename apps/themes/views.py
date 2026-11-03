@@ -52,7 +52,7 @@ from .customizer import read_settings, save_settings, validate_settings
 from . import presets
 from . import section_sync as sync
 from .rendering import (
-    _catalog, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
+    _catalog, _matches_filters, _products, _with_category_ids, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
     render_page, render_synced_section_fast, shop_url,
 )
 from apps.catalog.models import Product, ProductVariant
@@ -600,15 +600,21 @@ PREVIEW_EDITOR = """
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
     var path = m ? (m[1] || "/") : url.pathname;
     path = path.replace(/\\/+$/, "") || "/";
-    return /^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?|checkout(\\/.*)?|cart(\\/.*)?)?$/i.test(path) ? path : null;
+    if (/^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|search|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?|checkout(\\/.*)?|cart(\\/.*)?)?$/i.test(path)) {
+      return path + (url.search || "");
+    }
+    return null;
   }
 
   // Edit mode: a click selects the section or block under it, and does nothing else -
   // except on a product or blog post link, which opens that page (as does any store link with Edit mode off).
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
+    if (e.target.closest(".site-header__search-block, .site-header__search, .site-header__search-panel, .collection-search, input[type='search'], input[name='q']")) {
+      return;
+    }
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog|pages)\\/[^/]+$/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart)/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -624,7 +630,22 @@ PREVIEW_EDITOR = """
     var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
   }, true);
-  // Edit mode: right-click opens the customizer's menu (Edit code) for the section or block under it
+
+  document.addEventListener("submit", function (e) {
+    var form = e.target.closest("form[role='search'], .site-header__search-panel, .collection-search");
+    if (form) {
+      var input = form.querySelector("input[name='q'], input[type='search']");
+      var q = input ? input.value.trim() : "";
+      if (!q) {
+        e.preventDefault();
+        if (input) input.focus();
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      send({ type: "navigate", path: "/collections/all?q=" + encodeURIComponent(q) });
+    }
+  }, true);
   document.addEventListener("contextmenu", function (e) {
     if (!editing) return;
     e.preventDefault();
@@ -1699,9 +1720,14 @@ def _preview_target(request):
                 chosen = published_collections(request.store).filter(pk=uuid.UUID(value)).first()
             except ValueError:
                 chosen = published_collections(request.store).filter(handle=value).first()
-        if chosen is None:
-            return page, {"collection": {"name": "All products", "obj": None}}, None
-        return page, {"collection": {"name": chosen.name, "obj": chosen}}, None
+        collection_data = {"name": chosen.name, "obj": chosen} if chosen is not None else {"name": "Search results" if request.query_params.get("q") else "All products", "obj": None}
+        target = {
+            "collection": collection_data,
+            "filters": parse_collection_filters(request.query_params),
+            "sort": request.query_params.get("sort", "newest"),
+            "page_number": int(request.query_params.get("page", 1)) if str(request.query_params.get("page", "")).isdigit() else 1,
+        }
+        return page, target, None
     if page == "product":
         products = published_products(request.store)
         try:
@@ -2094,6 +2120,9 @@ def _storefront(render):
             if editing is not None:
                 reset_editing_theme(editing)
 
+        if isinstance(html, (HttpResponse, JsonResponse)):
+            return html
+
         # Store members who came from "View store" get the "Back to admin" bar.
         # Never inside a frame (the customizer's live preview).
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
@@ -2195,6 +2224,7 @@ def storefront_collection(
             **_listing(params),
         )
 
+
     # Draft collections, and ones off the Online Store, are not found
     lookup = {"pk": collection_id} if collection_id is not None else {"handle": handle}
     collection = published_collections(store).filter(**lookup).first()
@@ -2218,6 +2248,45 @@ def storefront_collection(
         request=request,
         **_listing(params),
     )
+
+
+@_storefront
+def storefront_search(store, request, params):
+    """Storefront search: renders the collection template with products matching ?q=... (or JSON if requested)."""
+    if request.headers.get("Accept") == "application/json" or params.get("format") == "json":
+        all_products = _products(store, shop_url(store))
+        filters = _with_category_ids(store, parse_collection_filters(params))
+        matched = [p for p in all_products if _matches_filters(p, filters)]
+        results_list = [
+            {
+                "id": str(p["id"]),
+                "title": p["title"],
+                "url": p["url"],
+                "price": p["price"],
+                "featured_image": p["featured_image"],
+                "vendor": p["vendor"],
+                "available": not p["is_sold_out"],
+            }
+            for p in matched[:20]
+        ]
+        return JsonResponse({
+            "query": filters.get("q", ""),
+            "q": filters.get("q", ""),
+            "total": len(matched),
+            "results": results_list,
+            "products": results_list,
+        })
+    return render_page(
+        store,
+        "collection",
+        collection={
+            "name": f"Search results for \u201c{params.get('q')}\u201d" if params.get("q") else "All products",
+            "obj": None,
+        },
+        request=request,
+        **_listing(params),
+    )
+
 
 BLOG_FILTERS = ("category", "tagged", "author")
 
@@ -2790,6 +2859,8 @@ def clear_storefront_customer_cookie(response, store):
 
 
 def _storefront_response(html, status=200, request=None, store=None):
+    if isinstance(html, (HttpResponse, JsonResponse)):
+        return html
     if request is not None and store is not None:
         visit = _admin_visit(request, store)
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":

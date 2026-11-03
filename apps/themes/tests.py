@@ -5761,6 +5761,45 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         none = self.client.get(f"{self.base}/collections/all?q=zzzz").content.decode()
         self.assertIn("No products match these filters", none)
 
+    def test_common_search_functionality_across_storefront_and_preview(self):
+        # 1. Direct /search route
+        res = self.client.get(f"{self.base}/search?q=mug")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn("Blue mug", html)
+        self.assertNotIn("Red scarf", html)
+
+        # 2. Case-insensitivity and whitespace trimming
+        res = self.client.get(f"{self.base}/search?q=  MuG  ")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Blue mug", res.content.decode())
+
+        # 3. Partial keyword matching
+        res = self.client.get(f"{self.base}/search?q=carf")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Red scarf", res.content.decode())
+        self.assertNotIn("Blue mug", res.content.decode())
+
+        # 4. JSON endpoint format
+        res_json = self.client.get(f"{self.base}/search?q=mug&format=json")
+        self.assertEqual(res_json.status_code, 200)
+        data = res_json.json()
+        self.assertEqual(data.get("q"), "mug")
+        self.assertEqual(len(data.get("products", [])), 1)
+        self.assertEqual(data["products"][0]["title"], "Blue mug")
+
+        # 5. Empty search results
+        none = self.client.get(f"{self.base}/search?q=nonexistent123")
+        self.assertEqual(none.status_code, 200)
+        self.assertIn("No products match these filters", none.content.decode())
+        self.assertIn("Clear search", none.content.decode())
+
+        # 6. Theme customizer preview query support
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        prev_html = self.ok("post", "/api/v1/themes/preview/?page=collection&q=mug", settings)["html"]
+        self.assertIn("Blue mug", prev_html)
+        self.assertNotIn("Red scarf", prev_html)
+
     def test_product_cards_carry_badges(self):
         html = self.client.get(f"{self.base}/collections/all").content.decode()
         self.assertIn('product-card__badge product-card__badge--new">New</span>', html)

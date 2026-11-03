@@ -6,7 +6,7 @@ from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
     storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
-    storefront_product, storefront_register,
+    storefront_product, storefront_register, storefront_search,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
 
@@ -40,6 +40,8 @@ urlpatterns = [
     path("<slug:store_slug>/collections/all", storefront_collection, name="storefront-collection-all"),
     path("<slug:store_slug>/collections/<uuid:collection_id>", storefront_collection, name="storefront-collection"),
     path("<slug:store_slug>/collections/<slug:handle>", storefront_collection, name="storefront-collection-handle"),
+    path("<slug:store_slug>/search", storefront_search, name="storefront-search-noslash"),
+    path("<slug:store_slug>/search/", storefront_search, name="storefront-search"),
     path("<slug:store_slug>/pages/<slug:handle>", storefront_page, name="storefront-page"),
     path("<slug:store_slug>/blog", storefront_blog, name="storefront-blog"),
     path("<slug:store_slug>/blog/<slug:kind>/<slug:handle>", storefront_blog, name="storefront-blog-filter"),

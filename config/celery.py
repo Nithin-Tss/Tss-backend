@@ -25,4 +25,5 @@ app.conf.beat_schedule = {
     "sweep-carts": {"task": "apps.core.tasks.sweep_carts", "schedule": crontab(minute=7)},
     "prune-webhook-deliveries": {"task": "apps.core.tasks.prune_webhook_deliveries", "schedule": crontab(hour=3, minute=50)},
     "prune-audit-logs": {"task": "apps.core.tasks.prune_audit_logs", "schedule": crontab(hour=3, minute=30)},
+    "aggregate-daily-metrics": {"task": "apps.core.tasks.aggregate_daily_metrics", "schedule": crontab(hour=1, minute=15)},
 }
