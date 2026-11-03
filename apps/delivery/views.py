@@ -3,13 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
-from apps.tenancy.models import ShippingRate, TaxRate
+from apps.tenancy.models import ShippingRate, ShippingZone, TaxRate
 
 from . import services
 from .models import DeliveryGateway, Shipment
 from .serializers import (
     DeliveryGatewaySerializer,
     ShippingRateSerializer,
+    ShippingZoneSerializer,
     TaxRateSerializer,
     ShipmentSerializer,
     ShipSerializer,
@@ -31,6 +32,14 @@ class ShippingRateViewSet(StoreScopedViewSet):
     permission_resource = "shipping"
     queryset = ShippingRate.objects.order_by("country", "min_weight")
     serializer_class = ShippingRateSerializer
+
+
+class ShippingZoneViewSet(StoreScopedViewSet):
+    """/api/v1/delivery/zones/  named groups of countries and regions that rates can target"""
+
+    permission_resource = "shipping"
+    queryset = ShippingZone.objects.prefetch_related("locations").order_by("name")
+    serializer_class = ShippingZoneSerializer
 
 
 class TaxRateViewSet(StoreScopedViewSet):

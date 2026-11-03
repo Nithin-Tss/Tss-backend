@@ -46,7 +46,8 @@ def sales_channels_for(store):
     channels = list(SalesChannel.objects.filter(store=store).order_by("created_at"))
     if not channels:
         SalesChannel.objects.bulk_create(
-            [SalesChannel(store=store, name=name, type=kind) for name, kind in DEFAULT_CHANNELS]
+            [SalesChannel(store=store, name=name, type=kind) for name, kind in DEFAULT_CHANNELS],
+            ignore_conflicts=True,  # a concurrent request may have just created them
         )
         return SalesChannel.objects.filter(store=store).order_by("created_at")
 
@@ -58,7 +59,7 @@ def sales_channels_for(store):
         if kind not in existing_types
     ]
     if missing:
-        SalesChannel.objects.bulk_create(missing)
+        SalesChannel.objects.bulk_create(missing, ignore_conflicts=True)
         channels = list(SalesChannel.objects.filter(store=store).order_by("created_at"))
 
     # Return only unique channels by (name, type)

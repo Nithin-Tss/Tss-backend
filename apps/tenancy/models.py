@@ -82,15 +82,75 @@ class Store(models.Model):
         return self.store_name
 
 
+class ShippingZone(models.Model):
+    """
+    A named group of destinations ("South India", "Europe") that shipping rates
+    can be set for, instead of one country per rate.
+    """
+
+    zone_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="shipping_zones")
+    name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"tenancy"."shipping_zones"'
+        verbose_name = "Shipping zone"
+        verbose_name_plural = "Shipping zones"
+        constraints = [
+            models.UniqueConstraint(
+                "store", Lower(Trim("name")),
+                name="uq_shipzone_store_name_ci",
+                violation_error_message="This store already has a shipping zone with that name.",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class ShippingZoneLocation(models.Model):
+    """One destination of a zone: a whole country, or one state/region of it."""
+
+    location_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store, on_delete=models.CASCADE, db_column="store_id", related_name="shipping_zone_locations",
+    )
+    zone = models.ForeignKey(ShippingZone, on_delete=models.CASCADE, db_column="zone_id", related_name="locations")
+    country = models.CharField(max_length=100)
+    region = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        db_table = '"tenancy"."shipping_zone_locations"'
+        verbose_name = "Shipping zone location"
+        verbose_name_plural = "Shipping zone locations"
+        constraints = [
+            models.CheckConstraint(condition=~models.Q(country=""), name="shipzone_loc_country_set"),
+            # A destination belongs to at most one zone of the store, matched trimmed and in any case
+            models.UniqueConstraint(
+                "store", Lower(Trim("country")), Lower(Trim("region")),
+                name="uq_shipzone_loc_store_dest_ci",
+                violation_error_message="That destination is already in one of this store's shipping zones.",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.region + ', ' if self.region else ''}{self.country}"
+
+
 class ShippingRate(models.Model):
     """
-    A shipping fee for carts within a weight band, to one country or (blank
-    country) anywhere. Weights are in the store's weight_unit; the band is
+    A shipping fee for carts within a weight band, to one zone, one country or
+    (neither set) anywhere. Weights are in the store's weight_unit; the band is
     min_weight <= cart weight < max_weight, with no upper limit when max_weight is blank.
     """
 
     rate_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     store = models.ForeignKey(Store, on_delete=models.CASCADE, db_column="store_id", related_name="shipping_rates")
+    # A zone's rates go with it
+    zone = models.ForeignKey(
+        ShippingZone, on_delete=models.CASCADE, db_column="zone_id", related_name="rates", null=True, blank=True,
+    )
     name = models.CharField(max_length=100, blank=True, default="")
     country = models.CharField(max_length=100, blank=True, default="")
     min_weight = models.DecimalField(max_digits=10, decimal_places=3, default=0)
@@ -108,6 +168,10 @@ class ShippingRate(models.Model):
             models.CheckConstraint(
                 condition=models.Q(max_weight__isnull=True) | models.Q(max_weight__gt=models.F("min_weight")),
                 name="shiprate_max_gt_min",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(zone__isnull=True) | models.Q(country=""),
+                name="shiprate_zone_or_country",
             ),
         ]
 

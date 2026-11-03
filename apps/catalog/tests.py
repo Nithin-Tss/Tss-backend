@@ -2531,3 +2531,75 @@ class TwoStoresJourneyTests(JourneyHelpers, APITestCase):
         for key in ("a", "b"):
             rows = self.stores[key]["client"].get("/api/v1/themes/redirects/").json()
             self.assertEqual([r["path"] for r in rows], ["/old-mugs"])  # its own, not the other store's too
+
+
+class CatalogDatabaseConstraintTests(TestCase):
+    """Relationships, uniqueness and value checks enforced by the database itself, per store."""
+
+    def setUp(self):
+        self.a = Store.objects.create(store_name="Alpha", store_slug="db-alpha", status="active")
+        self.b = Store.objects.create(store_name="Beta", store_slug="db-beta", status="active")
+        self.product = Product.objects.create(store=self.a, title="Mug", status="active")
+
+    def assertRejected(self, make):
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            make()
+
+    def test_variant_money_and_weight_cannot_be_negative(self):
+        ProductVariant.objects.create(product=self.product, sku="M-0", price=0, compare_at_price=None)
+        self.assertRejected(lambda: ProductVariant.objects.create(product=self.product, price=-1))
+        self.assertRejected(lambda: ProductVariant.objects.create(product=self.product, price=1, compare_at_price=-1))
+        self.assertRejected(lambda: ProductVariant.objects.create(product=self.product, price=1, weight=-1))
+
+    def test_product_status_and_image_position_are_checked(self):
+        from .models import ProductImage
+        self.assertRejected(lambda: Product.objects.create(store=self.a, title="X", status="published"))
+        self.assertRejected(lambda: ProductImage.objects.create(product=self.product, url="u", position=-1))
+        ProductImage.objects.create(product=self.product, url="u", position=0)
+
+    def test_catalogue_adjustment_cannot_be_negative(self):
+        from .models import Catalogue
+        self.assertRejected(lambda: Catalogue.objects.create(store=self.a, name="C", price_adjustment=-5))
+
+    def test_names_are_unique_per_store_not_across_stores(self):
+        from .models import Tag
+        for model, extra in ((Tag, {}), (SalesChannel, {"type": "online"})):
+            model.objects.create(store=self.a, name="Same", **extra)
+            model.objects.create(store=self.b, name="Same", **extra)  # another store may reuse it
+            self.assertRejected(lambda: model.objects.create(store=self.a, name="Same", **extra))
+        Brand.objects.create(store=self.a, name="Acme")
+        Brand.objects.create(store=self.b, name="Acme")
+        self.assertRejected(lambda: Brand.objects.create(store=self.a, name=" acme "))  # case/space-insensitive
+
+    def test_category_names_unique_per_parent_and_store(self):
+        top = Category.objects.create(store=self.a, name="Kitchen")
+        Category.objects.create(store=self.b, name="Kitchen")
+        self.assertRejected(lambda: Category.objects.create(store=self.a, name="KITCHEN"))
+        Category.objects.create(store=self.a, name="Mugs", parent=top)
+        Category.objects.create(store=self.a, name="Mugs")  # a top-level one may share a child's name
+        self.assertRejected(lambda: Category.objects.create(store=self.a, name="mugs", parent=top))
+
+    def test_collection_handles_and_link_rows_are_unique(self):
+        c = Collection.objects.create(store=self.a, name="Sale", handle="sale")
+        Collection.objects.create(store=self.b, name="Sale", handle="sale")
+        self.assertRejected(lambda: Collection.objects.create(store=self.a, name="Other", handle="sale"))
+        ProductCollection.objects.create(product=self.product, collection=c)
+        self.assertRejected(lambda: ProductCollection.objects.create(product=self.product, collection=c))
+
+    def test_referenced_rows_are_protected(self):
+        from django.db.models import ProtectedError
+        category = Category.objects.create(store=self.a, name="Cups")
+        brand = Brand.objects.create(store=self.a, name="Brandy")
+        Product.objects.create(store=self.a, title="Cup", status="draft", category=category, brand=brand)
+        ProductVariant.objects.create(product=self.product, price=5)
+        for obj in (category, brand, self.product):
+            with self.assertRaises(ProtectedError):
+                obj.delete()
+
+    def test_default_sales_channels_are_seeded_once(self):
+        from .services import sales_channels_for
+        sales_channels_for(self.a)
+        sales_channels_for(self.a)
+        self.assertEqual(SalesChannel.objects.filter(store=self.a).count(), 3)
+        self.assertFalse(SalesChannel.objects.filter(store=self.b).exists())

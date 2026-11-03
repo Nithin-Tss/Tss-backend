@@ -50,7 +50,7 @@ from apps.platform_admin import platform_views
 from apps.platform_admin.models import ApiKey
 from apps.platform_admin.permissions import IsPlatformAdmin
 from apps.purchasing.models import PurchaseOrder
-from apps.tenancy.models import ShippingRate, Store, TaxRate
+from apps.tenancy.models import ShippingRate, ShippingZone, Store, TaxRate
 from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
 from apps.wishlist.models import Wishlist, WishlistItem
 
@@ -447,6 +447,7 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             product, variant, customer, location, order, order_item, fulfillment, gateway, cart, wishlist,
             Category.objects.create(store=store, name="Tops"),
             ShippingRate.objects.create(store=store, country="India", price=60),
+            ShippingZone.objects.create(store=store, name="Domestic"),
             TaxRate.objects.create(store=store, country="India", rate=18),
             Collection.objects.create(store=store, name="promotions"),
             Catalogue.objects.create(store=store, name="wholesale"),

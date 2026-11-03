@@ -297,6 +297,63 @@ class ShippingRateIsolationTest(RbacTestBase):
             self.assertEqual(r.status_code, 401, method)
 
 
+ZONES = "/api/v1/delivery/zones/"
+
+
+class ShippingZoneApiTest(RbacTestBase):
+    def test_coordinator_manages_zones_and_zone_rates(self):
+        self.staff("zones@example.com", "shipping_coordinator")
+        zone = self.ok("post", ZONES, {"name": " South ", "locations": [
+            {"country": "India", "region": "Kerala"}, {"country": " India ", "region": "Goa"},
+        ]}, expect=201)
+        self.assertEqual(zone["name"], "South")
+        self.assertEqual(sorted(l["region"] for l in zone["locations"]), ["Goa", "Kerala"])
+        rate = self.ok("post", RATES, {"zone": zone["id"], "price": "20"}, expect=201)
+        self.assertEqual(rate["zone"], zone["id"])
+        self.ok("post", RATES, {"zone": zone["id"], "country": "India", "price": "20"}, expect=400)
+        # the list sent replaces the zone's destinations
+        zone = self.ok("patch", f"{ZONES}{zone['id']}/", {"locations": [{"country": "India", "region": "Goa"}]})
+        self.assertEqual([l["region"] for l in zone["locations"]], ["Goa"])
+        self.ok("delete", f"{ZONES}{zone['id']}/", expect=204)
+        self.assertEqual(self.ok("get", RATES), [])  # its rates went with it
+
+    def test_duplicate_zones_and_destinations_are_refused(self):
+        self.as_owner()
+        self.ok("post", ZONES, {"name": "Europe", "locations": [{"country": "France"}]}, expect=201)
+        self.ok("post", ZONES, {"name": "europe"}, expect=400)
+        self.ok("post", ZONES, {"name": "West", "locations": [{"country": "france"}]}, expect=400)
+        self.ok("post", ZONES, {"name": "Twice", "locations": [{"country": "Spain"}, {"country": "SPAIN"}]}, expect=400)
+        self.ok("post", ZONES, {"name": "Blank", "locations": [{"country": " ", "region": "X"}]}, expect=400)
+
+    def test_another_stores_zones_are_invisible(self):
+        self.as_owner()
+        zone = self.ok("post", ZONES, {"name": "Mine", "locations": [{"country": "India"}]}, expect=201)
+        token, other = self.sign_up("other-zone@example.com", "Other zone shop")
+        self.use(token, other["storeId"])
+        self.assertEqual(self.ok("get", ZONES), [])
+        self.ok("patch", f"{ZONES}{zone['id']}/", {"name": "Taken"}, expect=404)
+        self.ok("post", RATES, {"zone": zone["id"], "price": "1"}, expect=400)
+        # the same names and destinations are free in another store
+        self.ok("post", ZONES, {"name": "Mine", "locations": [{"country": "India"}]}, expect=201)
+
+    def test_database_rejects_duplicate_destination_and_zone_with_country(self):
+        from django.db import IntegrityError, transaction
+        from apps.tenancy.models import ShippingRate, ShippingZone, ShippingZoneLocation, Store
+
+        store = Store.objects.get(pk=self.store_id)
+        zone = ShippingZone.objects.create(store=store, name="A")
+        ShippingZoneLocation.objects.create(store=store, zone=zone, country="India")
+        other_zone = ShippingZone.objects.create(store=store, name="B")
+        for make in (
+            lambda: ShippingZoneLocation.objects.create(store=store, zone=other_zone, country=" INDIA "),
+            lambda: ShippingZoneLocation.objects.create(store=store, zone=zone, country=""),
+            lambda: ShippingZone.objects.create(store=store, name="a"),
+            lambda: ShippingRate.objects.create(store=store, zone=zone, country="India", price=1),
+        ):
+            with self.assertRaises(IntegrityError), transaction.atomic():
+                make()
+
+
 class OrderKeepsItsTaxAfterSettingsChangeTest(CommerceIntegrationBase):
     def configure(self, **settings):
         r = self.staff.patch(f"/api/v1/stores/{self.store.pk}/", settings, format="json")

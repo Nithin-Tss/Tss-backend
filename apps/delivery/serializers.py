@@ -1,9 +1,10 @@
+from django.db import transaction
 from rest_framework import serializers
 
 from apps.core.viewsets import StoreScopedSerializerMixin
 from apps.fulfillment.models import Fulfillment
 
-from apps.tenancy.models import ShippingRate, TaxRate
+from apps.tenancy.models import ShippingRate, ShippingZone, ShippingZoneLocation, TaxRate
 
 from .models import DeliveryGateway, Shipment, ShipmentItem, TrackingEvent
 
@@ -73,7 +74,68 @@ class ShipSerializer(StoreScopedSerializerMixin, serializers.Serializer):
     tracking_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
 
 
-class ShippingRateSerializer(serializers.ModelSerializer):
+class ShippingZoneLocationSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(source="location_id", read_only=True)
+
+    class Meta:
+        model = ShippingZoneLocation
+        fields = ["id", "country", "region"]
+
+
+class ShippingZoneSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(source="zone_id", read_only=True)
+    locations = ShippingZoneLocationSerializer(many=True, required=False)
+
+    class Meta:
+        model = ShippingZone
+        fields = ["id", "name", "locations", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def _others(self, model, **lookup):
+        qs = model.objects.filter(store=self.context["request"].store, **lookup)
+        return qs if self.instance is None else qs.exclude(**{"zone_id" if model is ShippingZoneLocation else "pk": self.instance.pk})
+
+    def validate_name(self, value):
+        if self._others(ShippingZone, name__iexact=value.strip()).exists():
+            raise serializers.ValidationError("This store already has a shipping zone with that name.")
+        return value.strip()
+
+    def validate_locations(self, value):
+        keys = [(loc["country"].lower(), loc.get("region", "").lower()) for loc in value]
+        if len(set(keys)) != len(keys):
+            raise serializers.ValidationError("A destination is listed twice.")
+        # A destination belongs to one zone only
+        used = {(c.strip().lower(), r.strip().lower()) for c, r in self._others(ShippingZoneLocation).values_list("country", "region")}
+        clash = [loc for loc, key in zip(value, keys) if key in used]
+        if clash:
+            names = ", ".join(f"{loc.get('region') + ', ' if loc.get('region') else ''}{loc['country']}" for loc in clash)
+            raise serializers.ValidationError(f"Already in another shipping zone: {names}.")
+        return value
+
+    def _set_locations(self, zone, locations):
+        ShippingZoneLocation.objects.bulk_create(
+            [ShippingZoneLocation(store=zone.store, zone=zone, **loc) for loc in locations]
+        )
+
+    @transaction.atomic
+    def create(self, validated_data):
+        locations = validated_data.pop("locations", [])
+        zone = super().create(validated_data)
+        self._set_locations(zone, locations)
+        return zone
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        locations = validated_data.pop("locations", None)
+        zone = super().update(instance, validated_data)
+        if locations is not None:  # the list sent replaces the zone's destinations
+            zone.locations.all().delete()
+            self._set_locations(zone, locations)
+        return zone
+
+
+class ShippingRateSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
+    zone = serializers.PrimaryKeyRelatedField(queryset=ShippingZone.objects.all(), required=False, allow_null=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
     min_weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False, default=0)
     max_weight = serializers.DecimalField(
@@ -82,7 +144,7 @@ class ShippingRateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ShippingRate
-        fields = ["id", "name", "country", "min_weight", "max_weight", "price", "created_at"]
+        fields = ["id", "name", "zone", "country", "min_weight", "max_weight", "price", "created_at"]
         read_only_fields = ["created_at"]
 
     id = serializers.UUIDField(source="rate_id", read_only=True)
@@ -98,6 +160,9 @@ class ShippingRateSerializer(serializers.ModelSerializer):
         high = attrs.get("max_weight", getattr(self.instance, "max_weight", None))
         if high is not None and high <= low:
             raise serializers.ValidationError({"max_weight": "Must be greater than the minimum weight."})
+        zone = attrs.get("zone", getattr(self.instance, "zone", None))
+        if zone is not None and attrs.get("country", getattr(self.instance, "country", "")):
+            raise serializers.ValidationError({"zone": "A rate is for a zone or a country, not both."})
         return attrs
 
 

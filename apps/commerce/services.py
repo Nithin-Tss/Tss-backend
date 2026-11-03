@@ -333,21 +333,37 @@ def _price_discount(checkout, new_code):
     checkout.metadata = metadata
 
 
-def _shipping_rate(store, country, weight):
+def _shipping_rate(store, country, weight, region=None):
     """
     Fee of the best ShippingRate for this destination and cart weight, or None
-    if the store has none that fit. A rate for the shopper's country beats an
-    anywhere rate; then the band with the highest minimum weight wins.
+    if the store has none that fit. A zone rate covering the shopper's region
+    beats a country rate (its own country, or a zone covering the whole
+    country), which beats an anywhere rate; then the band with the highest
+    minimum weight wins.
     """
     country = (country or "").strip().lower()
+    region = (region or "").strip().lower()
+    # zone id -> how closely it covers the destination: 2 its region, 1 the whole country
+    covers = {}
+    for loc in store.shipping_zone_locations.all():
+        loc_region = loc.region.strip().lower()
+        if loc.country.strip().lower() != country or (loc_region and loc_region != region):
+            continue
+        covers[loc.zone_id] = max(covers.get(loc.zone_id, 0), 2 if loc_region else 1)
     best = None
     for rate in store.shipping_rates.all():
-        rate_country = rate.country.strip().lower()
-        if rate_country and rate_country != country:
-            continue
+        if rate.zone_id is not None:
+            if rate.zone_id not in covers:
+                continue
+            fit = covers[rate.zone_id]
+        else:
+            rate_country = rate.country.strip().lower()
+            if rate_country and rate_country != country:
+                continue
+            fit = 1 if rate_country else 0
         if weight < rate.min_weight or (rate.max_weight is not None and weight >= rate.max_weight):
             continue
-        key = (bool(rate_country), rate.min_weight)
+        key = (fit, rate.min_weight)
         if best is None or key > best[0]:
             best = (key, rate)
     return None if best is None else _money(best[1].price)
@@ -363,7 +379,7 @@ def _tax_and_shipping(store, subtotal, discount_amount, country=None, weight=ZER
     """
     taxable = max(subtotal - discount_amount, ZERO)
 
-    shipping = _shipping_rate(store, country, weight)
+    shipping = _shipping_rate(store, country, weight, region)
     if shipping is None:
         shipping = _money(store.shipping_flat_rate)
     threshold = store.free_shipping_threshold

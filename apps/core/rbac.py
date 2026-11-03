@@ -258,7 +258,7 @@ _AREA_BY_APP = {
     "orders": "orders", "payments": "orders", "commerce": "orders",
     "delivery": "shipping", "webhooks": "webhooks",
 }
-_AREA_BY_MODEL = {"ApiKey": "api_keys", "DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "TaxRate": "shipping"}
+_AREA_BY_MODEL = {"ApiKey": "api_keys", "DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "ShippingZone": "shipping", "ShippingZoneLocation": "shipping", "TaxRate": "shipping"}
 
 
 def area_for_model(model):

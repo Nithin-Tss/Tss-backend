@@ -16,7 +16,7 @@ from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.inventory.models import Location
 from apps.inventory.services import set_available
 from apps.orders.models import Order
-from apps.tenancy.models import ShippingRate, Store, TaxRate
+from apps.tenancy.models import ShippingRate, ShippingZone, ShippingZoneLocation, Store, TaxRate
 
 from . import services
 from .models import Cart
@@ -503,10 +503,12 @@ class OrderCreationGapTests(CommerceTestBase):
 class ShippingCalculationTests(CommerceTestBase):
     """Flat fee, free-shipping threshold, and weight/country rates."""
 
-    def _checkout(self, qty=2, country=None, discount_code=None):
+    def _checkout(self, qty=2, country=None, discount_code=None, region=None):
         cart = services.get_or_create_cart(self.store, session_id="ship")
         services.add_item(cart, self.product, qty)
         address = {"city": "X"} if country is None else {"city": "X", "country": country}
+        if region:
+            address["state"] = region
         return services.start_checkout(cart, email="a@b.com", shipping_address=address, discount_code=discount_code)
 
     def _rate(self, price, country="", min_weight="0", max_weight=None):
@@ -551,6 +553,30 @@ class ShippingCalculationTests(CommerceTestBase):
         self.assertEqual(self._checkout(country="india").shipping_amount, Decimal("60.00"))
         self.assertEqual(self._checkout(country="France").shipping_amount, Decimal("100.00"))
         self.assertEqual(self._checkout().shipping_amount, Decimal("100.00"))  # no country given
+
+    def test_zone_rates_by_country_and_region(self):
+        self._rate("100.00")
+        self._rate("60.00", country="India")
+        south = ShippingZone.objects.create(store=self.store, name="South")
+        ShippingZoneLocation.objects.create(store=self.store, zone=south, country="India", region="Kerala")
+        europe = ShippingZone.objects.create(store=self.store, name="Europe")
+        for country in ("France", "Spain"):
+            ShippingZoneLocation.objects.create(store=self.store, zone=europe, country=country)
+        ShippingRate.objects.create(store=self.store, zone=south, price=Decimal("20.00"))
+        ShippingRate.objects.create(store=self.store, zone=europe, price=Decimal("90.00"))
+        self.assertEqual(self._checkout(country="india", region=" kerala ").shipping_amount, Decimal("20.00"))
+        self.assertEqual(self._checkout(country="India", region="Goa").shipping_amount, Decimal("60.00"))
+        self.assertEqual(self._checkout(country="spain").shipping_amount, Decimal("90.00"))
+        self.assertEqual(self._checkout(country="Japan").shipping_amount, Decimal("100.00"))
+
+    def test_another_stores_zone_never_applies(self):
+        other = Store.objects.create(store_name="Other", store_slug="other-zone", status="active")
+        zone = ShippingZone.objects.create(store=other, name="Everywhere")
+        ShippingZoneLocation.objects.create(store=other, zone=zone, country="India")
+        ShippingRate.objects.create(store=other, zone=zone, price=Decimal("1.00"))
+        self.store.shipping_flat_rate = Decimal("40.00")
+        self.store.save()
+        self.assertEqual(self._checkout(country="India").shipping_amount, Decimal("40.00"))
 
     def test_falls_back_to_flat_rate_when_no_rate_fits(self):
         self.store.shipping_flat_rate = Decimal("25.00")

@@ -241,6 +241,12 @@ class Product(models.Model):
                 name="prd_store_stat_date_idx",
             ),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(status__in=["active", "draft", "archived"]),
+                name="ck_product_status",
+            ),
+        ]
 
     def __str__(self):
         return self.title
@@ -294,6 +300,16 @@ class ProductVariant(models.Model):
                 fields=["product", "created_at"],
                 name="pvar_prod_created_idx",
             ),
+            # SKU lookups within a store (check_skus, CSV import matching)
+            models.Index(fields=["sku"], name="pvar_sku_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(price__gte=0), name="ck_pvar_price_nonneg"),
+            models.CheckConstraint(
+                condition=models.Q(compare_at_price__isnull=True) | models.Q(compare_at_price__gte=0),
+                name="ck_pvar_compare_at_nonneg",
+            ),
+            models.CheckConstraint(condition=models.Q(weight__gte=0), name="ck_pvar_weight_nonneg"),
         ]
 
     def __str__(self):
@@ -324,6 +340,9 @@ class ProductImage(models.Model):
         db_table = '"catalog"."product_images"'
         verbose_name = "Product Image"
         verbose_name_plural = "Product Images"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(position__gte=0), name="ck_pimg_position_nonneg"),
+        ]
 
     def __str__(self):
         return self.url
@@ -489,6 +508,9 @@ class Tag(models.Model):
         db_table = '"catalog"."tags"'
         verbose_name = "Tag"
         verbose_name_plural = "Tags"
+        constraints = [
+            models.UniqueConstraint(fields=["store", "name"], name="uq_tag_store_name"),
+        ]
 
     def __str__(self):
         return self.name
@@ -550,6 +572,9 @@ class SalesChannel(models.Model):
         db_table = '"catalog"."sales_channels"'
         verbose_name = "Sales Channel"
         verbose_name_plural = "Sales Channels"
+        constraints = [
+            models.UniqueConstraint(fields=["store", "type", "name"], name="uq_sales_channel_store_type_name"),
+        ]
 
     def __str__(self):
         return self.name
@@ -732,6 +757,9 @@ class Catalogue(models.Model):
         db_table = '"catalog"."catalogues"'
         verbose_name = "Catalog"
         verbose_name_plural = "Catalogs"
+        constraints = [
+            models.CheckConstraint(condition=models.Q(price_adjustment__gte=0), name="ck_catalogue_adjustment_nonneg"),
+        ]
 
     def __str__(self):
         return self.name
