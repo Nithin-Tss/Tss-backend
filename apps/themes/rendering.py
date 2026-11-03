@@ -125,7 +125,6 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card__wishlist-add{transition:transform .15s,box-shadow .15s}.product-card__wishlist-add:hover{transform:scale(1.1);box-shadow:0 2px 8px rgba(0,0,0,.25)}.product-card__wishlist-add:hover svg{stroke:#e11d48}
 .product-card__wishlist-add svg,.product__wishlist-add svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .product-card__wishlist-add.is-wishlisted svg,.product-card__wishlist-add[aria-pressed="true"] svg,.product__wishlist-add.is-wishlisted svg,.product__wishlist-add[aria-pressed="true"] svg{fill:#e11d48;stroke:#e11d48}
-.product-card__wishlist-remove{min-height:40px;padding:0 16px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--text);font:inherit;cursor:pointer}
 .product__wishlist-form{margin:-8px 0 20px}.product__wishlist-add{border:1px solid var(--line);border-radius:999px}
 .site-header__wishlist-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:4px;font-size:12px;font-weight:600}
 .wishlist-page{padding:48px 0 64px}
