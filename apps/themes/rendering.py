@@ -661,6 +661,176 @@ document.addEventListener("click", function (e) {
   set(button, open);
 });
 </script>""")
+# Common Storefront Search Controller: unified handling for existing search boxes
+SEARCH_JS = Markup("""<script>
+(function () {
+  function initCommonSearch() {
+    // 1. Header search block(s) across any theme
+    var searchBlocks = document.querySelectorAll('.site-header__search-block, [data-header-' + 'search]');
+    searchBlocks.forEach(function (block) {
+      if (block._searchBound) return;
+      block._searchBound = true;
+      var toggle = block.querySelector('.site-header__search');
+      var panel = block.querySelector('.site-header__search-panel');
+      var input = block.querySelector('.site-header__search-input, input[type="search"], input[name="q"]');
+      var form = block.querySelector('form');
+
+      function executeSearch() {
+        if (!input) return;
+        var q = input.value.trim();
+        if (!q) {
+          input.focus();
+          return;
+        }
+        input.value = q;
+        if (form) {
+          // If in theme preview iframe, communicate with parent editor
+          if (window.parent && window.parent !== window && window.parent.postMessage) {
+            var actionUrl = form.getAttribute('action') || '/collections/all';
+            var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
+            var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+            window.parent.postMessage({
+              source: 'tss-preview',
+              type: 'navigate',
+              path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+            }, '*');
+            return;
+          }
+          if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+        }
+      }
+
+      // If user clicks the magnifying glass when panel is open and has text, execute search!
+      if (toggle && panel && input) {
+        toggle.addEventListener('click', function (e) {
+          var val = input.value.trim();
+          if (!panel.hidden && val) {
+            e.preventDefault();
+            e.stopPropagation();
+            executeSearch();
+            return;
+          }
+        });
+      }
+
+      if (input) {
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            executeSearch();
+          }
+        });
+      }
+
+      if (form) {
+        form.addEventListener('submit', function (e) {
+          var q = input ? input.value.trim() : '';
+          if (!q) {
+            e.preventDefault();
+            if (input) input.focus();
+            return;
+          }
+          input.value = q;
+          if (window.parent && window.parent !== window && window.parent.postMessage) {
+            e.preventDefault();
+            var actionUrl = form.getAttribute('action') || '/collections/all';
+            var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
+            var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+            window.parent.postMessage({
+              source: 'tss-preview',
+              type: 'navigate',
+              path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+            }, '*');
+          }
+        });
+      }
+    });
+
+    // 2. Collection page search forms across any theme
+    var colForms = document.querySelectorAll('.collection-search, form[role="search"]:not(.site-header__search-panel)');
+    colForms.forEach(function (form) {
+      if (form._searchBound) return;
+      form._searchBound = true;
+      var input = form.querySelector('input[type="search"], input[name="q"]');
+      var btn = form.querySelector('button[type="submit"], button.button');
+
+      function executeColSearch() {
+        if (!input) return;
+        var q = input.value.trim();
+        if (!q) {
+          input.focus();
+          return;
+        }
+        input.value = q;
+        if (window.parent && window.parent !== window && window.parent.postMessage) {
+          var actionUrl = form.getAttribute('action') || window.location.pathname;
+          var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
+          var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+          window.parent.postMessage({
+            source: 'tss-preview',
+            type: 'navigate',
+            path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+          }, '*');
+          return;
+        }
+        if (typeof form.requestSubmit === 'function') {
+          form.requestSubmit();
+        } else {
+          form.submit();
+        }
+      }
+
+      if (input) {
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            executeColSearch();
+          }
+        });
+      }
+
+      if (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          executeColSearch();
+        });
+      }
+
+      form.addEventListener('submit', function (e) {
+        var q = input ? input.value.trim() : '';
+        if (!q) {
+          e.preventDefault();
+          if (input) input.focus();
+          return;
+        }
+        input.value = q;
+        if (window.parent && window.parent !== window && window.parent.postMessage) {
+          e.preventDefault();
+          var actionUrl = form.getAttribute('action') || window.location.pathname;
+          var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
+          var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+          window.parent.postMessage({
+            source: 'tss-preview',
+            type: 'navigate',
+            path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+          }, '*');
+        }
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCommonSearch);
+  } else {
+    initCommonSearch();
+  }
+})();
+</script>""")
+
 
 
 def shop_url(store):
@@ -1093,11 +1263,21 @@ def _matches_filters(product, f, skip=None):
     if skip != "tag" and f["tag"] and not set(f["tag"]) & set(product["tags"]):
         return False
 
-    # 7. Search: every word must be in the title, vendor, type or a tag
+    # 7. Search: matches product title, vendor, product type, or tags
     if f.get("q"):
-        haystack = " ".join([product["title"], product["vendor"], product["product_type"], *product["tags"]]).lower()
-        if not all(word in haystack for word in f["q"].lower().split()):
-            return False
+        query = str(f["q"]).strip().lower()
+        if query:
+            words = query.split()
+            title_lower = (product.get("title") or "").lower()
+            haystack = " ".join([
+                title_lower,
+                (product.get("vendor") or "").lower(),
+                (product.get("product_type") or "").lower(),
+                *(str(t).lower() for t in product.get("tags") or []),
+            ])
+            # Partial match on title substring or all search words present in product data
+            if not (query in title_lower or all(w in haystack for w in words)):
+                return False
 
     return True
 
@@ -2830,6 +3010,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     html.append(ANIMATION_JS)
     html.append(BLOCKS_JS)
     html.append(PRODUCT_INFO_JS)
+    html.append(SEARCH_JS)
 
     if slots is None:
         content = env.get_template(template_path).render(
