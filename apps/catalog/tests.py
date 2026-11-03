@@ -765,8 +765,10 @@ class AllProductsStorefrontTests(APITestCase):
         for i in range(24):
             self.product(f"Bulk {i:02d}")
         html = self.page("collections/all?page=2")
-        self.assertIn("Page 2 of 2", html)
-        self.assertIn(">Cheap<", html)  # 27 products: the oldest 3 are on page 2
+        self.assertIn('aria-current="page">2<', html)  # numbered pages, 20 to a page by default
+        self.assertIn(">Cheap<", html)  # 27 products: the oldest 7 are on page 2
+        self.assertNotIn("Bulk 23", html)  # the newest are on page 1
+        self.assertIn("?sort=newest&amp;page=1", html)  # page links keep the sort
 
     def test_only_this_stores_products(self):
         self.product("Mine")
@@ -1705,14 +1707,15 @@ class CatalogNavigationTests(APITestCase):
     def test_a_category_filter_by_name_still_works_and_its_links_use_the_id(self):
         from unittest import mock
 
-        from apps.themes import rendering
+        from apps.themes import schemas
 
         category = self.client.post("/api/v1/catalog/categories/", {"name": "Shoes"}, format="json").json()
         self.product("Boot A", category_id=category["id"])
         self.product("Boot B", category_id=category["id"])
         self.product("A hat")
 
-        with mock.patch.object(rendering, "PAGE_SIZE", 1):
+        # One product to a page, so the page links show up
+        with mock.patch.dict(schemas.SECTIONS["main-collection"]["settings"]["per_page"], {"default": 1}):
             by_name = self.get("collections/all?category=Shoes").content.decode()
             self.assertIn("Boot", by_name)
             self.assertNotIn("A hat", by_name)  # the old, name based link still filters
