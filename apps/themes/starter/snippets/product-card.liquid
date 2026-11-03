@@ -14,6 +14,9 @@
 <a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
   <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}">
     {%- comment -%} Badges over the image: "Sold out", "Few left", a "badge:..." tag, "New". Quantity 0 is still listed and clickable {%- endcomment -%}
+    {%- if product.on_sale -%}
+      <span class="product-card__ribbon">Hot deal</span>
+    {%- endif -%}
     {%- if product.badges.size > 0 -%}
       <span class="product-card__badges">
         {%- for badge in product.badges -%}
@@ -41,6 +44,9 @@
       <span class="price">From {{ product.price | money }}</span>
     {%- else -%}
       <span class="price">{{ product.price | money }}</span>
+    {%- endif -%}
+    {%- if product.on_sale and product.price != nil -%}
+      <span class="price price--compare">{{ product.compare_at_price | money }}</span>
     {%- endif -%}
   {%- endif -%}
   {%- if show_tags and product.tags.size > 0 -%}

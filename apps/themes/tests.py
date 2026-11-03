@@ -6230,6 +6230,18 @@ class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
       add.textContent = left <= 0 ? add.dataset.soldOut : add.dataset.label;
       if (qty) {
         qty.disabled = left <= 0;'''),
+        ('''<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.on_sale and product.price != nil %} <span class="price price--compare product__compare">{{ product.compare_at_price | money }}</span>{% endif %}{% if product.is_sold_out %}''',
+         '''<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.is_sold_out %}'''),
+        (''' data-variant-price="{{ variant.price | money }}"{% if variant.on_sale %} data-variant-compare="{{ variant.compare_at_price | money }}"{% endif %}''', ''' data-variant-price="{{ variant.price | money }}"'''),
+        ('''        if (option.dataset.variantCompare) {
+          var compare = document.createElement("span");
+          compare.className = "price price--compare product__compare";
+          compare.textContent = option.dataset.variantCompare;
+          priceBox.appendChild(document.createTextNode(" "));
+          priceBox.appendChild(compare);
+        }
+''', ''''''),
+        ('''<style>\n  .product__price .product__compare { display: inline; margin-left: 6px; font-size: .8em; font-weight: 400; color: #888; text-decoration: line-through; }\n''', '''<style>\n'''),
         ('''        var few = left > 0 && left <= low;
         stock.textContent = out ? add.dataset.soldOut : few ? "Only a few left" : "In stock";
         stock.className = "product__stock" + (out ? " product__stock--out" : few ? " product__stock--few" : "");''',

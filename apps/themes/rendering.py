@@ -1170,6 +1170,12 @@ def product_drop(product, base_url):
     images = [i.url for i in sorted(product.images.all(), key=lambda i: i.position)]
     variants = sorted(product.variants.all(), key=lambda v: v.created_at)
     prices = [v.price for v in variants]
+    # On sale when the cheapest variant has a compare-at price above its price
+    cheapest = min(variants, key=lambda v: v.price) if variants else None
+    compare_at = cheapest.compare_at_price if cheapest else None
+    on_sale = compare_at is not None and compare_at > cheapest.price
+    if not on_sale:
+        compare_at = None
     stock = {v.id: _available(v) for v in variants}
     available_total = sum(stock.values())
     # A variant that keeps selling when out of stock is never "sold out"
@@ -1194,6 +1200,8 @@ def product_drop(product, base_url):
         "description": Markup(product.description or ""),
         "price": min(prices) if prices else None,
         "price_varies": len(set(prices)) > 1,
+        "compare_at_price": compare_at,
+        "on_sale": on_sale,
         "images": images,
         "featured_image": images[0] if images else None,
         "tags": tags,
@@ -1211,6 +1219,9 @@ def product_drop(product, base_url):
         "variants": [
             {
                 "id": str(v.id), "sku": v.sku or "", "price": v.price, "available_total": stock[v.id],
+                # The "was" price, only while it is above the price
+                "compare_at_price": v.compare_at_price if v.compare_at_price is not None and v.compare_at_price > v.price else None,
+                "on_sale": v.compare_at_price is not None and v.compare_at_price > v.price,
                 "continue_selling": v.continue_selling,
                 "is_sold_out": stock[v.id] <= 0 and not v.continue_selling,
             }
