@@ -266,3 +266,41 @@ class SizeLimitTests(StoreClientMixin, APITestCase):
             image.load()
             times.append(image.info["duration"])
         self.assertEqual((times, image.info["loop"]), ([50, 200, 80], 3))
+
+
+class UploadHardeningTests(StoreClientMixin, APITestCase):
+    def test_product_photos_count_towards_the_store_quota(self):
+        from django.test import override_settings
+
+        self.sign_up("quota@example.com", "Quota Shop")
+        photo = make_image("PNG")
+        with override_settings(MEDIA_STORE_QUOTA_BYTES=len(photo) + 10):
+            first = self.client.post("/api/v1/catalog/products/images/",
+                                     {"image": SimpleUploadedFile("a.png", photo)}, format="multipart")
+            second = self.client.post("/api/v1/media/", {"image": SimpleUploadedFile("b.png", photo)},
+                                      format="multipart")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 400)
+        self.assertIn("media library is full", str(second.json()))
+
+    def test_stored_name_has_no_folders_or_control_characters(self):
+        from apps.media.services import safe_name
+
+        self.assertEqual(safe_name("../../etc/pass\x00wd.png"), "passwd.png")
+        self.assertEqual(safe_name("C:\\x\\y.png"), "y.png")
+        self.assertEqual(safe_name("\x01"), "image")
+
+    def test_public_picture_is_served_nosniff_and_sandboxed(self):
+        self.sign_up("sniff@example.com", "Sniff Shop")
+        r = self.client.post("/api/v1/media/", {"image": SimpleUploadedFile("a.png", make_image("PNG"))},
+                             format="multipart")
+        url = "/s/_img/" + r.json()["id"]
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["X-Content-Type-Options"], "nosniff")
+        self.assertIn("sandbox", resp["Content-Security-Policy"])
+
+    def test_chunked_multipart_upload_is_refused(self):
+        r = self.client.generic("POST", "/api/v1/media/", b"x", content_type="multipart/form-data; boundary=b",
+                                CONTENT_LENGTH="")
+        self.assertEqual(r.status_code, 411)

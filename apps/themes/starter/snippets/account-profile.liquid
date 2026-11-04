@@ -28,7 +28,7 @@
         <input id="profile-email" class="acct-input" type="email" value="{{ customer.email }}" disabled>
       </label>
       <label class="acct-label" for="profile-phone">Mobile
-        <input id="profile-phone" class="acct-input" type="tel" name="phone" value="{{ customer.phone }}" autocomplete="tel">
+        <input id="profile-phone" class="acct-input" type="tel" name="phone" value="{{ customer.phone }}" autocomplete="tel" inputmode="numeric" maxlength="10" pattern="[0-9]{10}" title="Enter a 10-digit mobile number, using numbers only." oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0, 10)">
       </label>
     </div>
     <div class="acct-actions">

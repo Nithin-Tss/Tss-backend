@@ -434,3 +434,56 @@ class StoreDailyMetric(models.Model):
 
     def __str__(self):
         return f"{self.store_id} {self.metric_date} {self.currency_code}"
+
+
+class BackgroundJob(models.Model):
+    """
+    One run of a background job (a Celery task), written by the job helpers in apps.core.tasks.
+    A retry of the same Celery task updates its row (retries + 1). Lives in its own "jobs" schema.
+    """
+
+    QUEUED, RUNNING, SUCCEEDED, FAILED = "queued", "running", "succeeded", "failed"
+    STATUSES = [(QUEUED, "Queued"), (RUNNING, "Running"), (SUCCEEDED, "Succeeded"), (FAILED, "Failed")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Empty for platform-wide jobs (e.g. one run over every store)
+    store = models.ForeignKey(
+        Store, on_delete=models.PROTECT, db_column="store_id", related_name="background_jobs",
+        null=True, blank=True, db_index=False,  # the (store, created_at) index covers it
+    )
+    job_type = models.CharField(max_length=50)
+    task_name = models.CharField(max_length=255)
+    celery_task_id = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUSES, default=QUEUED)
+    params = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(null=True, blank=True)
+    progress = models.PositiveSmallIntegerField(null=True, blank=True)  # percent, when the job reports it
+    error = models.TextField(blank=True, default="")
+    retries = models.PositiveIntegerField(default=0)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"jobs"."background_jobs"'
+        verbose_name = "Background job"
+        constraints = [
+            models.UniqueConstraint(fields=["celery_task_id"], name="uq_job_celery_task_id"),
+            models.CheckConstraint(condition=models.Q(status__in=["queued", "running", "succeeded", "failed"]),
+                                   name="ck_job_status_valid"),
+            models.CheckConstraint(condition=models.Q(progress__isnull=True) | models.Q(progress__lte=100),
+                                   name="ck_job_progress_range"),
+            models.CheckConstraint(
+                condition=(models.Q(finished_at__isnull=True) | models.Q(started_at__isnull=True)
+                           | models.Q(finished_at__gte=models.F("started_at"))),
+                name="ck_job_finished_after_started",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["store", "-created_at"], name="idx_job_store_created"),
+            models.Index(fields=["job_type", "status", "-created_at"], name="idx_job_type_status"),
+        ]
+
+    def __str__(self):
+        return f"{self.job_type} {self.status} ({self.id})"

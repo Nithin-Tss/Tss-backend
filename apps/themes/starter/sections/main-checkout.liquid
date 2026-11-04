@@ -579,7 +579,12 @@
             <div class="checkout-form-grid">
               <div class="checkout-field">
                 <label for="checkout-email">Email address *</label>
-                <input type="email" id="checkout-email" name="email" required placeholder="you@example.com" value="{{ customer.email | default: '' }}">
+                {%- comment -%} Pre-fill only from the signed-in shopper's own account, never from preview sample data {%- endcomment -%}
+                {%- assign prefill = customer -%}
+                {%- if customer.is_sample -%}{%- assign prefill = nil -%}{%- endif -%}
+                {%- assign saved = prefill.default_address -%}
+                {%- assign country_default = saved.country | default: shop.country -%}
+                <input type="email" id="checkout-email" name="email" required placeholder="Email address" value="{{ prefill.email | default: '' | escape }}">
               </div>
             </div>
           </div>
@@ -593,11 +598,11 @@
               <div class="checkout-form-row">
                 <div class="checkout-field">
                   <label for="checkout-first-name">First name *</label>
-                  <input type="text" id="checkout-first-name" name="first_name" required value="{{ customer.first_name | default: '' }}">
+                  <input type="text" id="checkout-first-name" name="first_name" required placeholder="First name" value="{{ prefill.first_name | default: '' | escape }}">
                 </div>
                 <div class="checkout-field">
                   <label for="checkout-last-name">Last name *</label>
-                  <input type="text" id="checkout-last-name" name="last_name" required value="{{ customer.last_name | default: '' }}">
+                  <input type="text" id="checkout-last-name" name="last_name" required placeholder="Last name" value="{{ prefill.last_name | default: '' | escape }}">
                 </div>
               </div>
 
@@ -610,40 +615,40 @@
 
               <div class="checkout-field">
                 <label for="checkout-address1">Street address *</label>
-                <input type="text" id="checkout-address1" name="address1" required placeholder="House number and street name">
+                <input type="text" id="checkout-address1" name="address1" required placeholder="House number and street name" value="{{ saved.address1 | default: '' | escape }}">
               </div>
 
               <div class="checkout-field">
                 <label for="checkout-address2">Apartment, suite, unit (optional)</label>
-                <input type="text" id="checkout-address2" name="address2">
+                <input type="text" id="checkout-address2" name="address2" value="{{ saved.address2 | default: '' | escape }}">
               </div>
 
               <div class="checkout-form-row">
                 <div class="checkout-field">
                   <label for="checkout-city">City *</label>
-                  <input type="text" id="checkout-city" name="city" required>
+                  <input type="text" id="checkout-city" name="city" required placeholder="City" value="{{ saved.city | default: '' | escape }}">
                 </div>
                 <div class="checkout-field">
                   <label for="checkout-state">State / Province</label>
-                  <input type="text" id="checkout-state" name="state">
+                  <input type="text" id="checkout-state" name="state" placeholder="State / Province" value="{{ saved.state | default: '' | escape }}">
                 </div>
               </div>
 
               <div class="checkout-form-row">
                 <div class="checkout-field">
                   <label for="checkout-postal-code">PIN / Postal code *</label>
-                  <input type="text" id="checkout-postal-code" name="postal_code" required>
+                  <input type="text" id="checkout-postal-code" name="postal_code" required placeholder="PIN / Postal code" value="{{ saved.postal_code | default: '' | escape }}">
                 </div>
                 <div class="checkout-field">
                   <label for="checkout-country">Country</label>
-                  <input type="text" id="checkout-country" name="country" value="India">
+                  <input type="text" id="checkout-country" name="country" placeholder="Country" value="{{ country_default | default: '' | escape }}">
                 </div>
               </div>
 
               {%- if s.show_phone_field != false -%}
                 <div class="checkout-field">
                   <label for="checkout-phone">Phone number *</label>
-                  <input type="tel" id="checkout-phone" name="phone" placeholder="Mobile number for delivery updates" value="{{ customer.phone | default: '' }}">
+                  <input type="tel" id="checkout-phone" name="phone" placeholder="{{ shop.phone_code | default: '+91' }} Phone number" value="{{ prefill.phone | default: saved.phone | default: '' | escape }}">
                 </div>
               {%- endif -%}
             </div>
@@ -715,7 +720,7 @@
             </div>
             <div>
               <label for="demo-billing-email">Billing email</label>
-              <input id="demo-billing-email" name="billing_email" type="email" autocomplete="off" value="{{ customer.email | default: '' | escape }}" required>
+              <input id="demo-billing-email" name="billing_email" type="email" autocomplete="off" placeholder="Email address" value="{{ prefill.email | default: '' | escape }}" required>
             </div>
             <div>
               <label for="demo-billing-postal">Billing postal code</label>
@@ -1035,7 +1040,7 @@
         city: city,
         state: form.state ? form.state.value.trim() : '',
         postal_code: postal_code,
-        country: form.country ? form.country.value.trim() : 'India',
+        country: form.country ? form.country.value.trim() : '',
         phone: form.phone ? form.phone.value.trim() : '',
         payment_method: form.payment_method ? form.payment_method.value : 'cod',
         notes: form.notes ? form.notes.value.trim() : '',

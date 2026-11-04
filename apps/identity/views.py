@@ -329,7 +329,11 @@ class MeView(APIView):
             current = request.data.get("currentPassword")
             if not isinstance(current, str) or not current:
                 raise serializers.ValidationError({"currentPassword": "Enter your current password to change your email."})
+            # Shares the sign-in lockout: a stolen token can't be used to guess the password
+            if lockout.is_locked(user.email):
+                raise serializers.ValidationError({"currentPassword": "Too many failed attempts. Try again later or reset your password."})
             if not user.check_password(current):
+                lockout.record_failure(user.email)
                 raise serializers.ValidationError({"currentPassword": "Current password is incorrect."})
         user = serializer.save()
 

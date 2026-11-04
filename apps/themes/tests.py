@@ -61,12 +61,46 @@ HEADER_ICONS_LOOP = """    {%- assign has_actions = false -%}
 """
 
 
-def wishlist_era_header():
-    """The starter header from before the cart icon: the heart as a block, and no cart (what revision 20 stores have)."""
-    from . import section_sync as sync
+def pre_rotation_header():
+    """The starter header from before the rotating announcement bar (revision 47): one message and four options."""
     from .services import starter_files
 
     header = starter_files()["sections/header.liquid"]
+    bar_start = header.index("{%- comment -%}\n  Announcement bar:")
+    bar_end = header.index('<header class="site-header"')
+    settings_start = header.index('    {"type": "text", "id": "announcement_text"')
+    settings_end = header.index('    {"type": "text", "id": "logo_text"')
+    block_start = header.index('    {\n      "type": "announcement",')
+    block_end = header.index('    {\n      "type": "link",')
+    return (
+        header[:bar_start]
+        + """{%- if s.announcement_text != blank -%}
+  {%- capture announcement_style -%}
+    {% if s.announcement_bg != blank %}background:{{ s.announcement_bg }};{% endif %}
+    {% if s.announcement_color != blank %}color:{{ s.announcement_color }};{% endif %}
+  {%- endcapture -%}
+  {%- if s.announcement_link != blank -%}
+    <a class="announcement announcement--link" href="{{ s.announcement_link | link }}" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</a>
+  {%- else -%}
+    <div class="announcement" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</div>
+  {%- endif -%}
+{%- endif -%}
+"""
+        + header[bar_end:settings_start]
+        + """    {"type": "text", "id": "announcement_text", "label": "Announcement text", "default": "", "info": "A banner above the header. Empty hides it."},
+    {"type": "url", "id": "announcement_link", "label": "Announcement link", "default": "", "info": "Optional. Makes the whole banner a link."},
+    {"type": "color", "id": "announcement_bg", "label": "Announcement colour", "default": "", "info": "None uses the accent colour."},
+    {"type": "color", "id": "announcement_color", "label": "Announcement text colour", "default": ""},
+"""
+        + header[settings_end:block_start]
+        + header[block_end:]
+    )
+
+
+def wishlist_era_header():
+    """The starter header from before the cart icon: the heart as a block, and no cart (what revision 20 stores have)."""
+    from . import section_sync as sync
+    header = pre_rotation_header()
     loop_start = header.index("    {%- assign has_actions = false -%}")
     loop_end = header.index("    {%- endif -%}\n  </div>\n</header>", loop_start) + len("    {%- endif -%}\n")
     header_icons_loop = header[loop_start:loop_end]
@@ -680,7 +714,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         spec = self.section()["spec"]["blocks"]
         self.assertEqual(spec["wishlist"]["name"], "Wishlist icon")
         self.assertEqual(set(spec["wishlist"]["settings"]), {"label", "show_count"})
-        self.assertEqual(set(spec), {"link", "search", "wishlist", "cart"})  # what "Add block" offers
+        self.assertEqual(set(spec), {"link", "search", "wishlist", "cart", "announcement"})  # what "Add block" offers
 
     def test_search_block_add_remove_reorder_and_two_way_code_sync(self):
         header = self.section()
@@ -2087,9 +2121,12 @@ class CartTest(StoreClientMixin, APITestCase):
         return __import__("re").search(r'data-line="([0-9a-f-]{36})"', self.call("get", "fragment").json()["html"]).group(1)
 
     def set_stock(self, product, available):
+        from django.db.models import F
+
         from apps.inventory.models import InventoryItem
 
-        InventoryItem.objects.filter(variant_id=product["variants"][0]["id"]).update(available=available)
+        InventoryItem.objects.filter(variant_id=product["variants"][0]["id"]).update(
+            available=available, on_hand=available + F("committed") + F("unavailable"))
 
     def test_change_refuses_bad_quantities_and_lines(self):
         self.add(self.mug, 2)
@@ -2496,7 +2533,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 46)
+        self.assertEqual(theme.theme_data["starter_revision"], 47)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2706,7 +2743,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 46)
+        self.assertEqual(STARTER_REVISION, 47)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3523,7 +3560,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 46)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 47)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5141,8 +5178,57 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertIn("Welcome, Samuel Cook", self.client.get(saved.url).content.decode())
 
         # A wrong or foreign token does not sign anyone in
+        self.client.cookies.clear()
         bad = self.client.get(f"{self.base}/account?ct=nonsense")
         self.assertIn(f"{self.base}/account/login", bad.url)
+
+    def test_a_browser_that_dropped_the_login_cookie_stays_signed_in_on_its_next_visit(self):
+        """The login form is a cross-site POST (the page is sandboxed), so a browser may refuse its cookie.
+        The page the token opens gives the cookie again; a later visit without the token is still signed in."""
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Ria", "last_name": "Shah", "email": "ria.shah@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        self.client.cookies.clear()
+        ok = self.client.post(f"{self.base}/account/login", {
+            "email": "ria.shah@example.com", "password": "Password123!",
+        })
+        self.client.cookies.clear()  # the browser refused the cookie set on the POST response
+
+        account = self.client.get(ok.url)  # the redirect: a top-level GET with ?ct=
+        self.assertEqual(account.status_code, 200)
+        cookie = account.cookies.get(f"tss_cust_{self.slug}")
+        self.assertIsNotNone(cookie)
+        self.assertEqual(cookie["path"], f"{self.base}/")
+        self.assertTrue(cookie["httponly"])
+
+        # Coming back later: no ?ct= in the address (the script removed it), only the cookie
+        later = self.client.get(f"{self.base}/account")
+        self.assertEqual(later.status_code, 200)
+        self.assertIn("Welcome, Ria Shah", later.content.decode())
+
+        # A shopper who already sends a valid cookie isn't given a new one on every page
+        self.assertNotIn(f"tss_cust_{self.slug}", later.cookies)
+
+    def test_the_customizer_previews_the_signed_in_account_page_with_sample_data(self):
+        """The preview is the store owner's: the account page shows sample customer data, never the shopper
+        signed in to the store in the same browser (the customizer sends that shopper to the real store)."""
+        self.client.post(f"{self.base}/account/register", {
+            "first_name": "Ria", "last_name": "Shah", "email": "ria.preview@example.com",
+            "password": "Password123!", "confirm_password": "Password123!", "agree_terms": "true",
+        })
+        self.assertIn(f"tss_cust_{self.slug}", self.client.cookies)
+
+        self.use(self.token, self.store["storeId"])
+        data = self.ok("get", "/api/v1/themes/settings/")
+        html = self.ok("post", "/api/v1/themes/preview/?customer=account", data)["html"]
+        self.assertIn("customer-account-section", html)
+        self.assertIn("Jane Doe", html)
+        self.assertNotIn("Ria", html)
+
+        # Other values still show the page being edited
+        home = self.ok("post", "/api/v1/themes/preview/?customer=orders", data)["html"]
+        self.assertNotIn("customer-account-section", home)
 
     def test_address_double_save_delete_and_customer_sync(self):
         from apps.customers.models import Customer, CustomerAddress
@@ -5553,6 +5639,8 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         import re
         from unittest import mock
 
+        from django.db.models import F
+
         from apps.commerce import services as commerce_services
         from apps.inventory.models import InventoryItem
 
@@ -5570,7 +5658,8 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         place_order = commerce_services.place_order
 
         def run_out_then_place(checkout, payment_method="cod"):
-            InventoryItem.objects.filter(variant_id=self.product["variants"][0]["id"]).update(available=1)
+            InventoryItem.objects.filter(variant_id=self.product["variants"][0]["id"]).update(
+                available=1, on_hand=1 + F("committed") + F("unavailable"))
             return place_order(checkout, payment_method=payment_method)
 
         with mock.patch("apps.themes.views.commerce_services.place_order", side_effect=run_out_then_place):
@@ -5752,6 +5841,21 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         html = self.client.get(f"{self.base}/").content.decode()
         self.assertIn("Big sale today", html)
         self.assertLess(html.index("Big sale today"), html.index('class="site-header"'))
+
+    def test_announcement_bar_rotates_its_messages(self):
+        header = self.ok("get", "/api/v1/themes/sections/")["header"]["values"]
+        blocks = header["blocks"] + [
+            {"type": "announcement", "settings": {"text": "New arrivals", "link": "/collections/all"}},
+            {"type": "announcement", "settings": {"text": "Gift wrapping", "link": ""}},
+        ]
+        values = {"settings": {**header["settings"], "announcement_text": "Big sale today"}, "blocks": blocks}
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn('aria-label="Previous announcement"', html)
+        self.assertIn('aria-label="2 of 3"', html)
+        self.assertIn(">New arrivals</a>", html)
+        self.assertIn("solid #D4AF37", html)
+        self.assertLess(html.index("Gift wrapping"), html.index('class="site-header"'))
 
     def test_search_lists_only_matching_products(self):
         html = self.client.get(f"{self.base}/collections/all?q=mug").content.decode()

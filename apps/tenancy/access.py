@@ -268,7 +268,7 @@ def add_member(store, caller, email, role_ids, make_owner=False):
     if make_owner and not _is_owner(caller):
         raise PermissionDenied("Only an owner can do this.")
 
-    email = (email or "").strip()
+    email = email.strip() if isinstance(email, str) else ""
     if not email or "@" not in email:
         raise ValidationError({"email": "Enter a valid email address."})
 

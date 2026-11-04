@@ -486,6 +486,9 @@ def _public_image_headers(response):
     whose origin is "null", may load or read them. Only this route; the rest of the API keeps its allow-list."""
     response["Access-Control-Allow-Origin"] = "*"
     response["Cross-Origin-Resource-Policy"] = "cross-origin"
+    # Never let a browser treat these bytes as anything but the picture they are, or run them if opened directly
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Security-Policy"] = "default-src 'none'; sandbox"
     return response
 
 
@@ -1771,9 +1774,10 @@ class ThemePreviewView(StoreThemeView):
                 preview_data["templates"].pop("cart")
         clean = validate_custom_data(preview_data)
         page, target, message = _preview_target(request)
-        # ?customer=login|register: the customer page (templates/login.liquid) with the theme's header and footer
+        # ?customer=login|register|account: the customer page (templates/login.liquid) with the theme's header and
+        # footer. The account page shows sample customer data (the editor never uses a real shopper's sign-in).
         customer_page = request.query_params.get("customer")
-        if customer_page in ("login", "register"):
+        if customer_page in ("login", "register", "account"):
             page, target, message = "index", {"customer_page": customer_page}, None
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
@@ -2141,6 +2145,7 @@ def _storefront(render):
         )
 
         response["Cache-Control"] = "no-store"
+        _restore_customer_cookie(response, request, store)
 
         # A page with the cart on it gives the shopper's browser their cart id (see cart.py)
         pending = getattr(request, "_cart_session", None)
@@ -2782,6 +2787,11 @@ def get_storefront_customer(store, request):
     if user is None:
         return None, None
 
+    # Known only by the link's 24-hour token: the browser refused or lost the cookie (the login form is a
+    # cross-site POST from the sandboxed page). The page's response gives it again (see _restore_customer_cookie).
+    if max_age == CUSTOMER_LINK_AGE:
+        request._customer_cookie_user = user
+
     customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
     if customer is None:
         try:
@@ -2820,6 +2830,10 @@ ACCOUNT_NOTICES = {
     "address_deleted": "Address deleted.",
     "address_default": "Default address updated.",
 }
+ACCOUNT_ERRORS = {
+    "phone_invalid": "Enter a 10-digit mobile number, using numbers only.",
+}
+MOBILE_NUMBER = re.compile(r"[0-9]{10}")  # exactly 10 digits: no letters, spaces or symbols
 
 
 def _account_redirect(store, request, user, notice=None):
@@ -2827,6 +2841,8 @@ def _account_redirect(store, request, user, notice=None):
     url = f"{shop_url(store)}/account"
     if notice in ACCOUNT_NOTICES:
         url += f"?notice={notice}"
+    elif notice in ACCOUNT_ERRORS:
+        url += f"?error={notice}"
     if user is not None and (request.GET.get(CUSTOMER_LINK_PARAM) or request.POST.get(CUSTOMER_LINK_PARAM)):
         url = signed_in_url(store, user, url)
     return HttpResponseRedirect(url)
@@ -2866,6 +2882,14 @@ def clear_storefront_customer_cookie(response, store):
     response.delete_cookie(customer_cookie_name(store), path=f"{shop_url(store)}/")
 
 
+def _restore_customer_cookie(response, request, store):
+    """A shopper signed in only by the link's token gets the 30-day cookie back, so their next visit
+    (no token in the address) is still signed in. A top-level GET's cookie is kept even from the sandbox."""
+    user = getattr(request, "_customer_cookie_user", None)
+    if user is not None:
+        set_storefront_customer_cookie(response, store, user)
+
+
 def _storefront_response(html, status=200, request=None, store=None):
     if isinstance(html, (HttpResponse, JsonResponse)):
         return html
@@ -2880,6 +2904,7 @@ def _storefront_response(html, status=200, request=None, store=None):
     )
     response["Cache-Control"] = "no-store"
     if request is not None and store is not None:
+        _restore_customer_cookie(response, request, store)
         pending = getattr(request, "_cart_session", None)
         if pending and pending[1] and ("data-cart-session=" in html or "cart_session" in html):
             response.set_cookie(
@@ -3074,6 +3099,7 @@ def storefront_account(request, store_slug):
         store, "account", request=request, customer_page="account",
         customer=customer, customer_user=user,
         auth_success=ACCOUNT_NOTICES.get(request.GET.get("notice", "")),
+        auth_error=ACCOUNT_ERRORS.get(request.GET.get("error", "")),
     )
     return _storefront_response(html, request=request, store=store)
 
@@ -3103,6 +3129,8 @@ def storefront_account_profile(request, store_slug):
         first_name = (request.POST.get("first_name") or "").strip()
         last_name = (request.POST.get("last_name") or "").strip()
         phone = (request.POST.get("phone") or "").strip()
+        if phone and not MOBILE_NUMBER.fullmatch(phone):
+            return _account_redirect(store, request, user, "phone_invalid")
         if first_name and last_name:
             customer.first_name = first_name
             customer.last_name = last_name

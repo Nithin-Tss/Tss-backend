@@ -20,16 +20,147 @@
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
 {%- endcapture -%}
-{%- if s.announcement_text != blank -%}
+{%- comment -%}
+  Announcement bar: the "Announcement text" setting is the first message and each "Announcement" block
+  adds one more. Two or more messages rotate, with previous/next arrows; hovering or focusing the bar
+  pauses it. Nothing shows when there are no messages.
+{%- endcomment -%}
+{%- assign announcement_blocks = section.blocks | where: 'type', 'announcement' -%}
+{%- assign announcement_count = announcement_blocks.size -%}
+{%- if s.announcement_text != blank -%}{%- assign announcement_count = announcement_count | plus: 1 -%}{%- endif -%}
+{%- if announcement_count > 0 -%}
   {%- capture announcement_style -%}
     {% if s.announcement_bg != blank %}background:{{ s.announcement_bg }};{% endif %}
     {% if s.announcement_color != blank %}color:{{ s.announcement_color }};{% endif %}
+    font-size:{{ s.announcement_font_size | default: 13 }}px;
+    padding-top:{{ s.announcement_spacing | default: 8 }}px;padding-bottom:{{ s.announcement_spacing | default: 8 }}px;
+    border-bottom:{{ s.announcement_divider_width | default: 0 }}px solid {{ s.announcement_divider_color | default: '#D4AF37' }} !important;
   {%- endcapture -%}
-  {%- if s.announcement_link != blank -%}
-    <a class="announcement announcement--link" href="{{ s.announcement_link | link }}" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</a>
-  {%- else -%}
-    <div class="announcement" style="{{ announcement_style | strip }}">{{ s.announcement_text }}</div>
-  {%- endif -%}
+  {%- assign announcement_rotates = false -%}
+  {%- if announcement_count > 1 -%}{%- assign announcement_rotates = true -%}{%- endif -%}
+  <div class="announcement announcement-bar" data-announcement-bar
+    data-autoplay="{% if announcement_rotates and s.announcement_autoplay %}true{% else %}false{% endif %}"
+    data-speed="{{ s.announcement_speed | default: 5 | times: 1000 }}"
+    {% if announcement_rotates %}role="region" aria-roledescription="carousel" aria-label="Announcements"{% endif %}
+    style="{{ announcement_style | strip }}">
+    <div class="page-width announcement-bar__inner">
+      {%- if announcement_rotates and s.announcement_arrows -%}
+        <button class="announcement-bar__button" type="button" data-announcement-prev aria-label="Previous announcement" aria-controls="announcement-slides-{{ section.id }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        </button>
+      {%- endif -%}
+      <div class="announcement-bar__slides" id="announcement-slides-{{ section.id }}"{% if announcement_rotates %} aria-live="off"{% endif %}>
+        {%- assign announcement_index = 0 -%}
+        {%- if s.announcement_text != blank -%}
+          {%- assign announcement_index = 1 -%}
+          <div class="announcement-bar__slide is-active"{% if announcement_rotates %} role="group" aria-roledescription="slide" aria-label="1 of {{ announcement_count }}"{% endif %}>
+            {%- if s.announcement_link != blank -%}
+              <a class="announcement-bar__link" href="{{ s.announcement_link | link }}">{{ s.announcement_text }}</a>
+            {%- else -%}
+              <span>{{ s.announcement_text }}</span>
+            {%- endif -%}
+          </div>
+        {%- endif -%}
+        {%- for block in announcement_blocks -%}
+          {%- assign announcement_index = announcement_index | plus: 1 -%}
+          <div class="announcement-bar__slide{% if announcement_index == 1 %} is-active{% endif %}"{% if announcement_index != 1 %} hidden{% endif %}{% if announcement_rotates %} role="group" aria-roledescription="slide" aria-label="{{ announcement_index }} of {{ announcement_count }}"{% endif %}{{ block.attrs }}>
+            {%- if block.settings.link != blank -%}
+              <a class="announcement-bar__link" href="{{ block.settings.link | link }}">{{ block.settings.text }}</a>
+            {%- else -%}
+              <span>{{ block.settings.text }}</span>
+            {%- endif -%}
+          </div>
+        {%- endfor -%}
+      </div>
+      {%- if announcement_rotates and s.announcement_arrows -%}
+        <button class="announcement-bar__button" type="button" data-announcement-next aria-label="Next announcement" aria-controls="announcement-slides-{{ section.id }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+        </button>
+      {%- endif -%}
+      {%- if announcement_rotates and s.announcement_autoplay -%}
+        <button class="announcement-bar__button announcement-bar__pause" type="button" data-announcement-pause aria-label="Pause announcements" aria-pressed="false">
+          <svg class="announcement-bar__icon-pause" viewBox="0 0 24 24" aria-hidden="true"><line x1="9" y1="6" x2="9" y2="18" /><line x1="15" y1="6" x2="15" y2="18" /></svg>
+          <svg class="announcement-bar__icon-play" viewBox="0 0 24 24" aria-hidden="true"><polygon points="8 5 19 12 8 19 8 5" /></svg>
+        </button>
+      {%- endif -%}
+    </div>
+  </div>
+  <style>
+    .announcement-bar { padding-left: 0; padding-right: 0; line-height: 1.4; }
+    .announcement-bar [class*="announcement"] { border: 0 !important; }
+    .announcement-bar__inner { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .announcement-bar__slides { flex: 1 1 auto; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+    .announcement-bar__slide[hidden] { display: none; }
+    .announcement-bar__slide.is-active { animation: announcement-bar-in .35s ease; }
+    .announcement-bar__link { color: inherit; text-decoration: none; }
+    .announcement-bar__link:hover { text-decoration: underline; }
+    .announcement-bar__button { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; opacity: .8; }
+    .announcement-bar__button:hover { opacity: 1; }
+    .announcement-bar__button:focus-visible, .announcement-bar__link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+    .announcement-bar__button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .announcement-bar__pause svg { width: 12px; height: 12px; }
+    .announcement-bar__icon-play, .announcement-bar.is-paused .announcement-bar__icon-pause { display: none; }
+    .announcement-bar.is-paused .announcement-bar__icon-play { display: block; }
+    @keyframes announcement-bar-in { from { opacity: 0; } to { opacity: 1; } }
+    @media (max-width: 749px) {
+      .announcement-bar__inner { gap: 4px; padding-left: 8px; padding-right: 8px; }
+      .announcement-bar__button { width: 32px; height: 32px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .announcement-bar__slide.is-active { animation: none; } }
+  </style>
+  <script>
+    (function () {
+      var bar = document.currentScript && document.currentScript.previousElementSibling;
+      while (bar && !bar.hasAttribute('data-announcement-bar')) bar = bar.previousElementSibling;
+      if (!bar) return;
+      var slides = bar.querySelectorAll('.announcement-bar__slide');
+      if (slides.length < 2) return;
+      var current = 0, timer = null, hovered = false, focused = false, stopped = false;
+      var speed = parseInt(bar.getAttribute('data-speed'), 10) || 5000;
+      var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var autoplay = bar.getAttribute('data-autoplay') === 'true' && !reduced;
+      var live = bar.querySelector('.announcement-bar__slides');
+      var pauseButton = bar.querySelector('[data-announcement-pause]');
+      function show(index) {
+        slides[current].classList.remove('is-active');
+        slides[current].hidden = true;
+        current = (index + slides.length) % slides.length;
+        slides[current].hidden = false;
+        slides[current].classList.add('is-active');
+      }
+      function stop() { clearInterval(timer); timer = null; }
+      function start() {
+        stop();
+        if (autoplay && !hovered && !focused && !stopped) timer = setInterval(function () { show(current + 1); }, speed);
+        // Screen readers hear a message change only when the visitor caused it
+        live.setAttribute('aria-live', timer ? 'off' : 'polite');
+      }
+      function step(by) { show(current + by); start(); }
+      var prev = bar.querySelector('[data-announcement-prev]');
+      var next = bar.querySelector('[data-announcement-next]');
+      if (prev) prev.addEventListener('click', function () { step(-1); });
+      if (next) next.addEventListener('click', function () { step(1); });
+      if (pauseButton) {
+        if (!autoplay) pauseButton.hidden = true;
+        pauseButton.addEventListener('click', function () {
+          stopped = !stopped;
+          bar.classList.toggle('is-paused', stopped);
+          pauseButton.setAttribute('aria-pressed', stopped ? 'true' : 'false');
+          pauseButton.setAttribute('aria-label', stopped ? 'Play announcements' : 'Pause announcements');
+          start();
+        });
+      }
+      bar.addEventListener('mouseenter', function () { hovered = true; start(); });
+      bar.addEventListener('mouseleave', function () { hovered = false; start(); });
+      bar.addEventListener('focusin', function () { focused = true; start(); });
+      bar.addEventListener('focusout', function (e) { if (!bar.contains(e.relatedTarget)) { focused = false; start(); } });
+      bar.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowLeft') step(-1);
+        else if (e.key === 'ArrowRight') step(1);
+      });
+      start();
+    })();
+  </script>
 {%- endif -%}
 <header class="site-header"{{ section.attrs }}
   data-sticky="{% if s.sticky %}true{% else %}false{% endif %}"
@@ -1258,10 +1389,17 @@
   "name": "Header",
   "max_blocks": 12,
   "settings": [
-    {"type": "text", "id": "announcement_text", "label": "Announcement text", "default": "", "info": "A banner above the header. Empty hides it."},
-    {"type": "url", "id": "announcement_link", "label": "Announcement link", "default": "", "info": "Optional. Makes the whole banner a link."},
+    {"type": "text", "id": "announcement_text", "label": "Announcement text", "default": "", "info": "The first message of the bar above the header. Add Announcement blocks for more messages; with none, the bar is hidden."},
+    {"type": "url", "id": "announcement_link", "label": "Announcement link", "default": "", "info": "Optional. Makes the message a link."},
+    {"type": "checkbox", "id": "announcement_autoplay", "label": "Rotate the messages automatically", "default": true},
+    {"type": "range", "id": "announcement_speed", "label": "Time on each message", "min": 2, "max": 15, "step": 1, "unit": "s", "default": 5},
+    {"type": "checkbox", "id": "announcement_arrows", "label": "Show previous and next arrows", "default": true},
     {"type": "color", "id": "announcement_bg", "label": "Announcement colour", "default": "", "info": "None uses the accent colour."},
     {"type": "color", "id": "announcement_color", "label": "Announcement text colour", "default": ""},
+    {"type": "range", "id": "announcement_font_size", "label": "Announcement font size", "min": 10, "max": 20, "step": 1, "unit": "px", "default": 13},
+    {"type": "range", "id": "announcement_spacing", "label": "Announcement spacing", "min": 2, "max": 24, "step": 1, "unit": "px", "default": 8, "info": "Space above and below the message."},
+    {"type": "color", "id": "announcement_divider_color", "label": "Divider colour", "default": "#D4AF37", "info": "The line under the announcement bar."},
+    {"type": "range", "id": "announcement_divider_width", "label": "Divider thickness", "min": 0, "max": 6, "step": 1, "unit": "px", "default": 1, "info": "0 hides the line."},
     {"type": "text", "id": "logo_text", "label": "Logo text", "default": "", "info": "Empty uses the store name."},
     {"type": "image", "id": "logo_image", "label": "Logo image", "default": "", "info": "Optional. Shown instead of the logo text."},
     {"type": "range", "id": "logo_height", "label": "Logo image height", "min": 16, "max": 96, "step": 2, "unit": "px", "default": 36},
@@ -1274,6 +1412,14 @@
     {"type": "color", "id": "text_color", "label": "Header text colour", "default": ""}
   ],
   "blocks": [
+    {
+      "type": "announcement",
+      "name": "Announcement",
+      "settings": [
+        {"type": "text", "id": "text", "label": "Text", "default": "Free shipping on all orders"},
+        {"type": "url", "id": "link", "label": "Link", "default": "", "info": "Optional. Makes the message a link."}
+      ]
+    },
     {
       "type": "link",
       "name": "Menu link",

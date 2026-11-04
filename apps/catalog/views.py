@@ -355,6 +355,9 @@ class ProductViewSet(StoreScopedViewSet):
 
         data, _, ctype = clean_image(file.read())
 
+        from apps.media.services import check_quota
+        check_quota(request.store.store_id, len(data))
+
         # Stored in the database (the server's disk is wiped on deploy). Served by the
         # public /s/_img/<id> route, the same one customizer pictures use.
         from apps.themes.models import ThemeImage
@@ -472,6 +475,8 @@ class CollectionViewSet(StoreScopedViewSet):
 
     @action(detail=False, methods=["post"])
     def preview(self, request):
+        if not isinstance(request.data, dict):
+            raise ValidationError({"detail": "Send a JSON object."})
         rules = CollectionRuleSerializer(data=request.data.get("rules") or [], many=True)
         rules.is_valid(raise_exception=True)
         match = "any" if request.data.get("match") == "any" else "all"
