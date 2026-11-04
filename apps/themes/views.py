@@ -2829,6 +2829,10 @@ ACCOUNT_NOTICES = {
     "address_deleted": "Address deleted.",
     "address_default": "Default address updated.",
 }
+ACCOUNT_ERRORS = {
+    "phone_invalid": "Enter a 10-digit mobile number, using numbers only.",
+}
+MOBILE_NUMBER = re.compile(r"[0-9]{10}")  # exactly 10 digits: no letters, spaces or symbols
 
 
 def _account_redirect(store, request, user, notice=None):
@@ -2836,6 +2840,8 @@ def _account_redirect(store, request, user, notice=None):
     url = f"{shop_url(store)}/account"
     if notice in ACCOUNT_NOTICES:
         url += f"?notice={notice}"
+    elif notice in ACCOUNT_ERRORS:
+        url += f"?error={notice}"
     if user is not None and (request.GET.get(CUSTOMER_LINK_PARAM) or request.POST.get(CUSTOMER_LINK_PARAM)):
         url = signed_in_url(store, user, url)
     return HttpResponseRedirect(url)
@@ -3092,6 +3098,7 @@ def storefront_account(request, store_slug):
         store, "account", request=request, customer_page="account",
         customer=customer, customer_user=user,
         auth_success=ACCOUNT_NOTICES.get(request.GET.get("notice", "")),
+        auth_error=ACCOUNT_ERRORS.get(request.GET.get("error", "")),
     )
     return _storefront_response(html, request=request, store=store)
 
@@ -3121,6 +3128,8 @@ def storefront_account_profile(request, store_slug):
         first_name = (request.POST.get("first_name") or "").strip()
         last_name = (request.POST.get("last_name") or "").strip()
         phone = (request.POST.get("phone") or "").strip()
+        if phone and not MOBILE_NUMBER.fullmatch(phone):
+            return _account_redirect(store, request, user, "phone_invalid")
         if first_name and last_name:
             customer.first_name = first_name
             customer.last_name = last_name
