@@ -7259,3 +7259,117 @@ class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
         data = res.json()
         self.assertIn("error", data)
         self.assertIn("sold out", data["error"].lower())
+
+
+class ThemeSettingsPanelTest(StoreClientMixin, APITestCase):
+    """Theme settings panel, phase 1: colour palette, typography and buttons."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("panel@example.com", "Panel Store")
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self, settings):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["settings"].update(settings)
+        return self.ok("post", "/api/v1/themes/preview/?page=index", data)["html"]
+
+    def test_defaults_render_as_before(self):
+        from .rendering import theme_css
+        from .schemas import resolve
+        css = str(theme_css(resolve({})["settings"]))
+        for line in ("--b-fw:600", "--b-bw:1px", "--b-mh:46px", "--b-px:26px", "--b-tt:none"):
+            self.assertIn(line, css)
+        self.assertTrue(css.endswith("}</style>") and css.count("{") == 1)  # :root only, no extra rules
+
+    def test_schema_groups_and_hidden_phases(self):
+        from .schemas import THEME_GROUPS, THEME_SETTINGS
+        ids = [g["id"] for g in THEME_GROUPS]
+        self.assertEqual(ids[:3], ["colors", "typography", "buttons"])
+        for later in ("pagination", "logo", "page", "animations", "badges", "cart", "drawers", "icons", "inputs",
+                      "popovers", "custom_css"):
+            self.assertNotIn(later, ids)
+        self.assertNotIn("heading_weight", THEME_SETTINGS)  # sections set their own heading weight
+        for key in ("heading_color", "link_color", "border_color", "heading_case", "base_font_size_mobile",
+                    "button_border", "button2_bg", "button_focus_color", "link_underline"):
+            self.assertIn(THEME_SETTINGS[key]["group"], ("colors", "typography", "buttons"))
+
+    def test_save_applies_to_store_and_keeps_other_settings(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"announcement": "Hello"}})
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {
+            "heading_color": "#112233", "link_color": "#AA0000", "border_color": "#CCCCCC",
+            "heading_case": "uppercase", "heading_size": 40, "heading_size_mobile": 24,
+            "base_font_size_mobile": 15, "body_line_height": "1.7",
+            "button_border": "#000000", "button_border_width": 2, "button_size": "large", "button_weight": "800",
+            "button_case": "uppercase", "button_hover_bg": "#333333", "button_focus_color": "#00FF00",
+            "button_disabled_opacity": 40, "button2_bg": "#EEEEEE", "link_underline": "hover",
+        }})
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual(saved["announcement"], "Hello")  # unrelated setting kept
+        self.assertEqual(saved["heading_case"], "uppercase")
+        html = self.store_html()
+        for part in ("--tss-heading-color:#112233", "--line:#CCCCCC", "--b-bd:#000000", "--b-bw:2px", "--b-mh:56px",
+                     "--b-fw:800", "--b-tt:uppercase", "--b-hbg:#333333", "--b-focus:#00FF00", "--b-dis-op:0.4",
+                     "--b2-bg:#EEEEEE", "h1,h2,h3{text-transform:uppercase}",
+                     "@media (min-width:750px){body .section-heading{font-size:40px}}",
+                     "@media (max-width:749px){body .section-heading{font-size:24px}}",
+                     "body .button{border-color:var(--b-bd);border-width:var(--b-bw)}",
+                     "--tss-base-size-m:15px", "body{line-height:1.7}",
+                     "a:where(:not(.button)):hover{text-decoration:underline}"):
+            self.assertIn(part, html)
+
+    def test_preview_shows_unsaved_change_without_saving(self):
+        html = self.preview_html({"heading_color": "#445566"})
+        self.assertIn("--tss-heading-color:#445566", html)
+        self.assertNotIn("--tss-heading-color", self.store_html())
+
+    def test_invalid_values_are_refused(self):
+        for bad in ({"heading_color": "red"}, {"heading_size": 500}, {"button_font": "comic"},
+                    {"link_color": "#123;}</style>"}):
+            self.ok("patch", "/api/v1/themes/settings/", {"settings": bad}, expect=400)
+        # Unknown choices fall back to the default and numbers are clamped (as for every other setting)
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"heading_case": "950", "button_border_width": 9}})
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual((saved["heading_case"], saved["button_border_width"]), ("none", 4))
+
+    def test_unvalidated_values_cannot_break_out_of_style(self):
+        from .rendering import theme_css
+        from .schemas import resolve
+        settings = resolve({})["settings"]
+        settings.update({"heading_color": "red;}</style><script>x</script>", "heading_case": "x}</style>",
+                         "heading_size": "40px}</style>"})
+        css = str(theme_css(settings))
+        self.assertNotIn("</style><", css)
+        self.assertNotIn("script", css)
+
+    def test_section_buttons_follow_theme_button_settings(self):
+        from .rendering import _button_vars, _theme_button
+        from .schemas import resolve
+        settings = resolve({})["settings"]
+        settings.update({"button_border": "#123456", "button_border_width": 3, "button_weight": "700"})
+        theme = _theme_button(settings)
+        vars_ = _button_vars({"b_bg": "#FF0000", "b_border_width": ""}, theme)
+        self.assertEqual((vars_["--b-bd"], vars_["--b-bw"], vars_["--b-fw"]), ("#123456", "3px", "700"))
+        # A section can still set any width, 1px included
+        for width in ("0", "1", "4"):
+            self.assertEqual(_button_vars({"b_border_width": width}, theme)["--b-bw"], f"{width}px")
+
+    def test_saved_number_border_widths_still_load(self):
+        from .schemas import resolve
+        template = {"order": ["h"], "sections": {"h": {"type": "hero", "settings": {}}}}
+        for saved, expected in ((1, ""), (2, "2"), (0, "0"), ("1", "1"), (9, "")):
+            template["sections"]["h"]["settings"]["b_border_width"] = saved
+            resolved = resolve({"templates": {"index": template}})
+            self.assertEqual(resolved["templates"]["index"]["sections"]["h"]["settings"]["b_border_width"], expected)
+
+    def test_mobile_body_size_is_not_overridden_by_type_css(self):
+        from .rendering import TYPE_CSS
+        rule = "@media (max-width:749px){body{font-size:var(--tss-base-size-m,var(--tss-base-size,16px))}}"
+        self.assertIn(rule, str(TYPE_CSS))
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"base_font_size_mobile": 14}})
+        html = self.store_html()
+        self.assertIn("--tss-base-size-m:14px", html)
+        self.assertLess(html.index("--tss-base-size-m:14px"), html.index(rule))
