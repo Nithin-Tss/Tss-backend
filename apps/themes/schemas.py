@@ -531,6 +531,10 @@ def resolve(custom_data):
     custom_templates = custom_data.get("templates") if isinstance(custom_data.get("templates"), dict) else {}
 
     for page_name, page in templates.items():
+        # Sections whose type no longer exists are dropped (as block types are below)
+        page["sections"] = {k: v for k, v in page["sections"].items() if v.get("type") in SECTIONS}
+        if isinstance(page.get("order"), list):
+            page["order"] = [k for k in page["order"] if k in page["sections"]]
         custom_page_sections = (
             custom_templates.get(page_name, {}).get("sections", {})
             if isinstance(custom_templates.get(page_name), dict) and isinstance(custom_templates[page_name].get("sections"), dict)
