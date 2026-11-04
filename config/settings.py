@@ -440,6 +440,9 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
     'UPDATE_LAST_LOGIN': False,
 }
+# Wrong passwords per email before sign-in is locked for that long (apps/identity/lockout.py)
+LOGIN_MAX_FAILURES = int(os.getenv('LOGIN_MAX_FAILURES', '10'))
+LOGIN_LOCKOUT_SECONDS = int(os.getenv('LOGIN_LOCKOUT_SECONDS', '900'))
 # "Remember me" keeps the refresh token for longer (see apps/core/tokens.py)
 JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
 
@@ -455,6 +458,7 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 
 # Password hashing: Argon2 for new passwords. Older PBKDF2 hashes still work

@@ -3,6 +3,8 @@ import uuid
 
 
 from django.db import transaction
+from django.db.models import CharField, Q
+from django.db.models.functions import Cast
 from django.utils import timezone
 
 from rest_framework import mixins, status
@@ -79,6 +81,28 @@ from .services import (
 from apps.media.images import MAX_IMAGE_SIZE, clean_image, image_extension, public_image_url  # noqa: E402,F401
 
 MAX_BULK_ROWS = 500
+
+
+def _products_by_filter(store, spec):
+    """
+    The store's products that the admin list's filter shows: {"status": "all"|<status>, "q": "text"}.
+    q matches the title, a SKU, an id or the category name, like the list's search box.
+    """
+    if not isinstance(spec, dict):
+        raise ValidationError({"filter": "Send the list's filter as an object."})
+    status = spec.get("status") or "all"
+    query = str(spec.get("q") or "").strip()
+    if status != "all" and status not in PRODUCT_STATUSES:
+        raise ValidationError({"filter": "Status must be all, active, draft or archived."})
+    qs = Product.objects.filter(store=store)
+    if status != "all":
+        qs = qs.filter(status=status)
+    if query:
+        qs = qs.annotate(_id_text=Cast("id", CharField()), _variant_id_text=Cast("variants__id", CharField())).filter(
+            Q(title__icontains=query) | Q(variants__sku__icontains=query) | Q(_id_text__icontains=query)
+            | Q(_variant_id_text__icontains=query) | Q(category__name__icontains=query)
+        )
+    return Product.objects.filter(store=store, pk__in=qs.values("pk"))
 
 
 
@@ -223,27 +247,33 @@ class ProductViewSet(StoreScopedViewSet):
     @action(detail=False, methods=["post"], url_path="bulk-status")
     def bulk_status(self, request):
         """
-        POST /api/v1/catalog/products/bulk-status/  {"ids": [id, ...], "status": "active"|"draft"}  (up to 500)
+        POST /api/v1/catalog/products/bulk-status/  {"ids": [id, ...], "status": "active"|"draft"|"archived"}  (up to 500)
+        or {"filter": {"status": "all", "q": ""}, "status": ...} for every product the list shows
         -> {"updated": n}
         """
         data = request.data if isinstance(request.data, dict) else {}
-        ids = data.get("ids")
         new_status = data.get("status")
-        if not isinstance(ids, list) or not ids:
-            raise ValidationError({"ids": "Send a non-empty list of product ids."})
-        if len(ids) > MAX_BULK_ROWS:
-            raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
         if new_status not in PRODUCT_STATUSES:
             raise ValidationError({"status": "Status must be active, draft or archived."})
-        try:
-            ids = [uuid.UUID(str(i)) for i in ids]
-        except ValueError:
-            raise ValidationError({"ids": "Every id must be a valid product id."})
+        if data.get("filter") is not None:
+            # "Select all N products": every product the list's filter matches, found here, not sent as ids
+            targets = _products_by_filter(request.store, data["filter"])
+        else:
+            ids = data.get("ids")
+            if not isinstance(ids, list) or not ids:
+                raise ValidationError({"ids": "Send a non-empty list of product ids."})
+            if len(ids) > MAX_BULK_ROWS:
+                raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
+            try:
+                ids = [uuid.UUID(str(i)) for i in ids]
+            except ValueError:
+                raise ValidationError({"ids": "Every id must be a valid product id."})
+            targets = Product.objects.filter(store=request.store, pk__in=ids)
 
         if new_status == ACTIVE:
             # Same rule as the product form: no option may be left without a price when a product goes on sale
             unpriced = (
-                Product.objects.filter(store=request.store, pk__in=ids, variants__price=0).exclude(status=ACTIVE)
+                targets.filter(variants__price=0).exclude(status=ACTIVE)
                 .distinct().count()
             )
             if unpriced:
@@ -252,25 +282,30 @@ class ProductViewSet(StoreScopedViewSet):
                     "Enter a price for every option before making them active."
                 )})
 
-        updated = audited_update(Product.objects.filter(store=request.store, pk__in=ids), status=new_status, updated_at=timezone.now())
+        updated = audited_update(targets, status=new_status, updated_at=timezone.now())
         return Response({"updated": updated})
 
     @action(detail=False, methods=["post"], url_path="bulk-delete")
     def bulk_delete(self, request):
         """
         POST /api/v1/catalog/products/bulk-delete/  {"ids": [id, ...]}  (up to 500)
+        or {"filter": {"status": "all", "q": ""}} for every product the list shows
         -> {"deleted": n, "blocked": ["title", ...]}
         Products used by orders or inventory are kept and listed in "blocked".
         """
-        ids = request.data.get("ids") if isinstance(request.data, dict) else None
-        if not isinstance(ids, list) or not ids:
-            raise ValidationError({"ids": "Send a non-empty list of product ids."})
-        if len(ids) > MAX_BULK_ROWS:
-            raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
-        try:
-            ids = [uuid.UUID(str(i)) for i in ids]
-        except ValueError:
-            raise ValidationError({"ids": "Every id must be a valid product id."})
+        data = request.data if isinstance(request.data, dict) else {}
+        if data.get("filter") is not None:
+            ids = list(_products_by_filter(request.store, data["filter"]).values_list("pk", flat=True))
+        else:
+            ids = data.get("ids")
+            if not isinstance(ids, list) or not ids:
+                raise ValidationError({"ids": "Send a non-empty list of product ids."})
+            if len(ids) > MAX_BULK_ROWS:
+                raise ValidationError({"ids": f"Send at most {MAX_BULK_ROWS} ids per request."})
+            try:
+                ids = [uuid.UUID(str(i)) for i in ids]
+            except ValueError:
+                raise ValidationError({"ids": "Every id must be a valid product id."})
 
         deleted, blocked = delete_products(request.store, ids)
         return Response({"deleted": deleted, "blocked": blocked})

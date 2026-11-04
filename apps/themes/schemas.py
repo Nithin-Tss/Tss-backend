@@ -1122,6 +1122,7 @@ SECTIONS["main-collection"]["settings"] = {
     "empty_text": _opt("content", "text", "Text when there are no products", "No products yet.", max=200),
     "columns": _opt("layout", "range", "Products per row (desktop)", 5, min=2, max=6),
     "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
+    "per_page": _opt("layout", "range", "Products per page", 20, min=8, max=48, step=4),
     "gap": _opt("layout", "range", "Gap between cards", 8, min=0, max=48, step=2, unit="px"),
     "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
     "show_price": _opt("style", "checkbox", "Show price", True),

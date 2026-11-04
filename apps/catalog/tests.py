@@ -98,6 +98,25 @@ class ProductApiTests(APITestCase):
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": []}, format="json").status_code, 400)
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": ["x"]}, format="json").status_code, 400)
 
+    def test_bulk_status_and_delete_by_filter_reach_every_match(self):
+        shirts = [self.create(title=f"Shirt {i}") for i in range(3)]
+        self.create(title="Hat")
+        r = self.client.post(URL + "bulk-status/", {"filter": {"status": "all", "q": "shirt"}, "status": "draft"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {"updated": 3})
+        self.assertEqual(Product.objects.filter(status="draft").count(), 3)
+        self.assertEqual(Product.objects.get(title="Hat").status, "active")
+        r = self.client.post(URL + "bulk-status/", {"filter": {"status": "draft"}, "status": "archived"}, format="json")
+        self.assertEqual(r.json(), {"updated": 3})
+        self.assertEqual(
+            self.client.post(URL + "bulk-status/", {"filter": {"status": "bogus"}, "status": "draft"}, format="json").status_code, 400
+        )
+        r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "archived", "q": shirts[0]["title"]}}, format="json")
+        self.assertEqual(r.json(), {"deleted": 1, "blocked": []})
+        r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "all", "q": ""}}, format="json")
+        self.assertEqual(r.json(), {"deleted": 3, "blocked": []})
+        self.assertFalse(Product.objects.exists())
+
     def test_delete_all_removes_stocked_products(self):
         stocked, plain = self.create(title="Stocked", collections=["C"]), self.create(title="Plain")
         self.stock(ProductVariant.objects.get(pk=stocked["variants"][0]["id"]))
@@ -746,8 +765,10 @@ class AllProductsStorefrontTests(APITestCase):
         for i in range(24):
             self.product(f"Bulk {i:02d}")
         html = self.page("collections/all?page=2")
-        self.assertIn("Page 2 of 2", html)
-        self.assertIn(">Cheap<", html)  # 27 products: the oldest 3 are on page 2
+        self.assertIn('aria-current="page">2<', html)  # numbered pages, 20 to a page by default
+        self.assertIn(">Cheap<", html)  # 27 products: the oldest 7 are on page 2
+        self.assertNotIn("Bulk 23", html)  # the newest are on page 1
+        self.assertIn("?sort=newest&amp;page=1", html)  # page links keep the sort
 
     def test_only_this_stores_products(self):
         self.product("Mine")
@@ -1686,14 +1707,15 @@ class CatalogNavigationTests(APITestCase):
     def test_a_category_filter_by_name_still_works_and_its_links_use_the_id(self):
         from unittest import mock
 
-        from apps.themes import rendering
+        from apps.themes import schemas
 
         category = self.client.post("/api/v1/catalog/categories/", {"name": "Shoes"}, format="json").json()
         self.product("Boot A", category_id=category["id"])
         self.product("Boot B", category_id=category["id"])
         self.product("A hat")
 
-        with mock.patch.object(rendering, "PAGE_SIZE", 1):
+        # One product to a page, so the page links show up
+        with mock.patch.dict(schemas.SECTIONS["main-collection"]["settings"]["per_page"], {"default": 1}):
             by_name = self.get("collections/all?category=Shoes").content.decode()
             self.assertIn("Boot", by_name)
             self.assertNotIn("A hat", by_name)  # the old, name based link still filters

@@ -161,7 +161,33 @@ class AuthFlowTest(APITestCase):
         codes = [self.login(password="wrong-guess-123").status_code for _ in range(12)]
         self.assertIn(429, codes)
 
+    def test_account_is_locked_after_repeated_failures(self):
+        from apps.identity import lockout
+        self.signup()
+        for _ in range(settings.LOGIN_MAX_FAILURES):
+            lockout.record_failure("Asha.Rao@example.com")  # e.g. guesses spread over many IPs
+        r = self.login()  # right password, still locked
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("Retry-After", r)
+
+    def test_successful_login_resets_the_failure_count(self):
+        from apps.identity import lockout
+        self.signup()
+        lockout.record_failure("asha.rao@example.com")
+        self.assertEqual(self.login().status_code, 200)
+        self.assertFalse(lockout.is_locked("asha.rao@example.com"))
+        self.assertEqual(cache.get(lockout._key("asha.rao@example.com")), None)
+
     # ------------------------------------------------------ sign-out, rotation
+
+    def test_replaying_an_old_refresh_token_ends_the_whole_sign_in(self):
+        refresh = self.signup().json()["refresh"]
+        newer = self.client.post("/api/v1/auth/refresh/", {"refresh": refresh}, format="json").json()
+
+        self.assertEqual(self.client.post("/api/v1/auth/refresh/", {"refresh": refresh}, format="json").status_code, 401)
+        # the legitimate holder's newest token and access token died with it
+        self.assertEqual(self.client.post("/api/v1/auth/refresh/", {"refresh": newer["refresh"]}, format="json").status_code, 401)
+        self.assertEqual(self.me(newer["access"]).status_code, 401)
 
     def test_refresh_token_is_single_use(self):
         refresh = self.signup().json()["refresh"]
@@ -169,10 +195,7 @@ class AuthFlowTest(APITestCase):
         first = self.client.post("/api/v1/auth/refresh/", {"refresh": refresh}, format="json")
         self.assertEqual(first.status_code, 200, first.content)
         again = self.client.post("/api/v1/auth/refresh/", {"refresh": refresh}, format="json")
-        self.assertEqual(again.status_code, 401)  # reused (e.g. stolen) token
-
-        newer = self.client.post("/api/v1/auth/refresh/", {"refresh": first.json()["refresh"]}, format="json")
-        self.assertEqual(newer.status_code, 200)
+        self.assertEqual(again.status_code, 401)  # reused (e.g. stolen) token; also ends the sign-in
 
     def test_logout_revokes_refresh_token_and_ends_session(self):
         tokens = self.signup().json()

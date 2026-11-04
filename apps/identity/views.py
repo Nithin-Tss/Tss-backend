@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import SESSION_KEY, get_user_model, login, logout, update_session_auth_hash
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -7,6 +8,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.audit.services import record as audit_record
+from apps.core.origin import TrustedOrigin
 from apps.core.tokens import (
     REMEMBER_CLAIM, SessionStore, SESSION_CLAIM, end_token_session, issue_tokens, refresh_tokens,
 )
@@ -14,6 +16,7 @@ from apps.tenancy.access import accept_invitations
 from apps.tenancy.services import ACTIVE, stores_for_user
 
 from .email_links import send_password_reset_email, send_verification_email
+from . import lockout
 from .models import normalize_email
 from .serializers import (
     ChangePasswordSerializer, LoginSerializer, PasswordResetConfirmSerializer,
@@ -56,7 +59,7 @@ class PublicAuthView(APIView):
     """Sign-up, sign-in and refresh: no login needed, but rate-limited."""
 
     authentication_classes = []
-    permission_classes = [AllowAny]
+    permission_classes = [AllowAny, TrustedOrigin]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth"
 
@@ -163,12 +166,26 @@ class LoginView(PublicAuthView):
     """POST /api/v1/auth/login/  {email, password, rememberMe} -> {user, stores, access, refresh}"""
 
     def post(self, request):
+        raw_email = request.data.get("email", "") if hasattr(request.data, "get") else ""
+        email = raw_email.strip().lower()[:254] if isinstance(raw_email, str) else ""
+
+        if email and lockout.is_locked(email):
+            audit_record("auth.login_locked", request=request, resource="auth", status_code=429, email=email)
+            response = Response(
+                {"detail": "Too many failed sign-in attempts. Try again later or reset your password."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            response["Retry-After"] = str(settings.LOGIN_LOCKOUT_SECONDS)
+            return response
+
         serializer = LoginSerializer(
             data=request.data,
             context={"request": request},
         )
 
         if not serializer.is_valid():
+            if email:
+                lockout.record_failure(email)
             # Only the address that was tried is kept, never the password
             audit_record(
                 "auth.login_failed", request=request, resource="auth", status_code=400,
@@ -181,6 +198,7 @@ class LoginView(PublicAuthView):
 
         user = serializer.validated_data["user"]
         remember_me = serializer.validated_data["rememberMe"]
+        lockout.clear(user.email)
         start_session(request, user, remember_me=remember_me)
         tokens = issue_tokens(user, remember_me=remember_me)
         audit_record("auth.login", request=request, user=user, resource="auth", status_code=200)
@@ -221,7 +239,7 @@ class LogoutView(APIView):
     """
 
     authentication_classes = []
-    permission_classes = [AllowAny]
+    permission_classes = [AllowAny, TrustedOrigin]
 
     def post(self, request):
         serializer = LogoutSerializer(data=request.data)
@@ -383,6 +401,8 @@ class PasswordResetConfirmView(PublicAuthView):
         user.set_password(serializer.validated_data["newPassword"])
         user.save(update_fields=["password", "updated_at"])
         mark_email_verified(user)
+        lockout.clear(user.email)
+        audit_record("auth.password_reset", request=request, user=user, resource="auth", status_code=200)
 
         return Response({"message": "Your password has been reset. Please sign in."})
 

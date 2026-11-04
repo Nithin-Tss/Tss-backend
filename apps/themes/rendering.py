@@ -1157,7 +1157,7 @@ def _best_sellers(store, base_url, limit):
 
 # Products a "Load more" grid can reveal, and products per all-products page
 LOAD_MORE_MAX = 96
-PAGE_SIZE = 24
+PAGE_SIZE = 20
 SORTS = {
     "newest": None,  # the catalog's own order
     "price-asc": lambda d: (d["price"] is None, d["price"] or 0),
@@ -2530,7 +2530,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     collection: {"name", "obj"} where obj is a Collection, or None for "all".
     article: the handle of the post the article page shows (the newest when None or not found).
     blog_filter: {"kind": "category" | "tagged" | "author", "handle"} narrows the blog page.
-    sort, page_number: the collection page's order (see SORTS) and page (PAGE_SIZE products each).
+    sort, page_number: the collection page's order (see SORTS) and page (the section's "Products per page", PAGE_SIZE by default).
     custom_data: unsaved section data to render instead of the saved one (customizer preview).
     editor: wrap each section in a marker the customizer preview uses for drag and drop.
     only_section: return just that section's HTML (customizer preview updates one section in place).
@@ -2678,7 +2678,14 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
         priced = [p["price"] for p in all_products if p["price"] is not None]
         filter_query = _filter_query(filters, sort)
-        pages = max(1, -(-len(products) // PAGE_SIZE))
+        # Products per page: the collection section's "Products per page" setting (PAGE_SIZE if it has none)
+        collection_template = data["templates"].get(page) or default_template(page)
+        per_page = next(
+            (s["settings"].get("per_page") for s in collection_template["sections"].values() if s["type"] == "main-collection"),
+            None,
+        )
+        per_page = per_page if isinstance(per_page, int) and not isinstance(per_page, bool) and per_page > 0 else PAGE_SIZE
+        pages = max(1, -(-len(products) // per_page))
         page_number = min(max(1, page_number), pages)
         obj = collection["obj"]
 
@@ -2697,7 +2704,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             # Written in the admin's rich-text editor; cleaned like section rich text
             "description": Markup(sanitize_html(obj.description)) if obj and obj.description else "",
             "image": obj.image_url if obj else "",
-            "products": products[(page_number - 1) * PAGE_SIZE:page_number * PAGE_SIZE],
+            "products": products[(page_number - 1) * per_page:page_number * per_page],
             "products_count": len(products),
             "total_count": len(all_products),
             "filters": {

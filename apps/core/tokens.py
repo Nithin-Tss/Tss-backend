@@ -26,6 +26,8 @@ from rest_framework import exceptions
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.audit import services as audit
+
 PASSWORD_CLAIM = "pwd"
 REMEMBER_CLAIM = "remember"
 SESSION_CLAIM = "sid"
@@ -98,7 +100,7 @@ def refresh_tokens(raw_refresh):
     """
     Exchange a refresh token for a new access + refresh pair (rotation).
     Raises AuthenticationFailed if it is invalid, expired, an access token,
-    already used, signed out, or the user changed their password since.
+    already used (which also ends that sign-in), signed out, or the user changed their password since.
     """
     expired = exceptions.AuthenticationFailed("Session expired. Please sign in again.")
 
@@ -112,6 +114,8 @@ def refresh_tokens(raw_refresh):
     if user is None or not user.is_active or not fingerprint_matches(user, old):
         raise expired
 
+    reused = False
+
     with transaction.atomic():
         # Lock this sign-in's row until the new token is saved, so two
         # requests with the same refresh token can't both succeed.
@@ -121,10 +125,24 @@ def refresh_tokens(raw_refresh):
         )
         session = token_session(user, old)
 
-        if session is None or not constant_time_compare(session.get(SESSION_REFRESH_JTI, ""), old["jti"]):
+        if session is None:
             raise expired
 
-        return issue_tokens(user, remember_me=bool(old.get(REMEMBER_CLAIM)), session=session)
+        if constant_time_compare(session.get(SESSION_REFRESH_JTI, ""), old["jti"]):
+            return issue_tokens(user, remember_me=bool(old.get(REMEMBER_CLAIM)), session=session)
+
+        reused = True
+
+    # An older refresh token of a live sign-in: either a client bug or a stolen
+    # copy. Can't tell which, so end the whole sign-in (outside the atomic
+    # block above, which a raise would roll back).
+    if reused:
+        session.delete()
+        audit.record(
+            "auth.refresh_token_reuse", user=user, resource="auth", status_code=401,
+            metadata={"sessionEnded": True},
+        )
+    raise expired
 
 
 def end_token_session(raw_token):
