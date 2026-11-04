@@ -6,6 +6,7 @@ v1 keeps working unchanged.
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
+from apps.core.health import JobsHealthView
 from apps.core.reports import DailyMetricsView, OverviewView, ReportDetailView, ReportListView
 from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 
@@ -14,6 +15,7 @@ urlpatterns = [
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("docs/", SpectacularSwaggerView.as_view(url_name="schema", template_name="docs/swagger.html"), name="swagger-ui"),
     path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    path("health/jobs/", JobsHealthView.as_view(), name="health-jobs"),
     path("auth/", include("apps.identity.urls")),
     path("stores/", include("apps.tenancy.urls")),
     path("members/", include(members_urlpatterns)),

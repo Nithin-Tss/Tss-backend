@@ -652,6 +652,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
+        "JobsHealthView",  # uptime pinger; answers 404 without X-Health-Token or a platform admin (apps/core/health.py)
         # API docs: open in tests/dev, admin-only in production (SPECTACULAR_SETTINGS SERVE_PERMISSIONS)
         "SpectacularAPIView", "SpectacularSwaggerView", "SpectacularRedocView",
     }

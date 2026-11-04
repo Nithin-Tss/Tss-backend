@@ -727,6 +727,66 @@ class IncomingReceiptTest(APITestCase):
                 incoming.process_receipt(receipt.pk)
         self.assertEqual(IncomingWebhookReceipt.objects.get().status, FAILED)
 
+    def test_validation_error_is_parked_at_once(self):
+        from rest_framework.exceptions import ValidationError
+
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_7", "type": "x"})
+        boom = mock.Mock(side_effect=ValidationError("amount doesn't match"))
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": boom}), \
+                self.assertLogs("apps.webhooks.incoming", level="CRITICAL"):
+            with self.assertRaises(ValidationError):
+                incoming.process_receipt(receipt.pk)
+        receipt.refresh_from_db()
+        self.assertEqual((receipt.status, receipt.attempts), (FAILED, 1))
+        self.assertIn("ValidationError", receipt.last_error)
+
+    def test_retry_back_off_doubles_and_is_capped(self):
+        boom = mock.Mock(side_effect=ConnectionError("db hiccup"))
+        expected = {0: 30, 1: 60, 2: 120, 5: 900, 7: 900}  # seconds after attempt number attempts+1
+        for before, seconds in expected.items():
+            with self.subTest(attempts_before=before):
+                IncomingWebhookReceipt.objects.all().delete()
+                receipt, _ = incoming.record_receipt("stripe", {"id": f"evt_b{before}", "type": "x"})
+                IncomingWebhookReceipt.objects.update(attempts=before)
+                started = timezone.now()
+                with mock.patch.object(incoming, "_handlers", return_value={"stripe": boom}):
+                    with self.assertRaises(ConnectionError):
+                        incoming.process_receipt(receipt.pk)
+                receipt.refresh_from_db()
+                wait = (receipt.next_attempt_at - started).total_seconds()
+                self.assertAlmostEqual(wait, seconds, delta=5)
+                self.assertEqual(receipt.status, RECEIVED)
+
+    def test_the_attempt_before_the_limit_still_retries_and_the_limit_parks_it(self):
+        boom = mock.Mock(side_effect=ConnectionError("db hiccup"))
+        for before, status in ((incoming.MAX_ATTEMPTS - 2, RECEIVED), (incoming.MAX_ATTEMPTS - 1, FAILED)):
+            with self.subTest(attempts_before=before):
+                IncomingWebhookReceipt.objects.all().delete()
+                receipt, _ = incoming.record_receipt("stripe", {"id": f"evt_l{before}", "type": "x"})
+                IncomingWebhookReceipt.objects.update(attempts=before)
+                with mock.patch.object(incoming, "_handlers", return_value={"stripe": boom}):
+                    with self.assertRaises(ConnectionError):
+                        incoming.process_receipt(receipt.pk)
+                self.assertEqual(IncomingWebhookReceipt.objects.get().status, status)
+
+    def test_a_retry_that_succeeds_clears_the_error_and_is_not_run_again(self):
+        receipt, _ = incoming.record_receipt("stripe", {"id": "evt_8", "type": "x"})
+        flaky = mock.Mock(side_effect=[ConnectionError("db hiccup"), None])
+        with mock.patch.object(incoming, "_handlers", return_value={"stripe": flaky}):
+            with self.assertRaises(ConnectionError):
+                incoming.process_receipt(receipt.pk)
+            IncomingWebhookReceipt.objects.update(next_attempt_at=timezone.now() - timedelta(seconds=1))
+            self.assertEqual(incoming.process_pending(), 1)
+            self.assertEqual(incoming.process_pending(), 0)
+        receipt.refresh_from_db()
+        self.assertEqual((receipt.status, receipt.attempts, receipt.last_error), (PROCESSED, 2, ""))
+        self.assertEqual(flaky.call_count, 2)
+
+    def test_a_parked_receipt_is_never_picked_up_by_the_sweeper(self):
+        incoming.record_receipt("stripe", {"id": "evt_9", "type": "x"})
+        IncomingWebhookReceipt.objects.update(status=FAILED)
+        self.assertEqual(incoming.process_pending(), 0)
+
     def test_leased_receipt_is_not_taken_twice_and_stale_worker_is_fenced(self):
         receipt, _ = incoming.record_receipt("stripe", {"id": "evt_6", "type": "x"})
         claimed = incoming.claim_receipt(receipt.pk)

@@ -1,5 +1,5 @@
 """Discount rules: is a code usable right now, and how much does it take off?"""
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -68,4 +68,4 @@ def amount_for(discount, subtotal):
     if discount.maximum_discount_amount:
         amount = min(amount, discount.maximum_discount_amount)
 
-    return min(amount, subtotal).quantize(Decimal("0.01"))
+    return min(amount, subtotal).quantize(Decimal("0.01"), ROUND_HALF_UP)  # half-up, like tax

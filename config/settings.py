@@ -61,14 +61,37 @@ CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 # limit of 1000 returns "Bad Request (400)" when more rows than that are selected.
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
 
-# With DEBUG off Django only mails 500 tracebacks to ADMINS, so they never reached the host's
-# logs. Send them to stderr so the Render log shows the cause of a server error.
+# Logs go to stderr, which the host (Render) collects. LOG_LEVEL sets the verbosity; LOG_JSON=True writes one JSON
+# object per line for log search. Every line carries the request id (apps/core/request_log.py).
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+# An /api/ request slower than this is logged as a WARNING
+LOG_SLOW_REQUEST_SECONDS = float(os.getenv('LOG_SLOW_REQUEST_SECONDS', '2'))
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
-    'handlers': {'console': {'class': 'logging.StreamHandler'}},
-    'loggers': {'django.request': {'handlers': ['console'], 'level': 'ERROR'}},
+    'filters': {'request_id': {'()': 'apps.core.logging_utils.RequestIdFilter'}},
+    'formatters': {
+        'text': {'format': '%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s'},
+        'json': {'()': 'apps.core.logging_utils.JsonFormatter'},
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'filters': ['request_id'],
+            'formatter': 'json' if env_bool('LOG_JSON') else 'text',
+        },
+    },
+    'root': {'handlers': ['console'], 'level': LOG_LEVEL},
+    'loggers': {
+        # With DEBUG off Django only mails 500 tracebacks to ADMINS, so they never reached the host's logs
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+    },
 }
+# Keep the root logger above in charge inside the Celery worker too, so its lines get the same format
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+
+# The host's health checks must not be redirected to https
+SECURE_REDIRECT_EXEMPT = [r'^healthz$', r'^readyz$']
 
 
 # Application definition
@@ -109,6 +132,7 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "identity.User"
 
 MIDDLEWARE = [
+    'apps.core.request_log.RequestLogMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'apps.core.middleware.SecurityHeadersMiddleware',
     'apps.core.middleware.RequestValidationMiddleware',
@@ -306,13 +330,34 @@ CELERY_TASK_TIME_LIMIT = 300
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_TIMEZONE = 'UTC'
+# /api/v1/health/jobs/ (apps/core/monitoring.py): the token an uptime pinger sends as X-Health-Token, and how many
+# queued tasks count as a backlog. With no token only platform administrators can read the endpoint.
+JOBS_HEALTH_TOKEN = os.getenv('JOBS_HEALTH_TOKEN', '')
+JOBS_QUEUE_ALERT_LENGTH = int(os.getenv('JOBS_QUEUE_ALERT_LENGTH', '500'))
 
 # No email provider yet: emails are printed in the runserver console.
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+# Set EMAIL_HOST (and EMAIL_HOST_USER / EMAIL_HOST_PASSWORD) to send real mail over SMTP. Without it
+# messages are only printed to the console, which means password-reset links end up in the logs.
+if os.getenv('EMAIL_HOST'):
+    MAILERS = {
+        'default': {
+            'BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+            'OPTIONS': {
+                'host': os.getenv('EMAIL_HOST'),
+                'port': int(os.getenv('EMAIL_PORT', '587')),
+                'username': os.getenv('EMAIL_HOST_USER', ''),
+                'password': os.getenv('EMAIL_HOST_PASSWORD', ''),
+                'use_tls': env_bool('EMAIL_USE_TLS', default=True),
+                'timeout': int(os.getenv('EMAIL_TIMEOUT', '10')),
+            },
+        },
+    }
+else:
+    MAILERS = {
+        'default': {
+            'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+        },
+    }
 
 
 # Allow the Next.js frontend to call the API from the browser

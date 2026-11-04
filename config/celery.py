@@ -18,7 +18,10 @@ app = Celery("tss")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
+from apps.core import monitoring  # noqa: E402,F401  (connects the task failure/retry log handlers)
+
 app.conf.beat_schedule = {
+    "heartbeat": {"task": "apps.core.tasks.heartbeat", "schedule": 60.0},
     "deliver-webhooks": {"task": "apps.core.tasks.deliver_webhooks", "schedule": 5.0},
     "sweep-webhooks": {"task": "apps.webhooks.tasks.sweep_webhooks", "schedule": 10.0},
     "expire-stock-reservations": {"task": "apps.core.tasks.expire_reservations", "schedule": 120.0},

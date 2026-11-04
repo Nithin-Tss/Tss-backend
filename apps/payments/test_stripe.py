@@ -381,6 +381,54 @@ class StripeTests(base_tests.CommerceTestBase):
             self.assertEqual(r.status_code, 200)
         self.assertEqual(Order.objects.count(), 0)
 
+    def active_holds(self, checkout):
+        from apps.inventory.models import StockReservation
+
+        return StockReservation.objects.filter(checkout_id=checkout.pk, status=StockReservation.ACTIVE).count()
+
+    def started(self):
+        """A checkout whose card payment has started: the stock is held while the shopper pays."""
+        checkout = self.checkout()
+        self.client_mock.v1.payment_intents.create.return_value = intent(checkout, status="requires_payment_method")
+        r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertGreater(self.active_holds(checkout), 0)
+        return checkout
+
+    def unpaid(self, checkout, status, account=ACCOUNT):
+        return stripe_service.note_unpaid(
+            {"id": "pi_1", "status": status, "last_payment_error": {"message": "declined"},
+             "metadata": {"checkout_id": str(checkout.pk)}},
+            account,
+        )
+
+    def test_a_declined_attempt_keeps_the_stock_hold_so_the_shopper_can_retry(self):
+        checkout = self.started()
+        held = self.active_holds(checkout)
+        self.unpaid(checkout, "requires_payment_method")
+        self.assertEqual(self.active_holds(checkout), held)
+
+    def test_a_retry_after_a_decline_on_the_same_intent_places_the_order_once(self):
+        checkout = self.started()
+        self.unpaid(checkout, "requires_payment_method")
+        self.assertEqual(Order.objects.count(), 0)
+        stripe_service.finalize(intent(checkout), ACCOUNT)
+        stripe_service.finalize(intent(checkout), ACCOUNT)  # Stripe redelivers the success
+        self.assertEqual((Order.objects.count(), Payment.objects.count()), (1, 1))
+
+    def test_a_cancelled_intent_gives_the_stock_hold_back(self):
+        checkout = self.started()
+        self.unpaid(checkout, "canceled")
+        self.assertEqual(self.active_holds(checkout), 0)
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_a_cancelled_intent_from_another_account_cannot_release_this_stores_stock(self):
+        checkout = self.started()
+        held = self.active_holds(checkout)
+        with self.assertLogs("apps.payments.stripe_service", "ERROR"):
+            self.unpaid(checkout, "canceled", account="acct_other")
+        self.assertEqual(self.active_holds(checkout), held)
+
     def test_webhook_deauthorization_disconnects_the_store(self):
         r = self.send("account.application.deauthorized", {"id": "ca_1"})
         self.assertEqual(r.status_code, 200)

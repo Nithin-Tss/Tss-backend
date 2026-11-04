@@ -60,6 +60,14 @@ def send_email_async(subject, body, recipients):
 
 
 @shared_task
+def heartbeat():
+    """Every minute from beat: proves beat and a worker are both alive (see apps/core/monitoring.py)."""
+    from .monitoring import stamp_heartbeat
+
+    stamp_heartbeat()
+
+
+@shared_task
 def deliver_webhooks(batch=50):
     from apps.webhooks import services
 
