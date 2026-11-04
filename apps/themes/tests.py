@@ -6008,7 +6008,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         from .services import starter_files
         self.assertIn("Your recommendation", starter_files()["sections/match-quiz.liquid"])
 
-    def test_match_quiz_and_unknown_sections_resolve_without_error(self):
+    def test_match_quiz_resolves_and_unknown_sections_are_dropped(self):
         from .schemas import resolve
         custom_data = {
             "templates": {
@@ -6033,9 +6033,10 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         }
         resolved = resolve(custom_data)
         self.assertIn("mq", resolved["templates"]["index"]["sections"])
-        self.assertIn("unknown", resolved["templates"]["index"]["sections"])
+        # Sections of a type that no longer exists are dropped, from both sections and order
+        self.assertNotIn("unknown", resolved["templates"]["index"]["sections"])
+        self.assertEqual(resolved["templates"]["index"]["order"], ["mq"])
         self.assertEqual(resolved["templates"]["index"]["sections"]["mq"]["settings"]["heading"], "Find your match")
-        self.assertEqual(resolved["templates"]["index"]["sections"]["unknown"]["settings"]["heading"], "Custom")
 
     def test_newsletter_subscribes_an_email_once_and_rejects_a_bad_one(self):
         from apps.customers.models import Customer
