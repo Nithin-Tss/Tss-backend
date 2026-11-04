@@ -82,6 +82,7 @@ REQUIRED_FILES = {
     "sections/newsletter.liquid",
     "sections/static-text.liquid",
     "sections/quiz.liquid",
+    "sections/match-quiz.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -673,8 +674,8 @@ def _card_sections(templates):
     """Every section of the pages that shows product cards and can have the "Cart icon" block."""
     for page in templates.values():
         for section in page["sections"].values():
-            blocks = SECTION_SCHEMAS[section["type"]].get("blocks", {})
-            if "cart_icon" in blocks and section["type"] != "main-product":
+            blocks = SECTION_SCHEMAS.get(section.get("type"), {}).get("blocks", {})
+            if "cart_icon" in blocks and section.get("type") != "main-product":
                 yield section
 
 
@@ -2150,7 +2151,7 @@ def save_template_code(store_theme, name, content, base_version=None, client="",
         if known is not None:
             if kind and kind != known["type"]:
                 raise exceptions.ValidationError({
-                    "content": f"Line {tag['line']}: \"{sid}\" is a {SECTION_SCHEMAS[known['type']]['name']} section. "
+                    "content": f"Line {tag['line']}: \"{sid}\" is a {SECTION_SCHEMAS.get(known['type'], {}).get('name', known['type'])} section. "
                                "To add a different one, give it a new id.", "line": tag["line"]})
             section = copy.deepcopy(known)
         elif not kind:

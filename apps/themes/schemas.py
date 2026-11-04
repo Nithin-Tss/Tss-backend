@@ -541,7 +541,12 @@ def resolve(custom_data):
             else {}
         )
         for section_id, section in page["sections"].items():
-            schema = SECTIONS[section["type"]]
+            schema = SECTIONS.get(section.get("type"))
+            if not schema:
+                section["hidden"] = bool(section.get("hidden", False))
+                section["settings"] = section.get("settings") or {}
+                section["blocks"] = section.get("blocks") or []
+                continue
             section["hidden"] = bool(section.get("hidden", False))
             raw_sec_settings = section.get("settings") or {}
             heart_saved = raw_sec_settings.get("show_wishlist") is True
@@ -1383,6 +1388,51 @@ SECTIONS["quiz"] = {
     },
     "type_limits": {"question": 10},
 }
+
+_MATCH_QUIZ_ANSWERS = {}
+_MATCH_QUIZ_ICONS = ["none", "star", "heart", "leaf", "sun", "moon", "flame", "drop", "coffee", "gift", "bolt", "snowflake", "cup"]
+for _n in (1, 2, 3, 4):
+    _MATCH_QUIZ_ANSWERS[f"answer_{_n}_label"] = _opt("content", "text", f"Answer {_n}", "", max=80, help="Leave empty to hide this answer." if _n > 2 else "")
+    _MATCH_QUIZ_ANSWERS[f"answer_{_n}_icon"] = _choice("content", f"Answer {_n} icon", _MATCH_QUIZ_ICONS, "none")
+    _MATCH_QUIZ_ANSWERS[f"answer_{_n}_key"] = _opt("content", "text", f"Answer {_n} result key", "", max=50, help="The key of the outcome this answer votes for.")
+
+SECTIONS["match-quiz"] = {
+    "name": "Match quiz",
+    "pages": CONTENT_PAGES,
+    "settings": {
+        "heading": _opt("content", "text", "Heading", "Find your match", max=120),
+        "subheading": _opt("content", "textarea", "Subheading", "Answer four quick questions and we'll point you to your perfect pick.", max=300),
+        "button_label": _opt("content", "text", "Button text", "Find your match", max=40),
+        "image_url": _opt("content", "image", "Image", ""),
+        "image_alt": _opt("content", "text", "Image description", "", max=100),
+        "panel_color": _opt("style", "color_optional", "Panel colour", "#FFF6E5"),
+        "accent_color": _opt("style", "color_optional", "Accent colour", "#6B2438"),
+        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "left", ui="segmented"),
+        "content_alignment": _choice("layout", "Content alignment", ["default", "reverse"], "default", ui="segmented"),
+        **common_settings(width="wide"),
+    },
+    "blocks": {
+        "question": {
+            "name": "Question",
+            "settings": {
+                "question": _opt("content", "text", "Question", "What are you looking for?", max=200),
+                **_MATCH_QUIZ_ANSWERS,
+            },
+        },
+        "result": {
+            "name": "Result",
+            "settings": {
+                "name": _opt("content", "text", "Result heading", "Result", max=120),
+                "text": _opt("content", "textarea", "Result text", "", max=300),
+                "result_key": _opt("content", "text", "Result key", "", max=50),
+                "button_label": _opt("content", "text", "Button text", "Shop now", max=40),
+                "link": _opt("content", "url", "Button link", "/collections/all"),
+            },
+        },
+    },
+    "type_limits": {"question": 10, "result": 10},
+}
+
 
 SECTIONS["main-blog"] = {
     "name": "Blog posts",

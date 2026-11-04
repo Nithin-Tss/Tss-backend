@@ -5851,6 +5851,35 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertIn("Question 1 of 1", html)
         self.assertNotIn("Cold hot", html)
 
+    def test_match_quiz_and_unknown_sections_resolve_without_error(self):
+        from .schemas import resolve
+        custom_data = {
+            "templates": {
+                "index": {
+                    "order": ["mq", "unknown"],
+                    "sections": {
+                        "mq": {
+                            "type": "match-quiz",
+                            "settings": {"heading": "Find your match"},
+                            "blocks": [
+                                {"type": "question", "settings": {"question": "Your preference?", "answer_1_label": "Tea", "answer_1_key": "tea"}},
+                                {"type": "result", "settings": {"name": "Green Tea", "result_key": "tea"}},
+                            ],
+                        },
+                        "unknown": {
+                            "type": "custom-nonexistent-type",
+                            "settings": {"heading": "Custom"},
+                        },
+                    },
+                }
+            }
+        }
+        resolved = resolve(custom_data)
+        self.assertIn("mq", resolved["templates"]["index"]["sections"])
+        self.assertIn("unknown", resolved["templates"]["index"]["sections"])
+        self.assertEqual(resolved["templates"]["index"]["sections"]["mq"]["settings"]["heading"], "Find your match")
+        self.assertEqual(resolved["templates"]["index"]["sections"]["unknown"]["settings"]["heading"], "Custom")
+
     def test_newsletter_subscribes_an_email_once_and_rejects_a_bad_one(self):
         from apps.customers.models import Customer
 

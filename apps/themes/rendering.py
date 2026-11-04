@@ -986,21 +986,17 @@ SEARCH_JS = Markup(r"""<script>
       function executeSearch() {
         if (!input) return;
         var q = input.value.trim();
-        if (!q) {
-          input.focus();
-          return;
-        }
         input.value = q;
         if (form) {
           // If in theme preview iframe, communicate with parent editor
           if (window.parent && window.parent !== window && window.parent.postMessage) {
             var actionUrl = form.getAttribute('action') || '/collections/all';
-            var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
-            var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+            var cleanPath = (actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all').split('?')[0];
+            var path = q ? cleanPath + '?q=' + encodeURIComponent(q) : cleanPath;
             window.parent.postMessage({
               source: 'tss-preview',
               type: 'navigate',
-              path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+              path: path
             }, '*');
             return;
           }
@@ -1012,11 +1008,10 @@ SEARCH_JS = Markup(r"""<script>
         }
       }
 
-      // If user clicks the magnifying glass when panel is open and has text, execute search!
+      // If user clicks the magnifying glass when panel is open, execute search!
       if (toggle && panel && input) {
         toggle.addEventListener('click', function (e) {
-          var val = input.value.trim();
-          if (!panel.hidden && val) {
+          if (!panel.hidden) {
             e.preventDefault();
             e.stopPropagation();
             executeSearch();
@@ -1037,21 +1032,16 @@ SEARCH_JS = Markup(r"""<script>
       if (form) {
         form.addEventListener('submit', function (e) {
           var q = input ? input.value.trim() : '';
-          if (!q) {
-            e.preventDefault();
-            if (input) input.focus();
-            return;
-          }
           input.value = q;
           if (window.parent && window.parent !== window && window.parent.postMessage) {
             e.preventDefault();
             var actionUrl = form.getAttribute('action') || '/collections/all';
-            var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
-            var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+            var cleanPath = (actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all').split('?')[0];
+            var path = q ? cleanPath + '?q=' + encodeURIComponent(q) : cleanPath;
             window.parent.postMessage({
               source: 'tss-preview',
               type: 'navigate',
-              path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+              path: path
             }, '*');
           }
         });
@@ -1069,19 +1059,15 @@ SEARCH_JS = Markup(r"""<script>
       function executeColSearch() {
         if (!input) return;
         var q = input.value.trim();
-        if (!q) {
-          input.focus();
-          return;
-        }
         input.value = q;
         if (window.parent && window.parent !== window && window.parent.postMessage) {
           var actionUrl = form.getAttribute('action') || window.location.pathname;
-          var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
-          var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+          var cleanPath = (actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all').split('?')[0];
+          var path = q ? cleanPath + '?q=' + encodeURIComponent(q) : cleanPath;
           window.parent.postMessage({
             source: 'tss-preview',
             type: 'navigate',
-            path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+            path: path
           }, '*');
           return;
         }
@@ -1110,21 +1096,16 @@ SEARCH_JS = Markup(r"""<script>
 
       form.addEventListener('submit', function (e) {
         var q = input ? input.value.trim() : '';
-        if (!q) {
-          e.preventDefault();
-          if (input) input.focus();
-          return;
-        }
         input.value = q;
         if (window.parent && window.parent !== window && window.parent.postMessage) {
           e.preventDefault();
           var actionUrl = form.getAttribute('action') || window.location.pathname;
-          var cleanPath = actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all';
-          var sep = cleanPath.indexOf('?') !== -1 ? '&' : '?';
+          var cleanPath = (actionUrl.replace(/^https?:\/\/[^/]+/, '').replace(/^\/s\/[^/]+/, '') || '/collections/all').split('?')[0];
+          var path = q ? cleanPath + '?q=' + encodeURIComponent(q) : cleanPath;
           window.parent.postMessage({
             source: 'tss-preview',
             type: 'navigate',
-            path: cleanPath + sep + 'q=' + encodeURIComponent(q)
+            path: path
           }, '*');
         }
       });
@@ -2132,7 +2113,7 @@ def _wrap_attrs(section_id, s, theme=None):
 
 def _prepare(section_type, settings):
     """Settings as the section template sees them: rich text becomes (cleaned) HTML."""
-    schema = SECTIONS[section_type]["settings"]
+    schema = SECTIONS.get(section_type, {}).get("settings", {})
     return {
         key: Markup(sanitize_html(value)) if schema.get(key, {}).get("type") == "richtext" else value
         for key, value in settings.items()
@@ -3386,7 +3367,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     spans = {}  # section id -> its part of `html` (to put it in its slot)
     for section_id, raw_section in visible:
         # "Latest posts" with no posts to show is left out of the live store
-        if SECTIONS[raw_section["type"]].get("uses_articles") and not posts and not editor:
+        if SECTIONS.get(raw_section.get("type"), {}).get("uses_articles") and not posts and not editor:
             continue
         span_start = len(html)
         section = dict(raw_section, id=section_id)
@@ -3461,17 +3442,19 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 heart = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
                 section["wishlist_heart"] = heart["settings"] if heart else None
 
-            if "wishlist_heart" in SECTIONS[section["type"]]["blocks"] and section["type"] != "main-product":
+            _sec_schema = SECTIONS.get(section.get("type"), {})
+            _sec_blocks = _sec_schema.get("blocks", {})
+            if "wishlist_heart" in _sec_blocks and section.get("type") != "main-product":
                 # The "Wishlist heart" block of a section with product cards: its settings, or None when hidden or never added
                 heart_block = next((b for b in all_blocks if b["type"] == "wishlist_heart" and not b.get("hidden")), None)
                 section["wishlist_heart"] = heart_block["settings"] if heart_block else None
 
-            if "cart_icon" in SECTIONS[section["type"]]["blocks"]:
+            if "cart_icon" in _sec_blocks:
                 # The "Cart icon" block: its settings, or None when the owner hid it (or never added it)
                 cart_block = next((b for b in all_blocks if b["type"] == "cart_icon" and not b.get("hidden")), None)
                 section["cart_icon"] = cart_block["settings"] if cart_block else None
 
-            if SECTIONS[section["type"]].get("uses_products"):
+            if _sec_schema.get("uses_products"):
                 ss = section["settings"]
                 source = ss.get("source", "collection")
                 chosen = ss.get("products") or []
@@ -3491,7 +3474,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                         store, base_url, collection=collection_obj, limit=limit, exclude=exclude,
                     )
 
-            if SECTIONS[section["type"]].get("uses_articles"):
+            if _sec_schema.get("uses_articles"):
                 ss = section["settings"]
                 wanted = slugify(ss.get("category") or "")
                 shown = [p for p in posts if not wanted or (p["category"] and p["category"]["handle"] == wanted)]

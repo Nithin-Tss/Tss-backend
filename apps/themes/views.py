@@ -644,14 +644,12 @@ PREVIEW_EDITOR = """
     if (form) {
       var input = form.querySelector("input[name='q'], input[type='search']");
       var q = input ? input.value.trim() : "";
-      if (!q) {
-        e.preventDefault();
-        if (input) input.focus();
-        return;
-      }
       e.preventDefault();
       e.stopPropagation();
-      send({ type: "navigate", path: "/collections/all?q=" + encodeURIComponent(q) });
+      var action = form.getAttribute("action") || "/collections/all";
+      var cleanPath = (action.replace(/^https?:\/\/[^/]+/, "").replace(/^\/s\/[^/]+/, "") || "/collections/all").split("?")[0];
+      var path = q ? cleanPath + "?q=" + encodeURIComponent(q) : cleanPath;
+      send({ type: "navigate", path: path });
     }
   }, true);
   document.addEventListener("contextmenu", function (e) {

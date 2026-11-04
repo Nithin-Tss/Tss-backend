@@ -1,0 +1,264 @@
+{%- comment -%}
+  Find your match quiz. A banner (text panel + image) whose button opens a popup quiz.
+  "Question" blocks are the steps (up to four answers each, every answer has a result key).
+  "Result" blocks are the possible outcomes. The result with the most picks wins; on a tie the
+  first matching Result block wins; with no match the first Result block is shown.
+  All markup, styles and script of the quiz are in this file, scoped to the section id.
+{%- endcomment -%}
+{%- assign s = section.settings -%}
+{%- assign question_count = 0 -%}
+{%- assign result_count = 0 -%}
+{%- for block in section.blocks -%}
+  {%- if block.type == 'question' -%}{%- assign question_count = question_count | plus: 1 -%}{%- endif -%}
+  {%- if block.type == 'result' -%}{%- assign result_count = result_count | plus: 1 -%}{%- endif -%}
+{%- endfor -%}
+<section id="section-{{ section.id }}" class="section match-quiz align-{{ s.text_alignment }}" style="--mq-panel: {{ s.panel_color }}; --mq-accent: {{ s.accent_color }};">
+  <div class="page-width">
+    <div class="match-quiz__banner">
+      <div class="match-quiz__panel">
+        {%- if s.heading != blank -%}<h2 class="match-quiz__heading">{{ s.heading }}</h2>{%- endif -%}
+        {%- if s.subheading != blank -%}<p class="match-quiz__sub">{{ s.subheading }}</p>{%- endif -%}
+        {%- if question_count > 0 and result_count > 0 -%}
+          <button class="match-quiz__button" type="button" data-mq-open aria-haspopup="dialog">{{ s.button_label }}</button>
+        {%- elsif design_mode -%}
+          <p class="match-quiz__hint">
+            {%- if question_count == 0 -%}Add "Question" blocks to build the quiz.{%- endif %}
+            {% if result_count == 0 -%}Add "Result" blocks for the possible outcomes.{%- endif -%}
+          </p>
+        {%- endif -%}
+      </div>
+      <div class="match-quiz__media">
+        {%- if s.image_url != blank -%}
+          <img src="{{ s.image_url }}" alt="{{ s.image_alt }}" loading="lazy">
+        {%- elsif design_mode -%}
+          <div class="match-quiz__placeholder">Add an image in the section settings</div>
+        {%- endif -%}
+      </div>
+    </div>
+  </div>
+
+  {%- if question_count > 0 and result_count > 0 -%}
+  <div class="mq-modal" id="mq-{{ section.id }}" role="dialog" aria-modal="true" aria-label="{{ s.heading | default: 'Find your match' }}" hidden style="--mq-accent: {{ s.accent_color }};">
+    <div class="mq-modal__overlay" data-mq-close></div>
+    <div class="mq-modal__box" tabindex="-1">
+      <button class="mq-modal__x" type="button" data-mq-close aria-label="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+
+      <div class="mq-modal__bars" data-mq-bars>
+        {%- for i in (1..question_count) -%}<span class="mq-modal__bar"></span>{%- endfor -%}
+      </div>
+
+      {%- assign q_index = 0 -%}
+      {%- for block in section.blocks -%}
+        {%- if block.type == 'question' -%}
+          {%- assign q_index = q_index | plus: 1 -%}
+          {%- assign q = block.settings -%}
+          <div class="mq-step" data-mq-step hidden>
+            <p class="mq-modal__eyebrow">Question {{ q_index }} of {{ question_count }}</p>
+            <h3 class="mq-modal__title">{{ q.question }}</h3>
+            <div class="mq-answers">
+              {%- for n in (1..4) -%}
+                {%- case n -%}
+                  {%- when 1 -%}{%- assign a_label = q.answer_1_label -%}{%- assign a_icon = q.answer_1_icon -%}{%- assign a_key = q.answer_1_key -%}
+                  {%- when 2 -%}{%- assign a_label = q.answer_2_label -%}{%- assign a_icon = q.answer_2_icon -%}{%- assign a_key = q.answer_2_key -%}
+                  {%- when 3 -%}{%- assign a_label = q.answer_3_label -%}{%- assign a_icon = q.answer_3_icon -%}{%- assign a_key = q.answer_3_key -%}
+                  {%- else -%}{%- assign a_label = q.answer_4_label -%}{%- assign a_icon = q.answer_4_icon -%}{%- assign a_key = q.answer_4_key -%}
+                {%- endcase -%}
+                {%- if a_label != blank -%}
+                  <button class="mq-answer" type="button" data-mq-answer data-key="{{ a_key | strip | downcase }}">
+                    {%- if a_icon != 'none' and a_icon != blank -%}
+                      <span class="mq-answer__icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                          {%- case a_icon -%}
+                            {%- when 'star' -%}<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9Z"/>
+                            {%- when 'heart' -%}<path d="M20.8 5.6a5.5 5.5 0 0 0-7.8 0L12 6.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 22l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"/>
+                            {%- when 'leaf' -%}<path d="M11 20A7 7 0 0 1 4 13c0-6 7-10 16-10 0 9-4 16-10 16"/><path d="M4 21c4-6 8-9 13-11"/>
+                            {%- when 'sun' -%}<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+                            {%- when 'moon' -%}<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/>
+                            {%- when 'flame' -%}<path d="M12 22c4 0 7-3 7-7 0-3-2-5-3-7-1 2-2 3-3.5 3C13 8 12 5 10 2 7 5 5 9 5 15c0 4 3 7 7 7Z"/>
+                            {%- when 'drop' -%}<path d="M12 2.5s7 7 7 12a7 7 0 0 1-14 0c0-5 7-12 7-12Z"/>
+                            {%- when 'coffee' -%}<path d="M3 8h14v6a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5ZM17 10h2a2 2 0 0 1 0 4h-2M7 2v3M11 2v3M15 2v3"/>
+                            {%- when 'gift' -%}<path d="M20 12v10H4V12M2 7h20v5H2zM12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7ZM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z"/>
+                            {%- when 'bolt' -%}<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>
+                            {%- when 'snowflake' -%}<path d="M12 2v20M3.3 7l17.4 10M3.3 17 20.7 7"/>
+                            {%- when 'cup' -%}<path d="M6 3h12l-1.500 14a3 3 0 0 1-3 3h-3a3 3 0 0 1-3-3ZM6.500 9h11"/>
+                          {%- endcase -%}
+                        </svg>
+                      </span>
+                    {%- endif -%}
+                    <span class="mq-answer__label">{{ a_label }}</span>
+                  </button>
+                {%- endif -%}
+              {%- endfor -%}
+            </div>
+          </div>
+        {%- endif -%}
+      {%- endfor -%}
+
+      <div class="mq-step mq-result" data-mq-final hidden>
+        <p class="mq-modal__eyebrow">Your recommendation</p>
+        <h3 class="mq-modal__title" data-mq-result-name></h3>
+        <p class="mq-result__text" data-mq-result-text></p>
+        <a class="match-quiz__button" href="#" data-mq-result-link></a>
+      </div>
+
+      <button class="mq-modal__back" type="button" data-mq-back hidden>&larr; Back</button>
+
+      {%- comment -%} The possible results; the script shows the winner in the box above. {%- endcomment -%}
+      <div data-mq-results hidden>
+        {%- for block in section.blocks -%}
+          {%- if block.type == 'result' -%}
+            <div data-mq-result data-key="{{ block.settings.result_key | strip | downcase }}" data-link="{{ block.settings.link | link }}" data-label="{{ block.settings.button_label | default: 'Shop now' }}">
+              <span data-name>{{ block.settings.name }}</span>
+              <span data-text>{{ block.settings.text }}</span>
+            </div>
+          {%- endif -%}
+        {%- endfor -%}
+      </div>
+    </div>
+  </div>
+  {%- endif -%}
+</section>
+<style>
+  #section-{{ section.id }} { --mq-radius: 20px; }
+  #section-{{ section.id }} .match-quiz__banner { display: grid; grid-template-columns: 1fr 1.25fr; border-radius: var(--mq-radius); overflow: hidden; background: var(--mq-panel); }
+  #section-{{ section.id }} .match-quiz__panel { display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 48px; }
+  #section-{{ section.id }}.align-left .match-quiz__panel { align-items: flex-start; text-align: left; }
+  #section-{{ section.id }}.align-center .match-quiz__panel { align-items: center; text-align: center; }
+  #section-{{ section.id }}.align-right .match-quiz__panel { align-items: flex-end; text-align: right; }
+  #section-{{ section.id }} .match-quiz__heading { margin: 0; }
+  #section-{{ section.id }} .match-quiz__sub { margin: 0; color: var(--muted); max-width: 42ch; }
+  #section-{{ section.id }} .match-quiz__hint { margin: 0; font-size: 13px; color: var(--muted); }
+  #section-{{ section.id }} .match-quiz__media { min-height: 320px; position: relative; }
+  #section-{{ section.id }} .match-quiz__media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  #section-{{ section.id }} .match-quiz__placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; font-size: 13px; color: var(--muted); background: var(--soft); }
+  #section-{{ section.id }} .match-quiz__button,
+  #mq-{{ section.id }} .match-quiz__button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 28px; border: 1px solid var(--mq-accent); border-radius: 999px; background: var(--mq-accent); color: #fff; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+  #section-{{ section.id }} .match-quiz__button:hover,
+  #mq-{{ section.id }} .match-quiz__button:hover { opacity: .88; }
+
+  #mq-{{ section.id }} { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #mq-{{ section.id }}[hidden] { display: none; }
+  #mq-{{ section.id }} .mq-modal__overlay { position: absolute; inset: 0; background: rgba(15, 15, 15, .7); }
+  #mq-{{ section.id }} .mq-modal__box { position: relative; width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; padding: 28px 32px 32px; border-radius: 20px; background: var(--bg, #fff); color: var(--text, #111); outline: none; text-align: left; }
+  #mq-{{ section.id }} .mq-modal__x { position: absolute; top: 14px; right: 14px; display: flex; padding: 8px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
+  #mq-{{ section.id }} .mq-modal__x:hover { background: var(--soft, #eee); }
+  #mq-{{ section.id }} .mq-modal__bars { display: flex; gap: 6px; margin: 0 40px 24px 0; }
+  #mq-{{ section.id }} .mq-modal__bar { flex: 1; height: 4px; border-radius: 2px; background: var(--line, #ddd); }
+  #mq-{{ section.id }} .mq-modal__bar.is-done { background: var(--mq-accent); }
+  #mq-{{ section.id }} .mq-modal__eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted, #777); }
+  #mq-{{ section.id }} .mq-modal__title { margin: 0 0 22px; font-size: 26px; line-height: 1.25; }
+  #mq-{{ section.id }} .mq-answers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #mq-{{ section.id }} .mq-answer { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 14px 16px; border: 1px solid var(--line, #ddd); border-radius: 14px; background: var(--bg, #fff); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+  #mq-{{ section.id }} .mq-answer:hover,
+  #mq-{{ section.id }} .mq-answer:focus-visible { border-color: var(--mq-accent); background: var(--soft, #f5f5f5); outline: none; }
+  #mq-{{ section.id }} .mq-answer.is-selected { border-color: var(--mq-accent); box-shadow: inset 0 0 0 1px var(--mq-accent); background: var(--soft, #f5f5f5); }
+  #mq-{{ section.id }} .mq-answer__icon { display: flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; background: var(--soft, #f0f0f0); color: var(--mq-accent); }
+  #mq-{{ section.id }} .mq-result__text { margin: 0 0 24px; color: var(--muted, #666); }
+  #mq-{{ section.id }} .mq-modal__back { margin: 20px 0 0; padding: 0; border: 0; background: none; color: var(--muted, #666); font: inherit; text-decoration: underline; cursor: pointer; }
+  #mq-{{ section.id }} .mq-modal__back[hidden] { display: none; }
+
+  @media (max-width: 720px) {
+    #section-{{ section.id }} .match-quiz__banner { grid-template-columns: 1fr; }
+    #section-{{ section.id }} .match-quiz__panel { padding: 32px 24px; }
+    #section-{{ section.id }} .match-quiz__media { min-height: 220px; order: -1; }
+    #mq-{{ section.id }} .mq-modal__box { padding: 24px 20px 24px; }
+    #mq-{{ section.id }} .mq-modal__title { font-size: 22px; }
+    #mq-{{ section.id }} .mq-answers { grid-template-columns: 1fr; }
+  }
+</style>
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var modal = document.getElementById("mq-{{ section.id }}");
+    if (!root || !modal) return;
+    var opener = root.querySelector("[data-mq-open]");
+    var box = modal.querySelector(".mq-modal__box");
+    var bars = Array.prototype.slice.call(modal.querySelectorAll(".mq-modal__bar"));
+    var steps = Array.prototype.slice.call(modal.querySelectorAll("[data-mq-step]"));
+    var final = modal.querySelector("[data-mq-final]");
+    var back = modal.querySelector("[data-mq-back]");
+    var results = Array.prototype.slice.call(modal.querySelectorAll("[data-mq-result]"));
+    var picks = [];   // { key, index } per answered question
+    var current = 0;
+    var lastFocus = null;
+    var timer = null;
+
+    function show(index) {
+      current = index;
+      steps.forEach(function (step, i) { step.hidden = i !== index; });
+      final.hidden = index !== steps.length;
+      bars.forEach(function (bar, i) { bar.classList.toggle("is-done", i <= index); });
+      back.hidden = index === 0;
+      // Mark the answer chosen earlier when coming back to a question
+      if (steps[index]) {
+        var buttons = steps[index].querySelectorAll("[data-mq-answer]");
+        Array.prototype.forEach.call(buttons, function (button, i) {
+          button.classList.toggle("is-selected", !!picks[index] && picks[index].index === i);
+        });
+      }
+      if (index === steps.length) showResult();
+    }
+
+    // Most picks wins; on a tie the first Result block wins; no match shows the first Result block
+    function showResult() {
+      var counts = {};
+      picks.forEach(function (pick) { if (pick.key) counts[pick.key] = (counts[pick.key] || 0) + 1; });
+      var winner = results[0];
+      var best = 0;
+      results.forEach(function (result) {
+        var count = counts[result.getAttribute("data-key")] || 0;
+        if (count > best) { best = count; winner = result; }
+      });
+      final.querySelector("[data-mq-result-name]").textContent = winner.querySelector("[data-name]").textContent;
+      final.querySelector("[data-mq-result-text]").textContent = winner.querySelector("[data-text]").textContent;
+      var link = final.querySelector("[data-mq-result-link]");
+      link.textContent = winner.getAttribute("data-label");
+      link.href = winner.getAttribute("data-link") || "#";
+    }
+
+    function open() {
+      lastFocus = document.activeElement;
+      picks = [];
+      // Moved to <body> so an animated or clipped parent cannot trap the overlay
+      document.body.appendChild(modal);
+      modal.hidden = false;
+      document.documentElement.style.overflow = "hidden";
+      show(0);
+      box.focus();
+    }
+
+    function close() {
+      clearTimeout(timer);
+      timer = null;
+      modal.hidden = true;
+      document.documentElement.style.overflow = "";
+      root.appendChild(modal);
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    }
+
+    opener.addEventListener("click", open);
+    modal.addEventListener("click", function (event) {
+      if (event.target.closest("[data-mq-close]")) { close(); return; }
+      if (event.target.closest("[data-mq-back]")) {
+        clearTimeout(timer);
+        timer = null;
+        picks.pop();
+        show(current - 1);
+        return;
+      }
+      var answer = event.target.closest("[data-mq-answer]");
+      if (!answer || timer) return;
+      var buttons = Array.prototype.slice.call(steps[current].querySelectorAll("[data-mq-answer]"));
+      var step = current;
+      picks[step] = { key: answer.getAttribute("data-key"), index: buttons.indexOf(answer) };
+      picks.length = step + 1;
+      buttons.forEach(function (button) { button.classList.toggle("is-selected", button === answer); });
+      timer = setTimeout(function () { timer = null; show(step + 1); }, 160);
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !modal.hidden) close();
+    });
+  })();
+</script>
