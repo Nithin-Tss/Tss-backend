@@ -27,17 +27,19 @@ from django.views.decorators.http import require_GET, require_POST
 from liquid.exceptions import LiquidError
 from markupsafe import escape
 
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import DisallowedHost, ValidationError as DjangoValidationError
 from rest_framework import exceptions, serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
+from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
 
 from apps.catalog.models import Collection
 from apps.catalog.services import published_collections, published_products
+from apps.core.origin import _origin_allowed
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.core.tokens import PASSWORD_CLAIM, fingerprint_matches, password_fingerprint
 from django.contrib.auth import authenticate, get_user_model
@@ -59,6 +61,7 @@ from .rendering import (
 )
 from apps.catalog.models import Product, ProductVariant
 from apps.commerce import services as commerce_services
+from apps.orders import services as orders_services
 from apps.orders.models import Order
 from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
@@ -2087,6 +2090,7 @@ def _storefront(render):
 
         # A visit started from "Open theme" on a draft shows that draft on every page of the visit
         visit = _admin_visit(request, store)
+        request._no_track = visit is not None  # staff looking at their own store are not visitors
         draft = _preview_theme_id(store, visit["t"]) if visit and visit.get("t") else None
         editing = set_editing_theme(draft) if draft else None
 
@@ -2148,12 +2152,7 @@ def _storefront(render):
         _restore_customer_cookie(response, request, store)
 
         # A page with the cart on it gives the shopper's browser their cart id (see cart.py)
-        pending = getattr(request, "_cart_session", None)
-        if pending and pending[1] and "data-cart-session=" in html:
-            response.set_cookie(
-                cart_data.cookie_name(store), pending[0], max_age=cart_data.CART_COOKIE_AGE,
-                path=f"{shop_url(store)}/", httponly=True, samesite="Lax", secure=not settings.DEBUG,
-            )
+        _give_cart_cookie(response, request, store, html)
 
         return response
 
@@ -2414,6 +2413,69 @@ def _json_body(request):
     return body
 
 
+class _TrackThrottle(SimpleRateThrottle):
+    """The storefront's rate ("storefront" in REST_FRAMEWORK), counted per client address apart from the cart API's."""
+    scope = "storefront"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {"scope": self.scope, "ident": "track-" + self.get_ident(request)}
+
+
+TRACK_MAX_BODY = 4096
+
+
+def _track_origin_ok(request):
+    """The beacon comes from the sandboxed storefront page (Origin: null), or the store's own site; nobody else."""
+    origin = request.headers.get("Origin")
+    return not origin or origin == "null" or _origin_allowed(request)
+
+
+@csrf_exempt
+def storefront_track(request, store_slug):
+    """
+    POST /s/<store_slug>/_track: one page load of the storefront, sent by the layout's script with
+    navigator.sendBeacon. Always answers 204 and nothing else, whatever the body: bots, editor previews
+    and bad payloads are dropped quietly. See apps.orders.orders_services.
+    """
+    if request.method == "OPTIONS":
+        response = HttpResponse(status=204)
+    elif request.method != "POST":
+        response = HttpResponse(status=405)
+    elif not _track_origin_ok(request):
+        response = HttpResponse(status=403)
+    elif not _TrackThrottle().allow_request(request, None):
+        response = HttpResponse(status=429)
+    else:
+        response = HttpResponse(status=204)
+        response["X-Visit-Tracking"] = "ignored"  # visible in the browser's network tab: counted or not
+        user_agent = request.headers.get("User-Agent", "")
+        too_big = int(request.META.get("CONTENT_LENGTH") or 0) > TRACK_MAX_BODY
+        if not orders_services.is_bot(user_agent) and not too_big:
+            store = Store.objects.filter(store_slug=store_slug, status="active").first()
+            try:
+                body = json.loads(request.body.decode("utf-8")) if store else None
+            except (ValueError, UnicodeDecodeError):
+                body = None
+            if store is not None and isinstance(body, dict):
+                try:
+                    host = request.get_host()
+                except DisallowedHost:
+                    host = ""
+                counted = orders_services.record_pageview(
+                    store,
+                    visitor_id=body.get("visitor_id"), path=body.get("path"), referrer=body.get("referrer"),
+                    utm_source=body.get("utm_source"), utm_medium=body.get("utm_medium"),
+                    utm_campaign=body.get("utm_campaign"),
+                    cart_session=cart_data.clean_id(str(body.get("cart_session") or "")),
+                    user_agent=user_agent, country=request.META.get("HTTP_CF_IPCOUNTRY", ""), own_host=host,
+                )
+                if counted is not None:
+                    response["X-Visit-Tracking"] = "counted"
+    for name, value in CART_API_HEADERS.items():
+        response[name] = value
+    return response
+
+
 def _uuid_of(value, message):
     try:
         return uuid.UUID(str(value))
@@ -2461,6 +2523,7 @@ def storefront_cart_add(request, store, cart_id):
             raise ValidationError("Choose an option.")
     cart = commerce_services.get_or_create_cart(store, session_id=cart_id)
     commerce_services.add_item(cart, product, quantity, variant)  # published, in stock, price from the variant
+    orders_services.mark_cart_event(store, cart_id, added_to_cart=True)
     return _cart_reply(store, cart)
 
 
@@ -2658,6 +2721,8 @@ def storefront_checkout(request, store_slug):
             html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error=msg)
             return _storefront_response(html, status=400, request=request, store=store)
 
+    if request.method == "GET" and cart_data.item_count(store, cart_session):
+        orders_services.mark_cart_event(store, cart_session, reached_checkout=True)
     html = render_page(store, "checkout", request=request, cart_id=cart_session)
     return _storefront_response(html, status=200, request=request, store=store)
 
@@ -2896,6 +2961,34 @@ def _restore_customer_cookie(response, request, store):
         set_storefront_customer_cookie(response, store, user)
 
 
+_VISIT_BEACON = re.compile(r"<script data-visit-beacon\b.*?</script>", re.S)
+
+
+def _without_visit_beacon(html):
+    """The page without the layout's visit-tracking script, which carries the cart id but is not the cart."""
+    return _VISIT_BEACON.sub("", html)
+
+
+def _give_cart_cookie(response, request, store, html, markers=("data-cart-session=",)):
+    """Give the browser its cart id, but only for a page that has the cart (see cart.py): `markers` tell.
+
+    A new id on a page without the cart is not kept, so the visit-tracking script is given none (it would be a
+    different "visitor" on every load): the id is taken out of `response`, and if the browser's storage is blocked
+    too, the script skips the visit.
+    """
+    pending = getattr(request, "_cart_session", None)
+    if not (pending and pending[1]):
+        return
+    page = _without_visit_beacon(html)
+    if any(marker in page for marker in markers):
+        response.set_cookie(
+            cart_data.cookie_name(store), pending[0], max_age=cart_data.CART_COOKIE_AGE,
+            path=f"{shop_url(store)}/", httponly=True, samesite="Lax", secure=not settings.DEBUG,
+        )
+    else:
+        response.content = html.replace(f'data-visit-cart="{pending[0]}"', 'data-visit-cart=""', 1)
+
+
 def _storefront_response(html, status=200, request=None, store=None):
     if isinstance(html, (HttpResponse, JsonResponse)):
         return html
@@ -2911,12 +3004,7 @@ def _storefront_response(html, status=200, request=None, store=None):
     response["Cache-Control"] = "no-store"
     if request is not None and store is not None:
         _restore_customer_cookie(response, request, store)
-        pending = getattr(request, "_cart_session", None)
-        if pending and pending[1] and ("data-cart-session=" in html or "cart_session" in html):
-            response.set_cookie(
-                cart_data.cookie_name(store), pending[0], max_age=cart_data.CART_COOKIE_AGE,
-                path=f"{shop_url(store)}/", httponly=True, samesite="Lax", secure=not settings.DEBUG,
-            )
+        _give_cart_cookie(response, request, store, html, markers=("data-cart-session=", "cart_session"))
     return response
 
 

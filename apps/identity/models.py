@@ -149,3 +149,30 @@ class User(AbstractBaseUser):
         db_table = '"identity"."users"'
         verbose_name = "User"
         verbose_name_plural = "Users"
+
+
+class MFADevice(models.Model):
+    """A user's authenticator-app secret. MFA is on once confirmed_at is set (see mfa.py)."""
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="mfa_device",
+    )
+
+    secret = models.CharField(max_length=64)
+
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    # Newest accepted TOTP time step: a code is good once
+    last_used_step = models.BigIntegerField(default=0)
+
+    # SHA-256 of each unused recovery code
+    recovery_codes = models.JSONField(default=list)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"identity"."mfa_devices"'
+        verbose_name = "MFA device"
+        verbose_name_plural = "MFA devices"

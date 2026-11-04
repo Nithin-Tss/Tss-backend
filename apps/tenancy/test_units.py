@@ -106,10 +106,14 @@ class StoreServicesTests(TestCase):
         self.assertIn(rbac.STORE_MANAGE, row["permissions"])
         self.assertEqual(row["permissions"], sorted(row["permissions"]))
 
-    def test_stores_for_user_does_not_hand_a_platform_admin_every_store(self):
-        services.create_store(self.owner, "Shop")
+    def test_stores_for_user_hands_a_platform_admin_every_open_store(self):
+        shop = services.create_store(self.owner, "Shop")
+        closed = services.create_store(self.owner, "Closed")
+        services.close_store(closed)
         admin = make_user("root@example.com", is_owner=True)
-        self.assertEqual(services.stores_for_user(admin), [])
+        rows = services.stores_for_user(admin)
+        self.assertEqual([r["storeSlug"] for r in rows], [shop.store_slug])
+        self.assertEqual(rows[0]["role"], services.OWNER)
 
     def test_stores_for_user_names_a_staff_members_roles_and_permissions(self):
         store = services.create_store(self.owner, "Shop")
