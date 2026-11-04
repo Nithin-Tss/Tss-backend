@@ -652,6 +652,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
+        "JobsHealthView",  # uptime pinger; answers 404 without X-Health-Token or a platform admin (apps/core/health.py)
         # API docs: open in tests/dev, admin-only in production (SPECTACULAR_SETTINGS SERVE_PERMISSIONS)
         "SpectacularAPIView", "SpectacularSwaggerView", "SpectacularRedocView",
     }
@@ -659,6 +660,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     ACCOUNT_ONLY = {
         "MeView", "ChangePasswordView", "ResendVerificationEmailView", "MyActivityView",
         "StoreViewSet", "CustomerAddressViewSet", "ThemeSchemaView",
+        "MFAStatusView", "MFASetupView", "MFAEnableView", "MFADisableView",
     }
     # Plain function views, outside DRF
     FUNCTION_VIEWS = {"theme_css"}
@@ -871,7 +873,7 @@ class HardeningTest(AccountTestBase):
         text = r.content.decode()
         for needle in (PASSWORD, "pbkdf2", "argon2", "md5$", "password_hash", "\"password\""):
             self.assertNotIn(needle, text)
-        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified", "isPlatformAdmin"})
+        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified", "isPlatformAdmin", "mfaEnabled"})
 
         me = self.client.get("/api/v1/auth/me/", HTTP_AUTHORIZATION=f"Bearer {r.json()['access']}")
         self.assertNotIn("password", me.content.decode().lower())

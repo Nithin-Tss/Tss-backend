@@ -44,7 +44,8 @@ class RequestValidationMiddleware:
         return self.get_response(request)
 
     def validate(self, request):
-        if "\x00" in request.get_full_path() or "%00" in request.META.get("QUERY_STRING", ""):
+        # get_full_path() re-encodes the path, so a decoded null byte has to be looked for in path_info
+        if "\x00" in request.path_info or "%00" in request.META.get("QUERY_STRING", ""):
             return _error(400, "Invalid characters in the request URL.")
 
         length = request.META.get("CONTENT_LENGTH") or ""

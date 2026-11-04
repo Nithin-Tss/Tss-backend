@@ -213,6 +213,8 @@ FONT_BY_KEY = {key: (stack, family, weights) for key, _, stack, family, weights 
 # anything sets the full set again on its own wrapper (class tss-btn).
 TYPE_CSS = Markup("""<style>
 body{font-family:var(--tss-body-font);font-size:var(--tss-base-size,16px)}
+@media (max-width:749px){body{font-size:var(--tss-base-size-m,var(--tss-base-size,16px))}}
+.button:focus-visible,.tss-btn .button:focus-visible{outline:2px solid var(--b-focus,var(--accent));outline-offset:2px}
 h1,h2,h3,h4,h5,.section-heading,.site-header__logo{font-family:var(--tss-heading-font)}
 .tss-wrap[data-hfont] :is(h1,h2,h3,h4,h5,.section-heading){font-family:var(--tss-section-hfont)}
 .button,.tss-btn .button{background:var(--b-bg);color:var(--b-tx);border:var(--b-bw) solid var(--b-bd);border-radius:var(--b-r);
@@ -220,8 +222,8 @@ h1,h2,h3,h4,h5,.section-heading,.site-header__logo{font-family:var(--tss-heading
   font-size:var(--b-fs);font-weight:var(--b-fw);text-transform:var(--b-tt);box-shadow:var(--b-sh);
   transition:background var(--b-sp) ease,color var(--b-sp) ease,border-color var(--b-sp) ease,transform var(--b-sp) ease,filter var(--b-sp) ease}
 .button:hover,.tss-btn .button:hover{background:var(--b-hbg);color:var(--b-htx);border-color:var(--b-hbd);transform:var(--b-ht);filter:var(--b-hf);opacity:1}
-.button:disabled,.button[disabled],.button.button--disabled,.button[aria-disabled="true"],.tss-btn .button:disabled,.tss-btn .button[disabled],.tss-btn .button.button--disabled,.tss-btn .button[aria-disabled="true"]{opacity:.55;cursor:not-allowed;pointer-events:none;transform:none !important;box-shadow:none !important}
-.button.button--outline{background:transparent;color:var(--b-bd);border-color:var(--b-bd)}
+.button:disabled,.button[disabled],.button.button--disabled,.button[aria-disabled="true"],.tss-btn .button:disabled,.tss-btn .button[disabled],.tss-btn .button.button--disabled,.tss-btn .button[aria-disabled="true"]{opacity:var(--b-dis-op,.55);cursor:not-allowed;pointer-events:none;transform:none !important;box-shadow:none !important}
+.button.button--outline{background:var(--b2-bg,transparent);color:var(--b2-tx,var(--b-bd));border-color:var(--b2-bd,var(--b-bd))}
 .hero--image .button.button--outline,.hero .button.button--outline{background:transparent;color:inherit;border-color:currentColor}
 .tss-bi .button{gap:.5em}
 .tss-bi-right .button::after,.tss-bi-left .button::before{content:"";width:1.1em;height:1.1em;flex:none;background:currentColor;
@@ -278,6 +280,16 @@ def _theme_button(settings):
         "b_text": settings.get("button_text") or "",
         "b_radius": settings.get("button_radius") or "pill",
         "b_hover": settings.get("button_hover") or "darken",
+        "b_border": settings.get("button_border") or "",
+        "b_border_width": settings.get("button_border_width", 1),
+        "b_hover_bg": settings.get("button_hover_bg") or "",
+        "b_hover_text": settings.get("button_hover_text") or "",
+        "b_size": settings.get("button_size") or "medium",
+        "b_padding_x": settings.get("button_padding_x") or 0,
+        "b_font": settings.get("button_font") or "",
+        "b_font_size": settings.get("button_font_size") or 0,
+        "b_weight": settings.get("button_weight") or "",
+        "b_transform": settings.get("button_case") or "",
     }
 
 
@@ -289,7 +301,7 @@ def _button_vars(o, theme):
     style = pick("b_style") or "filled"
     color = pick("b_bg") or "var(--accent)"
     text = o.get("b_text") or ""
-    border = o.get("b_border") or ""
+    border = pick("b_border")
 
     if style == "filled":
         bg, tx, bd = color, text or theme.get("b_text") or "var(--bg)", border or color
@@ -300,28 +312,32 @@ def _button_vars(o, theme):
     else:  # text only, link style
         bg, tx, bd = "transparent", text or color, border or "transparent"
 
-    height, padding, font_size = SIZES.get(o.get("b_size") or "medium", SIZES["medium"])
+    height, padding, font_size = SIZES.get(pick("b_size") or "medium", SIZES["medium"])
     if style in ("text", "link"):
         height, padding = "auto", "0px"
     if o.get("b_height"):
         height = f"{int(o['b_height'])}px"
-    if o.get("b_padding_x"):
-        padding = f"{int(o['b_padding_x'])}px"
-    if o.get("b_font_size"):
-        font_size = f"{int(o['b_font_size'])}px"
+    if pick("b_padding_x"):
+        padding = f"{int(pick('b_padding_x'))}px"
+    if pick("b_font_size"):
+        font_size = f"{int(pick('b_font_size'))}px"
+    # A section's border width "" (its default) follows the theme's
+    border_width = o.get("b_border_width")
+    if border_width in (None, ""):
+        border_width = theme.get("b_border_width", 1)
 
     hover_t, hover_f = HOVERS.get(pick("b_hover") or "darken", HOVERS["darken"])
     vars_ = {
         "--b-bg": bg, "--b-tx": tx, "--b-bd": bd,
-        "--b-hbg": o.get("b_hover_bg") or bg, "--b-htx": o.get("b_hover_text") or tx, "--b-hbd": o.get("b_hover_border") or bd,
+        "--b-hbg": pick("b_hover_bg") or bg, "--b-htx": pick("b_hover_text") or tx, "--b-hbd": o.get("b_hover_border") or bd,
         "--b-mh": height, "--b-px": padding, "--b-fs": font_size,
         "--b-r": RADII.get(pick("b_radius") or "pill", "999px"),
-        "--b-bw": f"{int(o.get('b_border_width', 1) if o.get('b_border_width') is not None else 1)}px",
+        "--b-bw": f"{int(border_width)}px",
         "--b-dec": "underline" if style == "link" else "none",
         "--b-w": "100%" if o.get("b_full_width") else "auto",
-        "--b-ff": _font_stack(o.get("b_font"), "inherit"),
-        "--b-fw": o.get("b_weight") or "600",
-        "--b-tt": o.get("b_transform") or "none",
+        "--b-ff": _font_stack(pick("b_font"), "inherit"),
+        "--b-fw": pick("b_weight") or "600",
+        "--b-tt": pick("b_transform") or "none",
         "--b-sh": SHADOWS.get(o.get("b_shadow"), "none"),
         "--b-sp": f"{int(o.get('b_speed', 150) if o.get('b_speed') is not None else 150)}ms",
         "--b-ht": hover_t, "--b-hf": hover_f,
@@ -334,7 +350,7 @@ def _button_vars(o, theme):
 
 
 def _has_button_overrides(o):
-    defaults = {"b_border_width": 1, "b_speed": 150, "b_gap": 12, "b_icon_position": "right", "b_shadow": "none"}
+    defaults = {"b_speed": 150, "b_gap": 12, "b_icon_position": "right", "b_shadow": "none"}
     return any(
         value not in ("", 0, False, None) and value != defaults.get(key)
         for key, value in o.items()
@@ -356,6 +372,90 @@ def _token(value):
     return value if value and not (_UNSAFE_TOKEN & set(value)) else None
 
 
+HEADING_SPACING = {"tight": "-0.02em", "normal": "0", "wide": "0.05em", "wider": "0.1em"}
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+PANEL_KEYS = (
+    "heading_color", "link_color", "border_color", "button_focus_color", "button2_bg", "button2_text", "button2_border",
+    "link_underline", "body_weight", "body_line_height", "base_font_size_mobile",
+    "heading_line_height", "heading_letter_spacing", "heading_case", "heading_size", "heading_size_mobile",
+    "button_border", "button_disabled_opacity", "button_border_width", "button_radius",
+)
+
+
+def _panel_css(settings):
+    """
+    Theme settings panel: palette, typography and button-state values as (:root variables, rules).
+    Only settings changed from their default add anything, so an untouched store renders as before.
+    """
+    def ok(key):
+        # Saved values are validated on save; check again against the schema before they go into <style>
+        value, spec = settings.get(key), THEME_SETTINGS[key]
+        if spec["type"] == "color_optional":
+            return value if isinstance(value, str) and _HEX_COLOR.match(value) else ""
+        if spec["type"] == "select":
+            return value if value in spec["options"] else spec["default"]
+        return value if isinstance(value, int) and not isinstance(value, bool) else spec["default"]
+
+    settings = {key: ok(key) for key in PANEL_KEYS}
+    vars_, rules = {}, []
+    for key, var in (
+        ("heading_color", "--tss-heading-color"), ("link_color", "--tss-link-color"), ("border_color", "--line"),
+        ("button_focus_color", "--b-focus"), ("button2_bg", "--b2-bg"), ("button2_text", "--b2-tx"),
+        ("button2_border", "--b2-bd"),
+    ):
+        if settings.get(key):
+            vars_[var] = settings[key]
+    if settings.get("heading_color"):
+        rules.append(":where(h1,h2,h3,.section-heading):not(:where(.hero,.slideshow,.site-header,.site-footer,.announcement) *)"
+                     "{color:var(--tss-heading-color)}")
+    if settings.get("link_color"):
+        rules.append(":where(main :is(p,li,blockquote)) a:where(:not(.button)){color:var(--tss-link-color)}")
+    if settings.get("link_underline") in ("hover", "none"):
+        hover = "underline" if settings["link_underline"] == "hover" else "none"
+        rules.append(":where(main :is(p,li,blockquote)) a:where(:not(.button)){text-decoration:none}"
+                     f":where(main :is(p,li,blockquote)) a:where(:not(.button)):hover{{text-decoration:{hover}}}")
+
+    body = []
+    if settings.get("body_weight") not in (None, "", "400"):
+        body.append(f"font-weight:{settings['body_weight']}")
+    if settings.get("body_line_height") not in (None, "", "1.55"):
+        body.append(f"line-height:{settings['body_line_height']}")
+    if body:
+        rules.append("body{" + ";".join(body) + "}")
+    if settings.get("base_font_size_mobile"):
+        # A variable: TYPE_CSS (after this <style>) sets the mobile body size from it
+        vars_["--tss-base-size-m"] = f"{int(settings['base_font_size_mobile'])}px"
+
+    heading = []
+    if settings.get("heading_line_height") not in (None, "", "1.1"):
+        heading.append(f"line-height:{settings['heading_line_height']}")
+    if settings.get("heading_letter_spacing") in HEADING_SPACING and settings["heading_letter_spacing"] != "tight":
+        heading.append(f"letter-spacing:{HEADING_SPACING[settings['heading_letter_spacing']]}")
+    if settings.get("heading_case") not in (None, "", "none"):
+        heading.append(f"text-transform:{settings['heading_case']}")
+    if heading:
+        rules.append("h1,h2,h3{" + ";".join(heading) + "}")
+    # "body ..." matches a preset's own rules (e.g. Bold's "body .section-heading"); this <style> comes after them.
+    # A section's own heading size or button options (two classes) still win.
+    if settings.get("heading_size_mobile"):
+        rules.append(f"@media (max-width:749px){{body .section-heading{{font-size:{int(settings['heading_size_mobile'])}px}}}}")
+    if settings.get("heading_size"):
+        rules.append(f"@media (min-width:750px){{body .section-heading{{font-size:{int(settings['heading_size'])}px}}}}")
+    button = []
+    if settings.get("button_border"):
+        button.append("border-color:var(--b-bd)")
+    if settings.get("button_border_width") not in (None, 1):
+        button.append("border-width:var(--b-bw)")
+    if settings.get("button_radius") not in (None, THEME_SETTINGS["button_radius"]["default"]):
+        button.append("border-radius:var(--b-r)")
+    if button:
+        rules.append("body .button{" + ";".join(button) + "}")
+
+    if settings.get("button_disabled_opacity") not in (None, 55):
+        vars_["--b-dis-op"] = f"{int(settings['button_disabled_opacity']) / 100:g}"
+    return vars_, rules
+
+
 def theme_css(settings, tokens=None):
     """
     :root variables for the theme's fonts, base size and button defaults. Saved customizer
@@ -368,6 +468,8 @@ def theme_css(settings, tokens=None):
         "--tss-base-size": f"{int(settings.get('base_font_size') or 16)}px",
         **_button_vars({}, _theme_button(settings)),
     }
+    panel_vars, panel_rules = _panel_css(settings)
+    root.update(panel_vars)
     tokens = tokens or {}
     colors, typography, buttons = (tokens.get(g) or {} for g in ("colors", "typography", "buttons"))
     for name, var in TOKEN_COLORS.items():
@@ -380,7 +482,7 @@ def theme_css(settings, tokens=None):
     if _token(buttons.get("radius")):
         root["--b-r"] = RADII.get(_token(buttons["radius"]), _token(buttons["radius"]))
     # Every value comes from fixed tables, validated colours/numbers or checked tokens, so it can't break out of <style>
-    return Markup(f"<style>:root{{{_style_attr(root)}}}</style>")
+    return Markup(f"<style>:root{{{_style_attr(root)}}}{''.join(panel_rules)}</style>")
 
 
 CUSTOMER_AUTH_CSS = Markup("""<style>
