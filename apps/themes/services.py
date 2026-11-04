@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 47
+STARTER_REVISION = 48
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -306,6 +306,10 @@ STARTER_UPGRADES = {
         "e08231172a0b48b7759637318a7175e9af93cb47ba1f5f18137b18cf213be7cd",  # revision 36: same, with CRLF line endings
         "908032a6073010b387eb6bb2af8c01c48cc511b2d50a8c6211ae46852eb116cb",  # revision 36: before the cart icon and wishlist heart blocks
         "4ee528be332fc9f1d1c96b99a0ef3572710e945ca1b93ec662bd0d3ebd6cf233",  # revision 36: same, with CRLF line endings
+    },
+    "snippets/account-profile.liquid": {
+        "0e7113af12897548e8b99d9b42c0e5802fd385db3c14895174462047f584b3e6",  # revision 48: before the 10-digit mobile number
+        "8f3610dfd87295c6e39f5342acc7cf7e8044e3e72cbb3bda15b7a12e759f3e16",  # revision 48: same, with CRLF line endings
     },
 }
 

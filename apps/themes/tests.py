@@ -7181,3 +7181,129 @@ class StorefrontCustomerTokenTest(APITestCase):
         user.set_password("New-pass-12345")
         user.save()
         self.assertEqual(get_storefront_customer(store, request), (None, None))
+
+
+
+class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
+    """Out-of-stock Add to Cart button handling, Edit Theme settings, and precedence."""
+
+    def setUp(self):
+        from apps.catalog.models import ProductVariant
+        from apps.inventory.models import InventoryItem
+
+        self.ProductVariant = ProductVariant
+        self.InventoryItem = InventoryItem
+        self.token, self.store = self.sign_up("stocktest@example.com", "Stock Test Store")
+        self.slug = self.store["storeSlug"]
+        self.base = f"/s/{self.slug}"
+        self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)["id"]
+
+        self.in_stock_prod = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "In Stock Shirt", "sku": "SHIRT-IN", "status": "active", "price": "25.00",
+            "location": self.location, "quantity": 15
+        }, expect=201)
+
+        self.out_stock_prod = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Out Stock Shirt", "sku": "SHIRT-OUT", "status": "active", "price": "25.00",
+            "location": self.location, "quantity": 0
+        }, expect=201)
+
+    def test_in_stock_product_renders_enabled_add_to_cart_button(self):
+        res = self.client.get(f"{self.base}/products/{self.in_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn('data-add', html)
+        self.assertIn('>Add to cart</button>', html)
+        # Ensure it does not have disabled attribute on the button
+        self.assertRegex(html, r'<button[^>]*data-add(?![^>]*disabled)[^>]*>')
+
+    def test_out_of_stock_product_renders_disabled_button_with_sold_out(self):
+        res = self.client.get(f"{self.base}/products/{self.out_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn('data-add', html)
+        self.assertIn('>Sold out</button>', html)
+        self.assertIn('disabled', html)
+        self.assertIn('data-sold-out="Sold out"', html)
+
+    def test_theme_setting_custom_sold_out_label_applies_to_out_of_stock_product(self):
+        # Update theme setting: sold_out_button_label
+        self.ok("patch", "/api/v1/themes/settings/", {
+            "settings": {"sold_out_button_label": "Currently Unavailable"}
+        })
+        res = self.client.get(f"{self.base}/products/{self.out_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn('>Currently Unavailable</button>', html)
+        self.assertIn('data-sold-out="Currently Unavailable"', html)
+        self.assertIn('data-sold-out-label="Currently Unavailable"', html)
+
+    def test_section_override_precedence_over_global_theme_setting(self):
+        # Global setting says "Theme Sold Out"
+        # Section override says "Section Sold Out"
+        data = self.ok("get", "/api/v1/themes/settings/")
+        prod_template = data["templates"]["product"]
+        prod_template["sections"]["main"]["settings"]["sold_out_label"] = "Section Sold Out"
+        self.ok("patch", "/api/v1/themes/settings/", {
+            "settings": {"sold_out_button_label": "Theme Sold Out"},
+            "templates": {
+                "product": prod_template
+            }
+        })
+        res = self.client.get(f"{self.base}/products/{self.out_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        # Section override wins!
+        self.assertIn('>Section Sold Out</button>', html)
+        self.assertIn('data-sold-out="Section Sold Out"', html)
+        self.assertIn('data-sold-out-label="Section Sold Out"', html)
+
+    def test_continue_selling_variant_remains_available_even_with_zero_stock(self):
+        var_id = self.out_stock_prod["variants"][0]["id"]
+        self.ProductVariant.objects.filter(pk=var_id).update(continue_selling=True)
+        res = self.client.get(f"{self.base}/products/{self.out_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        # Variant that continues selling is not sold out
+        self.assertIn('>Add to cart</button>', html)
+        self.assertRegex(html, r'<button[^>]*data-add(?![^>]*disabled)[^>]*>')
+
+    def test_disable_out_of_stock_turned_off_in_theme_settings(self):
+        self.ok("patch", "/api/v1/themes/settings/", {
+            "settings": {"disable_out_of_stock_add_to_cart": False}
+        })
+        res = self.client.get(f"{self.base}/products/{self.out_stock_prod['id']}")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn('data-disable-oos="false"', html)
+        self.assertIn('"disable_out_of_stock": false', html)
+
+    def test_product_card_out_of_stock_badge_in_collection(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        col_template = data["templates"]["collection"]
+        col_template["sections"]["main"]["settings"]["show_add_to_cart"] = True
+        self.ok("patch", "/api/v1/themes/settings/", {
+            "templates": {"collection": col_template}
+        })
+        res = self.client.get(f"{self.base}/collections/all")
+        self.assertEqual(res.status_code, 200)
+        html = res.content.decode()
+        self.assertIn('button--disabled', html)
+        self.assertIn('data-sold-out="true"', html)
+        self.assertIn('Sold out', html)
+
+    def test_backend_cart_api_rejects_out_of_stock_item(self):
+        import re
+        home = self.client.get(f"{self.base}/")
+        match = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode())
+        session_id = match.group(1) if match else "a" * 32
+        res = self.client.post(
+            f"{self.base}/cart/add",
+            data={"product": self.out_stock_prod["id"], "quantity": 1},
+            format="json",
+            HTTP_X_CART_SESSION=session_id,
+        )
+        self.assertEqual(res.status_code, 400)
+        data = res.json()
+        self.assertIn("error", data)
+        self.assertIn("sold out", data["error"].lower())
