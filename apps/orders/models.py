@@ -436,6 +436,72 @@ class StoreDailyMetric(models.Model):
         return f"{self.store_id} {self.metric_date} {self.currency_code}"
 
 
+class StorefrontSession(models.Model):
+    """
+    One visit to a store's storefront. Written by apps.orders.services from the storefront's page
+    beacon (POST /s/<store_slug>/_track); read only by the analytics reports. A visit ends after
+    30 minutes without activity or at midnight in the store's timezone. No IP address is stored.
+    Lives in the "analytics" schema, next to StoreDailyMetric.
+    """
+    PAGE_TYPES = [(k, k) for k in ("home", "product", "collection", "cart", "checkout", "other")]
+    REFERRER_TYPES = [(k, k) for k in ("direct", "search", "social", "email", "other")]
+    DEVICE_TYPES = [(k, k) for k in ("desktop", "mobile", "tablet")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        db_column="store_id",
+        related_name="storefront_sessions",
+        db_index=False,  # the (store, ...) indexes below cover it
+    )
+    visitor_id = models.CharField(max_length=64)  # random id kept in the shopper's browser
+    started_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+    landing_path = models.CharField(max_length=255, blank=True, default="")  # store-relative, no query string
+    landing_page_type = models.CharField(max_length=20, choices=PAGE_TYPES, default="other")
+    referrer_host = models.CharField(max_length=255, blank=True, default="")
+    referrer_type = models.CharField(max_length=20, choices=REFERRER_TYPES, default="direct")
+    utm_source = models.CharField(max_length=100, blank=True, default="")
+    utm_medium = models.CharField(max_length=100, blank=True, default="")
+    utm_campaign = models.CharField(max_length=100, blank=True, default="")
+    device_type = models.CharField(max_length=10, choices=DEVICE_TYPES, default="desktop")
+    country = models.CharField(max_length=2, blank=True, default="")  # from CF-IPCountry; blank when unknown
+    page_views = models.PositiveIntegerField(default=1)
+    added_to_cart = models.BooleanField(default=False)
+    reached_checkout = models.BooleanField(default=False)
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.SET_NULL,
+        db_column="order_id",
+        related_name="storefront_sessions",
+        null=True,
+        blank=True,
+        db_index=False,
+    )
+    cart_session = models.CharField(max_length=64, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"analytics"."storefront_sessions"'
+        verbose_name = "Storefront session"
+        ordering = ["started_at"]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(page_views__gte=1), name="ck_sfsession_views_pos"),
+            models.CheckConstraint(
+                condition=models.Q(last_seen_at__gte=models.F("started_at")), name="ck_sfsession_seen_after_start"),
+        ]
+        indexes = [
+            models.Index(fields=["store", "started_at"], name="idx_sfsession_store_started"),
+            models.Index(fields=["store", "last_seen_at"], name="idx_sfsession_store_seen"),
+            models.Index(fields=["store", "visitor_id"], name="idx_sfsession_store_visitor"),
+        ]
+
+    def __str__(self):
+        return f"{self.store_id} {self.visitor_id} {self.started_at:%Y-%m-%d %H:%M}"
+
+
 class BackgroundJob(models.Model):
     """
     One run of a background job (a Celery task), written by the job helpers in apps.core.tasks.

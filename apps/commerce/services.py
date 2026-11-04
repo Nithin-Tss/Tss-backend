@@ -625,6 +625,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
     checkout.save(update_fields=["customer", "metadata", "updated_at"])
     complete_checkout(checkout)
     convert_reservations(checkout.pk)
+    orders.mark_cart_event(checkout.store, checkout.cart.session_id, order=order)  # the visit that ordered
     return order
 
 

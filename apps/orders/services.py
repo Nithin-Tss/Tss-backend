@@ -2,11 +2,15 @@
 Orders. Creating or cancelling an order also updates stock (inventory app),
 in the same database transaction: both happen, or neither does.
 """
+import logging
+import re
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.dispatch import Signal
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -17,7 +21,7 @@ from apps.inventory import services as inventory
 
 from apps.catalog.services import ARCHIVED
 
-from .models import Order, OrderItem
+from .models import Order, OrderItem, StorefrontSession
 
 OPEN, CANCELLED, CLOSED = "open", "cancelled", "closed"
 UNFULFILLED, PARTIAL, FULFILLED = "unfulfilled", "partial", "fulfilled"
@@ -393,3 +397,185 @@ def settle_after_refund(order):
         _cancel_locked(order)
     else:
         release_unshipped_stock(order, reason="refund")
+
+# --- Storefront visit tracking (analytics.storefront_sessions) ---------------------------------------
+#
+# The storefront layout's script posts one beacon per page load to POST /s/<store_slug>/_track
+# (apps.themes.views.storefront_track), which calls record_pageview(). The cart and checkout code call
+# mark_cart_event() so a visit also knows whether it added to the cart, reached checkout and ordered.
+# A visit starts after 30 minutes without activity, or when the day changes in the store's timezone.
+# No IP address is stored; the country comes from the CDN/proxy header (CF-IPCountry) when present.
+# Tracking must never get in the way of a shopper: mark_cart_event() swallows its own errors.
+
+logger = logging.getLogger(__name__)
+
+SESSION_GAP = timedelta(minutes=30)
+CART_EVENT_WINDOW = timedelta(hours=24)  # how far back a cart event looks for its visit
+VISITOR_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+COUNTRY = re.compile(r"^[A-Za-z]{2}$")
+
+BOT_AGENT = re.compile(
+    r"bot|crawl|spider|slurp|headless|phantom|lighthouse|pagespeed|facebookexternalhit|embedly|preview|"
+    r"monitor|pingdom|uptime|curl|wget|python-requests|httpclient|okhttp|libwww|java/|go-http|axios|node-fetch",
+    re.I,
+)
+TABLET_AGENT = re.compile(r"ipad|tablet|kindle|silk|playbook|(android(?!.*mobile))", re.I)
+MOBILE_AGENT = re.compile(r"mobi|iphone|ipod|android|blackberry|opera mini|windows phone", re.I)
+
+SEARCH_HOSTS = ("google.", "bing.", "duckduckgo.", "yahoo.", "baidu.", "yandex.", "ecosia.", "search.brave.",
+                "startpage.", "qwant.", "ask.com", "naver.", "seznam.")
+SOCIAL_HOSTS = ("facebook.", "fb.com", "instagram.", "t.co", "twitter.", "x.com", "linkedin.", "lnkd.in",
+                "pinterest.", "pin.it", "youtube.", "youtu.be", "reddit.", "tiktok.", "whatsapp.", "wa.me",
+                "snapchat.", "telegram.", "t.me", "threads.net", "tumblr.")
+EMAIL_HOSTS = ("mail.", "webmail.", "outlook.", "email.")
+EMAIL_MEDIUMS = ("email", "e-mail", "newsletter")
+SOCIAL_MEDIUMS = ("social", "social-media", "social_media", "sm")
+SEARCH_MEDIUMS = ("cpc", "ppc", "paid-search", "paidsearch", "organic", "search")
+
+
+def is_bot(user_agent):
+    """True for crawlers, link checkers and scripts, and for a request with no user agent at all."""
+    return not user_agent or bool(BOT_AGENT.search(user_agent))
+
+
+def device_type(user_agent):
+    if TABLET_AGENT.search(user_agent or ""):
+        return "tablet"
+    return "mobile" if MOBILE_AGENT.search(user_agent or "") else "desktop"
+
+
+def page_type(path):
+    """Home, product, collection, cart, checkout or other, for a path inside the store ("/products/<id>")."""
+    first = path.strip("/").split("/", 1)[0].lower()
+    return {"": "home", "products": "product", "collections": "collection", "cart": "cart", "checkout": "checkout"}.get(
+        first, "other")
+
+
+def referrer_host(referrer, own_host=""):
+    """The referring site's host, lowercase without "www.". Empty for none, for junk, and for our own site."""
+    try:
+        host = (urlsplit(str(referrer or "").strip()[:2000]).hostname or "").lower()
+    except ValueError:
+        return ""
+    host = host[4:] if host.startswith("www.") else host
+    own = (own_host or "").lower().split(":")[0]
+    own = own[4:] if own.startswith("www.") else own
+    return "" if host == own else host[:255]
+
+
+def referrer_type(host, utm_medium="", utm_source=""):
+    """direct / search / social / email / other. A campaign's utm_medium says more than the referring host."""
+    medium = (utm_medium or "").lower()
+    if medium in EMAIL_MEDIUMS:
+        return "email"
+    if medium in SOCIAL_MEDIUMS:
+        return "social"
+    if host:
+        if host.startswith(EMAIL_HOSTS):
+            return "email"
+        if any(h in host for h in SEARCH_HOSTS):
+            return "search"
+        if any(host == h or host.endswith("." + h) or (h.endswith(".") and h in host) for h in SOCIAL_HOSTS):
+            return "social"
+        return "other"
+    if medium in SEARCH_MEDIUMS:
+        return "search"
+    return "other" if medium or utm_source else "direct"
+
+
+def store_path(path, slug):
+    """A page's path without the storefront's "/s/<slug>" prefix and without any query string, at most 255 characters."""
+    path = urlsplit(str(path or "")[:2000]).path or "/"
+    prefix = f"/s/{slug}"
+    if path == prefix or path.startswith(prefix + "/"):
+        path = path[len(prefix):] or "/"
+    return ("/" + path.lstrip("/"))[:255]
+
+
+def clean_visitor(value):
+    value = str(value or "")
+    return value if VISITOR_ID.match(value) else ""
+
+
+def clean_country(value):
+    value = str(value or "").strip()
+    return value.upper() if COUNTRY.match(value) and value.upper() not in ("XX", "T1") else ""
+
+
+def _same_local_day(store, a, b):
+    from apps.core.reports import store_tz
+
+    tz = store_tz(store)
+    return a.astimezone(tz).date() == b.astimezone(tz).date()
+
+
+def current_session(store, visitor_id, now):
+    """The visitor's visit that is still going: seen within 30 minutes, and started today in store time."""
+    latest = (StorefrontSession.objects.filter(store=store, visitor_id=visitor_id, last_seen_at__gte=now - SESSION_GAP)
+              .order_by("-last_seen_at").first())
+    if latest is not None and _same_local_day(store, latest.started_at, now):
+        return latest
+    return None
+
+
+def record_pageview(store, *, visitor_id, path, referrer="", utm_source="", utm_medium="", utm_campaign="",
+                    cart_session="", user_agent="", country="", own_host="", now=None):
+    """
+    Count one page load. Starts a new visit when the visitor has none going, else adds a page view to it.
+    Returns the session, or None when the request is ignored (a bot, or no usable visitor id).
+    """
+    visitor_id = clean_visitor(visitor_id)
+    if not visitor_id or is_bot(user_agent):
+        return None
+    now = now or timezone.now()
+    cart_session = str(cart_session or "")[:64]
+    session = current_session(store, visitor_id, now)
+    if session is not None:
+        changes = {"page_views": F("page_views") + 1, "last_seen_at": now, "updated_at": now}
+        if cart_session and cart_session != session.cart_session:
+            changes["cart_session"] = cart_session  # a cart made during the visit
+        StorefrontSession.objects.filter(pk=session.pk).update(**changes)
+        return session
+
+    clean_path = store_path(path, store.store_slug)
+    host = referrer_host(referrer, own_host)
+    medium = str(utm_medium or "")[:100]
+    source = str(utm_source or "")[:100]
+    return StorefrontSession.objects.create(
+        store=store, visitor_id=visitor_id, started_at=now, last_seen_at=now,
+        landing_path=clean_path, landing_page_type=page_type(clean_path),
+        referrer_host=host, referrer_type=referrer_type(host, medium, source),
+        utm_source=source, utm_medium=medium, utm_campaign=str(utm_campaign or "")[:100],
+        device_type=device_type(user_agent), country=clean_country(country),
+        page_views=1, cart_session=cart_session,
+    )
+
+
+def mark_cart_event(store, cart_session, *, added_to_cart=False, reached_checkout=False, order=None, now=None):
+    """
+    Note on the visit that owns this cart id that the shopper added to the cart, opened checkout or
+    ordered. Later steps imply earlier ones (an order means checkout was reached and something was in
+    the cart), so the funnel never counts a step without the one before it. Does nothing when there is
+    no tracked visit in the last 24 hours (a bot, an editor preview, a shopper with scripts off).
+    """
+    if not cart_session:
+        return
+    now = now or timezone.now()
+    try:
+        with transaction.atomic():  # a savepoint: a failure here must not poison the caller's transaction
+            session = (StorefrontSession.objects
+                       .filter(store=store, cart_session=str(cart_session)[:64], last_seen_at__gte=now - CART_EVENT_WINDOW)
+                       .order_by("-last_seen_at").first())
+            if session is None:
+                return
+            changes = {}
+            if (added_to_cart or reached_checkout or order) and not session.added_to_cart:
+                changes["added_to_cart"] = True
+            if (reached_checkout or order) and not session.reached_checkout:
+                changes["reached_checkout"] = True
+            if order is not None and session.order_id is None:
+                changes["order"] = order
+            if changes:
+                StorefrontSession.objects.filter(pk=session.pk).update(updated_at=now, **changes)
+    except Exception:  # noqa: BLE001 - analytics must never break a cart or an order
+        logger.exception("Could not record a storefront cart event")

@@ -3017,6 +3017,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         # Liquid's `cart` (item_count + lines & subtotal for cart and checkout templates)
         "cart": {"item_count": cart_count or cart_lines_data.get("count", 0), **cart_lines_data},
         "cart_session": cart_session,
+        # The layout's visit-tracking beacon: not in the customizer, nor for store members previewing the store
+        "track_visits": bool(request) and not editor and not getattr(request, "_no_track", False),
         "store_details": {
             "tax_rate": str(store.tax_rate or 0),
             "prices_include_tax": bool(store.prices_include_tax),
