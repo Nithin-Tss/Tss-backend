@@ -13,3 +13,4 @@ staticfiles/
 deploy/.env
 deploy/certs/
 backups/
+*.out
