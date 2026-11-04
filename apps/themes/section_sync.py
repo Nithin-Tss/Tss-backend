@@ -696,6 +696,9 @@ def add_search_block(content):
 
 # ======================================================================= schema -> customizer options
 
+# Header and footer colours that, left empty, follow a palette colour (the editor says which)
+SECTION_PALETTE = {"background": "Background", "announcement_bg": "Accent"}
+
 def _field(s):
     kind, label = s["type"], s.get("label") or s["id"].replace("_", " ").capitalize()
     base = {"label": label, "group": "content"}
@@ -714,7 +717,10 @@ def _field(s):
             spec["ui"] = "segmented"
         return spec
     if kind == "color":
-        return {**base, "type": "color_optional", "default": str(s.get("default", "") or "")}
+        spec = {**base, "type": "color_optional", "default": str(s.get("default", "") or "")}
+        if s["id"] in SECTION_PALETTE:
+            spec["palette"] = SECTION_PALETTE[s["id"]]
+        return spec
     if kind == "range":
         lo, hi = s["min"], s["max"]
         default = s.get("default", lo)
