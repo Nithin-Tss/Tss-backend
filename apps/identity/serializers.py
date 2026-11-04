@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from rest_framework import serializers
 
+from . import lockout
 from .email_links import user_for_email_verification, user_for_password_reset
 
 User = get_user_model()
@@ -293,7 +294,15 @@ class ChangePasswordSerializer(serializers.Serializer):
     )
 
     def validate_currentPassword(self, value):
-        if not self.context["request"].user.check_password(value):
+        # Shares the sign-in lockout: a stolen token can't be used to guess the password
+        user = self.context["request"].user
+        if lockout.is_locked(user.email):
+            raise serializers.ValidationError(
+                "Too many failed attempts. Try again later or reset your password."
+            )
+
+        if not user.check_password(value):
+            lockout.record_failure(user.email)
             raise serializers.ValidationError(
                 "Current password is incorrect."
             )

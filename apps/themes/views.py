@@ -485,6 +485,9 @@ def _public_image_headers(response):
     whose origin is "null", may load or read them. Only this route; the rest of the API keeps its allow-list."""
     response["Access-Control-Allow-Origin"] = "*"
     response["Cross-Origin-Resource-Policy"] = "cross-origin"
+    # Never let a browser treat these bytes as anything but the picture they are, or run them if opened directly
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Security-Policy"] = "default-src 'none'; sandbox"
     return response
 
 

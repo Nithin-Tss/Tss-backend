@@ -357,6 +357,11 @@ API_ALLOWED_CONTENT_TYPES = {
 # API: every endpoint needs a signed-in user unless the view says otherwise.
 # Store-owned endpoints also need the X-Store-Id header (see apps/core/permissions.py).
 REST_FRAMEWORK = {
+    'DEFAULT_PARSER_CLASSES': [
+        'apps.core.parsers.ObjectJSONParser',
+        'rest_framework.parsers.FormParser',
+        'rest_framework.parsers.MultiPartParser',
+    ],
     'DEFAULT_SCHEMA_CLASS': 'apps.core.schema.TSSAutoSchema',
     # A JWT ("Authorization: Bearer ...") or the Django session cookie set at
     # sign-in; session requests must also send the CSRF token.
@@ -369,6 +374,10 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # Which X-Forwarded-For entry is the client. Unset, DRF keys throttles on the whole header, which a client can
+    # vary per request to dodge every per-IP limit. 1 = one trusted proxy (Render, Railway, Nginx...); 0 = none,
+    # use the socket address.
+    'NUM_PROXIES': int(os.getenv('DJANGO_NUM_PROXIES', '1' if env_bool('DJANGO_BEHIND_PROXY', default=False) else '0')),
     # Every view without its own throttle gets this one (per user, or per IP when signed out)
     'DEFAULT_THROTTLE_CLASSES': ['apps.core.throttling.DefaultApiThrottle'],
     'DEFAULT_THROTTLE_RATES': {

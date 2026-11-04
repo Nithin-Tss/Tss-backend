@@ -1,9 +1,36 @@
 from django import forms
 from django.contrib import admin
+from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import AdminUserCreationForm, UserChangeForm
 
+from . import lockout
 from .models import User, normalize_email
+
+
+class LockoutAdminAuthenticationForm(AdminAuthenticationForm):
+    """/admin/login/ shares the per-email sign-in lockout with the API."""
+
+    def clean(self):
+        email = (self.cleaned_data.get("username") or "").strip().lower()
+        if email and lockout.is_locked(email):
+            raise forms.ValidationError(
+                "Too many failed sign-in attempts. Try again later or reset your password.",
+                code="locked",
+            )
+        try:
+            cleaned = super().clean()
+        except forms.ValidationError:
+            if email:
+                lockout.record_failure(email)
+            raise
+        if email:
+            lockout.clear(email)
+        return cleaned
+
+
+admin.site.login_form = LockoutAdminAuthenticationForm
+
 
 # Registering models
 class UniqueEmailMixin:

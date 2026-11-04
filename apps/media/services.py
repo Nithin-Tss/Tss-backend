@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 
 from django.conf import settings
@@ -13,6 +14,26 @@ IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "w
 
 
 IMAGE_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+def safe_name(name):
+    """An uploaded file's name for display only: no folders, no control characters."""
+    name = re.sub(r"[\x00-\x1f\x7f]", "", (name or "").replace("\\", "/").rsplit("/", 1)[-1]).strip()
+    return (name or "image")[:255]
+
+
+def check_quota(store_id, new_bytes):
+    """Refuse an upload that would take the store over MEDIA_STORE_QUOTA_BYTES (media library and product photos)."""
+    from apps.themes.models import ThemeImage
+
+    quota = getattr(settings, "MEDIA_STORE_QUOTA_BYTES", 0)
+    if not quota:
+        return
+    used = MediaAsset.objects.filter(store_id=store_id).aggregate(total=Sum("file_size"))["total"] or 0
+    # Product photos are kept in ThemeImage, library pictures in MediaAsset
+    used += ThemeImage.objects.filter(store_id=store_id).aggregate(total=Sum("size"))["total"] or 0
+    if used + new_bytes > quota:
+        raise ValidationError({"image": "Your media library is full. Delete unused pictures first."})
 
 
 def store_image(store_id, data, content_type, original_name, user=None, asset_id=None):
@@ -32,7 +53,7 @@ def store_image(store_id, data, content_type, original_name, user=None, asset_id
         store_id=store_id,
         data=data,
         storage_key=storage_key,
-        original_name=(original_name or "image")[:255],
+        original_name=safe_name(original_name),
         mime_type=content_type,
         file_size=size,
         uploaded_by=user if getattr(user, "is_authenticated", False) else None,
@@ -51,11 +72,7 @@ def upload_image(store_id, file, user=None):
 
     data, _, content_type = clean_image(file.read())
 
-    quota = getattr(settings, "MEDIA_STORE_QUOTA_BYTES", 0)
-    if quota:
-        used = MediaAsset.objects.filter(store_id=store_id).aggregate(total=Sum("file_size"))["total"] or 0
-        if used + len(data) > quota:
-            raise ValidationError({"image": "Your media library is full. Delete unused pictures first."})
+    check_quota(store_id, len(data))
 
     return store_image(store_id, data, content_type, file.name, user)
 
