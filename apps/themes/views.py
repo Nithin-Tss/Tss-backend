@@ -38,6 +38,7 @@ from rest_framework.views import APIView
 from apps.catalog.models import Collection
 from apps.catalog.services import published_collections, published_products
 from apps.core.permissions import HasStorePermission, IsStoreMember
+from apps.core.tokens import PASSWORD_CLAIM, fingerprint_matches, password_fingerprint
 from django.contrib.auth import authenticate, get_user_model
 from apps.customers.models import Customer, CustomerAddress
 from apps.customers import services as customer_services
@@ -2769,6 +2770,9 @@ def get_storefront_customer(store, request):
             data = signing.loads(token, salt=CUSTOMER_SALT, max_age=max_age)
             if data.get("store_id") == str(store.pk):
                 user = get_user_model().objects.filter(pk=data.get("user_id")).first()
+                # A token from before the last password change (or without the fingerprint) is dead
+                if user is not None and not fingerprint_matches(user, data):
+                    user = None
         except Exception:
             user = None
         if user is not None:
@@ -2793,7 +2797,10 @@ def get_storefront_customer(store, request):
 
 
 def customer_link_token(store, user):
-    return signing.dumps({"user_id": str(user.pk), "store_id": str(store.pk)}, salt=CUSTOMER_SALT)
+    return signing.dumps(
+        {"user_id": str(user.pk), "store_id": str(store.pk), PASSWORD_CLAIM: password_fingerprint(user)},
+        salt=CUSTOMER_SALT,
+    )
 
 
 def signed_in_url(store, user, url):

@@ -947,6 +947,19 @@ class HardeningTest(AccountTestBase):
         self.assertTrue(cookie["httponly"])
         self.assertEqual(cookie["samesite"], "Lax")
 
+    def test_cookie_setting_auth_endpoints_refuse_foreign_origins(self):
+        evil = "https://evil.example.net"
+        with override_settings(CORS_ALLOWED_ORIGINS=["https://shop.example.com"]):
+            for path in ("/api/v1/auth/login/", "/api/v1/auth/signup/", "/api/v1/auth/logout/"):
+                refused = self.client.post(path, {"email": "x@y.com", "password": "x"}, format="json", HTTP_ORIGIN=evil)
+                self.assertEqual(refused.status_code, 403, path)
+                self.assertNotIn("sessionid", refused.cookies)
+            # No Origin (scripts, apps) and an allowed Origin still work
+            self.assertNotEqual(self.client.post("/api/v1/auth/login/", {"email": "x@y.com", "password": "x"},
+                                                 format="json").status_code, 403)
+            self.assertNotEqual(self.client.post("/api/v1/auth/login/", {"email": "x@y.com", "password": "x"},
+                                                 format="json", HTTP_ORIGIN="https://shop.example.com").status_code, 403)
+
     def test_admin_site_is_closed_to_everyone_but_platform_admins(self):
         self.signup()
         self.assertEqual(self.client.get("/admin/").status_code, 302)

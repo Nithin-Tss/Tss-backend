@@ -7007,3 +7007,25 @@ class ThemePerformanceCacheTest(StoreClientMixin, APITestCase):
             self.assertEqual(env.get_template("layout/theme.liquid").render(), "[1][2][3][4][5]")
             self.assertEqual(env.get_template("layout/theme.liquid").render(), "[1][2][3][4][5]")
         self.assertEqual(parse.call_count, 2)  # the layout and the card, once each
+
+
+class StorefrontCustomerTokenTest(APITestCase):
+    """The customer cookie / ct token stop working once the password changes."""
+
+    def test_token_dies_when_the_password_changes(self):
+        from django.contrib.auth import get_user_model
+        from django.test import RequestFactory
+        from apps.tenancy.models import Store
+
+        from .views import CUSTOMER_LINK_PARAM, customer_link_token, get_storefront_customer
+
+        user = get_user_model().objects.create_user(email="tok@example.com", password="Old-pass-12345")
+        store = Store.objects.create(store_name="Tok", store_slug="tok-shop", status="active")
+        token = customer_link_token(store, user)
+        request = RequestFactory().get("/", {CUSTOMER_LINK_PARAM: token})
+
+        self.assertEqual(get_storefront_customer(store, request)[1], user)
+
+        user.set_password("New-pass-12345")
+        user.save()
+        self.assertEqual(get_storefront_customer(store, request), (None, None))
