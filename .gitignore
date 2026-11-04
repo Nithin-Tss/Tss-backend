@@ -8,3 +8,8 @@ db.sqlite3
 /media/
 staticfiles/
 .env.docker
+
+# Deployment: real secrets, certificates and database/file backups
+deploy/.env
+deploy/certs/
+backups/
