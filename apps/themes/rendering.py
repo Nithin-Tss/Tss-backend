@@ -2397,6 +2397,19 @@ def _customer_drop(customer, user, store, base_url):
     }
 
 
+# The store has no country setting, so its country and dialling code follow its currency
+_STORE_COUNTRY_BY_CURRENCY = {
+    "INR": ("India", "+91"),
+    "AUD": ("Australia", "+61"),
+    "USD": ("United States", "+1"),
+    "GBP": ("United Kingdom", "+44"),
+    "CAD": ("Canada", "+1"),
+    "NZD": ("New Zealand", "+64"),
+    "SGD": ("Singapore", "+65"),
+    "AED": ("United Arab Emirates", "+971"),
+}
+
+
 def _sample_customer_drop(base_url):
     """Realistic customer data for the theme customizer preview."""
     sample_address = {
@@ -2447,6 +2460,8 @@ def _sample_customer_drop(base_url):
     ]
     return {
         "id": "sample-customer",
+        # Preview-only account data: forms (checkout) must never pre-fill from it
+        "is_sample": True,
         "name": "Jane Doe",
         "first_name": "Jane",
         "last_name": "Doe",
@@ -2800,7 +2815,11 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
     menu_links = navbar_menu_links(store, base_url)
     common = {
-        "shop": dict(shop, blog_url=f"{base_url}/blog", slug=store.store_slug, currency=(getattr(store, "currency", None) or "USD").upper()),
+        "shop": dict(
+            shop, blog_url=f"{base_url}/blog", slug=store.store_slug,
+            currency=(getattr(store, "currency", None) or "USD").upper(),
+            **dict(zip(("country", "phone_code"), _STORE_COUNTRY_BY_CURRENCY.get((getattr(store, "currency", None) or "").upper(), ("", "")))),
+        ),
         "settings": settings,
         "product": product_drop_,
         "product_json_ld": product_json_ld,
