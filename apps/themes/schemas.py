@@ -892,6 +892,52 @@ VALUE_CLEANERS.update({
 })
 
 
+# Custom CSS (Theme settings and each section's Advanced options) is untrusted: it goes into a <style> tag,
+# so nothing may close the tag, load other files, run script or reach outside its braces.
+_CSS_BANNED = re.compile(r"<|>\s*<|\\|@import|@charset|@namespace|expression\s*\(|javascript:|vbscript:|behavior\s*:"
+                         r"|-moz-binding|image-set\s*\(|src\s*\(", re.I)
+_CSS_URL = re.compile(r"url\(\s*(['\x22]?)([^)]*)\)", re.I)
+_CSS_SKIPPED = re.compile(r"/\*.*?\*/|\x22[^\x22\n]*\x22|'[^'\n]*'", re.S)
+
+
+def custom_css_problem(css):
+    """Why a custom CSS value can't be used, or None when it is safe."""
+    if _CSS_BANNED.search(css):
+        return "can't contain <, \\, @import, @charset, @namespace, expression(), script links or src()."
+    for _quote, address in _CSS_URL.findall(css):
+        if not address.strip().strip("'\x22").startswith("https://"):
+            return "can only load pictures and fonts from https:// addresses."
+    if css.lower().count("url(") != len(_CSS_URL.findall(css)):
+        return "has a url( that is not closed."
+    # Braces are counted outside strings and comments, which the browser skips too
+    bare = _CSS_SKIPPED.sub("", css)
+    if any(mark in bare for mark in ("'", '"', "/*", "*/")):
+        return "has an unclosed quote or comment."
+    depth = 0
+    for char in bare:
+        depth += {"{": 1, "}": -1}.get(char, 0)
+        if depth < 0:
+            return "has a } without its {."
+    if depth:
+        return "has a { without its }."
+    return None
+
+
+def _clean_css(spec, value, where):
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    value = value.strip()
+    if len(value) > spec["max"]:
+        raise serializers.ValidationError(f"{where} can be at most {spec['max']} characters.")
+    problem = custom_css_problem(value)
+    if problem:
+        raise serializers.ValidationError(f"{where} {problem}")
+    return value
+
+
+VALUE_CLEANERS["css"] = _clean_css
+
+
 def _opt(group, type_, label, default, **extra):
     return {"type": type_, "label": label, "default": default, "group": group, **extra}
 
@@ -945,6 +991,11 @@ def common_settings(width="wide", spacing_top=48, spacing_bottom=48, alignment="
         "css_class": _opt(
             "advanced", "css_class", "Custom CSS class", "", max=100,
             help="Adds your own class names, for styles written in the code editor.",
+        ),
+        "custom_css": _opt(
+            "advanced", "css", "Custom CSS", "", max=500,
+            help="Only for this section. Plain declarations style the section itself; rules like "
+                 "\".heading { color: red }\" style what is inside it. Not shown on checkout.",
         ),
     }
 
@@ -1078,7 +1129,8 @@ def _product_list_settings(layout, limit, heading):
         "columns": _opt("layout", "range", "Products per row (desktop)", 5, min=2, max=6),
         "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
         "gap": _opt("layout", "range", "Gap between cards", 8, min=0, max=48, step=2, unit="px"),
-        "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
+        "image_ratio": _choice("layout", "Image shape", ["", "square", "portrait", "landscape"], "", ui="segmented",
+                               labels={"": "Theme"}, help="Theme uses the shape set in Theme settings > Product cards."),
         "show_arrows": _opt("layout", "checkbox", "Show arrows", True, show_if={"layout": "carousel"}),
         "autoplay": _opt("layout", "checkbox", "Auto-scroll", False, show_if={"layout": "carousel"}),
         "show_price": _opt("style", "checkbox", "Show price", True),
@@ -1161,7 +1213,8 @@ SECTIONS["main-collection"]["settings"] = {
     "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
     "per_page": _opt("layout", "range", "Products per page", 20, min=8, max=48, step=4),
     "gap": _opt("layout", "range", "Gap between cards", 8, min=0, max=48, step=2, unit="px"),
-    "image_ratio": _choice("layout", "Image shape", ["square", "portrait", "landscape"], "square", ui="segmented"),
+    "image_ratio": _choice("layout", "Image shape", ["", "square", "portrait", "landscape"], "", ui="segmented",
+                           labels={"": "Theme"}, help="Theme uses the shape set in Theme settings > Product cards."),
     "show_price": _opt("style", "checkbox", "Show price", True),
     "show_vendor": _opt("style", "checkbox", "Show vendor", False),
     "show_rating": _opt("style", "checkbox", "Show rating", False, help="From approved product reviews."),
@@ -2143,11 +2196,141 @@ THEME_SETTINGS.update({
     ),
 })
 THEME_SETTINGS["button_text"]["contrast"] = [["button_text", "background_color"], ["button_bg", "accent_color"]]
+# "palette": the palette colour an empty value follows; the editor shows "Follows the palette" or "Own colour"
+for _key, _palette in (
+    ("button_bg", "Accent"), ("button_text", "Background"), ("announcement_bg", "Accent"),
+    ("announcement_text", "Background"), ("header_bg", "Background"), ("header_text", "Text"),
+    ("footer_bg", "Background"), ("heading_color", "Text"), ("link_color", "Text"),
+):
+    THEME_SETTINGS[_key]["palette"] = _palette
+
+# Prices: product cards, the product page and cart lines (rendering._panel_css). Empty or 0 keeps the theme's look.
+THEME_SETTINGS.update({
+    "price_color": _theme_opt("prices", "color_optional", "Price colour", "", palette="Text",
+                              help="Product cards, the product page and the cart."),
+    "price_sale_color": _theme_opt("prices", "color_optional", "Sale price colour", "",
+                                   help="The price of a product with a compare-at price. None uses the price colour."),
+    "price_compare_color": _theme_opt("prices", "color_optional", "Compare-at price colour", "",
+                                      help="The crossed-out price. None keeps the theme's grey."),
+    "price_show_compare": _theme_opt("prices", "checkbox", "Show compare-at price", True,
+                                     help="The crossed-out price next to a sale price."),
+    "price_size": _theme_opt("prices", "font_size", "Price size (desktop)", 0, min=12, max=40, unit="px",
+                             presets={"Small": 16, "Medium": 20, "Large": 26}, help="Theme uses its own size."),
+    "price_size_mobile": _theme_opt("prices", "font_size", "Price size (mobile)", 0, min=12, max=32, unit="px",
+                                    presets={"Small": 14, "Medium": 17, "Large": 20}),
+    "price_weight": _theme_opt("prices", "select", "Price font weight", "", options=_WEIGHTS, labels=_WEIGHT_LABELS),
+})
+
+# Product cards: theme defaults for every product card (the --card-* variables of styles.liquid).
+# A section's own card background, hover effect and image shape win over these.
+THEME_SETTINGS.update({
+    "card_bg": _theme_opt("cards", "color_optional", "Card background", "", palette="Background",
+                          help="A section's own card background wins."),
+    "card_border_width": _theme_opt("cards", "range", "Card border width", 1, min=0, max=4, unit="px"),
+    "card_border_color": _theme_opt("cards", "color_optional", "Card border colour", "",
+                                    help="None uses the border and divider colour."),
+    "card_radius": _theme_opt("cards", "range", "Card corner radius", 6, min=0, max=32, unit="px"),
+    "card_padding": _theme_opt("cards", "range", "Card padding", 16, min=0, max=32, unit="px"),
+    "card_shadow": _theme_opt("cards", "select", "Card shadow", "none", options=["none", "soft", "strong"],
+                              ui="segmented"),
+    "card_image_ratio": _theme_opt("cards", "select", "Image shape", "square",
+                                   options=["square", "portrait", "landscape"], ui="segmented",
+                                   help="For sections whose image shape is Theme."),
+    "card_image_fit": _theme_opt("cards", "select", "Image fit", "contain", options=["contain", "cover"], ui="segmented",
+                                 labels={"contain": "Whole image", "cover": "Fill the frame"}),
+    "card_image_padding": _theme_opt("cards", "range", "Image padding", 8, min=0, max=32, unit="px"),
+    "card_text_align": _theme_opt("cards", "select", "Text alignment", "left", options=["left", "center", "right"],
+                                  ui="segmented"),
+    "card_title_size": _theme_opt("cards", "font_size", "Title size (desktop)", 0, min=11, max=28, unit="px",
+                                  presets={"Small": 13, "Medium": 15, "Large": 18}, help="Theme uses 14px."),
+    "card_title_size_mobile": _theme_opt("cards", "font_size", "Title size (mobile)", 0, min=11, max=24, unit="px",
+                                         presets={"Small": 12, "Medium": 14, "Large": 16}, help="Theme uses 13px."),
+    "card_title_weight": _theme_opt("cards", "select", "Title font weight", "", options=_WEIGHTS,
+                                    labels=_WEIGHT_LABELS),
+    "card_zoom": _theme_opt("cards", "range", "Image zoom on hover", 104, min=100, max=115, unit="%",
+                            help="100% is off. Sections with the Lift or None hover effect don't zoom. "
+                                 "Off for shoppers who ask for reduced motion."),
+})
+
+# Badges, logo, page, animations, cart, drawers, search, icons, inputs, popovers (rendering._panel_css).
+# Every default keeps the theme's own look.
+_CORNERS = {"pill": "999px", "rounded": "6px", "square": "0px"}
+THEME_SETTINGS.update({
+    "badge_bg": _theme_opt("badges", "color_optional", "Badge colour", "", help="Sold out, Few left and tag badges. None is dark navy."),
+    "badge_text": _theme_opt("badges", "color_optional", "Badge text colour", "", help="None is white."),
+    "badge_new_bg": _theme_opt("badges", "color_optional", '"New" badge colour', "", palette="Accent"),
+    "badge_corners": _theme_opt("badges", "select", "Badge corners", "pill", options=list(_CORNERS), ui="segmented"),
+    "sale_badge_show": _theme_opt("badges", "checkbox", "Show the sale ribbon", True,
+                                  help='The "Hot deal" ribbon on products with a compare-at price.'),
+    "sale_badge_bg": _theme_opt("badges", "color_optional", "Sale ribbon colour", "", help="None is deep red."),
+    "sale_badge_text": _theme_opt("badges", "color_optional", "Sale ribbon text colour", "", help="None is white."),
+    "favicon_url": _theme_opt("logo", "image", "Favicon", "", help="The small icon in the browser tab. A square PNG, 32 x 32 px or larger."),
+    "logo_height_mobile": _theme_opt("logo", "range", "Logo image height (mobile)", 0, min=0, max=80, step=2, unit="px",
+                                     help="0 keeps the header's logo height."),
+    "page_width": _theme_opt("page", "range", "Page width", 0, min=0, max=1920, step=20, unit="px",
+                             help="The widest the page content gets. 0 keeps the theme's width. "
+                                  "Sections set to Narrow or Full width keep theirs."),
+    "animations_enabled": _theme_opt("animations", "checkbox", "Motion effects", True,
+                                     help="Sections that fade or slide in, scrolling text and image zoom on hover. "
+                                          "Always off for shoppers who ask for reduced motion."),
+    "animation_speed": _theme_opt("animations", "select", "Reveal speed", "normal", options=["fast", "normal", "slow"],
+                                  ui="segmented", help="How long a section takes to fade or slide in."),
+    "button_hover_border": _theme_opt("buttons", "color_optional", "Hover border colour", "",
+                                      help="None keeps the border colour."),
+    "button_press": _theme_opt("buttons", "select", "Pressed effect", "none", options=["none", "shrink"], ui="segmented",
+                               help="While a button is clicked or tapped."),
+    "cart_count_bg": _theme_opt("cart", "color_optional", "Cart count colour", "", palette="Accent",
+                                help="The bubble with the number of items on the cart icon."),
+    "cart_count_text": _theme_opt("cart", "color_optional", "Cart count text colour", "", palette="Background"),
+    "drawer_width": _theme_opt("drawers", "range", "Cart drawer width", 420, min=320, max=640, step=10, unit="px",
+                               help="Never wider than the screen."),
+    "drawer_bg": _theme_opt("drawers", "color_optional", "Drawer colour", "", palette="Background"),
+    "drawer_overlay": _theme_opt("drawers", "range", "Page dimming behind the drawer", 45, min=0, max=80, step=5, unit="%"),
+    "search_submit_bg": _theme_opt("search", "color_optional", "Search button colour", "", palette="Accent",
+                                   help="The header search's Search button."),
+    "search_submit_text": _theme_opt("search", "color_optional", "Search button text colour", "", palette="Background"),
+    "search_panel_width": _theme_opt("search", "range", "Search box width", 360, min=260, max=560, step=10, unit="px"),
+    "icon_size": _theme_opt("icons", "range", "Header icon size", 20, min=16, max=32, unit="px",
+                            help="Search, account and wishlist icons. The cart icon stays 4px larger."),
+    "icon_stroke": _theme_opt("icons", "select", "Icon line weight", "2", options=["1.5", "2", "2.5"], ui="segmented",
+                              labels={"1.5": "Thin", "2": "Regular", "2.5": "Bold"}),
+    "input_corners": _theme_opt("inputs", "select", "Field corners", "theme",
+                                options=["theme", "square", "slight", "rounded", "pill"], ui="segmented",
+                                labels={"theme": "Theme"},
+                                help="Sign-in, account, newsletter and header search fields. Checkout keeps its own."),
+    "input_border_color": _theme_opt("inputs", "color_optional", "Field border colour", "",
+                                     help="None uses the border and divider colour."),
+    "input_bg": _theme_opt("inputs", "color_optional", "Field background", "", palette="Background"),
+    "input_focus_color": _theme_opt("inputs", "color_optional", "Field focus colour", "", palette="Accent"),
+    "input_height": _theme_opt("inputs", "range", "Field height", 0, min=0, max=64, step=2, unit="px",
+                               help="0 keeps each field's own height."),
+    "popover_radius": _theme_opt("popovers", "range", "Menu corner radius", 8, min=0, max=24, unit="px",
+                                 help="Header dropdown and mega menus."),
+    "popover_shadow": _theme_opt("popovers", "select", "Menu shadow", "theme", options=["none", "theme", "strong"],
+                                 ui="segmented", labels={"theme": "Soft"}),
+    "popover_border": _theme_opt("popovers", "checkbox", "Menu border", True),
+    "custom_css": _theme_opt("custom_css", "css", "Custom CSS", "", max=1500,
+                             help="Added to every storefront page after the theme's styles. Not shown on checkout "
+                                  "or in the admin. No @import, scripts or http:// links."),
+})
 
 THEME_GROUPS = [
     {"id": "colors", "label": "Color palette"},
     {"id": "typography", "label": "Typography"},
     {"id": "buttons", "label": "Buttons"},
+    {"id": "prices", "label": "Prices"},
+    {"id": "cards", "label": "Product cards"},
+    {"id": "badges", "label": "Badges"},
+    {"id": "logo", "label": "Logo and favicon"},
+    {"id": "page", "label": "Page"},
+    {"id": "animations", "label": "Animations"},
+    {"id": "cart", "label": "Cart"},
+    {"id": "drawers", "label": "Drawers"},
+    {"id": "search", "label": "Search"},
+    {"id": "icons", "label": "Icons"},
+    {"id": "inputs", "label": "Input fields"},
+    {"id": "popovers", "label": "Menus and popovers"},
+    {"id": "custom_css", "label": "Custom CSS"},
     {"id": "products", "label": "Products & inventory"},
     {"id": "header", "label": "Header and navigation"},
     {"id": "footer", "label": "Footer"},

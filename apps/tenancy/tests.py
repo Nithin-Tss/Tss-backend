@@ -4,7 +4,7 @@ Multi-store tests.
     python manage.py test apps.tenancy --settings=config.test_settings
 """
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils.text import slugify
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APITestCase
@@ -654,3 +654,39 @@ class StoreShippingConstraintTests(TestCase):
         store = self.make_store(14, free_shipping_threshold=Decimal("100.00"))
         with self.assertRaises(IntegrityError), transaction.atomic():
             Store.objects.filter(pk=store.pk).update(free_shipping_threshold=Decimal("-1.00"))
+
+
+class StoreDomainTests(TestCase):
+    @override_settings(STORE_BASE_DOMAIN="example.com", ALLOWED_HOSTS=[".example.com", "testserver"])
+    def test_store_gets_own_domain_and_serves_on_it(self):
+        from django.contrib.auth import get_user_model
+        from .services import create_store
+
+        user = get_user_model().objects.create_user(email="o@x.com", password="pw12345678")
+        store = create_store(user, "My Shop")
+        self.assertEqual(store.domain, "my-shop.example.com")
+
+        r = self.client.get("/", HTTP_HOST=store.domain)
+        self.assertEqual(r.status_code, 200)
+
+    @override_settings(STORE_BASE_DOMAIN="example.com", ALLOWED_HOSTS=[".example.com", "testserver"])
+    def test_storefront_links_drop_the_slug_prefix(self):
+        from .middleware import StoreDomainMiddleware
+        from django.http import HttpResponse
+
+        user = get_user_model().objects.create_user(email="p@x.com", password="pw12345678")
+        store = create_store(user, "Clean Shop")
+
+        def view(request):
+            r = HttpResponse('<a href="/s/clean-shop/blog">b</a><a href="/s/clean-shop">h</a>')
+            r["Location"] = "/s/clean-shop/cart"
+            r.set_cookie("c", "1", path="/s/clean-shop/")
+            return r
+
+        request = self.client.get("/", HTTP_HOST=store.domain).wsgi_request
+        request = type(request)(request.environ)
+        r = StoreDomainMiddleware(view)(request)
+        self.assertIn('href="/blog"', r.content.decode())
+        self.assertIn('href="/"', r.content.decode())
+        self.assertEqual(r["Location"], "/cart")
+        self.assertEqual(r.cookies["c"]["path"], "/")

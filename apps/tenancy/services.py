@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import transaction
 from django.utils.text import slugify
 
@@ -64,12 +65,20 @@ def _unique_slug(name):
     return slug
 
 
+def domain_for_slug(slug):
+    """The store's own hostname under STORE_BASE_DOMAIN, or None when no base domain is configured."""
+    base = getattr(settings, "STORE_BASE_DOMAIN", "")
+    return f"{slug}.{base}" if base else None
+
+
 @transaction.atomic
 def create_store(owner, store_name, store_slug=None):
     """Create a store and make `owner` its owner, as one unit."""
+    store_slug = store_slug or _unique_slug(store_name)
     store = Store.objects.create(
         store_name=store_name,
-        store_slug=store_slug or _unique_slug(store_name),
+        store_slug=store_slug,
+        domain=domain_for_slug(store_slug),
         status=ACTIVE,
         created_by=owner.email,
     )

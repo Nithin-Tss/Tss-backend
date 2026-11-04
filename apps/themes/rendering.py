@@ -31,7 +31,7 @@ from apps.catalog.services import published_collections, published_products
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
-from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, custom_css_problem, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
@@ -101,6 +101,7 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .product-card__media{position:relative}
 .product-card__badges{position:absolute;top:10px;left:10px;z-index:1;display:flex;flex-direction:column;align-items:flex-start;gap:6px}.product-card__badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#141b2d;color:#fff}.product-card__badge--new{background:var(--accent)}
 .product-card--sold-out .product-card__media img,.product-card--sold-out .product-card__media .placeholder{opacity:.6}
+@media (prefers-reduced-motion:reduce){.product-card .product-card__media img{transition:none}.product-card:hover .product-card__media img{transform:none}}
 .product__stock{font-size:14px;font-weight:600;margin:-12px 0 16px}
 .product__stock--few{color:#B45309}.product__stock--out{color:var(--muted)}
 .product-list__more{display:flex;justify-content:center;margin-top:28px}
@@ -284,6 +285,7 @@ def _theme_button(settings):
         "b_border_width": settings.get("button_border_width", 1),
         "b_hover_bg": settings.get("button_hover_bg") or "",
         "b_hover_text": settings.get("button_hover_text") or "",
+        "b_hover_border": settings.get("button_hover_border") or "",
         "b_size": settings.get("button_size") or "medium",
         "b_padding_x": settings.get("button_padding_x") or 0,
         "b_font": settings.get("button_font") or "",
@@ -329,7 +331,7 @@ def _button_vars(o, theme):
     hover_t, hover_f = HOVERS.get(pick("b_hover") or "darken", HOVERS["darken"])
     vars_ = {
         "--b-bg": bg, "--b-tx": tx, "--b-bd": bd,
-        "--b-hbg": pick("b_hover_bg") or bg, "--b-htx": pick("b_hover_text") or tx, "--b-hbd": o.get("b_hover_border") or bd,
+        "--b-hbg": pick("b_hover_bg") or bg, "--b-htx": pick("b_hover_text") or tx, "--b-hbd": pick("b_hover_border") or bd,
         "--b-mh": height, "--b-px": padding, "--b-fs": font_size,
         "--b-r": RADII.get(pick("b_radius") or "pill", "999px"),
         "--b-bw": f"{int(border_width)}px",
@@ -379,7 +381,38 @@ PANEL_KEYS = (
     "link_underline", "body_weight", "body_line_height", "base_font_size_mobile",
     "heading_line_height", "heading_letter_spacing", "heading_case", "heading_size", "heading_size_mobile",
     "button_border", "button_disabled_opacity", "button_border_width", "button_radius",
+    "price_color", "price_sale_color", "price_compare_color", "price_show_compare", "price_size", "price_size_mobile",
+    "price_weight",
+    "card_bg", "card_border_width", "card_border_color", "card_radius", "card_padding", "card_shadow", "card_image_ratio",
+    "card_image_fit", "card_image_padding", "card_text_align", "card_title_size", "card_title_size_mobile",
+    "card_title_weight", "card_zoom",
+    "badge_bg", "badge_text", "badge_new_bg", "badge_corners", "sale_badge_show", "sale_badge_bg", "sale_badge_text",
+    "logo_height_mobile", "page_width", "animations_enabled", "animation_speed", "button_press",
+    "cart_count_bg", "cart_count_text", "drawer_width", "drawer_bg", "drawer_overlay", "search_submit_bg",
+    "search_submit_text", "search_panel_width", "icon_size", "icon_stroke", "input_corners", "input_border_color",
+    "input_bg", "input_focus_color", "input_height", "popover_radius", "popover_shadow", "popover_border",
 )
+# ":not(#tss)" adds an id's weight, so these win over the header's and the sign-in page's own (longer) rules.
+# Fields on the checkout page keep the checkout's look.
+_FIELD = "body:not(.template-checkout) :is(.form-input,.newsletter__input):not(#tss)"
+_MENU = "body .site-header__nav :is(.site-nav__dropdown,.mega-menu):not(#tss)"
+_HEADER_ICONS = ":is(.site-header__search,.site-header__account,.site-header__wishlist) svg"
+_MOTION = "html.tss-js body :is(.tss-anim-fade,.tss-anim-slide-up)"
+MENU_SHADOWS = {"none": "none", "strong": "0 18px 40px rgba(0,0,0,.28)"}
+REVEAL_SPEEDS = {"fast": ".35s", "slow": "1.2s"}
+BADGE_CORNERS = {"rounded": "6px", "square": "0px"}
+_FAVICON_URL = re.compile(r"(?:/|https?://)[^\s\x22\x27<>\x5c]+")
+# Where prices show: product cards and the product page (its script rebuilds the same classes), then cart lines
+_PRICE = "body :is(.product-card,.product__price) .price:not(.price--compare,.price--muted)"
+_SALE_PRICE = "body :is(.product-card,.product__price):has(.price--compare) .price:not(.price--compare,.price--muted)"
+_COMPARE_PRICE = "body :is(.product-card,.product__price) .price--compare"
+# Product cards: ".product-card.product-card" beats a preset's own "body .product-card" rules; cards in a section
+# with "Card border" on keep that section's border and padding
+_CARD = "body .product-card.product-card"
+_CARD_UNBORDERED = "body .product-card.product-card:not(:where(.cards--bordered) *)"
+_THEME_RATIO = ":not(.product-card__media--square,.product-card__media--portrait,.product-card__media--landscape)"
+CARD_RATIOS = {"square": "1", "portrait": "3/4", "landscape": "4/3"}
+CARD_ALIGN = {"left": "flex-start", "center": "center", "right": "flex-end"}
 
 
 def _panel_css(settings):
@@ -394,6 +427,8 @@ def _panel_css(settings):
             return value if isinstance(value, str) and _HEX_COLOR.match(value) else ""
         if spec["type"] == "select":
             return value if value in spec["options"] else spec["default"]
+        if spec["type"] == "checkbox":
+            return value if isinstance(value, bool) else spec["default"]
         return value if isinstance(value, int) and not isinstance(value, bool) else spec["default"]
 
     settings = {key: ok(key) for key in PANEL_KEYS}
@@ -453,7 +488,174 @@ def _panel_css(settings):
 
     if settings.get("button_disabled_opacity") not in (None, 55):
         vars_["--b-dis-op"] = f"{int(settings['button_disabled_opacity']) / 100:g}"
+
+    price = []
+    if settings.get("price_color"):
+        price.append(f"color:{settings['price_color']}")
+    if settings.get("price_weight"):
+        price.append(f"font-weight:{settings['price_weight']}")
+    if price:
+        rules.append(f"{_PRICE},body .cart-line__price{{{';'.join(price)}}}")
+    if settings.get("price_sale_color"):
+        rules.append(f"{_SALE_PRICE}{{color:{settings['price_sale_color']}}}")
+    if settings.get("price_compare_color"):
+        rules.append(f"{_COMPARE_PRICE}{{color:{settings['price_compare_color']}}}")
+    if settings.get("price_show_compare") is False:
+        rules.append(f"{_COMPARE_PRICE}{{display:none}}")
+    if settings.get("price_size_mobile"):
+        rules.append(f"@media (max-width:749px){{{_PRICE}{{font-size:{int(settings['price_size_mobile'])}px}}}}")
+    if settings.get("price_size"):
+        rules.append(f"@media (min-width:750px){{{_PRICE}{{font-size:{int(settings['price_size'])}px}}}}")
+
+    # Product cards. Background through --card-bg, so a section's own card background (set on the section) still wins
+    if settings.get("card_bg"):
+        vars_["--card-bg"] = settings["card_bg"]
+        rules.append(f"{_CARD}{{background:var(--card-bg)}}")
+    unbordered = []
+    if settings.get("card_border_width") not in (None, 1) or settings.get("card_border_color"):
+        vars_["--card-border"] = f"{int(settings['card_border_width'])}px solid {settings.get('card_border_color') or 'var(--line)'}"
+        unbordered.append("border:var(--card-border)")
+    if settings.get("card_padding") not in (None, 16):
+        vars_["--card-padding"] = f"{int(settings['card_padding'])}px"  # the wishlist heart and cart icon follow it
+        unbordered.append("padding:var(--card-padding)")
+    if unbordered:
+        rules.append(f"{_CARD_UNBORDERED}{{{';'.join(unbordered)}}}")
+    card = []
+    if settings.get("card_radius") not in (None, 6):
+        card.append(f"border-radius:{int(settings['card_radius'])}px")
+    if settings.get("card_shadow") in SHADOWS:
+        card.append(f"box-shadow:{SHADOWS[settings['card_shadow']]}")
+    if settings.get("card_text_align") in ("center", "right"):
+        card.append(f"text-align:{settings['card_text_align']}")
+        rules.append(f"{_CARD} :is(.price,.product-card__cta,.product-card__rating){{align-self:{CARD_ALIGN[settings['card_text_align']]}}}")
+    if card:
+        rules.append(f"{_CARD}{{{';'.join(card)}}}")
+    if settings.get("card_image_padding") not in (None, 8):
+        vars_["--card-media-padding"] = f"{int(settings['card_image_padding'])}px"
+    if settings.get("card_image_fit") == "cover":
+        vars_["--card-media-fit"] = "cover"
+    if settings.get("card_image_ratio") in ("portrait", "landscape"):
+        ratio = CARD_RATIOS[settings["card_image_ratio"]]
+        rules.append(f"body .product-card__media{_THEME_RATIO}{{aspect-ratio:{ratio}}}"
+                     f"body .product-card-shell:has(.product-card__media{_THEME_RATIO}) .product-card__cart-area{{aspect-ratio:{ratio}}}")
+    if settings.get("card_title_weight"):
+        rules.append(f"{_CARD} .product-card__title{{font-weight:{settings['card_title_weight']}}}")
+    if settings.get("card_title_size_mobile"):
+        rules.append(f"@media (max-width:749px){{{_CARD} .product-card__title{{font-size:{int(settings['card_title_size_mobile'])}px}}}}")
+    if settings.get("card_title_size"):
+        rules.append(f"@media (min-width:750px){{{_CARD} .product-card__title{{font-size:{int(settings['card_title_size'])}px}}}}")
+    if settings.get("card_zoom") not in (None, 104):
+        zoom = int(settings["card_zoom"])
+        img = ".product-card:hover .product-card__media img"
+        rules.append(f"body {img}{{transform:{f'scale({zoom / 100:g})' if zoom > 100 else 'none'}}}"
+                     f"body .card-hover--none {img},body .card-hover--lift {img}{{transform:none}}"
+                     f"@media (prefers-reduced-motion:reduce){{body {img}{{transform:none}}}}")
+
+    def colours(selector, *pairs):
+        decl = [f"{prop}:{settings[key]}" for key, prop in pairs if settings.get(key)]
+        if decl:
+            rules.append(f"{selector}{{{';'.join(decl)}}}")
+
+    # Badges
+    colours("body .product-card__badge:not(.product-card__badge--new)", ("badge_bg", "background"))
+    colours("body .product-card__badge", ("badge_text", "color"))
+    colours("body .product-card__badge--new", ("badge_new_bg", "background"))
+    if settings.get("badge_corners") in ("rounded", "square"):
+        rules.append(f"body .product-card__badge{{border-radius:{BADGE_CORNERS[settings['badge_corners']]}}}")
+    if settings.get("sale_badge_show") is False:
+        rules.append("body .product-card__ribbon{display:none}body .product-card__ribbon~.product-card__badges{top:10px}")
+    colours("body .product-card__ribbon", ("sale_badge_bg", "background"), ("sale_badge_text", "color"))
+
+    # Logo (the header sets the image height on the image itself) and page
+    if settings.get("logo_height_mobile"):
+        rules.append(f"@media (max-width:749px){{body .site-header__logo img{{height:{int(settings['logo_height_mobile'])}px!important}}}}")
+    if settings.get("page_width"):
+        rules.append(f"body .page-width{{max-width:{max(int(settings['page_width']), 600)}px}}")
+
+    # Animations: reveal speed, or every motion effect off
+    if settings.get("animation_speed") in REVEAL_SPEEDS:
+        rules.append(f"{_MOTION}{{transition-duration:{REVEAL_SPEEDS[settings['animation_speed']]}}}")
+    if settings.get("animations_enabled") is False:
+        rules.append(f"{_MOTION}{{opacity:1;transform:none;transition:none}}body .tss-marquee__track{{animation:none}}"
+                     "body .product-card:hover .product-card__media img{transform:none}"
+                     "body .product-card .product-card__media img{transition:none}")
+
+    # Buttons: pressed state (hover border is a button variable, see _button_vars)
+    if settings.get("button_press") == "shrink":
+        rules.append('body .button:active:not(:disabled,[aria-disabled="true"]){transform:scale(.97)}'
+                     '@media (prefers-reduced-motion:reduce){body .button:active{transform:none}}')
+
+    # Cart, drawers, search
+    colours("body .site-header__cart-count", ("cart_count_bg", "background"), ("cart_count_text", "color"))
+    drawer = [f"background:{settings['drawer_bg']}"] if settings.get("drawer_bg") else []
+    if settings.get("drawer_width") not in (None, 420):
+        drawer.append(f"width:min({int(settings['drawer_width'])}px,100%)")
+    if drawer:
+        rules.append(f"body .cart-drawer__panel{{{';'.join(drawer)}}}")
+    if settings.get("drawer_overlay") not in (None, 45):
+        rules.append(f"body .cart-drawer__overlay{{background:rgba(0,0,0,{int(settings['drawer_overlay']) / 100:g})}}")
+    colours("body .site-header__search-submit", ("search_submit_bg", "background"), ("search_submit_text", "color"))
+    if settings.get("search_panel_width") not in (None, 360):
+        rules.append(f"body .site-header__search-panel{{width:min(92vw,{int(settings['search_panel_width'])}px)}}")
+
+    # Header icons (the cart icon is drawn 4px larger)
+    icons, cart_icon = [], []
+    if settings.get("icon_size") not in (None, 20):
+        size = int(settings["icon_size"])
+        icons += [f"width:{size}px", f"height:{size}px"]
+        cart_icon += [f"width:{size + 4}px", f"height:{size + 4}px"]
+    if settings.get("icon_stroke") in ("1.5", "2.5"):
+        icons.append(f"stroke-width:{settings['icon_stroke']}")
+        cart_icon.append(f"stroke-width:{float(settings['icon_stroke']) - .2:g}")
+    if icons:
+        rules.append(f"body {_HEADER_ICONS}{{{';'.join(icons)}}}body .site-header__cart svg{{{';'.join(cart_icon)}}}")
+
+    # Input fields
+    field = []
+    if settings.get("input_corners") in RADII:
+        field.append(f"border-radius:{RADII[settings['input_corners']]}")
+    if settings.get("input_border_color"):
+        field.append(f"border-color:{settings['input_border_color']}")
+    if settings.get("input_bg"):
+        field.append(f"background:{settings['input_bg']}")
+    if settings.get("input_height"):
+        field.append(f"height:{int(settings['input_height'])}px;min-height:0")
+    if field:
+        rules.append(f"{_FIELD}{{{';'.join(field)}}}")
+    if settings.get("input_focus_color"):
+        focus = settings["input_focus_color"]
+        rules.append(f"{_FIELD}:is(:focus,:focus-visible){{border-color:{focus};outline-color:{focus}}}")
+
+    # Header menus (dropdown and mega menu)
+    menu = []
+    if settings.get("popover_radius") not in (None, 8):
+        menu.append(f"border-radius:{int(settings['popover_radius'])}px")
+    if settings.get("popover_shadow") in MENU_SHADOWS:
+        menu.append(f"box-shadow:{MENU_SHADOWS[settings['popover_shadow']]}")
+    if settings.get("popover_border") is False:
+        menu.append("border-color:transparent")
+    if menu:
+        rules.append(f"{_MENU}{{{';'.join(menu)}}}")
     return vars_, rules
+
+
+_SECTION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _section_css(section_id, s):
+    """A section's own custom CSS when it is safe to use (checked again: it may come from Edit code)."""
+    css = str(s.get("custom_css") or "").strip()
+    if css and len(css) <= 500 and _SECTION_ID.fullmatch(str(section_id)) and custom_css_problem(css) is None:
+        return css
+    return ""
+
+
+def store_custom_css(settings):
+    """Theme settings > Custom CSS as a <style> tag for storefront pages (never checkout or the admin)."""
+    css = str(settings.get("custom_css") or "").strip()
+    if not css or len(css) > 1500 or custom_css_problem(css):
+        return Markup("")
+    return Markup(f'<style data-tss-custom-css>{css}</style>')
 
 
 def theme_css(settings, tokens=None):
@@ -467,6 +669,9 @@ def theme_css(settings, tokens=None):
         "--tss-body-font": _font_stack(settings.get("body_font"), FONT_BY_KEY["system"][0]),
         "--tss-base-size": f"{int(settings.get('base_font_size') or 16)}px",
         **_button_vars({}, _theme_button(settings)),
+        # The theme's button colour whatever the button style; presets use it for their highlight colour
+        "--tss-button-color": settings.get("button_bg") if _HEX_COLOR.match(str(settings.get("button_bg") or "")) else "var(--accent)",
+        "--tss-button-text": settings.get("button_text") if _HEX_COLOR.match(str(settings.get("button_text") or "")) else "var(--bg)",
     }
     panel_vars, panel_rules = _panel_css(settings)
     root.update(panel_vars)
@@ -765,7 +970,7 @@ document.addEventListener("click", function (e) {
 });
 </script>""")
 # Common Storefront Search Controller: unified handling for existing search boxes
-SEARCH_JS = Markup("""<script>
+SEARCH_JS = Markup(r"""<script>
 (function () {
   function initCommonSearch() {
     // 1. Header search block(s) across any theme
@@ -1885,6 +2090,10 @@ def _wrap_attrs(section_id, s, theme=None):
     if s.get("animation", "none") != "none":
         classes.append(f"tss-anim-{s['animation']}")
     classes += (s.get("css_class") or "").split()
+    if _section_css(section_id, s):
+        extra_attrs_css = f' data-tss-css="{section_id}"'
+    else:
+        extra_attrs_css = ""
 
     style = [
         f"--tss-pt:{int(s.get('spacing_top', 48))}px",
@@ -1897,7 +2106,7 @@ def _wrap_attrs(section_id, s, theme=None):
     if s.get("text_color"):
         style.append(f"--tss-color:{s['text_color']}")
 
-    extra_attrs = ""
+    extra_attrs = extra_attrs_css
     if s.get("t_body_font"):
         style.append(f"font-family:{_font_stack(s['t_body_font'], 'inherit')}")
     if s.get("t_heading_font"):
@@ -3170,6 +3379,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     html = [google_fonts_link(_collect_fonts(data)), theme_css(settings, tokens), SECTION_CSS, TYPE_CSS]
 
     html.append(CUSTOM_CSS)
+    if page != "checkout":
+        html.append(store_custom_css(settings))
     page_styles = len(html)
 
     spans = {}  # section id -> its part of `html` (to put it in its slot)
@@ -3188,6 +3399,9 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             label = section["settings"].get("heading") or SECTIONS.get(section["type"], {}).get("name", "")
             html.append(Markup(f'<div data-tss-section="{escape(section_id)}" data-tss-label="{escape(label)}">'))
         html.append(_wrap_attrs(section_id, raw_section["settings"], theme_button))
+        if page != "checkout" and _section_css(section_id, raw_section["settings"]):
+            # Section > Advanced > Custom CSS, nested inside the section's own wrapper so it stays there
+            html.append(Markup(f'<style>[data-tss-css="{section_id}"]{{{_section_css(section_id, raw_section["settings"])}}}</style>'))
 
         if section["type"] == "custom":
             html.append(_render_custom(section, store, env, base_url, theme_button))
@@ -3444,6 +3658,10 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     )
     for name, html in synced_html.items():
         page_html = page_html.replace(SECTION_PLACEHOLDER.format(name), str(html))
+    # Theme settings > Logo and favicon: the layout file (Edit code) has no favicon tag, so it is added here
+    favicon = str(settings.get("favicon_url") or "")
+    if _FAVICON_URL.fullmatch(favicon):
+        page_html = page_html.replace("</head>", f'<link rel="icon" href="{escape(favicon)}">\n</head>', 1)
     if customer is not None and customer_user is not None and request is not None and not editor:
         from .views import customer_link_token
         page_html = _with_customer_link(page_html, customer_link_token(store, customer_user), base_url)

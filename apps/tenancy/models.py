@@ -16,6 +16,8 @@ class Store(models.Model):
         max_length=100,
         unique=True,
     )
+    # Hostname this store's storefront is served on, e.g. "my-shop.example.com"
+    domain = models.CharField(max_length=253, unique=True, null=True, blank=True)
     status = models.CharField(max_length=30)
     # Names the owner gave the generic product columns, e.g. {"column1": "Ingredients"}
     field_labels = models.JSONField(default=dict, blank=True)

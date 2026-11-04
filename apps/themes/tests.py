@@ -7340,9 +7340,7 @@ class ThemeSettingsPanelTest(StoreClientMixin, APITestCase):
         from .schemas import THEME_GROUPS, THEME_SETTINGS
         ids = [g["id"] for g in THEME_GROUPS]
         self.assertEqual(ids[:3], ["colors", "typography", "buttons"])
-        for later in ("pagination", "logo", "page", "animations", "badges", "cart", "drawers", "icons", "inputs",
-                      "popovers", "custom_css"):
-            self.assertNotIn(later, ids)
+        self.assertNotIn("pagination", ids)  # SipNow pagination stays out of the shared settings
         self.assertNotIn("heading_weight", THEME_SETTINGS)  # sections set their own heading weight
         for key in ("heading_color", "link_color", "border_color", "heading_case", "base_font_size_mobile",
                     "button_border", "button2_bg", "button_focus_color", "link_underline"):
@@ -7424,3 +7422,290 @@ class ThemeSettingsPanelTest(StoreClientMixin, APITestCase):
         html = self.store_html()
         self.assertIn("--tss-base-size-m:14px", html)
         self.assertLess(html.index("--tss-base-size-m:14px"), html.index(rule))
+
+
+class ThemeSettingsPhase2Test(StoreClientMixin, APITestCase):
+    """Theme settings panel, phase 2: palette fix, prices, product cards and the later groups."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("phase2@example.com", "Phase Two Store")
+
+    def store_html(self, path="/"):
+        r = self.client.get(f"/s/{self.store['storeSlug']}{path}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self, settings):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["settings"].update(settings)
+        return self.ok("post", "/api/v1/themes/preview/?page=index", data)["html"]
+
+    def save(self, settings, expect=200):
+        return self.ok("patch", "/api/v1/themes/settings/", {"settings": settings}, expect=expect)
+
+    def theme_style(self, html):
+        start = html.index("<style>:root{--tss-heading-font")
+        return html[start:html.index("</style>", start)]
+
+    # Colour fix
+    def test_palette_names_what_an_empty_colour_follows(self):
+        from .schemas import THEME_SETTINGS
+        from .section_sync import _field
+        self.assertEqual(THEME_SETTINGS["button_bg"]["palette"], "Accent")
+        self.assertEqual(THEME_SETTINGS["header_bg"]["palette"], "Background")
+        self.assertEqual(_field({"type": "color", "id": "background", "default": ""})["palette"], "Background")
+        self.assertNotIn("palette", _field({"type": "color", "id": "logo_color", "default": ""}))
+
+    def test_button_colour_variable_follows_accent_until_the_button_has_its_own(self):
+        css = self.theme_style(self.store_html())
+        self.assertIn("--tss-button-color:var(--accent)", css)
+        self.assertIn("--tss-button-text:var(--bg)", css)
+        self.save({"button_bg": "#F5C400", "button_text": "#0F0F0F"})
+        css = self.theme_style(self.store_html())
+        self.assertIn("--tss-button-color:#F5C400", css)
+        self.assertIn("--tss-button-text:#0F0F0F", css)
+        self.save({"button_bg": ""})  # Use palette
+        self.assertIn("--tss-button-color:var(--accent)", self.theme_style(self.store_html()))
+
+    def test_bold_highlight_uses_the_button_colour_and_keeps_its_look(self):
+        from .presets import build, get_preset
+        files, custom_data, _ = build("bold")
+        styles = files["snippets/theme-styles.liquid"]
+        self.assertIn("--pop: var(--tss-button-color, #F5C400)", styles)
+        self.assertIn("color: var(--tss-button-text, #0F0F0F)", styles)
+        # Its saved colours are unchanged, so a new Bold store looks as before
+        self.assertEqual(get_preset("bold")["settings"]["button_bg"], "#F5C400")
+        self.assertEqual(custom_data["settings"]["button_bg"], "#F5C400")
+
+    # Prices
+    def test_untouched_store_has_no_price_rules(self):
+        css = self.theme_style(self.store_html())
+        self.assertNotIn(".price", css)
+
+    def test_price_settings_reach_store_preview_and_reload(self):
+        from .rendering import _COMPARE_PRICE, _PRICE, _SALE_PRICE
+        values = {"price_color": "#112233", "price_sale_color": "#CC0000", "price_compare_color": "#999999",
+                  "price_show_compare": False, "price_size": 26, "price_size_mobile": 17, "price_weight": "800"}
+        expected = [f"{_PRICE},body .cart-line__price{{color:#112233;font-weight:800}}",
+                    f"{_SALE_PRICE}{{color:#CC0000}}", f"{_COMPARE_PRICE}{{color:#999999}}",
+                    f"{_COMPARE_PRICE}{{display:none}}",
+                    f"@media (max-width:749px){{{_PRICE}{{font-size:17px}}}}",
+                    f"@media (min-width:750px){{{_PRICE}{{font-size:26px}}}}"]
+        preview = self.preview_html(values)
+        for part in expected:
+            self.assertIn(part, preview)
+        self.assertNotIn("#CC0000", self.store_html())  # unsaved: preview only
+        self.save(values)
+        for html in (self.store_html(), self.store_html()):  # storefront, and after a reload
+            for part in expected:
+                self.assertIn(part, html)
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual((saved["price_weight"], saved["price_show_compare"]), ("800", False))
+
+    def test_price_values_are_validated(self):
+        for bad in ({"price_color": "red"}, {"price_size": 99}, {"price_sale_color": "#12;}</style>"}):
+            self.save(bad, expect=400)
+        self.save({"price_weight": "950"})  # unknown choice: back to the theme's weight
+        self.assertEqual(self.ok("get", "/api/v1/themes/settings/")["settings"]["price_weight"], "")
+
+    def test_price_selectors_match_the_storefront_markup(self):
+        # Cards and the product page use these classes, so the rules above reach them
+        from pathlib import Path
+        starter = Path(__file__).resolve().parent / "starter"
+        card = (starter / "snippets/product-card.liquid").read_text(encoding="utf-8")
+        product = (starter / "sections/main-product.liquid").read_text(encoding="utf-8")
+        cart = (starter / "snippets/cart.liquid").read_text(encoding="utf-8")
+        self.assertIn('class="product-card', card)
+        self.assertIn('<span class="price price--compare">', card)
+        self.assertIn('class="product__price" data-price', product)
+        self.assertIn('"price price--compare product__compare"', product)  # the variant script keeps the class
+        self.assertIn('class="cart-line__price"', cart)
+
+    # Product cards
+    def test_untouched_store_has_no_card_rules(self):
+        css = self.theme_style(self.store_html())
+        self.assertNotIn("--card-", css)
+        self.assertNotIn(".product-card", css)
+
+    def test_card_settings_reach_store_preview_and_reload(self):
+        from .rendering import _CARD, _CARD_UNBORDERED, _THEME_RATIO
+        values = {"card_bg": "#FFFFEE", "card_border_width": 2, "card_border_color": "#222222", "card_radius": 14,
+                  "card_padding": 10, "card_shadow": "soft", "card_image_ratio": "portrait", "card_image_fit": "cover",
+                  "card_image_padding": 0, "card_text_align": "center", "card_title_size": 18,
+                  "card_title_size_mobile": 15, "card_title_weight": "700", "card_zoom": 110}
+        expected = ["--card-bg:#FFFFEE", "--card-border:2px solid #222222", "--card-padding:10px",
+                    "--card-media-padding:0px", "--card-media-fit:cover",
+                    f"{_CARD}{{background:var(--card-bg)}}",
+                    f"{_CARD_UNBORDERED}{{border:var(--card-border);padding:var(--card-padding)}}",
+                    f"{_CARD}{{border-radius:14px;box-shadow:0 4px 12px rgba(0,0,0,.12);text-align:center}}",
+                    f"{_CARD} :is(.price,.product-card__cta,.product-card__rating){{align-self:center}}",
+                    f"body .product-card__media{_THEME_RATIO}{{aspect-ratio:3/4}}",
+                    f"{_CARD} .product-card__title{{font-weight:700}}",
+                    f"@media (max-width:749px){{{_CARD} .product-card__title{{font-size:15px}}}}",
+                    f"@media (min-width:750px){{{_CARD} .product-card__title{{font-size:18px}}}}",
+                    "body .product-card:hover .product-card__media img{transform:scale(1.1)}",
+                    "@media (prefers-reduced-motion:reduce){body .product-card:hover .product-card__media img{transform:none}}"]
+        preview = self.preview_html(values)
+        for part in expected:
+            self.assertIn(part, preview)
+        self.save(values)
+        for html in (self.store_html(), self.store_html(), self.store_html("/collections/all")):
+            for part in expected:
+                self.assertIn(part, html)
+
+    def test_zoom_off_and_sections_without_zoom(self):
+        self.save({"card_zoom": 100})
+        css = self.theme_style(self.store_html())
+        self.assertIn("body .product-card:hover .product-card__media img{transform:none}", css)
+        self.save({"card_zoom": 112})
+        css = self.theme_style(self.store_html())
+        # A section with the Lift or None hover effect keeps it
+        self.assertIn("body .card-hover--none .product-card:hover .product-card__media img,"
+                      "body .card-hover--lift .product-card:hover .product-card__media img{transform:none}", css)
+
+    def test_reduced_motion_turns_off_the_default_zoom(self):
+        from .rendering import SECTION_CSS
+        self.assertIn("@media (prefers-reduced-motion:reduce){.product-card .product-card__media img{transition:none}"
+                      ".product-card:hover .product-card__media img{transform:none}}", str(SECTION_CSS))
+
+    def test_section_card_settings_win_over_the_theme(self):
+        self.save({"card_bg": "#FFFFEE", "card_image_ratio": "landscape"})
+        data = self.ok("get", "/api/v1/themes/settings/")
+        index = data["templates"]["index"]
+        grid = next(i for i, sec in index["sections"].items() if sec["type"] in ("product-grid", "product-carousel"))
+        self.assertEqual(index["sections"][grid]["settings"]["image_ratio"], "")  # new sections follow the theme
+        index["sections"][grid]["settings"].update(card_background="#ABCDEF", image_ratio="square")
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": index}})
+        html = self.store_html()
+        self.assertIn("--card-bg: #ABCDEF;", html)  # on the section, closer to its cards than :root
+        self.assertIn("product-card__media--square", html)  # excluded from the theme's shape rule
+
+    def test_card_values_are_validated_and_cart_wishlist_badges_still_render(self):
+        for bad in ({"card_bg": "blue"}, {"card_title_size": 99}):
+            self.save(bad, expect=400)
+        self.save({"card_radius": "9px;}"})  # a range never saves text
+        self.assertIsInstance(self.ok("get", "/api/v1/themes/settings/")["settings"]["card_radius"], int)
+        self.save({"card_shadow": "huge", "card_zoom": 400})  # unknown choice and clamped number
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual((saved["card_shadow"], saved["card_zoom"]), ("none", 115))
+        self.save({"card_padding": 4, "card_text_align": "right"})
+        html = self.store_html()
+        self.assertIn("--card-padding:4px", self.theme_style(html))
+        self.assertIn("top:calc(var(--card-padding,16px) + 9px)", html)  # the wishlist heart follows the padding
+
+    # Badges, logo and favicon, page, animations, buttons, cart, drawers, search, icons, inputs, menus
+    LATER = {
+        "badge_bg": "#333333", "badge_text": "#FFFFEE", "badge_new_bg": "#00AA00", "badge_corners": "square",
+        "sale_badge_show": False, "sale_badge_bg": "#880000", "sale_badge_text": "#FFFFFF",
+        "favicon_url": "https://cdn.example.com/icon.png", "logo_height_mobile": 28, "page_width": 1400,
+        "animations_enabled": False, "animation_speed": "fast", "button_hover_border": "#445566", "button_press": "shrink",
+        "cart_count_bg": "#123123", "cart_count_text": "#FAFAFA", "drawer_width": 520, "drawer_bg": "#F0F0F0",
+        "drawer_overlay": 60, "search_submit_bg": "#202020", "search_submit_text": "#EEEEEE", "search_panel_width": 480,
+        "icon_size": 24, "icon_stroke": "1.5", "input_corners": "pill", "input_border_color": "#999999",
+        "input_bg": "#FFFFFF", "input_focus_color": "#0055FF", "input_height": 50, "popover_radius": 0,
+        "popover_shadow": "none", "popover_border": False,
+    }
+    LATER_CSS = [
+        "body .product-card__badge:not(.product-card__badge--new){background:#333333}",
+        "body .product-card__badge{color:#FFFFEE}", "body .product-card__badge--new{background:#00AA00}",
+        "body .product-card__badge{border-radius:0px}", "body .product-card__ribbon{display:none}",
+        "body .product-card__ribbon{background:#880000;color:#FFFFFF}",
+        "@media (max-width:749px){body .site-header__logo img{height:28px!important}}",
+        "body .page-width{max-width:1400px}",
+        "html.tss-js body :is(.tss-anim-fade,.tss-anim-slide-up){transition-duration:.35s}",
+        "html.tss-js body :is(.tss-anim-fade,.tss-anim-slide-up){opacity:1;transform:none;transition:none}",
+        "body .tss-marquee__track{animation:none}", "--b-hbd:#445566",
+        'body .button:active:not(:disabled,[aria-disabled="true"]){transform:scale(.97)}',
+        "body .site-header__cart-count{background:#123123;color:#FAFAFA}",
+        "body .cart-drawer__panel{background:#F0F0F0;width:min(520px,100%)}",
+        "body .cart-drawer__overlay{background:rgba(0,0,0,0.6)}",
+        "body .site-header__search-submit{background:#202020;color:#EEEEEE}",
+        "body .site-header__search-panel{width:min(92vw,480px)}",
+        "svg{width:24px;height:24px;stroke-width:1.5}",
+        "body .site-header__cart svg{width:28px;height:28px;stroke-width:1.3}",
+        "body:not(.template-checkout) :is(.form-input,.newsletter__input):not(#tss){border-radius:999px;"
+        "border-color:#999999;background:#FFFFFF;height:50px;min-height:0}",
+        ":is(:focus,:focus-visible){border-color:#0055FF;outline-color:#0055FF}",
+        "body .site-header__nav :is(.site-nav__dropdown,.mega-menu):not(#tss){border-radius:0px;box-shadow:none;"
+        "border-color:transparent}",
+    ]
+
+    def test_untouched_store_has_no_rules_from_the_later_groups(self):
+        html = self.store_html()
+        css = self.theme_style(html)
+        self.assertEqual(css.count("{"), 1, css[-300:])  # :root only
+        self.assertNotIn('rel="icon"', html)
+
+    def test_later_groups_reach_store_preview_and_reload(self):
+        preview = self.preview_html(self.LATER)
+        for part in self.LATER_CSS:
+            self.assertIn(part, preview)
+        self.save(self.LATER)
+        for html in (self.store_html(), self.store_html(), self.store_html("/collections/all")):
+            for part in self.LATER_CSS:
+                self.assertIn(part, html)
+            self.assertIn('<link rel="icon" href="https://cdn.example.com/icon.png">', html)
+            self.assertLess(html.index('rel="icon"'), html.index("</head>"))
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual({k: saved[k] for k in self.LATER}, self.LATER)
+
+    def test_later_group_values_are_validated(self):
+        for bad in ({"favicon_url": "javascript:alert(1)"}, {"badge_bg": "red"},
+                    {"input_focus_color": "#000;}</style>"}):
+            self.save(bad, expect=400)
+
+    def test_theme_hover_border_is_a_default_sections_can_override(self):
+        from .rendering import _button_vars, _theme_button
+        from .schemas import resolve
+        settings = resolve({})["settings"]
+        settings["button_hover_border"] = "#445566"
+        theme = _theme_button(settings)
+        self.assertEqual(_button_vars({}, theme)["--b-hbd"], "#445566")
+        self.assertEqual(_button_vars({"b_hover_border": "#000000"}, theme)["--b-hbd"], "#000000")
+        self.assertEqual(_button_vars({}, _theme_button(resolve({})["settings"]))["--b-hbd"], "var(--accent)")
+
+    # Custom CSS
+    def test_store_custom_css_reaches_store_preview_and_reload_but_not_checkout(self):
+        css = ".product-card__title{letter-spacing:.05em}@media (max-width:749px){.site-header{padding:4px}}"
+        self.assertIn(f"<style data-tss-custom-css>{css}</style>", self.preview_html({"custom_css": css}))
+        self.assertNotIn("data-tss-custom-css", self.store_html())  # unsaved
+        self.save({"custom_css": css})
+        for html in (self.store_html(), self.store_html(), self.store_html("/collections/all")):
+            self.assertIn(f"<style data-tss-custom-css>{css}</style>", html)
+        from .rendering import render_page
+        from apps.tenancy.models import Store
+        store = Store.objects.get(store_id=self.store["storeId"])
+        self.assertNotIn("data-tss-custom-css", render_page(store, "checkout", editor=True))
+
+    def test_unsafe_custom_css_is_refused(self):
+        for bad in (
+            "</style><script>alert(1)</script>", "a{color:red}</style>", "@import url(https://x.test/a.css);",
+            "a{background:url(http://x.test/a.png)}", "a{background:url(javascript:alert(1))}",
+            "a{background:url('data:image/svg+xml,x')}", "a{width:expression(alert(1))}", "a{color:red}}b{color:red",
+            'a{content:"{"}}body{display:none}', "a{color:red", "a{color:\\72 ed}", "a{behavior:url(https://x.test/x.htc)}",
+            "x" * 1501,
+        ):
+            self.save({"custom_css": bad}, expect=400)
+        self.save({"custom_css": "a{background:url(https://cdn.example.com/a.png)}"})
+
+    def test_section_custom_css_is_scoped_to_its_section(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        index = data["templates"]["index"]
+        sid = index["order"][0]
+        index["sections"][sid]["settings"]["custom_css"] = "padding:2px;.section-heading{color:#C00000}"
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": index}})
+        html = self.store_html()
+        self.assertIn(f'<style>[data-tss-css="{sid}"]{{padding:2px;.section-heading{{color:#C00000}}}}</style>', html)
+        self.assertRegex(html, rf'<div class="tss-wrap[^>]*data-tss-css="{sid}"')  # on the section's wrapper
+        self.assertEqual(html.count("data-tss-css="), 2)  # only that section
+        index["sections"][sid]["settings"]["custom_css"] = "x" * 501
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": index}}, expect=400)
+        index["sections"][sid]["settings"]["custom_css"] = "}body{display:none}{"
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": index}}, expect=400)
+
+    def test_other_stores_do_not_get_the_css(self):
+        self.save({"custom_css": ".site-header{outline:1px solid red}"})
+        self.client.credentials()
+        _token, other = self.sign_up("other-css@example.com", "Other CSS Store")
+        r = self.client.get(f"/s/{other['storeSlug']}/")
+        self.assertNotIn("data-tss-custom-css", r.content.decode())

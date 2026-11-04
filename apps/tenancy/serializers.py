@@ -23,6 +23,7 @@ class StoreSerializer(serializers.ModelSerializer):
         max_length=100,
         required=False,
     )
+    domain = serializers.CharField(read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     fieldLabels = serializers.JSONField(source="field_labels", required=False)
     contactEmail = serializers.EmailField(source="contact_email", required=False, allow_blank=True, max_length=254)
@@ -51,7 +52,7 @@ class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            "storeId", "storeName", "storeSlug", "status", "createdAt", "fieldLabels",
+            "storeId", "storeName", "storeSlug", "domain", "status", "createdAt", "fieldLabels",
             "contactEmail", "phone", "address", "currency", "backupRegion", "unitSystem",
             "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
             "taxRate", "pricesIncludeTax", "taxShipping", "shippingFlatRate", "freeShippingThreshold",
