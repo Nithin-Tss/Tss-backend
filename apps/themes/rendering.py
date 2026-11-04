@@ -2996,6 +2996,40 @@ def _with_customer_link(html, token, base_url):
     return html + script if index < 0 else html[:index] + script + html[index:]
 
 
+def _match_quiz_links(store, base_url, blocks):
+    """
+    "Find your match quiz" (priority order): each answer's collection setting becomes answer_N_link_url and
+    answer_N_link_title for the template. The setting is a collection's id, handle or name; a path (/collections/x)
+    or a web address is kept as it is, and a collection that is not (yet) published still links to its handle.
+    """
+    lookup = None
+    for block in blocks:
+        if block["type"] != "question":
+            continue
+        settings = block["settings"]
+        for n in range(1, 5):
+            value = str(settings.get(f"answer_{n}_link") or "").strip()
+            url = title = ""
+            if value:
+                if lookup is None:
+                    lookup = {}
+                    for c in published_collections(store):
+                        for key in (str(c.id), c.handle, (c.name or "").casefold()):
+                            if key:
+                                lookup.setdefault(key, c)
+                found = lookup.get(value) or lookup.get(value.casefold())
+                if found:
+                    url, title = collection_url(base_url, found), found.name
+                elif value.startswith(("http://", "https://")):
+                    url = value
+                elif value.startswith("/") and not value.startswith("//"):
+                    url = base_url + value
+                else:
+                    url = f"{base_url}/collections/{slugify(value)}"
+            settings[f"answer_{n}_link_url"] = url
+            settings[f"answer_{n}_link_title"] = title
+
+
 def render_page(*args, **kwargs):
     """Render one storefront page (see _render_page). The "few left" number is per render and never leaks to the next."""
     token = _few_left_at.set(FEW_LEFT)
@@ -3399,6 +3433,9 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 t_classes, t_style = text_attrs(own["settings"])
                 own["settings"] = dict(own["settings"], _t_class=" ".join(t_classes), _t_style=";".join(t_style))
             extra_blocks = [dict(b, _index=i) for i, b in enumerate(all_blocks) if b["type"] in GENERIC_BLOCK_TYPES]
+
+            if section["type"] == "match-quiz":
+                _match_quiz_links(store, base_url, section["blocks"])
 
             if section["type"] == "promotions":
                 # The cart icon and wishlist heart blocks are read below, they are not promotion cards

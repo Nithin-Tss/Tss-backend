@@ -445,6 +445,18 @@ def _with_default_children(schema, raw):
     ][:MAX_GROUP_CHILDREN]
 
 
+# Section types that were removed; saved data may still hold them, and they are skipped quietly
+RETIRED_SECTION_TYPES = {"quiz"}
+
+
+def _drop_retired(order, sections):
+    """order and sections without the sections whose type was removed (anything else is left for validation)."""
+    gone = {sid for sid, sec in sections.items() if isinstance(sec, dict) and sec.get("type") in RETIRED_SECTION_TYPES}
+    if not gone:
+        return order, sections
+    return [sid for sid in order if sid not in gone], {sid: sec for sid, sec in sections.items() if sid not in gone}
+
+
 def validate_custom_data(data):
     """Validate a full custom_data document from the API. Returns a clean copy."""
     if not isinstance(data, dict):
@@ -470,6 +482,7 @@ def validate_custom_data(data):
 
         if not isinstance(order, list) or not isinstance(sections, dict):
             raise serializers.ValidationError(f"templates.{page} needs an order list and a sections object.")
+        order, sections = _drop_retired(order, sections)
         if len(sections) > MAX_SECTIONS_PER_PAGE:
             raise serializers.ValidationError(f"templates.{page} has too many sections.")
         if sorted(order) != sorted(sections):
@@ -540,6 +553,13 @@ def resolve(custom_data):
             if isinstance(custom_templates.get(page_name), dict) and isinstance(custom_templates[page_name].get("sections"), dict)
             else {}
         )
+        # Sections whose type no longer exists (e.g. the removed "quiz") are skipped
+        page["sections"] = {
+            sid: sec for sid, sec in page.get("sections", {}).items()
+            if isinstance(sec, dict) and sec.get("type") in SECTIONS
+        }
+        if isinstance(page.get("order"), list):
+            page["order"] = [sid for sid in page["order"] if sid in page["sections"]]
         for section_id, section in page["sections"].items():
             schema = SECTIONS.get(section.get("type"))
             if not schema:
@@ -1309,7 +1329,7 @@ def _post_card_settings():
 
 
 # ---------------------------------------------------------------------------
-# Newsletter sign-up, "Responsibly drink" style notice box and product quiz.
+# Newsletter sign-up, "Responsibly drink" style notice box.
 # Their markup is in starter/sections/<type>.liquid.
 # ---------------------------------------------------------------------------
 
@@ -1354,39 +1374,91 @@ SECTIONS["static-text"] = {
     },
 }
 
-_QUIZ_OPTIONS = {}
+# "Find your match" quiz: a banner whose button opens a popup quiz. Markup, styles and script
+# are all in starter/sections/match-quiz.liquid (so Edit code can change them).
+# Two ways to pick the result: "priority" (each answer has its own result and the questions are checked in
+# the order of "Question priority") or "picks" (Result blocks; the key picked most often wins).
+MATCH_QUIZ_ICONS = ["none", "star", "heart", "leaf", "sun", "moon", "flame", "drop", "coffee", "cup", "gift", "bolt", "snowflake"]
+
+_MATCH_ANSWERS = {}
 for _n in range(1, 5):
-    _QUIZ_OPTIONS[f"option_{_n}"] = _opt("content", "text", f"Answer {_n}", "", max=80, help="Leave empty to hide this answer." if _n > 2 else "")
-    _QUIZ_OPTIONS[f"tag_{_n}"] = _opt(
-        "content", "text", f"Answer {_n} product tag", "", max=60,
-        help="Products with this tag are suggested when shoppers pick this answer.",
+    _MATCH_ANSWERS[f"answer_{_n}_label"] = _opt(
+        "content", "text", f"Answer {_n}", "", max=80, help="Leave empty to hide this answer." if _n > 2 else "",
+    )
+    _MATCH_ANSWERS[f"answer_{_n}_icon"] = _choice(
+        "content", f"Answer {_n} icon", MATCH_QUIZ_ICONS, "none", labels={"none": "No icon", "drop": "Drop", "cup": "Glass"},
+    )
+    _MATCH_ANSWERS[f"answer_{_n}_result_name"] = _opt(
+        "content", "text", f"Answer {_n} result name", "", max=120,
+        help="Priority order: the result name. Empty = the title of the collection below.",
+    )
+    _MATCH_ANSWERS[f"answer_{_n}_result_text"] = _opt(
+        "content", "textarea", f"Answer {_n} result text", "", max=400, help="Priority order: the text under the result name.",
+    )
+    _MATCH_ANSWERS[f"answer_{_n}_link"] = dict(
+        _COLLECTION, group="content", label=f"Answer {_n} result collection",
+        help="Priority order: the Shop Now button goes to this collection.",
+    )
+    _MATCH_ANSWERS[f"answer_{_n}_key"] = _opt(
+        "content", "text", f"Answer {_n} result key", "", max=40,
+        help="Most picks: the key of the Result block this answer counts towards, e.g. cider.",
     )
 
-SECTIONS["quiz"] = {
-    "name": "Product quiz",
+
+SECTIONS["match-quiz"] = {
+    "name": "Find your match quiz",
     "pages": CONTENT_PAGES,
     "settings": {
-        "heading": _opt("content", "text", "Heading", "Find your perfect match", max=120),
-        "subheading": _opt("content", "textarea", "Sub-text", "Answer a few questions and we'll suggest products.", max=300),
-        "start_label": _opt("content", "text", "Start button text", "Take the quiz", max=40),
-        "result_heading": _opt("content", "text", "Result heading", "Here's what we recommend", max=120),
-        "result_text": _opt("content", "textarea", "Result text", "Based on your answers, these should suit you.", max=300),
-        "result_button_label": _opt("content", "text", "Result button text", "See my picks", max=40),
-        "result_link": _opt(
-            "content", "url", "Result page", "/collections/all",
-            help="Shoppers go here, filtered by the tags of the answers they chose.",
+        "heading": _opt("content", "text", "Heading", "Can't decide? Let our Sommelier guide you.", max=120),
+        "subheading": _opt(
+            "content", "textarea", "Sub-text",
+            "Discover a considered selection chosen to match your taste, your table, and every occasion in between.", max=300,
         ),
-        "restart_label": _opt("content", "text", "Restart text", "Start over", max=40),
-        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "center", ui="segmented"),
-        **common_settings(width="narrow"),
+        "button_label": _opt("content", "text", "Button text", "FIND YOUR MATCH", max=40),
+        "image_url": _opt("content", "image", "Image", "", help="Shown on the right of the banner."),
+        "image_alt": dict(_opt("content", "text", "Image description", "", max=200), show_if={"image_url": "*"}),
+        "result_logic": _choice(
+            "content", "Result logic", ["priority", "picks"], "priority",
+            labels={"priority": "Priority order", "picks": "Most picks"},
+            help="Priority order: each answer has its own result. Most picks: Result blocks, the key picked most often wins.",
+        ),
+        "question_priority": dict(
+            _opt(
+                "content", "text", "Question priority", "4,3,1,2", max=40,
+                help="The question numbers in the order they are checked: the first one whose answer has a result decides.",
+            ),
+            show_if={"result_logic": "priority"},
+        ),
+        "panel_color": _opt("style", "color", "Panel background colour", "#fff6e3"),
+        "panel_text_color": _opt("style", "color", "Panel text colour", "#24151a"),
+        "accent_color": _opt("style", "color", "Accent colour", "#6b2737", help="Button, progress line and selected answer."),
+        "popup_color": _opt("style", "color", "Popup background colour", "#fffaf2"),
+        "text_alignment": _choice("layout", "Text alignment", _ALIGN3, "left", ui="segmented"),
+        **{
+            key: (dict(spec, default="expert-match-quiz") if key == "anchor_id" else spec)
+            for key, spec in common_settings(width="wide").items()
+        },
     },
     "blocks": {
         "question": {
             "name": "Question",
-            "settings": {"question": _opt("content", "text", "Question", "What are you looking for?", max=200), **_QUIZ_OPTIONS},
+            "settings": {"question": _opt("content", "text", "Question", "What's your style?", max=200), **_MATCH_ANSWERS},
+        },
+        "result": {
+            "name": "Result",
+            "settings": {
+                "result_key": _opt(
+                    "content", "text", "Result key", "", max=40,
+                    help="Most picks: answers with this key count towards this result (also the fallback when no answer has its own result).",
+                ),
+                "name": _opt("content", "text", "Name", "Cider", max=120),
+                "text": _opt("content", "textarea", "Text", "A crisp, refreshing pick for you.", max=400),
+                "button_label": _opt("content", "text", "Button text", "Shop now", max=40),
+                "link": _opt("content", "url", "Link", "/collections/all", help="A collection page or any address."),
+            },
         },
     },
-    "type_limits": {"question": 10},
+    "type_limits": {"question": 8, "result": 12},
 }
 
 _MATCH_QUIZ_ANSWERS = {}

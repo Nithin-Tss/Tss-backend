@@ -78,10 +78,9 @@ REQUIRED_FILES = {
     "sections/main-checkout.liquid",
     # Promotions is available in the customizer for existing private starter themes too
     "sections/promotions.liquid",
-    # Newsletter sign-up, notice box and product quiz
+    # Newsletter sign-up, notice box and "Find your match" quiz
     "sections/newsletter.liquid",
     "sections/static-text.liquid",
-    "sections/quiz.liquid",
     "sections/match-quiz.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024

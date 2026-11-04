@@ -5832,24 +5832,181 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.ok("patch", "/api/v1/themes/settings/", {"templates": {page: {
             "order": template["order"] + list(sections), "sections": template["sections"]}}})
 
-    def test_newsletter_notice_and_quiz_render_on_the_home_page(self):
+    def test_newsletter_and_notice_render_on_the_home_page(self):
         self.add_sections("index", {
             "news": {"type": "newsletter", "settings": {"heading": "Stay in touch"}},
             "notice": {"type": "static-text", "settings": {"heading": "Please drink responsibly"}},
-            "quiz": {"type": "quiz", "settings": {"heading": "Find your match"}, "blocks": [
-                {"type": "question", "settings": {
-                    "question": "Hot or cold?", "option_1": "Hot", "tag_1": "hot", "option_2": "Cold", "tag_2": "cold"}},
-            ]},
         })
         html = self.client.get(f"{self.base}/").content.decode()
         self.assertIn("Stay in touch", html)
         self.assertIn(f'action="{self.base}/newsletter"', html)
         self.assertIn("Please drink responsibly", html)
         self.assertIn('role="note"', html)
-        self.assertIn("Find your match", html)
-        self.assertIn('data-tag="hot"', html)
-        self.assertIn("Question 1 of 1", html)
-        self.assertNotIn("Cold hot", html)
+
+    def test_a_removed_section_type_in_saved_data_is_skipped_quietly(self):
+        from .models import StoreTheme
+
+        self.add_sections("index", {"news": {"type": "newsletter", "settings": {"heading": "Stay in touch"}}})
+        assignment = StoreTheme.objects.get(store__store_id=self.store["storeId"], is_active=True)
+        index = assignment.custom_data["templates"]["index"]
+        index["sections"]["old"] = {"type": "quiz", "settings": {"heading": "Old quiz heading"}}
+        index["order"].append("old")
+        assignment.save(update_fields=["custom_data"])
+
+        r = self.client.get(f"{self.base}/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Stay in touch", r.content.decode())
+        self.assertNotIn("Old quiz heading", r.content.decode())
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        self.assertNotIn("old", settings["templates"]["index"]["sections"])
+        self.assertNotIn("old", settings["templates"]["index"]["order"])
+        self.ok("post", "/api/v1/themes/preview/", settings)  # the customizer preview does not crash either
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": index["order"], "sections": index["sections"]}}})  # saving still works with the old section in it
+        self.assertNotIn("old", self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"])
+
+    MATCH_BLOCKS = [
+        {"type": "question", "settings": {
+            "question": "Pick a mood", "answer_1_label": "Crisp", "answer_1_icon": "leaf", "answer_1_key": "Cider",
+            "answer_2_label": "Rich", "answer_2_icon": "moon", "answer_2_key": "stout"}},
+        {"type": "question", "settings": {"question": "Pick a time", "answer_1_label": "Day", "answer_1_key": "cider"}},
+        {"type": "result", "settings": {"result_key": "stout", "name": "Stout", "link": "/collections/stout"}},
+        {"type": "result", "settings": {"result_key": "cider", "name": "Cider", "text": "Apple joy", "button_label": ""}},
+    ]
+
+    def test_match_quiz_renders_on_the_home_page_with_blocks_and_anchor(self):
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {"heading": "Find your match"},
+                                              "blocks": self.MATCH_BLOCKS}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn('id="expert-match-quiz"', html)  # the default section ID
+        self.assertIn("data-mq-open", html)
+        self.assertIn("Question 1 of 2", html)
+        self.assertIn("Question 2 of 2", html)
+        self.assertIn('data-key="cider"', html)  # result keys are matched in lower case
+        self.assertIn("Pick a mood", html)
+        self.assertIn(f'data-link="{self.base}/collections/stout"', html)
+        self.assertIn('data-label="Shop now"', html)  # empty button text falls back to the default
+        self.assertEqual(html.count('class="mq-modal__bar"'), 2)
+
+    def test_match_quiz_result_logic_is_in_the_section_file(self):
+        code = self.ok("get", "/api/v1/themes/files/")["files"]
+        script = next(f["content"] for f in code if f["path"] == "sections/match-quiz.liquid")
+        # most picks wins; the first Result block wins a tie and is the fallback
+        self.assertIn("count > best", script)
+        self.assertIn("var winner = results[0]", script)
+
+    def test_match_quiz_new_section_defaults(self):
+        from .schemas import SECTIONS
+
+        spec = SECTIONS["match-quiz"]
+        settings = {key: option["default"] for key, option in spec["settings"].items()}
+        self.assertEqual(settings["result_logic"], "priority")
+        self.assertEqual(settings["question_priority"], "4,3,1,2")
+        self.assertEqual(settings["anchor_id"], "expert-match-quiz")
+        self.assertEqual(settings["button_label"], "FIND YOUR MATCH")
+        self.assertEqual(settings["heading"], "Can't decide? Let our Sommelier guide you.")
+        self.assertEqual((settings["panel_color"], settings["panel_text_color"]), ("#fff6e3", "#24151a"))
+        self.assertEqual((settings["accent_color"], settings["popup_color"]), ("#6b2737", "#fffaf2"))
+        # a new section starts with no Question and no Result blocks: each owner adds their own
+        self.assertNotIn("default_blocks", spec)
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn('id="expert-match-quiz"', html)
+        self.assertNotIn('<button class="match-quiz__button" type="button" data-mq-open', html)  # the element, not CSS/JS text
+        self.assertNotIn('class="mq-modal__bar"', html)
+
+    PRIORITY_BLOCKS = [
+        {"type": "question", "settings": {"question": "Q1", "answer_1_label": "One", "answer_1_result_name": "From one",
+                                          "answer_2_label": "Two"}},
+        {"type": "question", "settings": {"question": "Q2", "answer_1_label": "Three"}},
+        {"type": "question", "settings": {"question": "Q3", "answer_1_label": "Four", "answer_1_link": "stout-shelf"}},
+        {"type": "question", "settings": {
+            "question": "Q4", "answer_1_label": "Light", "answer_1_result_name": "Beer & Cider",
+            "answer_1_result_text": "Fresh beers.", "answer_1_link": "/collections/beer",
+            "answer_2_label": "Strong", "answer_2_link": "stout-shelf"}},
+    ]
+
+    def test_match_quiz_priority_answers_carry_their_own_result(self):
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Stout shelf", "status": "active"}, expect=201)
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}, "blocks": self.PRIORITY_BLOCKS}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn('data-mode="priority"', html)
+        self.assertNotIn("data-mq-result ", html)  # no Result blocks needed
+        # an answer with a name: its name, text and the collection link
+        self.assertIn(
+            f'data-rname="Beer &amp; Cider" data-rtext="Fresh beers." data-rlink="{self.base}/collections/beer"', html)
+        # no name: the collection's title is the result name
+        self.assertIn(f'data-rname="Stout shelf" data-rtext="" data-rlink="{self.base}/collections/stout-shelf"', html)
+        # a name without a collection has no link
+        self.assertIn('data-rname="From one" data-rtext="" data-rlink=""', html)
+        # an answer with no result at all
+        self.assertIn('data-rname="" data-rtext="" data-rlink=""', html)
+
+    def test_match_quiz_priority_order_and_popup_behaviour_are_in_the_section_file(self):
+        code = self.ok("get", "/api/v1/themes/files/")["files"]
+        script = next(f["content"] for f in code if f["path"] == "sections/match-quiz.liquid")
+        # questions are checked in the order of "Question priority"; the first chosen answer with a name or link wins
+        self.assertIn("function priorityOrder()", script)
+        self.assertIn("var pick = picks[order[i]];", script)
+        self.assertIn("if (pick && (pick.name || pick.link))", script)
+        self.assertIn('setResult(pick.name, pick.text, pick.link, "Shop Now")', script)
+        self.assertIn("text-transform: uppercase", script)  # the button reads SHOP NOW
+        # advances 350ms after an answer; no answers kept after reopening; page scroll is locked while open
+        self.assertIn("}, 350);", script)
+        self.assertIn("picks = [];", script)
+        self.assertIn('document.body.style.overflow = "hidden"', script)
+        self.assertIn("back.hidden = index === 0;", script)
+        self.assertIn("data-mq-close", script)
+        self.assertIn('event.key === "Escape"', script)
+        self.assertIn("@media (max-width: 749px)", script)
+        self.assertIn("grid-template-columns: 1fr 0.9fr", script)
+
+    def test_match_quiz_most_picks_still_works_when_chosen_or_when_answers_have_no_results(self):
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {"result_logic": "picks"},
+                                              "blocks": self.PRIORITY_BLOCKS + self.MATCH_BLOCKS[2:]}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertIn('data-mode="picks"', html)
+        self.assertIn('data-key="cider"', html)
+        # "Priority order" with answers that have no results (an older section) falls back to the Result blocks
+        self.add_sections("index", {"older": {"type": "match-quiz", "settings": {}, "blocks": self.MATCH_BLOCKS}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        self.assertEqual(html.count('data-mode="picks"'), 2)
+
+    def test_match_quiz_limits_and_placeholders(self):
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}}})
+        page = self.client.get(f"{self.base}/").content.decode()
+        self.assertNotIn("<button", page.split('class="section match-quiz', 1)[1].split("</section>", 1)[0])
+        self.assertNotIn("data-mq-open", page)  # no button, popup or script without blocks
+        preview = self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))["html"]
+        self.assertIn('Add "Question" blocks', preview)
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["match"]
+        section["blocks"] = [{"type": "question", "settings": {}} for _ in range(9)]
+        r = self.client.patch("/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"match": section}}}}, format="json")
+        self.assertEqual(r.status_code, 400, r.content[:300])
+
+    def test_match_quiz_edit_code_change_shows_for_that_store_only(self):
+        other_token, other = self.sign_up("other-quiz@example.com", "Other Quiz Store")
+        for token, store in ((self.token, self.store), (other_token, other)):
+            self.use(token, store["storeId"])
+            self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}, "blocks": self.MATCH_BLOCKS}})
+        self.use(self.token, self.store["storeId"])
+        original = next(f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]
+                        if f["path"] == "sections/match-quiz.liquid")
+        edited = original.replace("Your recommendation", "Hand-edited recommendation")
+        self.assertNotEqual(edited, original)
+        self.ok("post", "/api/v1/themes/files/", {"path": "sections/match-quiz.liquid", "content": edited})
+
+        mine = self.client.get(f"{self.base}/").content.decode()
+        theirs = self.client.get(f"/s/{other['storeSlug']}/").content.decode()
+        self.assertIn("Hand-edited recommendation", mine)
+        self.assertNotIn("Hand-edited recommendation", theirs)
+        self.assertIn("Your recommendation", theirs)
+        preview = self.ok("post", "/api/v1/themes/preview/", self.ok("get", "/api/v1/themes/settings/"))["html"]
+        self.assertIn("Hand-edited recommendation", preview)
+        from .services import starter_files
+        self.assertIn("Your recommendation", starter_files()["sections/match-quiz.liquid"])
 
     def test_match_quiz_and_unknown_sections_resolve_without_error(self):
         from .schemas import resolve
