@@ -5569,6 +5569,54 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.assertIn("theme-a-sec", r_a2.content.decode())
         self.assertNotIn("theme-b-sec", r_a2.content.decode())
 
+    def test_checkout_rejects_email_without_top_level_domain_for_every_payment_method(self):
+        import re
+        from apps.orders.models import Order
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        form = {
+            "first_name": "Jav", "last_name": "V", "address1": "1 Main Street", "city": "Pune",
+            "postal_code": "411001", "country": "India",
+        }
+        for method in ("cod", "online_demo", "cash_on_delivery", ""):
+            for bad in ("jv@gmail", "jav", "", "  ", "jv@gmail.c", "a@b.com\r\nBcc: x@y.com"):
+                with self.subTest(method=method, email=bad):
+                    r = self.shopper.post(
+                        f"{self.base}/checkout/", data=json.dumps({**form, "email": bad, "payment_method": method}),
+                        content_type="application/json", HTTP_ACCEPT="application/json", HTTP_X_CART_SESSION=session_id,
+                    )
+                    self.assertEqual(r.status_code, 400, r.content[:200])
+                    self.assertIn(r.json()["error"], ("Enter an email address", "Enter a valid email address"))
+                    self.assertEqual(r.json()["field"], "email")
+                    self.assertEqual(Order.objects.count(), 0)
+
+    def test_checkout_refuses_to_place_order_with_bad_email_already_saved_on_it(self):
+        import re
+        from apps.commerce.models import Checkout
+        from apps.commerce import services as commerce_services
+        from apps.orders.models import Order
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        self.shopper.post(f"{self.base}/checkout/", data=json.dumps({"action": "apply_discount", "discount_code": ""}),
+                          content_type="application/json", HTTP_X_CART_SESSION=session_id)
+        checkout = Checkout.objects.get()
+        Checkout.objects.filter(pk=checkout.pk).update(email="jv@gmail", shipping_address={"first_name": "J", "address1": "1 St"})
+        checkout.refresh_from_db()
+        for method in ("cod", "online_demo"):
+            with self.assertRaises(Exception):
+                commerce_services._place_order(checkout, method)
+        self.assertEqual(Order.objects.count(), 0)
+
     def test_storefront_checkout_full_order_journey(self):
         import re
         self.add_theme(source="blank", name="Main Theme")

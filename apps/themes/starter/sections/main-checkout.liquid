@@ -138,6 +138,14 @@
     transition: border-color .15s, box-shadow .15s;
     font-family: inherit;
   }
+  .checkout-field-error {
+    margin: 0;
+    color: #DC2626;
+    font-size: 12px;
+  }
+  .checkout-field input.is-invalid {
+    border-color: #DC2626;
+  }
   .checkout-field textarea {
     height: 80px;
     padding: 10px 12px;
@@ -567,7 +575,7 @@
   {%- else -%}
     <div class="checkout-grid" id="checkout-main-grid">
       <div class="checkout-form-col">
-        <form id="checkout-form" method="post" action="{{ shop.url }}/checkout/">
+        <form id="checkout-form" method="post" novalidate action="{{ shop.url }}/checkout/">
           <input type="hidden" name="cart_session" value="{{ cart_session }}">
           <input type="hidden" name="discount_code" id="hidden_discount_code" value="">
 
@@ -584,7 +592,8 @@
                 {%- if customer.is_sample -%}{%- assign prefill = nil -%}{%- endif -%}
                 {%- assign saved = prefill.default_address -%}
                 {%- assign country_default = saved.country | default: shop.country -%}
-                <input type="email" id="checkout-email" name="email" required placeholder="Email address" value="{{ prefill.email | default: '' | escape }}">
+                <input type="email" id="checkout-email" name="email" required maxlength="254" autocomplete="email" placeholder="Email address" aria-describedby="checkout-email-error" value="{{ prefill.email | default: '' | escape }}">
+                <p class="checkout-field-error" id="checkout-email-error" role="alert" hidden></p>
               </div>
             </div>
           </div>
@@ -881,6 +890,13 @@
   });
   if (demoPaymentForm) demoPaymentForm.addEventListener('submit', function(e) {
     e.preventDefault();
+    // The pay button re-checks the contact email (and the billing email) with the same rules as the order form
+    if (!checkEmail()) { closePaymentModal(); return; }
+    if (demoBillingEmail) {
+      var billing = demoBillingEmail.value.trim().toLowerCase();
+      demoBillingEmail.value = billing;
+      demoBillingEmail.setCustomValidity(billing.length <= 254 && EMAIL_PATTERN.test(billing) ? '' : 'Enter a valid email address');
+    }
     if (!demoPaymentForm.reportValidity()) return;
     if (demoPaymentResult) {
       demoPaymentResult.textContent = 'Demo complete. No payment was processed and no order was placed.';
@@ -894,6 +910,31 @@
     alertBox.style.display = 'flex';
     alertBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+
+  var emailInput = document.getElementById('checkout-email');
+  var emailError = document.getElementById('checkout-email-error');
+  var EMAIL_PATTERN = /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}$/;
+
+  function showEmailError(msg) {
+    if (!emailInput || !emailError) return;
+    emailError.textContent = msg;
+    emailError.hidden = !msg;
+    emailInput.classList.toggle('is-invalid', !!msg);
+    if (msg) emailInput.focus();
+  }
+
+  // Same rules as the server: trimmed, lower-case, name@domain.tld, at most 254 characters
+  function checkEmail() {
+    var value = emailInput.value.trim().toLowerCase();
+    var msg = '';
+    if (!value) msg = 'Enter an email address';
+    else if (value.length > 254 || !EMAIL_PATTERN.test(value)) msg = 'Enter a valid email address';
+    showEmailError(msg);
+    if (!msg) emailInput.value = value;
+    return !msg;
+  }
+
+  if (emailInput) emailInput.addEventListener('input', function() { showEmailError(''); });
 
   function hideAlert() {
     if (alertBox) alertBox.style.display = 'none';
@@ -1011,6 +1052,7 @@
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       hideAlert();
+      if (!checkEmail()) return;
 
       if (selectedPaymentMethod() === 'online_demo') {
         openDemoPayment();
@@ -1024,7 +1066,7 @@
       var city = form.city.value.trim();
       var postal_code = form.postal_code.value.trim();
 
-      if (!email || !first_name || !last_name || !address1 || !city || !postal_code) {
+      if (!first_name || !last_name || !address1 || !city || !postal_code) {
         showAlert('Please fill in all required delivery fields.');
         return;
       }
@@ -1063,7 +1105,11 @@
       })
       .then(function(res) {
         return res.json().then(function(data) {
-          if (!res.ok) throw new Error(data.error || 'Could not place order.');
+          if (!res.ok) {
+            var failure = new Error(data.error || 'Could not place order.');
+            failure.field = data.field;
+            throw failure;
+          }
           return data;
         });
       })
@@ -1075,7 +1121,8 @@
         }
       })
       .catch(function(err) {
-        showAlert(err.message || 'There was a problem processing your order. Please try again.');
+        if (err.field === 'email') showEmailError(err.message);
+        else showAlert(err.message || 'There was a problem processing your order. Please try again.');
         if (submitBtn) {
           submitBtn.disabled = false;
           submitBtn.textContent = selectedPaymentMethod() === 'online_demo' ? 'Pay Now' : submitBtn.dataset.label;

@@ -2576,7 +2576,7 @@ def storefront_checkout(request, store_slug):
             html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error="Your cart is empty.")
             return _storefront_response(html, status=400, request=request, store=store)
 
-        email = (data.get("email") or "").strip()
+        email = (data.get("email") or "").strip().lower()
         first_name = (data.get("first_name") or "").strip()
         last_name = (data.get("last_name") or "").strip()
         address1 = (data.get("address1") or data.get("address_line_1") or "").strip()
@@ -2592,8 +2592,14 @@ def storefront_checkout(request, store_slug):
         discount_code = (data.get("discount_code") or "").strip()
         notes = (data.get("notes") or data.get("order_notes") or "").strip()
 
-        if not email or "@" not in email:
-            error = "Please provide a valid email address."
+        error_field = ""
+        try:
+            email = commerce_services.clean_email(email)
+            error = None
+        except ValidationError as e:
+            error, error_field = _first_message(e.detail), "email"
+        if error:
+            pass
         elif not first_name or not last_name:
             error = "First and last name are required."
         elif not address1 or not city or not postal_code:
@@ -2603,7 +2609,7 @@ def storefront_checkout(request, store_slug):
 
         if error:
             if is_json:
-                return JsonResponse({"error": error}, status=400)
+                return JsonResponse({"error": error, "field": error_field}, status=400)
             html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error=error)
             return _storefront_response(html, status=400, request=request, store=store)
 
@@ -2647,7 +2653,7 @@ def storefront_checkout(request, store_slug):
         except Exception as e:
             msg = _first_message(getattr(e, "detail", str(e)))
             if is_json:
-                return JsonResponse({"error": msg}, status=400)
+                return JsonResponse({"error": msg, "field": "email" if "email address" in msg else ""}, status=400)
             html = render_page(store, "checkout", request=request, cart_id=cart_session, auth_error=msg)
             return _storefront_response(html, status=400, request=request, store=store)
 

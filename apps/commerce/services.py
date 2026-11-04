@@ -3,6 +3,7 @@ Carts and checkouts. A shopper fills a cart, then starts a checkout, which
 freezes the cart's lines and prices. Turning a checkout into an order is the
 orders app's job (orders.services.create_order).
 """
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
@@ -243,6 +244,22 @@ def clear_cart(cart):
     return cart
 
 
+EMAIL_MAX_LENGTH = 254
+_EMAIL_PATTERN = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}$"
+)
+
+
+def clean_email(value):
+    """The shopper's email trimmed and lower-cased; ValidationError({"email": ...}) when missing or not name@domain.tld."""
+    value = (value or "").strip().lower() if isinstance(value, str) or value is None else ""
+    if not value:
+        raise ValidationError({"email": "Enter an email address"})
+    if len(value) > EMAIL_MAX_LENGTH or not _EMAIL_PATTERN.match(value):
+        raise ValidationError({"email": "Enter a valid email address"})
+    return value
+
+
 def cart_subtotal(cart):
     return sum((i.unit_price * i.quantity for i in active_items(cart)), ZERO)
 
@@ -409,7 +426,7 @@ def update_checkout(checkout, email=None, shipping_address=None, billing_address
         raise ValidationError("This checkout is no longer open.")
 
     if email is not None:
-        checkout.email = email
+        checkout.email = clean_email(email) if str(email).strip() else ""
     if shipping_address is not None:
         checkout.shipping_address = shipping_address
     if billing_address is not None:
@@ -541,8 +558,8 @@ def _place_order(checkout, payment_method, payment_reference=None):
     if checkout.status != CHECKOUT_OPEN:
         raise ValidationError("This checkout is no longer open.")
 
-    if not checkout.email:
-        raise ValidationError({"email": "An email is required to place the order."})
+    # Every path that makes an order (cash, card, Stripe) ends here, so an email saved before the rules existed can't slip through
+    checkout.email = clean_email(checkout.email)
     if not checkout.shipping_address:
         raise ValidationError({"shipping_address": "A shipping address is required to place the order."})
 
