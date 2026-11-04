@@ -970,7 +970,7 @@ document.addEventListener("click", function (e) {
 });
 </script>""")
 # Common Storefront Search Controller: unified handling for existing search boxes
-SEARCH_JS = Markup("""<script>
+SEARCH_JS = Markup(r"""<script>
 (function () {
   function initCommonSearch() {
     // 1. Header search block(s) across any theme
