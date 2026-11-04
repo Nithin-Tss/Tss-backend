@@ -13,7 +13,7 @@ from .models import Store
 from .services import ACTIVE
 
 STORE_PREFIX = "/s/"
-PASSTHROUGH = ("/api/", "/admin/", "/static/", "/s/")
+PASSTHROUGH = ("/api/", "/admin/", "/static/", "/s/", "/healthz", "/readyz")
 REWRITABLE_TYPES = ("text/html", "text/xml", "application/xml", "application/json", "text/javascript", "application/javascript")
 
 
