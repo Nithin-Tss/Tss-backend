@@ -619,7 +619,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn('<header class="site-header" data-tss-section="header"', page)
         self.assertNotIn('<div data-tss-section="header"', page)
         # The store's own page has no editor markers
-        self.assertNotIn("data-tss-section", self.home())
+        self.assertNotIn('data-tss-section="', self.home())  # (the stock script only names it in a selector)
 
         # Code without {{ section.attrs }} is wrapped instead, so the customizer can still select it
         self.save_code(self.code().replace("{{ section.attrs }}", ""))
@@ -2533,7 +2533,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 47)
+        self.assertEqual(theme.theme_data["starter_revision"], 48)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2743,7 +2743,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 47)
+        self.assertEqual(STARTER_REVISION, 48)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -2906,8 +2906,10 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 class StorefrontWishlistTest(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, self.store = self.sign_up("wishlist@example.com", "Wishlist Store")
-        self.product = self.ok("post", "/api/v1/catalog/products/", {
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.product = self.ok("post", "/api/v1/catalog/products/", {  # in stock: the card shows Add to cart, not Sold out
             "title": "Blue mug", "sku": "SKU-MUG", "status": "active", "price": "12.50",
+            "location": location, "quantity": 5,
         }, expect=201)
         self.base = f"/s/{self.store['storeSlug']}"
 
@@ -3560,7 +3562,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 47)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 48)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
