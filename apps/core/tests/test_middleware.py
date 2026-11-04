@@ -79,6 +79,9 @@ class MiddlewareEdgeTests(SimpleTestCase):
 
 
 class ErrorPageTests(SimpleTestCase):
+    # StoreDomainMiddleware looks up the Host on non-API paths
+    databases = {"default"}
+
     def test_unknown_api_route_is_json(self):
         r = self.client.get("/api/v1/nope/")
         self.assertEqual(r.status_code, 404)
