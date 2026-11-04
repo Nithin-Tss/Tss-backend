@@ -54,6 +54,12 @@ if SECRET_KEY == 'django-insecure-secret-key' and not DEBUG:
 # Domains this backend may be served on, e.g. "api.example.com"
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1' if DEBUG else '')
 
+# Every store gets its own hostname "<store-slug>.<STORE_BASE_DOMAIN>" (needs a wildcard DNS record
+# and certificate for *.<STORE_BASE_DOMAIN>). Leave empty to serve stores only under /s/<slug>/.
+STORE_BASE_DOMAIN = os.environ.get('STORE_BASE_DOMAIN', '').strip().lower().strip('.')
+if STORE_BASE_DOMAIN:
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, f'.{STORE_BASE_DOMAIN}']
+
 # Frontend origins allowed to send forms/cookies to this backend (must include https://)
 CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 
@@ -139,6 +145,7 @@ MIDDLEWARE = [
     'apps.audit.middleware.AuditMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'apps.tenancy.middleware.StoreDomainMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
