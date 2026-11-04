@@ -56,8 +56,8 @@
     {%- assign card_disable_oos = settings.disable_out_of_stock_add_to_cart -%}
     {%- if card_disable_oos == nil -%}{%- assign card_disable_oos = true -%}{%- endif -%}
     {%- assign card_sold_out_text = settings.sold_out_button_label | default: 'Sold out' -%}
-    {%- if product.is_sold_out and card_disable_oos -%}
-      <span class="button button--disabled product-card__cta" aria-disabled="true" data-sold-out="true">{{ card_sold_out_text }}</span>
+    {%- if product.is_sold_out and card_disable_oos and wishlist_action != 'remove' -%}
+      <span class="button product-card__cta" aria-disabled="true" data-sold-out="true">{{ card_sold_out_text }}</span>
     {%- else -%}
       <span class="button product-card__cta">Add to cart</span>
     {%- endif -%}

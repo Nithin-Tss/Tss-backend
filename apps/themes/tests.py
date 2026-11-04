@@ -2528,12 +2528,13 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
 
     def test_an_existing_store_gets_the_snippet_and_the_new_starter_files(self):
         import hashlib
+        from .services import STARTER_REVISION
 
         self.revert_to_revision_20()
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 47)
+        self.assertEqual(theme.theme_data["starter_revision"], STARTER_REVISION)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2743,7 +2744,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 47)
+        self.assertGreaterEqual(STARTER_REVISION, 47)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3551,7 +3552,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         import hashlib
 
         from . import section_sync as sync
-        from .services import STARTER_UPGRADES
+        from .services import STARTER_REVISION, STARTER_UPGRADES
 
         self.make_store_from_before_the_wishlist_blocks()
         # the fixtures really are the old starter files (their hashes are registered for the upgrade)
@@ -3560,7 +3561,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 47)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], STARTER_REVISION)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))

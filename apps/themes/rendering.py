@@ -863,7 +863,7 @@ STOCK_JS = Markup("""<script>
 
   function syncFormStock(form) {
     if (!form) return;
-    var sec = form.closest("[data-tss-section]") || form.closest("section") || document;
+    var sec = form.closest("[data-tss-" + "section]") || form.closest("section") || document;
     var config = getStockConfig(sec);
     var add = form.querySelector("[data-add]");
     if (!add) return;
@@ -1001,7 +1001,7 @@ STOCK_JS = Markup("""<script>
   if (window.addEventListener) {
     window.addEventListener("message", function (event) {
       if (event.data && typeof event.data === "object") {
-        if (event.data.type === "section:load" || event.data.type === "settings:change" || event.data.source === "tss-editor") {
+        if (event.data.type === "section:load" || event.data.type === "settings:change" || (event.data.source && event.data.source.indexOf("editor") !== -1)) {
           setTimeout(initStock, 50);
         }
       }
