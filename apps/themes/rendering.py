@@ -378,7 +378,7 @@ PANEL_KEYS = (
     "heading_color", "link_color", "border_color", "button_focus_color", "button2_bg", "button2_text", "button2_border",
     "link_underline", "body_weight", "body_line_height", "base_font_size_mobile",
     "heading_line_height", "heading_letter_spacing", "heading_case", "heading_size", "heading_size_mobile",
-    "button_disabled_opacity", "button_border_width", "button_radius",
+    "button_border", "button_disabled_opacity", "button_border_width", "button_radius",
 )
 
 
