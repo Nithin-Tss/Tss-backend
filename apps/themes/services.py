@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 46
+STARTER_REVISION = 47
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -237,6 +237,8 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
+        "968932f6ec131d7062429bba9cbb3e2005fb711bf51c0f552c9a9c15ff9e78ad",  # revision 47: before the rotating announcement bar
+        "617d6d3d40e3684af3e5ded9e23d75e84754c32238f7e8aba9503683192db6ed",  # revision 47: before the rotating announcement bar (CRLF)
         "2a4098b38d89db4b74379ed9d6bdbf7e344864db5bac20b2c9e96abf5c5f5db2",  # revision 41: before the announcement bar
         "9d15d2135de541b6cdc494c32c325e490d151d8e984f222015cc80b017843685",  # revision 20: legacy wishlist block fixture
         "1d988651e7e347b5e4eba971acebc1e7a11a49d8a4f9974ba3d74ea8b35ef3de",  # revision 18: legacy Show Wishlist fixture
