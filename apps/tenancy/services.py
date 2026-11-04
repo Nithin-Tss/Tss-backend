@@ -23,8 +23,7 @@ def platform_membership(user, store):
 
 def stores_for_user(user):
     """Stores the user is an active member of, with their role and access in each.
-    A platform admin is no exception: the store picker and the session list only their own
-    stores. They reach any other store through /platform/stores/ (or by its id)."""
+    A platform admin also gets every other open store, as an owner of it."""
     from .access import member_roles, membership_permissions
 
     memberships = list(
@@ -32,6 +31,12 @@ def stores_for_user(user):
         .filter(user=user, status=ACTIVE)
         .order_by("created_at")
     )
+    if user.is_owner:
+        own = {m.store_id for m in memberships}
+        memberships += [
+            platform_membership(user, store)
+            for store in Store.objects.exclude(status=CLOSED).exclude(pk__in=own).order_by("created_at")
+        ]
 
     return [
         {

@@ -329,14 +329,14 @@ class PlatformAccessTest(Base):
 
 
 class PlatformStoresTest(Base):
-    def test_store_lists_show_only_the_admins_own_stores(self):
+    def test_store_lists_show_every_store_to_the_admin(self):
         # The platform admin's own store is "Root store"; "Shop" belongs to owner@example.com
         self.as_admin(self.admin())
 
         for listed in (self.ok("get", "/api/v1/auth/me/")["stores"], self.ok("get", "/api/v1/stores/")):
-            self.assertEqual([s["storeName"] for s in listed], ["Root store"])
+            self.assertEqual({s["storeName"] for s in listed}, {"Shop", "Root store"})
 
-        # The platform page still lists every store, and a store can still be opened by its id
+        # The platform page lists every store too, and a store can be opened by its id
         everything = self.ok("get", "/api/v1/platform/stores/")
         self.assertEqual({s["storeName"] for s in everything["results"]}, {"Shop", "Root store"})
         self.ok("get", f"/api/v1/stores/{self.store_id}/")
