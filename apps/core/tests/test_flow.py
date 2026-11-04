@@ -361,8 +361,8 @@ class HomeSectionsTest(StoreClientMixin, APITestCase):
 
         self.ok("put", "/api/v1/themes/settings/", body)
         public = self.home(store["storeSlug"])
-        self.assertNotIn("data-tss-section", public)
-        self.assertNotIn("tss-edit", public)
+        self.assertNotIn('data-tss-section="', public)  # (the stock script only names it in a selector)
+        self.assertNotIn(".tss-edit", public)  # the editor's styles (the page script's "tss-editor" source tag is fine)
 
     def test_preview_config_cannot_break_out_of_script(self):
         self.sign_up("xss@example.com", "Xss Shop")

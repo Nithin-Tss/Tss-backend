@@ -114,7 +114,7 @@ class AddressSerializer(serializers.Serializer):
 
 
 class CheckoutInputSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False, max_length=320)
+    email = serializers.EmailField(required=False, max_length=254)
     shipping_address = AddressSerializer(required=False)
     billing_address = AddressSerializer(required=False)
     discount_code = serializers.CharField(required=False, allow_blank=True, max_length=50)

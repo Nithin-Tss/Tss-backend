@@ -285,8 +285,16 @@ _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 VALUE_CLEANERS = {}
 
 
+def _from_legacy_int(spec, value):
+    """A select that used to be a number: the old default (int_legacy) meant "follow the theme"."""
+    if spec.get("int_legacy") is not None and isinstance(value, int) and not isinstance(value, bool):
+        return "" if value == spec["int_legacy"] else str(value)
+    return value
+
+
 def _clean_value(spec, value, where):
     kind = spec["type"]
+    value = _from_legacy_int(spec, value)
 
     if kind in VALUE_CLEANERS:
         return VALUE_CLEANERS[kind](spec, value, where)
@@ -495,6 +503,7 @@ def _coerce(spec, value):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return copy.deepcopy(spec["default"])
         return max(spec["min"], min(spec["max"], int(value)))
+    value = _from_legacy_int(spec, value)
     if spec["type"] == "select" and value not in spec["options"]:
         return copy.deepcopy(spec["default"])
     return value
@@ -1897,7 +1906,10 @@ def button_settings():
             "button", "select", "Corners", "", options=["", "square", "slight", "rounded", "pill"],
             labels={"": "Theme", "slight": "Slight"}, ui="segmented",
         ),
-        "b_border_width": _td("button", "range", "Border width", 1, min=0, max=4, unit="px"),
+        # "" follows the theme's border width; saved numbers from before are read by _coerce
+        "b_border_width": _td("button", "select", "Border width", "", options=["", "0", "1", "2", "3", "4"],
+                              labels={"": "Theme", "0": "None", "1": "1px", "2": "2px", "3": "3px", "4": "4px"},
+                              ui="segmented", int_legacy=1),
         "b_full_width": _td("button", "checkbox", "Full width", False),
         "b_font": _td("button", "font", "Font", ""),
         "b_font_size": _td("button", "font_size", "Font size", 0, min=10, max=40, unit="px",
@@ -2044,8 +2056,96 @@ THEME_SETTINGS.update({
     ),
 })
 
+# Theme settings panel: colour palette, typography and button styles. theme_css (rendering.py)
+# turns them into :root variables; styles.liquid and TYPE_CSS read them.
+# "contrast": two lists of colour keys (the first one with a value is used) the editor checks.
+_CASES = ["none", "uppercase", "lowercase", "capitalize"]
+_CASE_LABELS = {"none": "As typed", "uppercase": "UPPERCASE", "lowercase": "lowercase", "capitalize": "Capitalize"}
+_THEME_WEIGHTS = ["300", "400", "500", "600", "700", "800"]
+_THEME_WEIGHT_LABELS = {k: v for k, v in _WEIGHT_LABELS.items() if k}
+
+THEME_SETTINGS["text_color"]["contrast"] = [["text_color"], ["background_color"]]
+THEME_SETTINGS["accent_color"]["help"] = "Buttons, the announcement bar and highlights."
+THEME_SETTINGS["base_font_size"]["label"] = "Body text size (desktop)"
+
+THEME_SETTINGS.update({
+    "heading_color": _theme_opt(
+        "colors", "color_optional", "Heading colour", "", help="None uses the text colour.",
+        contrast=[["heading_color", "text_color"], ["background_color"]],
+    ),
+    "link_color": _theme_opt(
+        "colors", "color_optional", "Link colour", "", help="Links inside text. None uses the text colour.",
+        contrast=[["link_color", "text_color"], ["background_color"]],
+    ),
+    "border_color": _theme_opt(
+        "colors", "color_optional", "Border and divider colour", "",
+        help="None mixes the text and background colours.",
+    ),
+    "base_font_size_mobile": _theme_opt(
+        "typography", "font_size", "Body text size (mobile)", 0, min=12, max=22, unit="px",
+        presets={"Small": 14, "Medium": 16, "Large": 18}, help="Theme uses the desktop size.",
+    ),
+    "body_weight": _theme_opt("typography", "select", "Body font weight", "400", options=["300", "400", "500"],
+                              labels=_THEME_WEIGHT_LABELS),
+    "body_line_height": _theme_opt(
+        "typography", "select", "Body line height", "1.55", options=["1.3", "1.45", "1.55", "1.7", "1.9"],
+        labels={"1.3": "1.3 (tight)", "1.55": "1.55 (normal)", "1.9": "1.9 (loose)"},
+    ),
+    "heading_size": _theme_opt(
+        "typography", "font_size", "Section heading size (desktop)", 0, min=16, max=72, unit="px",
+        presets={"Small": 24, "Medium": 30, "Large": 40}, help="Theme scales between 22 and 30px.",
+    ),
+    "heading_size_mobile": _theme_opt(
+        "typography", "font_size", "Section heading size (mobile)", 0, min=16, max=56, unit="px",
+        presets={"Small": 20, "Medium": 24, "Large": 30},
+    ),
+    "heading_line_height": _theme_opt(
+        "typography", "select", "Heading line height", "1.1", options=["1", "1.1", "1.2", "1.3", "1.4"],
+        labels={"1": "1 (tight)", "1.1": "1.1 (normal)", "1.4": "1.4 (loose)"},
+    ),
+    "heading_letter_spacing": _theme_opt(
+        "typography", "select", "Heading letter spacing", "tight", options=["tight", "normal", "wide", "wider"],
+        ui="segmented",
+    ),
+    "heading_case": _theme_opt("typography", "select", "Heading letter case", "none", options=_CASES,
+                               labels=_CASE_LABELS),
+    "button_border": _theme_opt("buttons", "color_optional", "Button border colour", "",
+                                help="None matches the button colour."),
+    "button_border_width": _theme_opt("buttons", "range", "Button border width", 1, min=0, max=4, unit="px"),
+    "button_hover_bg": _theme_opt("buttons", "color_optional", "Hover button colour", "",
+                                  help="None keeps the button colour (with the hover effect)."),
+    "button_hover_text": _theme_opt("buttons", "color_optional", "Hover text colour", ""),
+    "button_size": _theme_opt("buttons", "select", "Button size", "medium", options=["small", "medium", "large"],
+                              ui="segmented"),
+    "button_padding_x": _theme_opt("buttons", "number", "Button side padding", 0, min=0, max=80, unit="px",
+                                   help="0 uses the size above."),
+    "button_font": _theme_opt("buttons", "font", "Button font", "", allow_empty=True,
+                              help="Theme font uses the body font."),
+    "button_font_size": _theme_opt("buttons", "font_size", "Button font size", 0, min=10, max=24, unit="px",
+                                   presets={"Small": 13, "Medium": 15, "Large": 17}, help="Theme uses the size above."),
+    "button_weight": _theme_opt("buttons", "select", "Button font weight", "600", options=_THEME_WEIGHTS,
+                                labels=_THEME_WEIGHT_LABELS),
+    "button_case": _theme_opt("buttons", "select", "Button letter case", "none", options=_CASES, labels=_CASE_LABELS),
+    "button_focus_color": _theme_opt("buttons", "color_optional", "Keyboard focus ring", "",
+                                     help="Shown when a button is reached with Tab. None uses the accent colour."),
+    "button_disabled_opacity": _theme_opt("buttons", "range", "Disabled button opacity", 55, min=20, max=90, step=5,
+                                          unit="%", help="For example, Add to cart when a product is sold out."),
+    "button2_bg": _theme_opt("buttons", "color_optional", "Secondary button colour", "",
+                             help="Outline buttons, e.g. the hero's second button. None is transparent."),
+    "button2_text": _theme_opt(
+        "buttons", "color_optional", "Secondary button text colour", "", help="None uses the primary border colour.",
+        contrast=[["button2_text", "button_border", "button_bg", "accent_color"], ["button2_bg", "background_color"]],
+    ),
+    "button2_border": _theme_opt("buttons", "color_optional", "Secondary button border colour", ""),
+    "link_underline": _theme_opt(
+        "buttons", "select", "Text link underline", "always", options=["always", "hover", "none"], ui="segmented",
+        labels={"hover": "On hover"}, help="Links inside text. Sections can still set their own.",
+    ),
+})
+THEME_SETTINGS["button_text"]["contrast"] = [["button_text", "background_color"], ["button_bg", "accent_color"]]
+
 THEME_GROUPS = [
-    {"id": "colors", "label": "Colours"},
+    {"id": "colors", "label": "Color palette"},
     {"id": "typography", "label": "Typography"},
     {"id": "buttons", "label": "Buttons"},
     {"id": "products", "label": "Products & inventory"},

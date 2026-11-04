@@ -16,7 +16,7 @@ from apps.tenancy.access import accept_invitations
 from apps.tenancy.services import ACTIVE, stores_for_user
 
 from .email_links import send_password_reset_email, send_verification_email
-from . import lockout
+from . import lockout, mfa
 from .models import normalize_email
 from .serializers import (
     ChangePasswordSerializer, LoginSerializer, PasswordResetConfirmSerializer,
@@ -35,6 +35,7 @@ def session_payload(user, tokens=None):
             "mobileNumber": user.phone,
             "emailVerified": user.email_verified_at is not None,
             "isPlatformAdmin": user.is_owner,
+            "mfaEnabled": mfa.is_enabled(user),
         },
         "stores": stores_for_user(user),
     }
@@ -198,6 +199,20 @@ class LoginView(PublicAuthView):
 
         user = serializer.validated_data["user"]
         remember_me = serializer.validated_data["rememberMe"]
+
+        # Right password, but this account also needs its second factor
+        if mfa.is_enabled(user):
+            code = request.data.get("mfaCode", "")
+            if not code:
+                return Response(
+                    {"mfaRequired": True, "detail": "Enter the code from your authenticator app."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not isinstance(code, str) or not mfa.verify(user, code):
+                lockout.record_failure(email)
+                audit_record("auth.mfa_failed", request=request, user=user, resource="auth", status_code=400)
+                return Response({"mfaCode": ["Invalid code."]}, status=status.HTTP_400_BAD_REQUEST)
+
         lockout.clear(user.email)
         start_session(request, user, remember_me=remember_me)
         tokens = issue_tokens(user, remember_me=remember_me)
@@ -298,6 +313,63 @@ class ChangePasswordView(APIView):
             "message": "Password changed.",
             **issue_tokens(user, remember_me=remember_me),
         })
+
+
+class MFAView(APIView):
+    """Base for the two-factor settings endpoints: signed in, rate-limited like password changes."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
+
+
+class MFAStatusView(MFAView):
+    """GET /api/v1/auth/mfa/  -> {enabled, recoveryCodesLeft}"""
+
+    def get(self, request):
+        device = mfa.get_device(request.user)
+        enabled = device is not None and device.confirmed_at is not None
+        return Response({"enabled": enabled, "recoveryCodesLeft": len(device.recovery_codes) if enabled else 0})
+
+
+class MFASetupView(MFAView):
+    """POST /api/v1/auth/mfa/setup/  -> {secret, otpauthUri}: scan it, then confirm with /mfa/enable/"""
+
+    def post(self, request):
+        try:
+            secret, uri = mfa.begin_setup(request.user)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"secret": secret, "otpauthUri": uri})
+
+
+class MFAEnableView(MFAView):
+    """POST /api/v1/auth/mfa/enable/  {code}  -> {recoveryCodes}  (shown once)"""
+
+    def post(self, request):
+        code = request.data.get("code", "")
+        codes = mfa.confirm_setup(request.user, code if isinstance(code, str) else "")
+        if codes is None:
+            return Response({"code": ["Invalid code."]}, status=status.HTTP_400_BAD_REQUEST)
+        audit_record("auth.mfa_enabled", request=request, user=request.user, resource="auth", status_code=200)
+        return Response({"message": "Two-factor sign-in is on.", "recoveryCodes": codes})
+
+
+class MFADisableView(MFAView):
+    """POST /api/v1/auth/mfa/disable/  {password, code}  -> 200. Needs both, so a stolen token can't turn it off."""
+
+    def post(self, request):
+        password = request.data.get("password", "")
+        code = request.data.get("code", "")
+        if not mfa.is_enabled(request.user):
+            return Response({"detail": "Two-factor sign-in is not on."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(password, str) or not request.user.check_password(password):
+            return Response({"password": ["Password is incorrect."]}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(code, str) or not mfa.verify(request.user, code):
+            return Response({"code": ["Invalid code."]}, status=status.HTTP_400_BAD_REQUEST)
+        mfa.disable(request.user)
+        audit_record("auth.mfa_disabled", request=request, user=request.user, resource="auth", status_code=200)
+        return Response({"message": "Two-factor sign-in is off."})
 
 
 class MeView(APIView):

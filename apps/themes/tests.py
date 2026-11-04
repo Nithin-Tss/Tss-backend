@@ -619,7 +619,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         self.assertIn('<header class="site-header" data-tss-section="header"', page)
         self.assertNotIn('<div data-tss-section="header"', page)
         # The store's own page has no editor markers
-        self.assertNotIn("data-tss-section", self.home())
+        self.assertNotIn('data-tss-section="', self.home())  # (the stock script only names it in a selector)
 
         # Code without {{ section.attrs }} is wrapped instead, so the customizer can still select it
         self.save_code(self.code().replace("{{ section.attrs }}", ""))
@@ -2534,7 +2534,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], STARTER_REVISION)
+        self.assertEqual(theme.theme_data["starter_revision"], 48)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2744,7 +2744,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertGreaterEqual(STARTER_REVISION, 47)
+        self.assertEqual(STARTER_REVISION, 48)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -2907,8 +2907,10 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 class StorefrontWishlistTest(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, self.store = self.sign_up("wishlist@example.com", "Wishlist Store")
-        self.product = self.ok("post", "/api/v1/catalog/products/", {
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.product = self.ok("post", "/api/v1/catalog/products/", {  # in stock: the card shows Add to cart, not Sold out
             "title": "Blue mug", "sku": "SKU-MUG", "status": "active", "price": "12.50",
+            "location": location, "quantity": 5,
         }, expect=201)
         self.base = f"/s/{self.store['storeSlug']}"
 
@@ -3561,7 +3563,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], STARTER_REVISION)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 48)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5570,6 +5572,54 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.assertIn("theme-a-sec", r_a2.content.decode())
         self.assertNotIn("theme-b-sec", r_a2.content.decode())
 
+    def test_checkout_rejects_email_without_top_level_domain_for_every_payment_method(self):
+        import re
+        from apps.orders.models import Order
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        form = {
+            "first_name": "Jav", "last_name": "V", "address1": "1 Main Street", "city": "Pune",
+            "postal_code": "411001", "country": "India",
+        }
+        for method in ("cod", "online_demo", "cash_on_delivery", ""):
+            for bad in ("jv@gmail", "jav", "", "  ", "jv@gmail.c", "a@b.com\r\nBcc: x@y.com"):
+                with self.subTest(method=method, email=bad):
+                    r = self.shopper.post(
+                        f"{self.base}/checkout/", data=json.dumps({**form, "email": bad, "payment_method": method}),
+                        content_type="application/json", HTTP_ACCEPT="application/json", HTTP_X_CART_SESSION=session_id,
+                    )
+                    self.assertEqual(r.status_code, 400, r.content[:200])
+                    self.assertIn(r.json()["error"], ("Enter an email address", "Enter a valid email address"))
+                    self.assertEqual(r.json()["field"], "email")
+                    self.assertEqual(Order.objects.count(), 0)
+
+    def test_checkout_refuses_to_place_order_with_bad_email_already_saved_on_it(self):
+        import re
+        from apps.commerce.models import Checkout
+        from apps.commerce import services as commerce_services
+        from apps.orders.models import Order
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        self.shopper.post(f"{self.base}/checkout/", data=json.dumps({"action": "apply_discount", "discount_code": ""}),
+                          content_type="application/json", HTTP_X_CART_SESSION=session_id)
+        checkout = Checkout.objects.get()
+        Checkout.objects.filter(pk=checkout.pk).update(email="jv@gmail", shipping_address={"first_name": "J", "address1": "1 St"})
+        checkout.refresh_from_db()
+        for method in ("cod", "online_demo"):
+            with self.assertRaises(Exception):
+                commerce_services._place_order(checkout, method)
+        self.assertEqual(Order.objects.count(), 0)
+
     def test_storefront_checkout_full_order_journey(self):
         import re
         self.add_theme(source="blank", name="Main Theme")
@@ -7260,3 +7310,117 @@ class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
         data = res.json()
         self.assertIn("error", data)
         self.assertIn("sold out", data["error"].lower())
+
+
+class ThemeSettingsPanelTest(StoreClientMixin, APITestCase):
+    """Theme settings panel, phase 1: colour palette, typography and buttons."""
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("panel@example.com", "Panel Store")
+
+    def store_html(self):
+        r = self.client.get(f"/s/{self.store['storeSlug']}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def preview_html(self, settings):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        data["settings"].update(settings)
+        return self.ok("post", "/api/v1/themes/preview/?page=index", data)["html"]
+
+    def test_defaults_render_as_before(self):
+        from .rendering import theme_css
+        from .schemas import resolve
+        css = str(theme_css(resolve({})["settings"]))
+        for line in ("--b-fw:600", "--b-bw:1px", "--b-mh:46px", "--b-px:26px", "--b-tt:none"):
+            self.assertIn(line, css)
+        self.assertTrue(css.endswith("}</style>") and css.count("{") == 1)  # :root only, no extra rules
+
+    def test_schema_groups_and_hidden_phases(self):
+        from .schemas import THEME_GROUPS, THEME_SETTINGS
+        ids = [g["id"] for g in THEME_GROUPS]
+        self.assertEqual(ids[:3], ["colors", "typography", "buttons"])
+        for later in ("pagination", "logo", "page", "animations", "badges", "cart", "drawers", "icons", "inputs",
+                      "popovers", "custom_css"):
+            self.assertNotIn(later, ids)
+        self.assertNotIn("heading_weight", THEME_SETTINGS)  # sections set their own heading weight
+        for key in ("heading_color", "link_color", "border_color", "heading_case", "base_font_size_mobile",
+                    "button_border", "button2_bg", "button_focus_color", "link_underline"):
+            self.assertIn(THEME_SETTINGS[key]["group"], ("colors", "typography", "buttons"))
+
+    def test_save_applies_to_store_and_keeps_other_settings(self):
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"announcement": "Hello"}})
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {
+            "heading_color": "#112233", "link_color": "#AA0000", "border_color": "#CCCCCC",
+            "heading_case": "uppercase", "heading_size": 40, "heading_size_mobile": 24,
+            "base_font_size_mobile": 15, "body_line_height": "1.7",
+            "button_border": "#000000", "button_border_width": 2, "button_size": "large", "button_weight": "800",
+            "button_case": "uppercase", "button_hover_bg": "#333333", "button_focus_color": "#00FF00",
+            "button_disabled_opacity": 40, "button2_bg": "#EEEEEE", "link_underline": "hover",
+        }})
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual(saved["announcement"], "Hello")  # unrelated setting kept
+        self.assertEqual(saved["heading_case"], "uppercase")
+        html = self.store_html()
+        for part in ("--tss-heading-color:#112233", "--line:#CCCCCC", "--b-bd:#000000", "--b-bw:2px", "--b-mh:56px",
+                     "--b-fw:800", "--b-tt:uppercase", "--b-hbg:#333333", "--b-focus:#00FF00", "--b-dis-op:0.4",
+                     "--b2-bg:#EEEEEE", "h1,h2,h3{text-transform:uppercase}",
+                     "@media (min-width:750px){body .section-heading{font-size:40px}}",
+                     "@media (max-width:749px){body .section-heading{font-size:24px}}",
+                     "body .button{border-color:var(--b-bd);border-width:var(--b-bw)}",
+                     "--tss-base-size-m:15px", "body{line-height:1.7}",
+                     "a:where(:not(.button)):hover{text-decoration:underline}"):
+            self.assertIn(part, html)
+
+    def test_preview_shows_unsaved_change_without_saving(self):
+        html = self.preview_html({"heading_color": "#445566"})
+        self.assertIn("--tss-heading-color:#445566", html)
+        self.assertNotIn("--tss-heading-color", self.store_html())
+
+    def test_invalid_values_are_refused(self):
+        for bad in ({"heading_color": "red"}, {"heading_size": 500}, {"button_font": "comic"},
+                    {"link_color": "#123;}</style>"}):
+            self.ok("patch", "/api/v1/themes/settings/", {"settings": bad}, expect=400)
+        # Unknown choices fall back to the default and numbers are clamped (as for every other setting)
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"heading_case": "950", "button_border_width": 9}})
+        saved = self.ok("get", "/api/v1/themes/settings/")["settings"]
+        self.assertEqual((saved["heading_case"], saved["button_border_width"]), ("none", 4))
+
+    def test_unvalidated_values_cannot_break_out_of_style(self):
+        from .rendering import theme_css
+        from .schemas import resolve
+        settings = resolve({})["settings"]
+        settings.update({"heading_color": "red;}</style><script>x</script>", "heading_case": "x}</style>",
+                         "heading_size": "40px}</style>"})
+        css = str(theme_css(settings))
+        self.assertNotIn("</style><", css)
+        self.assertNotIn("script", css)
+
+    def test_section_buttons_follow_theme_button_settings(self):
+        from .rendering import _button_vars, _theme_button
+        from .schemas import resolve
+        settings = resolve({})["settings"]
+        settings.update({"button_border": "#123456", "button_border_width": 3, "button_weight": "700"})
+        theme = _theme_button(settings)
+        vars_ = _button_vars({"b_bg": "#FF0000", "b_border_width": ""}, theme)
+        self.assertEqual((vars_["--b-bd"], vars_["--b-bw"], vars_["--b-fw"]), ("#123456", "3px", "700"))
+        # A section can still set any width, 1px included
+        for width in ("0", "1", "4"):
+            self.assertEqual(_button_vars({"b_border_width": width}, theme)["--b-bw"], f"{width}px")
+
+    def test_saved_number_border_widths_still_load(self):
+        from .schemas import resolve
+        template = {"order": ["h"], "sections": {"h": {"type": "hero", "settings": {}}}}
+        for saved, expected in ((1, ""), (2, "2"), (0, "0"), ("1", "1"), (9, "")):
+            template["sections"]["h"]["settings"]["b_border_width"] = saved
+            resolved = resolve({"templates": {"index": template}})
+            self.assertEqual(resolved["templates"]["index"]["sections"]["h"]["settings"]["b_border_width"], expected)
+
+    def test_mobile_body_size_is_not_overridden_by_type_css(self):
+        from .rendering import TYPE_CSS
+        rule = "@media (max-width:749px){body{font-size:var(--tss-base-size-m,var(--tss-base-size,16px))}}"
+        self.assertIn(rule, str(TYPE_CSS))
+        self.ok("patch", "/api/v1/themes/settings/", {"settings": {"base_font_size_mobile": 14}})
+        html = self.store_html()
+        self.assertIn("--tss-base-size-m:14px", html)
+        self.assertLess(html.index("--tss-base-size-m:14px"), html.index(rule))

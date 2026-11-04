@@ -3,11 +3,13 @@ from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
 from apps.tenancy.models import Store
 
+from . import services
 from .models import Discount
 
 URL = "/api/v1/discounts/"
@@ -107,3 +109,10 @@ class DiscountConstraintTests(StoreClientMixin, APITestCase):
         self.make(name="Y", value=Decimal("0"), minimum_order_amount=Decimal("0"), maximum_discount_amount=Decimal("0"),
                   usage_limit=1, per_customer_limit=1)
         self.assertEqual(Discount.objects.count(), 2)
+
+
+class AmountForRoundingTests(SimpleTestCase):
+    def test_percentage_rounds_half_up_like_tax(self):
+        discount = Discount(discount_type="percentage", value=Decimal("5"))
+        self.assertEqual(services.amount_for(discount, "0.50"), Decimal("0.03"))
+        self.assertEqual(services.amount_for(discount, "0.30"), Decimal("0.02"))

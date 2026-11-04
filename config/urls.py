@@ -8,7 +8,11 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+from apps.core.health import healthz, readyz
+
 urlpatterns = [
+    path('healthz', healthz, name='healthz'),
+    path('readyz', readyz, name='readyz'),
     path('admin/', admin.site.urls),
     path("api/v1/", include("config.api_v1")),
     # Public storefronts, rendered from each store's theme
@@ -17,3 +21,6 @@ urlpatterns = [
 
 # Uploaded product photos, for local development only
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+handler404 = "apps.core.errors.not_found"
+handler500 = "apps.core.errors.server_error"

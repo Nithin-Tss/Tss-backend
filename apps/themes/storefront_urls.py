@@ -6,7 +6,7 @@ from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
     storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
-    storefront_product, storefront_register, storefront_search,
+    storefront_product, storefront_register, storefront_search, storefront_track,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
 
@@ -27,6 +27,7 @@ urlpatterns = [
     path("<slug:store_slug>/cart/", storefront_cart, name="storefront-cart-page"),
     path("<slug:store_slug>/cart/fragment", storefront_cart_fragment, name="storefront-cart-fragment"),
     path("<slug:store_slug>/cart/add", storefront_cart_add, name="storefront-cart-add"),
+    path("<slug:store_slug>/_track", storefront_track, name="storefront-track"),
     path("<slug:store_slug>/newsletter", storefront_newsletter, name="storefront-newsletter"),
     path("<slug:store_slug>/cart/change", storefront_cart_change, name="storefront-cart-change"),
     path("<slug:store_slug>/cart/clear", storefront_cart_clear, name="storefront-cart-clear"),

@@ -22,5 +22,36 @@
 
   {%- comment -%} Footer: Theme settings > Footer {%- endcomment -%}
   {% render 'footer', shop: shop, settings: settings, links: footer_links, social: footer_social %}
+  {%- comment -%} Visit counting for Analytics: one small beacon per page load. Delete this block to stop counting visits. {%- endcomment -%}
+  {%- if track_visits -%}
+  <script data-visit-beacon data-visit-cart="{{ cart_session }}">
+  (function () {
+    if (window.parent !== window || !/^https?:$/.test(location.protocol) || !navigator.sendBeacon) return;
+    // The shopper's cart id, or "" on a page without the cart when the browser has no cart cookie (the server blanks it:
+    // that id would be new on every load). The attribute is not data-cart-session: only the cart's own markup makes the server set the cookie.
+    var cart = document.currentScript.getAttribute("data-visit-cart") || "";
+    var id = "";
+    try {
+      id = localStorage.getItem("tss_visitor") || "";
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+        var bytes = new Uint8Array(16);
+        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        id = Array.prototype.map.call(bytes, function (b) { return (b < 16 ? "0" : "") + b.toString(16); }).join("");
+        localStorage.setItem("tss_visitor", id);
+      }
+    } catch (e) {
+      id = cart; // storage is blocked (the storefront runs sandboxed): the cart id, kept in a cookie by the server, stands in
+    }
+    if (!id) return; // storage blocked and no cart cookie: there is nothing steady to count this visitor by, so the visit is skipped
+    var q = new URLSearchParams(location.search);
+    var body = JSON.stringify({
+      visitor_id: id, path: location.pathname, referrer: document.referrer,
+      utm_source: q.get("utm_source") || "", utm_medium: q.get("utm_medium") || "", utm_campaign: q.get("utm_campaign") || "",
+      cart_session: cart
+    });
+    navigator.sendBeacon("{{ shop.url }}/_track", new Blob([body], { type: "text/plain;charset=UTF-8" }));
+  })();
+  </script>
+  {%- endif -%}
 </body>
 </html>
