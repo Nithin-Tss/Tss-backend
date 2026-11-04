@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import re
@@ -270,12 +271,12 @@ class ThemeSettingsView(StoreThemeView):
             raise ValidationError("Expected an object.")
 
         store_theme = self.store_theme()
-        merged = resolve(store_theme.custom_data)
-
+        data = copy.deepcopy(store_theme.custom_data or {})
         if body.get("settings") is not None:
             if not isinstance(body["settings"], dict):
                 raise ValidationError({"settings": "Expected an object."})
-            merged["settings"].update(body["settings"])
+            data.setdefault("settings", {}).update(body["settings"])
+        merged = resolve(data)
 
         templates = body.get("templates") or {}
         if not isinstance(templates, dict):

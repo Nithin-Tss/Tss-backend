@@ -515,15 +515,43 @@ def default_template(page):
 def resolve(custom_data):
     """custom_data merged over the defaults: what the renderer uses."""
     custom_data = custom_data or {}
+    resolved_settings = _with_defaults(THEME_SETTINGS, custom_data.get("settings", {}))
     templates = copy.deepcopy(DEFAULT_TEMPLATES)
     templates.update(copy.deepcopy(custom_data.get("templates", {})))
 
-    for page in templates.values():
-        for section in page["sections"].values():
+    custom_templates = custom_data.get("templates") if isinstance(custom_data.get("templates"), dict) else {}
+
+    for page_name, page in templates.items():
+        custom_page_sections = (
+            custom_templates.get(page_name, {}).get("sections", {})
+            if isinstance(custom_templates.get(page_name), dict) and isinstance(custom_templates[page_name].get("sections"), dict)
+            else {}
+        )
+        for section_id, section in page["sections"].items():
             schema = SECTIONS[section["type"]]
             section["hidden"] = bool(section.get("hidden", False))
-            heart_saved = (section.get("settings") or {}).get("show_wishlist") is True
-            section["settings"] = _with_defaults(schema["settings"], section.get("settings", {}))
+            raw_sec_settings = section.get("settings") or {}
+            heart_saved = raw_sec_settings.get("show_wishlist") is True
+            section["settings"] = _with_defaults(schema["settings"], raw_sec_settings)
+
+            if section["type"] == "main-product":
+                saved_sec_settings = (
+                    custom_page_sections.get(section_id, {}).get("settings", {})
+                    if isinstance(custom_page_sections.get(section_id), dict) and isinstance(custom_page_sections[section_id].get("settings"), dict)
+                    else {}
+                )
+                theme_disable = resolved_settings.get("disable_out_of_stock_add_to_cart", True)
+                if "disable_out_of_stock" in saved_sec_settings:
+                    section["settings"]["disable_out_of_stock"] = bool(saved_sec_settings["disable_out_of_stock"])
+                else:
+                    section["settings"]["disable_out_of_stock"] = theme_disable
+
+                theme_sold_out = resolved_settings.get("sold_out_button_label") or "Sold out"
+                saved_label = saved_sec_settings.get("sold_out_label")
+                if saved_label and saved_label != "Sold out":
+                    section["settings"]["sold_out_label"] = saved_label
+                else:
+                    section["settings"]["sold_out_label"] = theme_sold_out
             if "blocks" in schema:
                 section["blocks"] = [
                     {
@@ -550,7 +578,7 @@ def resolve(custom_data):
                         })
 
     return {
-        "settings": _with_defaults(THEME_SETTINGS, custom_data.get("settings", {})),
+        "settings": resolved_settings,
         "templates": templates,
         # Synced sections' values (see section_sync), passed through as saved
         **({"sections": copy.deepcopy(custom_data["sections"])} if isinstance(custom_data.get("sections"), dict) else {}),
@@ -1155,6 +1183,10 @@ SECTIONS["main-product"]["settings"] = {
     "show_description": _opt("content", "checkbox", "Show description", True),
     "add_to_cart_label": _opt("content", "text", "Add to cart button text", "Add to cart", max=40),
     "sold_out_label": _opt("content", "text", "Sold out button text", "Sold out", max=40),
+    "disable_out_of_stock": _opt(
+        "content", "checkbox", "Disable Add to cart when out of stock", True,
+        help="When enabled, the button becomes disabled and displays the sold out label when stock is 0.",
+    ),
     "variant_style": _choice(
         "content", "Options shown as", ["buttons", "dropdown"], "buttons", ui="segmented",
         labels={"buttons": "Tier cards", "dropdown": "Dropdown"},
@@ -1996,14 +2028,27 @@ _THEME_GROUP_OF = {
     "heading_font": "typography", "body_font": "typography", "base_font_size": "typography",
     "button_style": "buttons", "button_bg": "buttons", "button_text": "buttons",
     "button_radius": "buttons", "button_hover": "buttons",
+    "disable_out_of_stock_add_to_cart": "products", "sold_out_button_label": "products",
 }
 for _key, _spec in THEME_SETTINGS.items():
     _spec.setdefault("group", _THEME_GROUP_OF.get(_key, "store"))
+
+THEME_SETTINGS.update({
+    "disable_out_of_stock_add_to_cart": _theme_opt(
+        "products", "checkbox", "Disable Add to Cart when out of stock", True,
+        help="Automatically disable the Add to Cart button and display the Sold Out label for unavailable products.",
+    ),
+    "sold_out_button_label": _theme_opt(
+        "products", "text", "Sold out button text", "Sold out", max=40,
+        help="Text displayed on the button when a product or variant is out of stock.",
+    ),
+})
 
 THEME_GROUPS = [
     {"id": "colors", "label": "Colours"},
     {"id": "typography", "label": "Typography"},
     {"id": "buttons", "label": "Buttons"},
+    {"id": "products", "label": "Products & inventory"},
     {"id": "header", "label": "Header and navigation"},
     {"id": "footer", "label": "Footer"},
     {"id": "blog", "label": "Blog"},

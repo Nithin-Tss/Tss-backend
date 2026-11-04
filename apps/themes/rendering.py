@@ -220,6 +220,7 @@ h1,h2,h3,h4,h5,.section-heading,.site-header__logo{font-family:var(--tss-heading
   font-size:var(--b-fs);font-weight:var(--b-fw);text-transform:var(--b-tt);box-shadow:var(--b-sh);
   transition:background var(--b-sp) ease,color var(--b-sp) ease,border-color var(--b-sp) ease,transform var(--b-sp) ease,filter var(--b-sp) ease}
 .button:hover,.tss-btn .button:hover{background:var(--b-hbg);color:var(--b-htx);border-color:var(--b-hbd);transform:var(--b-ht);filter:var(--b-hf);opacity:1}
+.button:disabled,.button[disabled],.button.button--disabled,.button[aria-disabled="true"],.tss-btn .button:disabled,.tss-btn .button[disabled],.tss-btn .button.button--disabled,.tss-btn .button[aria-disabled="true"]{opacity:.55;cursor:not-allowed;pointer-events:none;transform:none !important;box-shadow:none !important}
 .button.button--outline{background:transparent;color:var(--b-bd);border-color:var(--b-bd)}
 .hero--image .button.button--outline,.hero .button.button--outline{background:transparent;color:inherit;border-color:currentColor}
 .tss-bi .button{gap:.5em}
@@ -830,6 +831,185 @@ SEARCH_JS = Markup("""<script>
   }
 })();
 </script>""")
+
+def _stock_config_script(settings):
+    oos_flag = "true" if settings.get("disable_out_of_stock_add_to_cart", True) else "false"
+    oos_label = escape(str(settings.get("sold_out_button_label") or "Sold out"))
+    return Markup(f'<script id="tss-stock-config" type="application/json">{{"disable_out_of_stock": {oos_flag}, "sold_out_label": "{oos_label}"}}</script>')
+
+
+STOCK_JS = Markup("""<script>
+(function () {
+  function getStockConfig(sec) {
+    var cfgEl = sec ? sec.querySelector("[data-stock-config]") : null;
+    if (cfgEl) {
+      return {
+        disable_out_of_stock: cfgEl.getAttribute("data-disable-oos") !== "false",
+        sold_out_label: cfgEl.getAttribute("data-sold-out-label") || "Sold out"
+      };
+    }
+    var globalEl = document.getElementById("tss-stock-config");
+    if (globalEl && globalEl.textContent) {
+      try {
+        var parsed = JSON.parse(globalEl.textContent);
+        return {
+          disable_out_of_stock: parsed.disable_out_of_stock !== false,
+          sold_out_label: parsed.sold_out_label || "Sold out"
+        };
+      } catch (e) {}
+    }
+    return { disable_out_of_stock: true, sold_out_label: "Sold out" };
+  }
+
+  function syncFormStock(form) {
+    if (!form) return;
+    var sec = form.closest("[data-tss-section]") || form.closest("section") || document;
+    var config = getStockConfig(sec);
+    var add = form.querySelector("[data-add]");
+    if (!add) return;
+    var qty = form.querySelector("[data-quantity]");
+
+    var select = form.querySelector("select[data-variant], select[name='variant']");
+    var isOut = false;
+    var avail = 99;
+
+    if (select && select.selectedOptions && select.selectedOptions[0]) {
+      var opt = select.selectedOptions[0];
+      var availAttr = opt.getAttribute("data-variant-available");
+      avail = availAttr != null ? Number(availAttr) : 0;
+      var contAttr = opt.getAttribute("data-variant-continue");
+      var cont = contAttr === "true";
+      isOut = (avail <= 0) && !cont;
+    } else {
+      if (add.hasAttribute("data-sold-out-initial") || add.disabled || add.getAttribute("data-sold-out") === add.textContent.trim()) {
+        isOut = true;
+      }
+    }
+
+    if (config.disable_out_of_stock) {
+      if (isOut) {
+        add.disabled = true;
+        add.setAttribute("aria-disabled", "true");
+        add.classList.add("button--disabled");
+        var soldOutText = add.getAttribute("data-sold-out") || config.sold_out_label || "Sold out";
+        if (add.textContent !== soldOutText) {
+          add.textContent = soldOutText;
+        }
+        if (qty) qty.disabled = true;
+      } else {
+        add.disabled = false;
+        add.removeAttribute("aria-disabled");
+        add.classList.remove("button--disabled");
+        var labelText = add.getAttribute("data-label") || "Add to cart";
+        if (add.textContent !== labelText) {
+          add.textContent = labelText;
+        }
+        if (qty) {
+          qty.disabled = false;
+          qty.max = (avail > 0 && avail < 99) ? avail : 99;
+        }
+      }
+    } else {
+      add.disabled = false;
+      add.removeAttribute("aria-disabled");
+      add.classList.remove("button--disabled");
+      if (qty) qty.disabled = false;
+    }
+  }
+
+  function initStock() {
+    document.querySelectorAll("form[data-cart-add]").forEach(function (form) {
+      var add = form.querySelector("[data-add]");
+      if (add && add.disabled) {
+        add.setAttribute("data-sold-out-initial", "true");
+      }
+      syncFormStock(form);
+    });
+
+    var globalCfg = getStockConfig(null);
+    document.querySelectorAll(".product-card__cta[data-sold-out]").forEach(function (cta) {
+      if (globalCfg.disable_out_of_stock) {
+        cta.setAttribute("aria-disabled", "true");
+        cta.classList.add("button--disabled");
+      } else {
+        cta.removeAttribute("aria-disabled");
+        cta.classList.remove("button--disabled");
+      }
+    });
+  }
+
+  document.addEventListener("change", function (e) {
+    var select = e.target && e.target.closest && e.target.closest("select[data-variant], select[name='variant']");
+    if (select) {
+      var form = select.closest("form[data-cart-add]") || select.closest("form");
+      if (form) syncFormStock(form);
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    var tier = e.target && e.target.closest && e.target.closest(".product__tier");
+    if (tier) {
+      var sec = tier.closest("section") || document;
+      var select = sec.querySelector("select[data-variant], select[name='variant']");
+      if (select) {
+        setTimeout(function () {
+          var form = select.closest("form[data-cart-add]") || select.closest("form");
+          if (form) syncFormStock(form);
+        }, 0);
+      }
+    }
+  });
+
+  document.addEventListener("submit", function (e) {
+    var form = e.target && e.target.closest && e.target.closest("form[data-cart-add]");
+    if (!form) return;
+    var add = form.querySelector("[data-add]");
+    if (add && (add.disabled || add.getAttribute("aria-disabled") === "true" || add.classList.contains("button--disabled"))) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return false;
+    }
+  }, true);
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target && e.target.closest && e.target.closest("[data-add], [data-card-add], .product-card__cta[data-sold-out]");
+    if (!btn) return;
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true" || btn.classList.contains("button--disabled")) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return false;
+    }
+  }, true);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initStock);
+  } else {
+    initStock();
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    var timer = null;
+    var observer = new MutationObserver(function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(initStock, 40);
+    });
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
+  if (window.addEventListener) {
+    window.addEventListener("message", function (event) {
+      if (event.data && typeof event.data === "object") {
+        if (event.data.type === "section:load" || event.data.type === "settings:change" || event.data.source === "tss-editor") {
+          setTimeout(initStock, 50);
+        }
+      }
+    });
+  }
+})();
+</script>""")
+
 
 
 
@@ -2991,6 +3171,10 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
             try:
                 rendered = env.get_template(path).render(section=section, **common)
+                if section["type"] == "main-product":
+                    oos_flag = "true" if section["settings"].get("disable_out_of_stock", settings.get("disable_out_of_stock_add_to_cart", True)) else "false"
+                    oos_label = escape(str(section["settings"].get("sold_out_label") or settings.get("sold_out_button_label") or "Sold out"))
+                    rendered = f'<div data-stock-config data-disable-oos="{oos_flag}" data-sold-out-label="{oos_label}" style="display:none"></div>\n' + rendered
                 html.append(Markup(rendered))
                 # A product template edited before the accordion existed doesn't place it: show it after the section
                 if product_info and "data-product-info" not in rendered:
@@ -3018,6 +3202,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     html.append(BLOCKS_JS)
     html.append(PRODUCT_INFO_JS)
     html.append(SEARCH_JS)
+    html.append(_stock_config_script(settings))
+    html.append(STOCK_JS)
 
     if slots is None:
         content = env.get_template(template_path).render(
