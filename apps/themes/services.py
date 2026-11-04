@@ -1039,6 +1039,47 @@ def _parse_json(path, content):
         )
 
 
+_ERROR_WHERE = re.compile(r"sections\.([A-Za-z0-9_-]+)(?:\.blocks\[(\d+)\])?(?:\.settings\.([A-Za-z0-9_]+))?")
+
+
+def _json_error_line(content, message):
+    """The line of the section, block or setting a validation message is about (None when it can't be found)."""
+    found = _ERROR_WHERE.search(message)
+    if not found:
+        return None
+    section_id, block_index, setting = found.group(1), found.group(2), found.group(3)
+    unknown = re.search(r"unknown settings: ([A-Za-z0-9_]+)", message)
+    if setting is None and unknown:
+        setting = unknown.group(1)
+    decoder = json.JSONDecoder()
+    # The section's key inside "sections" (its id also appears earlier, in the "order" list)
+    sections_at = re.search(r'"sections"\s*:', content)
+    key_at = re.compile(r'"%s"\s*:' % re.escape(section_id)).search(content, sections_at.end() if sections_at else 0)
+    if not key_at:
+        return None
+    at = key_at.start()
+    if block_index is not None:
+        key = content.find('"blocks"', at)
+        start = content.find("[", key) if key >= 0 else -1
+        if start < 0:
+            return content.count("\n", 0, at) + 1
+        pos = start + 1
+        for _ in range(int(block_index) + 1):
+            while pos < len(content) and content[pos] in " \t\r\n,":
+                pos += 1
+            block_start = pos
+            try:
+                _, pos = decoder.raw_decode(content, pos)
+            except ValueError:
+                return content.count("\n", 0, at) + 1
+        at = block_start
+        if setting:
+            inside = content.find(f'"{setting}"', at, pos)
+            if inside >= 0:
+                at = inside
+    return content.count("\n", 0, at) + 1
+
+
 def _save_settings_file(store_theme, path, content):
     parsed = _parse_json(path, content)
     if not isinstance(parsed, dict):
@@ -1057,13 +1098,39 @@ def _save_settings_file(store_theme, path, content):
     try:
         store_theme.custom_data = validate_custom_data(merged)
     except exceptions.ValidationError as error:
-        # Say which file the problem is in
-        raise exceptions.ValidationError({"content": f"{path}: " + " ".join(str(m) for m in _messages(error.detail))})
+        # Say which file the problem is in, and (for a section or block) which line
+        message = " ".join(str(m) for m in _messages(error.detail))
+        line = _json_error_line(content, message)
+        detail = {"content": f"{path}{f' (line {line})' if line else ''}: {message}"}
+        if line:
+            detail["line"] = line
+        raise exceptions.ValidationError(detail)
     store_theme.save(update_fields=["custom_data", "updated_at"])
     if PAGE_TEMPLATE_JSON.match(path):
         _ensure_page_file(store_theme.theme, page)
-    templates_changed(store_theme, before, source="code")
+    already = templates_changed(store_theme, before, source="code")
+    _publish_json_edit(store_theme, before, already)
     return SimpleNamespace(file_path=path, file_size=len(content.encode("utf-8")))
+
+
+@transaction.atomic
+def _publish_json_edit(store_theme, before, already):
+    """
+    templates/<page>.json was saved with a change inside a section (a new or edited block, a setting) that
+    leaves the template's section lines alone: tell the open customizer anyway, so its sidebar and preview follow.
+    """
+    for name, config in sync.SYNCED_TEMPLATES.items():
+        page = config["page"]
+        after = resolve(store_theme.custom_data)["templates"][page]
+        if name in already or after == before[page]:
+            continue
+        theme = Theme.objects.select_for_update().get(pk=store_theme.theme_id)
+        file = theme.files.filter(file_path=config["path"]).first()
+        if file is None or sync.is_legacy_template(file.content):
+            continue
+        version = sync.record_version(theme, name, file.content, "code")
+        theme.save(update_fields=["theme_data", "updated_at"])
+        _publish_template(store_theme, name, "code", version, after, file.content, "")
 
 
 def _messages(detail):

@@ -1461,6 +1461,7 @@ SECTIONS["match-quiz"] = {
     "type_limits": {"question": 8, "result": 12},
 }
 
+
 SECTIONS["main-blog"] = {
     "name": "Blog posts",
     "pages": ("blog",),

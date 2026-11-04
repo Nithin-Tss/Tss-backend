@@ -1,10 +1,10 @@
 {%- comment -%}
   Find your match quiz. A banner (text panel + image) whose button opens a popup quiz.
   "Question" blocks are the steps (up to four answers each).
-  Priority order: every answer has its own result (name, text, collection); the questions are checked in
-  the order of "Question priority" and the first chosen answer with a name or collection decides.
-  Most picks: "Result" blocks are the outcomes and every answer has a result key; the result with the most
-  picks wins, on a tie the first matching Result block wins, with no match the first Result block is shown.
+  Priority order: each answer carries its own result (name, text, collection) and the questions are
+  checked in the order of "Question priority"; the first chosen answer with a result decides.
+  Most picks: answers have a result key and "Result" blocks are the outcomes. The result with the most
+  picks wins; on a tie the first matching Result block wins; with no match the first Result block is shown.
   All markup, styles and script of the quiz are in this file, scoped to the section id.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
@@ -14,29 +14,33 @@
   {%- if block.type == 'question' -%}{%- assign question_count = question_count | plus: 1 -%}{%- endif -%}
   {%- if block.type == 'result' -%}{%- assign result_count = result_count | plus: 1 -%}{%- endif -%}
   {%- if block.type == 'question' -%}
-    {%- assign q = block.settings -%}
-    {%- if q.answer_1_result_name != blank or q.answer_1_link_url != blank or q.answer_2_result_name != blank or q.answer_2_link_url != blank or q.answer_3_result_name != blank or q.answer_3_link_url != blank or q.answer_4_result_name != blank or q.answer_4_link_url != blank -%}
-      {%- assign has_own_results = true -%}
-    {%- endif -%}
+    {%- for n in (1..4) -%}
+      {%- case n -%}
+        {%- when 1 -%}{%- if block.settings.answer_1_result_name != blank or block.settings.answer_1_link != blank -%}{%- assign own_results = true -%}{%- endif -%}
+        {%- when 2 -%}{%- if block.settings.answer_2_result_name != blank or block.settings.answer_2_link != blank -%}{%- assign own_results = true -%}{%- endif -%}
+        {%- when 3 -%}{%- if block.settings.answer_3_result_name != blank or block.settings.answer_3_link != blank -%}{%- assign own_results = true -%}{%- endif -%}
+        {%- else -%}{%- if block.settings.answer_4_result_name != blank or block.settings.answer_4_link != blank -%}{%- assign own_results = true -%}{%- endif -%}
+      {%- endcase -%}
+    {%- endfor -%}
   {%- endif -%}
 {%- endfor -%}
 {%- assign mode = 'picks' -%}
-{%- if s.result_logic != 'picks' and has_own_results -%}{%- assign mode = 'priority' -%}{%- endif -%}
-{%- assign can_open = false -%}
-{%- if question_count > 0 and mode == 'priority' -%}{%- assign can_open = true -%}{%- endif -%}
-{%- if question_count > 0 and result_count > 0 -%}{%- assign can_open = true -%}{%- endif -%}
-<section id="section-{{ section.id }}" class="section match-quiz align-{{ s.text_alignment }}" style="--mq-panel: {{ s.panel_color }}; --mq-panel-text: {{ s.panel_text_color }}; --mq-accent: {{ s.accent_color }}; --mq-popup: {{ s.popup_color }};">
+{%- if s.result_logic != 'picks' and own_results -%}{%- assign mode = 'priority' -%}{%- endif -%}
+{%- assign ready = false -%}
+{%- if question_count > 0 and mode == 'priority' -%}{%- assign ready = true -%}{%- endif -%}
+{%- if question_count > 0 and result_count > 0 -%}{%- assign ready = true -%}{%- endif -%}
+<section id="section-{{ section.id }}" class="section match-quiz align-{{ s.text_alignment }}" style="--mq-panel: {{ s.panel_color }}; --mq-text: {{ s.panel_text_color }}; --mq-accent: {{ s.accent_color }};">
   <div class="page-width">
     <div class="match-quiz__banner">
       <div class="match-quiz__panel">
         {%- if s.heading != blank -%}<h2 class="match-quiz__heading">{{ s.heading }}</h2>{%- endif -%}
         {%- if s.subheading != blank -%}<p class="match-quiz__sub">{{ s.subheading }}</p>{%- endif -%}
-        {%- if can_open -%}
+        {%- if ready -%}
           <button class="match-quiz__button" type="button" data-mq-open aria-haspopup="dialog">{{ s.button_label }}</button>
         {%- elsif design_mode -%}
           <p class="match-quiz__hint">
             {%- if question_count == 0 -%}Add "Question" blocks to build the quiz.{%- endif %}
-            {% if result_count == 0 and mode == 'picks' -%}Add "Result" blocks, or give the answers their own results.{%- endif -%}
+            {% if question_count > 0 and result_count == 0 -%}Add "Result" blocks (or give the answers their own results).{%- endif -%}
           </p>
         {%- endif -%}
       </div>
@@ -50,8 +54,8 @@
     </div>
   </div>
 
-  {%- if can_open -%}
-  <div class="mq-modal" id="mq-{{ section.id }}" data-mode="{{ mode }}" role="dialog" aria-modal="true" aria-label="{{ s.heading | default: 'Find your match' }}" hidden style="--mq-accent: {{ s.accent_color }}; --mq-popup: {{ s.popup_color }};">
+  {%- if ready -%}
+  <div class="mq-modal" id="mq-{{ section.id }}" data-mode="{{ mode }}" data-priority="{{ s.question_priority }}" role="dialog" aria-modal="true" aria-label="{{ s.heading | default: 'Find your match' }}" hidden style="--mq-accent: {{ s.accent_color }}; --mq-popup: {{ s.popup_color }};">
     <div class="mq-modal__overlay" data-mq-close></div>
     <div class="mq-modal__box" tabindex="-1">
       <button class="mq-modal__x" type="button" data-mq-close aria-label="Close">
@@ -73,13 +77,13 @@
             <div class="mq-answers">
               {%- for n in (1..4) -%}
                 {%- case n -%}
-                  {%- when 1 -%}{%- assign a_label = q.answer_1_label -%}{%- assign a_icon = q.answer_1_icon -%}{%- assign a_key = q.answer_1_key -%}{%- assign a_rname = q.answer_1_result_name | default: q.answer_1_link_title -%}{%- assign a_rtext = q.answer_1_result_text -%}{%- assign a_rlink = q.answer_1_link_url -%}
-                  {%- when 2 -%}{%- assign a_label = q.answer_2_label -%}{%- assign a_icon = q.answer_2_icon -%}{%- assign a_key = q.answer_2_key -%}{%- assign a_rname = q.answer_2_result_name | default: q.answer_2_link_title -%}{%- assign a_rtext = q.answer_2_result_text -%}{%- assign a_rlink = q.answer_2_link_url -%}
-                  {%- when 3 -%}{%- assign a_label = q.answer_3_label -%}{%- assign a_icon = q.answer_3_icon -%}{%- assign a_key = q.answer_3_key -%}{%- assign a_rname = q.answer_3_result_name | default: q.answer_3_link_title -%}{%- assign a_rtext = q.answer_3_result_text -%}{%- assign a_rlink = q.answer_3_link_url -%}
-                  {%- else -%}{%- assign a_label = q.answer_4_label -%}{%- assign a_icon = q.answer_4_icon -%}{%- assign a_key = q.answer_4_key -%}{%- assign a_rname = q.answer_4_result_name | default: q.answer_4_link_title -%}{%- assign a_rtext = q.answer_4_result_text -%}{%- assign a_rlink = q.answer_4_link_url -%}
+                  {%- when 1 -%}{%- assign a_label = q.answer_1_label -%}{%- assign a_icon = q.answer_1_icon -%}{%- assign a_key = q.answer_1_key -%}{%- assign a_name = q.answer_1_result_name | default: q.answer_1_link_title -%}{%- assign a_text = q.answer_1_result_text -%}{%- assign a_url = q.answer_1_link_url -%}
+                  {%- when 2 -%}{%- assign a_label = q.answer_2_label -%}{%- assign a_icon = q.answer_2_icon -%}{%- assign a_key = q.answer_2_key -%}{%- assign a_name = q.answer_2_result_name | default: q.answer_2_link_title -%}{%- assign a_text = q.answer_2_result_text -%}{%- assign a_url = q.answer_2_link_url -%}
+                  {%- when 3 -%}{%- assign a_label = q.answer_3_label -%}{%- assign a_icon = q.answer_3_icon -%}{%- assign a_key = q.answer_3_key -%}{%- assign a_name = q.answer_3_result_name | default: q.answer_3_link_title -%}{%- assign a_text = q.answer_3_result_text -%}{%- assign a_url = q.answer_3_link_url -%}
+                  {%- else -%}{%- assign a_label = q.answer_4_label -%}{%- assign a_icon = q.answer_4_icon -%}{%- assign a_key = q.answer_4_key -%}{%- assign a_name = q.answer_4_result_name | default: q.answer_4_link_title -%}{%- assign a_text = q.answer_4_result_text -%}{%- assign a_url = q.answer_4_link_url -%}
                 {%- endcase -%}
                 {%- if a_label != blank -%}
-                  <button class="mq-answer" type="button" data-mq-answer data-key="{{ a_key | strip | downcase }}" data-rname="{{ a_rname }}" data-rtext="{{ a_rtext }}" data-rlink="{{ a_rlink }}">
+                  <button class="mq-answer" type="button" data-mq-answer data-key="{{ a_key | strip | downcase }}" data-rname="{{ a_name }}" data-rtext="{{ a_text }}" data-rlink="{{ a_url }}">
                     {%- if a_icon != 'none' and a_icon != blank -%}
                       <span class="mq-answer__icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -113,7 +117,7 @@
         <p class="mq-modal__eyebrow">Your recommendation</p>
         <h3 class="mq-modal__title" data-mq-result-name></h3>
         <p class="mq-result__text" data-mq-result-text></p>
-        <a class="match-quiz__button" href="#" data-mq-result-link hidden></a>
+        <a class="match-quiz__button mq-result__button" href="#" data-mq-result-link></a>
       </div>
 
       <button class="mq-modal__back" type="button" data-mq-back hidden>&larr; Back</button>
@@ -121,7 +125,7 @@
       {%- comment -%} The possible results; the script shows the winner in the box above. {%- endcomment -%}
       <div data-mq-results hidden>
         {%- for block in section.blocks -%}
-          {%- if block.type == 'result' -%}
+          {%- if block.type == 'result' and mode == 'picks' -%}
             <div data-mq-result data-key="{{ block.settings.result_key | strip | downcase }}" data-link="{{ block.settings.link | link }}" data-label="{{ block.settings.button_label | default: 'Shop now' }}">
               <span data-name>{{ block.settings.name }}</span>
               <span data-text>{{ block.settings.text }}</span>
@@ -136,13 +140,13 @@
 {%- if can_open -%}
 <style>
   #section-{{ section.id }} { --mq-radius: 20px; }
-  #section-{{ section.id }} .match-quiz__banner { display: grid; grid-template-columns: 1fr 0.9fr; border-radius: var(--mq-radius); overflow: hidden; background: var(--mq-panel); color: var(--mq-panel-text); }
-  #section-{{ section.id }} .match-quiz__panel { display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 48px; }
+  #section-{{ section.id }} .match-quiz__banner { display: grid; grid-template-columns: 1fr 0.9fr; border-radius: var(--mq-radius); overflow: hidden; background: var(--mq-panel); }
+  #section-{{ section.id }} .match-quiz__panel { color: var(--mq-text); display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 48px; }
   #section-{{ section.id }}.align-left .match-quiz__panel { align-items: flex-start; text-align: left; }
   #section-{{ section.id }}.align-center .match-quiz__panel { align-items: center; text-align: center; }
   #section-{{ section.id }}.align-right .match-quiz__panel { align-items: flex-end; text-align: right; }
   #section-{{ section.id }} .match-quiz__heading { margin: 0; }
-  #section-{{ section.id }} .match-quiz__sub { margin: 0; opacity: .8; max-width: 42ch; }
+  #section-{{ section.id }} .match-quiz__sub { margin: 0; color: inherit; opacity: .8; max-width: 42ch; }
   #section-{{ section.id }} .match-quiz__hint { margin: 0; font-size: 13px; color: var(--muted); }
   #section-{{ section.id }} .match-quiz__media { min-height: 320px; position: relative; }
   #section-{{ section.id }} .match-quiz__media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -155,7 +159,7 @@
   #mq-{{ section.id }} { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
   #mq-{{ section.id }}[hidden] { display: none; }
   #mq-{{ section.id }} .mq-modal__overlay { position: absolute; inset: 0; background: rgba(15, 15, 15, .7); }
-  #mq-{{ section.id }} .mq-modal__box { position: relative; width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; padding: 28px 32px 32px; border-radius: 20px; background: var(--mq-popup); color: var(--text, #111); outline: none; text-align: left; }
+  #mq-{{ section.id }} .mq-modal__box { position: relative; width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; padding: 28px 32px 32px; border-radius: 20px; background: var(--mq-popup, #fff); color: var(--text, #111); outline: none; text-align: left; }
   #mq-{{ section.id }} .mq-modal__x { position: absolute; top: 14px; right: 14px; display: flex; padding: 8px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
   #mq-{{ section.id }} .mq-modal__x:hover { background: var(--soft, #eee); }
   #mq-{{ section.id }} .mq-modal__bars { display: flex; gap: 6px; margin: 0 40px 24px 0; }
@@ -172,6 +176,9 @@
   #mq-{{ section.id }} .mq-result__text { margin: 0 0 24px; color: var(--muted, #666); }
   #mq-{{ section.id }} .mq-modal__back { margin: 20px 0 0; padding: 0; border: 0; background: none; color: var(--muted, #666); font: inherit; text-decoration: underline; cursor: pointer; }
   #mq-{{ section.id }} .mq-modal__back[hidden] { display: none; }
+
+  #mq-{{ section.id }} .mq-result__button { text-transform: uppercase; letter-spacing: .08em; }
+  #mq-{{ section.id }} .mq-result__button[hidden] { display: none; }
 
   @media (max-width: 749px) {
     #section-{{ section.id }} .match-quiz__banner { grid-template-columns: 1fr; }
@@ -196,7 +203,7 @@
     var back = modal.querySelector("[data-mq-back]");
     var results = Array.prototype.slice.call(modal.querySelectorAll("[data-mq-result]"));
     var mode = modal.getAttribute("data-mode");
-    var picks = [];   // { key, index, name, text, link } per answered question
+    var picks = [];   // { key, index } per answered question
     var current = 0;
     var lastFocus = null;
     var timer = null;
@@ -217,30 +224,30 @@
       if (index === steps.length) showResult();
     }
 
-    // Question numbers in the order of "Question priority" (1 = first Question block)
+    // Question numbers in the order they are checked, e.g. "4,3,1,2"; questions not listed follow in order
     function priorityOrder() {
       var order = [];
-      "{{ s.question_priority }}".split(/[^0-9]+/).forEach(function (part) {
+      String(modal.getAttribute("data-priority") || "").split(/[^0-9]+/).forEach(function (part) {
         var n = parseInt(part, 10) - 1;
         if (n >= 0 && n < steps.length && order.indexOf(n) < 0) order.push(n);
       });
-      if (!order.length) steps.forEach(function (step, i) { order.push(i); });
+      steps.forEach(function (step, i) { if (order.indexOf(i) < 0) order.push(i); });
       return order;
     }
 
-    function setResult(name, text, href, label) {
-      final.querySelector("[data-mq-result-name]").textContent = name || "";
-      final.querySelector("[data-mq-result-text]").textContent = text || "";
-      var link = final.querySelector("[data-mq-result-link]");
-      link.hidden = !href;
-      link.textContent = label || "";
-      link.href = href || "#";
+    function setResult(name, text, link, label) {
+      final.querySelector("[data-mq-result-name]").textContent = name;
+      final.querySelector("[data-mq-result-text]").textContent = text;
+      var button = final.querySelector("[data-mq-result-link]");
+      button.textContent = label;
+      button.href = link || "#";
+      button.hidden = !link;
     }
 
-    // Priority order: the first question (in priority order) whose chosen answer has a name or a collection decides.
-    // Most picks: the result with the most picks wins, on a tie the first Result block wins, no match shows the first.
+    // Most picks wins; on a tie the first Result block wins; no match shows the first Result block
     function showResult() {
       if (mode === "priority") {
+        // The first question (in priority order) whose chosen answer has a name or a collection decides
         var order = priorityOrder();
         for (var i = 0; i < order.length; i++) {
           var pick = picks[order[i]];
@@ -249,8 +256,9 @@
             return;
           }
         }
+        setResult("", "", "", "Shop Now");
+        return;
       }
-      if (!results.length) { setResult("", "", "", ""); return; }
       var counts = {};
       picks.forEach(function (pick) { if (pick.key) counts[pick.key] = (counts[pick.key] || 0) + 1; });
       var winner = results[0];
@@ -259,12 +267,8 @@
         var count = counts[result.getAttribute("data-key")] || 0;
         if (count > best) { best = count; winner = result; }
       });
-      setResult(
-        winner.querySelector("[data-name]").textContent,
-        winner.querySelector("[data-text]").textContent,
-        winner.getAttribute("data-link"),
-        winner.getAttribute("data-label")
-      );
+      setResult(winner.querySelector("[data-name]").textContent, winner.querySelector("[data-text]").textContent,
+        winner.getAttribute("data-link"), winner.getAttribute("data-label"));
     }
 
     function open() {

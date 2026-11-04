@@ -6008,7 +6008,67 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         from .services import starter_files
         self.assertIn("Your recommendation", starter_files()["sections/match-quiz.liquid"])
 
-    def test_match_quiz_resolves_and_unknown_sections_are_dropped(self):
+    def test_match_quiz_question_added_in_index_json_reaches_the_customizer_and_the_store(self):
+        from . import section_sync as sync
+        from .models import StoreTheme
+
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Stout shelf", "status": "active"}, expect=201)
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}, "blocks": self.PRIORITY_BLOCKS[:1]}})
+        store_id = StoreTheme.objects.get(store__store_id=self.store["storeId"], is_active=True).store_id
+
+        def index_json():
+            files = self.ok("get", "/api/v1/themes/files/")["files"]
+            return json.loads(next(f["content"] for f in files if f["path"] == "templates/index.json"))
+
+        code = index_json()
+        new_question = {"type": "question", "settings": {
+            "question": "Brand new question", "answer_1_label": "Dark", "answer_1_result_name": "Stouts",
+            "answer_1_result_text": "Roasty and rich.", "answer_1_link": "stout-shelf"}}
+        code["sections"]["match"]["blocks"].append(new_question)
+        seen = sync.EVENTS.last_seq
+        self.ok("post", "/api/v1/themes/files/", {"path": "templates/index.json", "content": json.dumps(code, indent=2)})
+
+        # 1. the customizer's sidebar data has the new Question block ...
+        blocks = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["match"]["blocks"]
+        self.assertEqual(blocks[-1]["type"], "question")
+        self.assertEqual(blocks[-1]["settings"]["question"], "Brand new question")
+        self.assertEqual(blocks[-1]["settings"]["answer_1_link"], "stout-shelf")
+        # ... and an open customizer is told right away, with the section's blocks
+        events = [p for _, p in sync.EVENTS.wait(store_id, seen, 0)[0] if p.get("kind") == "template"]
+        self.assertTrue(events, "no live event for the open customizer")
+        self.assertEqual(events[-1]["source"], "code")
+        self.assertEqual(events[-1]["template"]["sections"]["match"]["blocks"][-1]["settings"]["question"], "Brand new question")
+        # 2. the storefront and the customizer preview show it
+        settings = self.ok("get", "/api/v1/themes/settings/")
+        for html in (self.client.get(f"{self.base}/").content.decode(), self.ok("post", "/api/v1/themes/preview/", settings)["html"]):
+            self.assertIn("Brand new question", html)
+            self.assertIn(f'data-rname="Stouts" data-rtext="Roasty and rich." data-rlink="{self.base}/collections/stout-shelf"', html)
+        # 3. the other way round: a block added in the customizer shows in index.json
+        template = settings["templates"]["index"]
+        template["sections"]["match"]["blocks"].append({"type": "question", "settings": {"question": "From the customizer"}})
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": template}})
+        questions = [b["settings"]["question"] for b in index_json()["sections"]["match"]["blocks"]]
+        self.assertEqual(questions[-2:], ["Brand new question", "From the customizer"])
+
+        # 4. invalid JSON and invalid block settings are refused with a line number, and nothing is saved
+        good = json.dumps(index_json(), indent=2)
+        r = self.client.post("/api/v1/themes/files/", {"path": "templates/index.json", "content": good[:-3]}, format="json")
+        self.assertEqual(r.status_code, 400, r.content[:300])
+        self.assertIn("not valid JSON", r.content.decode())
+        self.assertRegex(r.content.decode(), r"line \d+")
+
+        bad = index_json()
+        bad["sections"]["match"]["blocks"][1]["settings"]["no_such_setting"] = "x"
+        text = json.dumps(bad, indent=2)
+        r = self.client.post("/api/v1/themes/files/", {"path": "templates/index.json", "content": text}, format="json")
+        self.assertEqual(r.status_code, 400, r.content[:300])
+        body = r.content.decode()
+        self.assertIn("blocks[1]", body)
+        expected_line = next(i for i, line in enumerate(text.splitlines(), 1) if line.strip().startswith('"no_such_setting"'))
+        self.assertIn(f"(line {expected_line})", body)
+        self.assertEqual(index_json(), json.loads(good))  # nothing was saved
+
+    def test_match_quiz_and_unknown_sections_resolve_without_error(self):
         from .schemas import resolve
         custom_data = {
             "templates": {
