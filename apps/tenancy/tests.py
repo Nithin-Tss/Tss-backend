@@ -497,7 +497,9 @@ class StoreAdminOwnerTest(TestCase):
                 "currency": "INR", "unit_system": "metric", "weight_unit": "kg", "timezone": "Asia/Kolkata",
                 "auto_fulfill": "gift_cards", "tax_rate": "0", "shipping_flat_rate": "0",
                 "cancellation_window_minutes": "60", "return_window_starts_from": "delivery",
-                "return_shipping": "free", "restocking_fee_percent": "0", **fields}
+                "return_shipping": "free", "restocking_fee_percent": "0",
+                "cookie_banner": "automated", "data_sharing_opt_out": "automated",
+                "checkout_email_marketing": "unchecked", "checkout_sms_marketing": "hidden", **fields}
         return self.client.post(self.URL + "add/", data)
 
     def test_admin_add_store_makes_the_owner(self):

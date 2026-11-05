@@ -15,6 +15,8 @@ WEIGHT_UNITS = ["kg", "g", "lb", "oz"]
 AUTO_FULFILL = ["all", "gift_cards", "none"]
 RETURN_STARTS_FROM = ["delivery", "fulfillment", "order"]
 RETURN_SHIPPING = ["free", "customer_pays"]
+PRIVACY_MODES = ["automated", "always", "off"]
+CONSENT_MODES = ["hidden", "unchecked", "prechecked"]
 MAX_CANCELLATION_MINUTES = 60 * 24 * 30
 MAX_RETURN_DAYS = 365
 
@@ -58,6 +60,17 @@ class StoreSerializer(serializers.ModelSerializer):
     restockingFeePercent = serializers.DecimalField(
         source="restocking_fee_percent", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False
     )
+    cookieBanner = serializers.ChoiceField(source="cookie_banner", choices=PRIVACY_MODES, required=False)
+    dataSharingOptOut = serializers.ChoiceField(source="data_sharing_opt_out", choices=PRIVACY_MODES, required=False)
+    networkIntelligence = serializers.BooleanField(source="network_intelligence", required=False)
+    checkoutEmailMarketing = serializers.ChoiceField(
+        source="checkout_email_marketing", choices=CONSENT_MODES, required=False
+    )
+    checkoutSmsMarketing = serializers.ChoiceField(
+        source="checkout_sms_marketing", choices=CONSENT_MODES, required=False
+    )
+    doubleOptInEmail = serializers.BooleanField(source="double_opt_in_email", required=False)
+    doubleOptInSms = serializers.BooleanField(source="double_opt_in_sms", required=False)
     taxRate = serializers.DecimalField(source="tax_rate", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False)
     pricesIncludeTax = serializers.BooleanField(source="prices_include_tax", required=False)
     taxShipping = serializers.BooleanField(source="tax_shipping", required=False)
@@ -77,6 +90,8 @@ class StoreSerializer(serializers.ModelSerializer):
             "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
             "cancellationsEnabled", "cancellationWindowMinutes", "returnsEnabled", "returnWindowDays",
             "returnWindowStartsFrom", "returnWindowExtendWeekends", "returnShipping", "restockingFeePercent",
+            "cookieBanner", "dataSharingOptOut", "networkIntelligence", "checkoutEmailMarketing",
+            "checkoutSmsMarketing", "doubleOptInEmail", "doubleOptInSms",
             "taxRate", "pricesIncludeTax", "taxShipping", "shippingFlatRate", "freeShippingThreshold",
             "role", "roles", "permissions",
         ]

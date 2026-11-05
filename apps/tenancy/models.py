@@ -51,6 +51,16 @@ class Store(models.Model):
     return_shipping = models.CharField(max_length=20, default="free")  # free | customer_pays
     restocking_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
+    # Settings > Customer privacy. Banner / opt-out page: "automated" (shown only where the law needs it),
+    # "always" or "off". Checkout marketing consent: "hidden", "unchecked" or "prechecked".
+    cookie_banner = models.CharField(max_length=20, default="automated")
+    data_sharing_opt_out = models.CharField(max_length=20, default="automated")
+    network_intelligence = models.BooleanField(default=True)
+    checkout_email_marketing = models.CharField(max_length=20, default="unchecked")
+    checkout_sms_marketing = models.CharField(max_length=20, default="hidden")
+    double_opt_in_email = models.BooleanField(default=False)
+    double_opt_in_sms = models.BooleanField(default=False)
+
     # Checkout pricing: tax is a percentage of (subtotal - discount); shipping is
     # a flat fee, waived once the discounted subtotal reaches free_shipping_threshold.
     # ShippingRate rows (by destination country and cart weight) override the flat fee.

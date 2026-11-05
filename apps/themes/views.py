@@ -54,6 +54,8 @@ from apps.media.services import upload_image
 from .models import BlogPost, Menu, MenuItem, StorePage, StoreTheme, ThemeImage, UrlRedirect
 from .customizer import read_settings, save_settings, validate_settings
 from . import presets
+from . import privacy
+import logging
 from . import section_sync as sync
 from .rendering import (
     _catalog, _matches_filters, _products, _with_category_ids, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
@@ -2135,6 +2137,7 @@ def _storefront(render):
         # Never inside a frame (the customizer's live preview).
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
             html = _with_admin_bar(html, store, visit)
+        html = privacy.inject(html, store, request)
 
         response = HttpResponse(
             html,
@@ -2350,6 +2353,9 @@ def storefront_wishlist(store, request, params):
     )
 
 
+logger = logging.getLogger(__name__)
+
+
 # ------------------------------------------------------------------ the cart (see cart.py and snippets/cart.liquid)
 
 # The storefront page runs in a sandbox (no cookies, no same-origin), so its script reaches these endpoints
@@ -2541,13 +2547,12 @@ def storefront_newsletter(request, store, cart_id):
     customer = Customer.objects.filter(store=store, email__iexact=email).first()
     if customer is None:
         try:
-            Customer.objects.create(store=store, email=email, email_subscription_status="subscribed")
+            customer = Customer.objects.create(store=store, email=email, email_subscription_status="not_subscribed")
         except IntegrityError:
             customer = Customer.objects.filter(store=store, email__iexact=email).first()
     if customer is not None and customer.email_subscription_status != "subscribed":
-        customer.email_subscription_status = "subscribed"
-        customer.save(update_fields=["email_subscription_status", "updated_at"])
-    return JsonResponse({"ok": True})
+        privacy.record_consent(store, customer, request, email=True)
+    return JsonResponse({"ok": True, "confirm": bool(store.double_opt_in_email)})
 
 
 @_cart_api
@@ -2597,6 +2602,22 @@ def _with_cart_cors(view):
         return response
 
     return wrapper
+
+
+def _record_checkout_consent(store, request, email, data):
+    """Marketing boxes ticked at checkout. Only channels the store asks about count; failures never block the order."""
+    def ticked(key, mode):
+        value = data.get(key)
+        return mode != "hidden" and value in (True, "true", "on", "1", 1)
+    wants_email = ticked("email_marketing", store.checkout_email_marketing)
+    wants_sms = ticked("sms_marketing", store.checkout_sms_marketing)
+    if not (wants_email or wants_sms):
+        return
+    try:
+        customer = Customer.objects.filter(store=store, email__iexact=email).first()
+        privacy.record_consent(store, customer, request, email=wants_email, sms=wants_sms)
+    except Exception:
+        logger.exception("Could not record marketing consent for store %s", store.pk)
 
 
 @xframe_options_exempt
@@ -2707,6 +2728,7 @@ def storefront_checkout(request, store_slug):
                 checkout.save(update_fields=["metadata"])
 
             order = commerce_services.place_order(checkout, payment_method=payment_method)
+            _record_checkout_consent(store, request, email, data)
             if is_json:
                 return JsonResponse({
                     "success": True,
@@ -2998,6 +3020,8 @@ def _storefront_response(html, status=200, request=None, store=None):
         visit = _admin_visit(request, store)
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
             html = _with_admin_bar(html, store, visit)
+    if request is not None and store is not None:
+        html = privacy.inject(html, store, request)
     response = HttpResponse(html, status=status)
     response["Content-Security-Policy"] = (
         "sandbox allow-scripts allow-forms "
@@ -3118,10 +3142,12 @@ def storefront_register(request, store_slug):
                                 email=email,
                                 first_name=user.first_name or first_name,
                                 last_name=user.last_name or last_name,
-                                email_subscription_status="subscribed" if newsletter else "not_subscribed",
+                                email_subscription_status="not_subscribed",
                             )
                         except IntegrityError:
                             customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    if newsletter and customer is not None and customer.email_subscription_status != "subscribed":
+                        privacy.record_consent(store, customer, request, email=True)
                     # Link cart if open
                     pending = getattr(request, "_cart_session", None)
                     cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
@@ -3153,10 +3179,12 @@ def storefront_register(request, store_slug):
                                 email=email,
                                 first_name=first_name,
                                 last_name=last_name,
-                                email_subscription_status="subscribed" if newsletter else "not_subscribed",
+                                email_subscription_status="not_subscribed",
                             )
                         except IntegrityError:
                             customer = Customer.objects.filter(store=store, email__iexact=email).first()
+                    if newsletter and customer is not None and customer.email_subscription_status != "subscribed":
+                        privacy.record_consent(store, customer, request, email=True)
                     # Link cart if open
                     pending = getattr(request, "_cart_session", None)
                     cart_id = pending[0] if pending else request.COOKIES.get(cart_data.cookie_name(store))
