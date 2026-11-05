@@ -82,7 +82,7 @@
     <div class="cart-empty">
       <h2 class="cart-empty__title">{{ settings.empty_message | default: 'Your cart is empty' }}</h2>
       {%- if settings.show_login -%}
-        <p class="cart-empty__login">Have an account? <a href="{{ settings.login_url | link }}">Log in</a> to check out faster.</p>
+        {%- if show_sign_in_links != false -%}<p class="cart-empty__login">Have an account? <a href="{{ settings.login_url | link }}">Log in</a> to check out faster.</p>{%- endif -%}
       {%- endif -%}
       <a class="button" href="{{ shop.url }}/collections/all">Continue shopping</a>
     </div>

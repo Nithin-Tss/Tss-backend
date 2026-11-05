@@ -2762,6 +2762,19 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         end = older.index('    if (target.closest("[data-cart-checkout-soon]")) {')
         return older[:start] + older[end:]
 
+    def register_as_older(self, *texts):
+        """The older copies are rebuilt from the current snippet, so their hashes move whenever the snippet changes.
+        Register them for this test only; the shipped hashes in STARTER_UPGRADES are covered by the constants test."""
+        import hashlib
+        from unittest import mock
+
+        from .services import STARTER_UPGRADES
+
+        hashes = {hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts}
+        patcher = mock.patch.dict(STARTER_UPGRADES, {self.SNIPPET: STARTER_UPGRADES[self.SNIPPET] | hashes})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_the_snippet_from_before_clear_cart_is_registered_for_the_upgrade(self):
         import hashlib
 
@@ -2769,8 +2782,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
 
         text = self.snippet_before_clear_cart()
         self.assertNotIn("data-cart-clear", text)
-        for variant in (text, text.replace("\n", "\r\n")):  # an LF copy and a CRLF copy
-            self.assertIn(hashlib.sha256(variant.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        self.register_as_older(text, text.replace("\n", "\r\n"))  # an LF copy and a CRLF copy
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
         theme.theme_data = {**theme.theme_data, "starter_revision": 37}
@@ -2817,7 +2829,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         text = self.snippet_before_link_ids()
         self.assertNotIn("tagLinks", text)
         self.assertIn("A header that draws its own cart icon", text)  # still the revision-22 file, with the badge code
-        self.assertIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        self.register_as_older(text)
         # a store with that copy gets the new one, an edited copy stays as it is
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
@@ -2832,7 +2844,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         from .services import STARTER_UPGRADES, starter_files
 
         old = self.old_cart_snippet()
-        self.assertIn(hashlib.sha256(old.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])  # a real older file
+        self.register_as_older(old)
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=old, file_size=len(old.encode("utf-8")))
         theme.theme_data = {**theme.theme_data, "starter_revision": 21}
@@ -5801,6 +5813,62 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
                     self.assertIn(r.json()["error"], ("Enter an email address", "Enter a valid email address"))
                     self.assertEqual(r.json()["field"], "email")
                     self.assertEqual(Order.objects.count(), 0)
+
+    def _checkout_session(self):
+        import re
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        return session_id
+
+    def _post_checkout(self, session_id, **extra):
+        form = {
+            "email": "jv@example.com", "first_name": "Jav", "last_name": "V", "address1": "1 Main Street",
+            "city": "Pune", "postal_code": "411001", "country": "India", "payment_method": "cod", **extra,
+        }
+        return self.shopper.post(
+            f"{self.base}/checkout/", data=json.dumps(form), content_type="application/json",
+            HTTP_ACCEPT="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+
+    def test_checkout_settings_make_phone_company_and_address2_required(self):
+        from apps.orders.models import Order
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(
+            checkout_phone="required", checkout_company="required", checkout_address2="required")
+        for message, extra in (
+            ("Company name is required.", {}),
+            ("Apartment, suite or unit is required.", {"company": "Acme"}),
+            ("Phone number is required.", {"company": "Acme", "address2": "Flat 2"}),
+        ):
+            r = self._post_checkout(session_id, **extra)
+            self.assertEqual((r.status_code, r.json()["error"]), (400, message))
+        self.assertEqual(Order.objects.count(), 0)
+        r = self._post_checkout(session_id, company="Acme", address2="Flat 2", phone="9876543210")
+        self.assertEqual(r.status_code, 200, r.content[:200])
+
+    def test_checkout_last_name_only_does_not_need_a_first_name(self):
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        r = self._post_checkout(session_id, first_name="")
+        self.assertEqual(r.status_code, 400)
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(checkout_full_name="last_only")
+        r = self._post_checkout(session_id, first_name="")
+        self.assertEqual(r.status_code, 200, r.content[:200])
+
+    def test_checkout_can_require_sign_in(self):
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(checkout_require_login=True)
+        page = self.shopper.get(f"{self.base}/checkout")
+        self.assertEqual(page.status_code, 302)
+        self.assertIn("/account/login", page["Location"])
+        self.assertEqual(self._post_checkout(session_id).status_code, 403)
 
     def test_checkout_refuses_to_place_order_with_bad_email_already_saved_on_it(self):
         import re
