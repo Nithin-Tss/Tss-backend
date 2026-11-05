@@ -54,6 +54,12 @@ class Store(models.Model):
     stripe_account_id = models.CharField(max_length=64, blank=True, default="")
     stripe_charges_enabled = models.BooleanField(default=False)
     stripe_details_submitted = models.BooleanField(default=False)
+    # The store's own API keys (entered by the owner). Secrets are encrypted at rest (apps.payments.crypto).
+    stripe_publishable_key = models.CharField(max_length=255, blank=True, default="")
+    stripe_secret_key_enc = models.TextField(blank=True, default="", editable=False)
+    stripe_webhook_secret_enc = models.TextField(blank=True, default="", editable=False)
+    stripe_webhook_endpoint_id = models.CharField(max_length=64, blank=True, default="")
+    stripe_livemode = models.BooleanField(default=False)
 
     # Email of the account that created the store (blank for stores made before this was kept)
     created_by = models.EmailField(blank=True, default="", editable=False)

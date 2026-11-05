@@ -71,10 +71,10 @@ class StripeTests(base_tests.CommerceTestBase):
         r = self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.data["client_secret"], "secret_1")
-        self.assertEqual(r.data["stripe_account"], ACCOUNT)
+        self.assertIsNone(r.data["stripe_account"])  # the store's own keys: charged directly, no connected account
         params, = intents.create.call_args.args
         self.assertEqual((params["amount"], params["currency"]), (99800, "inr"))
-        self.assertEqual(intents.create.call_args.kwargs["options"]["stripe_account"], ACCOUNT)
+        self.assertNotIn("stripe_account", intents.create.call_args.kwargs["options"])
 
         self.client.post(f"{self.base}/checkout/{checkout.pk}/stripe/", **self.h)
         self.assertEqual(intents.create.call_count, 1)

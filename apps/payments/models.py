@@ -195,3 +195,20 @@ class PaymentTransaction(models.Model):
 
     def __str__(self):
         return f"{self.payment} - {self.transaction_type}"
+
+class BankPayoutAccount(models.Model):
+    """Where a store's owner wants payouts sent when they don't use Stripe. One per store."""
+
+    store = models.OneToOneField(
+        Store, on_delete=models.CASCADE, db_column="store_id", related_name="bank_payout_account"
+    )
+    account_holder_name = models.CharField(max_length=120)
+    bank_name = models.CharField(max_length=120)
+    account_number = models.CharField(max_length=34)  # never returned by the API in full
+    routing_code = models.CharField(max_length=20)  # routing / sort code / IFSC / BSB
+    currency = models.CharField(max_length=3, default="USD")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def account_last4(self):
+        return self.account_number[-4:]

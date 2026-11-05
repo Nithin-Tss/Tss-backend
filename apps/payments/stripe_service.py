@@ -1,8 +1,7 @@
 """
-Stripe, as a Connect platform. Each store connects its own Standard account and
-shoppers pay it directly: charges are created on the connected account (the
-`stripe_account` request option), so the money, the dispute liability and the
-Stripe dashboard all belong to the store.
+Stripe, with each store's own API keys. The owner enters their publishable and secret keys; we validate them
+with Stripe, then shoppers pay the store's own Stripe account directly, so the money, the dispute liability
+and the Stripe dashboard all belong to the store. Secret keys are encrypted at rest.
 
 An order is only created once Stripe confirms the money (payment_intent.succeeded,
 via the webhook or the shopper's return from Stripe, whichever comes first), so
@@ -10,6 +9,7 @@ unpaid checkouts never hold stock. If the order cannot be placed after the shopp
 paid (stock ran out, the total moved), the payment is refunded straight away.
 """
 import logging
+import re
 from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -23,6 +23,7 @@ from apps.inventory import services as inventory
 from apps.commerce.models import Checkout
 from apps.tenancy.models import Store
 
+from . import crypto
 from . import services as payments
 from .models import Payment, PaymentTransaction
 
@@ -46,7 +47,13 @@ def plain(obj):
     return obj.to_dict() if hasattr(obj, "to_dict") else (obj or {})
 
 
-def client():
+def client(store=None):
+    """A Stripe client using the store's own secret key (or, with no store, the platform's)."""
+    if store is not None:
+        key = crypto.decrypt(store.stripe_secret_key_enc)
+        if not key:
+            raise ValidationError("This store can't take card payments yet.")
+        return stripe.StripeClient(key)
     if not settings.STRIPE_SECRET_KEY:
         raise ValidationError("Card payments are not configured on this server.")
     return stripe.StripeClient(settings.STRIPE_SECRET_KEY)
@@ -70,34 +77,107 @@ def _require_connected(store):
 
 # -- Connecting a store ------------------------------------------------------------------------
 
-def onboarding_link(store, return_url, refresh_url):
-    """Create the store's Standard account on first use; return a Stripe-hosted onboarding URL."""
-    stripe_client = client()
-    if not store.stripe_account_id:
-        account = stripe_client.v1.accounts.create(
-            {"type": "standard", "email": store.contact_email or None, "metadata": {"store_id": str(store.pk)}}
-        )
-        store.stripe_account_id = account.id
-        store.save(update_fields=["stripe_account_id", "updated_at"])
-    link = stripe_client.v1.account_links.create(
-        {
-            "account": store.stripe_account_id,
-            "type": "account_onboarding",
-            "return_url": return_url,
-            "refresh_url": refresh_url,
-        }
-    )
-    return link.url
+KEY_PATTERNS = {
+    "publishable_key": re.compile(r"^pk_(test|live)_[A-Za-z0-9]{10,}$"),
+    "secret_key": re.compile(r"^(?:sk|rk)_(test|live)_[A-Za-z0-9]{10,}$"),
+}
+WEBHOOK_EVENTS = [
+    "payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.canceled",
+    "charge.refunded", "charge.dispute.created", "charge.dispute.closed",
+]
+
+
+def webhook_url(store):
+    base = getattr(settings, "PUBLIC_API_URL", "")
+    return f"{base}/api/v1/payments/stripe/webhook/{store.pk}/" if base else ""
+
+
+def connect_with_keys(store, publishable_key, secret_key, webhook_secret=""):
+    """
+    Validate the keys the owner typed in, then connect the store. Checks the format of each key, that both are for
+    the same mode (test or live), and that Stripe accepts the secret key (by fetching the account it belongs to).
+    Nothing is saved unless every check passes.
+    """
+    publishable_key, secret_key, webhook_secret = (publishable_key or "").strip(), (secret_key or "").strip(), (webhook_secret or "").strip()
+    errors = {}
+    pk_match = KEY_PATTERNS["publishable_key"].match(publishable_key)
+    sk_match = KEY_PATTERNS["secret_key"].match(secret_key)
+    if not pk_match:
+        errors["publishable_key"] = "Enter your publishable key (it starts with pk_test_ or pk_live_)."
+    if not sk_match:
+        errors["secret_key"] = "Enter your secret key (it starts with sk_test_ or sk_live_)."
+    if webhook_secret and not webhook_secret.startswith("whsec_"):
+        errors["webhook_secret"] = "A webhook signing secret starts with whsec_."
+    if errors:
+        raise ValidationError(errors)
+    if pk_match.group(1) != sk_match.group(1):
+        raise ValidationError({"secret_key": "The publishable and secret keys are for different modes (one test, one live)."})
+    livemode = sk_match.group(1) == "live"
+
+    try:
+        account = stripe.StripeClient(secret_key).v1.accounts.retrieve()
+    except stripe.AuthenticationError:
+        raise ValidationError({"secret_key": "Stripe rejected this secret key. Check it and try again."})
+    except stripe.PermissionError:
+        raise ValidationError({"secret_key": "This key can't read the account. Use a secret key, or give a restricted key read access to Accounts."})
+    if Store.objects.filter(stripe_account_id=account.id).exclude(pk=store.pk).exists():
+        raise ValidationError({"secret_key": "This Stripe account is already connected to another store."})
+
+    endpoint_id = store.stripe_webhook_endpoint_id if store.stripe_account_id == account.id else ""
+    url = webhook_url(store)
+    if not webhook_secret and url and not endpoint_id:
+        # Register the webhook for the owner; Stripe returns its signing secret only at creation
+        try:
+            endpoint = stripe.StripeClient(secret_key).v1.webhook_endpoints.create(
+                {"url": url, "enabled_events": WEBHOOK_EVENTS, "description": "Store payments"}
+            )
+            webhook_secret, endpoint_id = endpoint.secret, endpoint.id
+        except stripe.StripeError as exc:
+            logger.warning("Could not register Stripe webhook for store %s: %s", store.pk, exc)
+
+    store.stripe_account_id = account.id
+    store.stripe_charges_enabled = bool(account.charges_enabled)
+    store.stripe_details_submitted = bool(account.details_submitted)
+    store.stripe_publishable_key = publishable_key
+    store.stripe_secret_key_enc = crypto.encrypt(secret_key)
+    if webhook_secret:
+        store.stripe_webhook_secret_enc = crypto.encrypt(webhook_secret)
+    store.stripe_webhook_endpoint_id = endpoint_id
+    store.stripe_livemode = livemode
+    store.save(update_fields=[
+        "stripe_account_id", "stripe_charges_enabled", "stripe_details_submitted", "stripe_publishable_key",
+        "stripe_secret_key_enc", "stripe_webhook_secret_enc", "stripe_webhook_endpoint_id", "stripe_livemode", "updated_at",
+    ])
+    return store
 
 
 def sync_account(store, account=None):
-    """Copy whether the store may take payments from Stripe (account.updated, or after onboarding)."""
+    """Refresh whether the store may take payments (account.updated, or when the page is opened)."""
     if not store.stripe_account_id:
         return store
-    account = account or client().v1.accounts.retrieve(store.stripe_account_id)
+    if account is None:
+        try:
+            account = client(store).v1.accounts.retrieve()
+        except stripe.StripeError:
+            logger.warning("Could not refresh Stripe account for store %s", store.pk)
+            return store
     store.stripe_charges_enabled = bool(account.charges_enabled)
     store.stripe_details_submitted = bool(account.details_submitted)
     store.save(update_fields=["stripe_charges_enabled", "stripe_details_submitted", "updated_at"])
+    return store
+
+
+def clear_connection(store, remove_webhook=True):
+    """Forget the store's keys and stop taking card payments. Removes the webhook we registered, if any."""
+    if remove_webhook and store.stripe_webhook_endpoint_id and store.stripe_secret_key_enc:
+        try:
+            client(store).v1.webhook_endpoints.delete(store.stripe_webhook_endpoint_id)
+        except Exception:
+            logger.warning("Could not delete Stripe webhook %s for store %s", store.stripe_webhook_endpoint_id, store.pk)
+    for field in ("stripe_account_id", "stripe_publishable_key", "stripe_secret_key_enc", "stripe_webhook_secret_enc", "stripe_webhook_endpoint_id"):
+        setattr(store, field, "")
+    store.stripe_charges_enabled = store.stripe_details_submitted = store.stripe_livemode = False
+    store.save()
     return store
 
 
@@ -127,9 +207,9 @@ def payment_session(checkout):
     inventory.reserve(checkout.pk, checkout.store_id, [(i.variant, i.quantity) for i in items], STOCK_HOLD)
 
     store = checkout.store
-    options = {"stripe_account": store.stripe_account_id}
+    options = {}
     amount = to_minor_units(checkout.total_amount, checkout.currency)
-    intents = client().v1.payment_intents
+    intents = client(store).v1.payment_intents
     intent_id = (checkout.metadata or {}).get("stripe_payment_intent")
 
     intent = None
@@ -161,8 +241,8 @@ def payment_session(checkout):
 
     return {
         "client_secret": intent.client_secret,
-        "publishable_key": settings.STRIPE_PUBLISHABLE_KEY,
-        "stripe_account": store.stripe_account_id,
+        "publishable_key": store.stripe_publishable_key,
+        "stripe_account": None,  # the store's own keys: charges are made directly on its account
         "amount": checkout.total_amount,
         "currency": checkout.currency,
     }
@@ -205,7 +285,7 @@ def finalize(intent, account_id):
         logger.warning("Refunding Stripe payment %s, order not placed: %s", intent.id, exc.detail)
         why = str(exc.detail)[:300]
         try:
-            refund = refund_intent(intent.id, account_id, reason="order_not_placed")
+            refund = refund_intent(intent.id, checkout.store, reason="order_not_placed")
         except Exception as failure:
             # Raised on so Stripe retries the webhook (the refund key makes that safe), but say loudly that money is unplaced
             logger.exception("REFUND FAILED for Stripe payment %s on account %s: no order and money not returned", intent.id, account_id)
@@ -246,14 +326,14 @@ def _note_auto_refund(checkout_id, intent, state, why, refund_id=None, error=Non
         logger.exception("Could not record the automatic refund of Stripe payment %s on checkout %s", intent.id, checkout_id)
 
 
-def refund_intent(intent_id, account_id, amount=None, reason=None):
+def refund_intent(intent_id, store, amount=None, reason=None):
     params = {"payment_intent": intent_id}
     if amount is not None:
         params["amount"] = amount
     if reason == "order_not_placed":
         params["metadata"] = {"reason": reason}
     key = f"refund-{intent_id}-{amount or 'full'}"
-    return client().v1.refunds.create(params, options={"stripe_account": account_id, "idempotency_key": key})
+    return client(store).v1.refunds.create(params, options={"idempotency_key": key})
 
 
 def refund_payment(payment, amount, already_refunded):
@@ -265,9 +345,9 @@ def refund_payment(payment, amount, already_refunded):
     # The same refund asked twice must not repeat: the key names this payment and how much is already refunded
     key = f"refund-{payment.pk}-{already_refunded}-{minor}"
     try:
-        refund = client().v1.refunds.create(
+        refund = client(payment.store).v1.refunds.create(
             {"payment_intent": payment.provider_payment_id, "amount": minor},
-            options={"stripe_account": account_id, "idempotency_key": key},
+            options={"idempotency_key": key},
         )
     except stripe.StripeError as exc:
         raise ValidationError({"payment": f"Stripe refused the refund: {exc.user_message or exc}"})
@@ -355,12 +435,11 @@ def _flag_order_dispute(order, dispute, status, payment):
 
 
 def disconnect(account_id):
-    """account.application.deauthorized: the store revoked us, so stop taking card payments for it."""
+    """The store revoked access (or removed its keys): stop taking card payments for it."""
     store = Store.objects.filter(stripe_account_id=account_id).first()
     if store is None:
         return None
-    store.stripe_account_id, store.stripe_charges_enabled, store.stripe_details_submitted = "", False, False
-    store.save(update_fields=["stripe_account_id", "stripe_charges_enabled", "stripe_details_submitted", "updated_at"])
+    clear_connection(store, remove_webhook=False)
     logger.warning("Store %s disconnected Stripe account %s", store.pk, account_id)
     return store
 
