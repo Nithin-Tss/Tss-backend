@@ -109,6 +109,75 @@ def _price_missing(product, data, creating, was_active):
     return False
 
 
+MAX_OPTIONS = 3
+
+
+def clean_options(value):
+    """
+    Product.options as sent by the admin: at most 3 options, each with a name and its values in display order.
+    Names and values are trimmed; blanks and case-insensitive duplicates are refused.
+    """
+    if not isinstance(value, list):
+        raise ValidationError("Send a list of options.")
+    if len(value) > MAX_OPTIONS:
+        raise ValidationError(f"A product can have at most {MAX_OPTIONS} options.")
+    cleaned, names = [], set()
+    for option in value:
+        if not isinstance(option, dict) or not isinstance(option.get("values"), list):
+            raise ValidationError("Each option needs a name and a list of values.")
+        name = str(option.get("name") or "").strip()
+        if not name:
+            raise ValidationError("Option names can't be blank.")
+        if name.lower() in names:
+            raise ValidationError(f'There are two options called "{name}".')
+        names.add(name.lower())
+        values, seen = [], set()
+        for raw in option["values"]:
+            text = str(raw if raw is not None else "").strip()
+            if not text:
+                raise ValidationError(f"{name} has a blank value.")
+            if text.lower() in seen:
+                raise ValidationError(f'{name} has "{text}" more than once.')
+            seen.add(text.lower())
+            values.append(text)
+        if not values:
+            raise ValidationError(f"{name} needs at least one value.")
+        cleaned.append({"name": name, "values": values})
+    return cleaned
+
+
+def variant_options(variant):
+    return (variant.metadata or {}).get("options") or {}
+
+
+def check_variant_options(product):
+    """Every variant has one listed value per option of the product, and no two variants share a combination."""
+    options = product.options or []
+    names = [o["name"] for o in options]
+    seen = set()
+    for variant in product.variants.order_by("created_at"):
+        chosen = variant_options(variant)
+        label = variant.sku or "A variant"
+        if not options:
+            if chosen:
+                raise ValidationError({"variants": f"{label} has option values, but the product has no options."})
+            continue
+        if set(chosen) != set(names):
+            raise ValidationError({"variants": f"{label} needs one value for each option: {', '.join(names)}."})
+        for option in options:
+            value = chosen[option["name"]]
+            if not value:
+                raise ValidationError({"variants": f"{label} has a blank value for {option['name']}."})
+            if value not in option["values"]:
+                raise ValidationError({"variants": f'{label}: "{value}" isn\'t a value of {option["name"]}.'})
+        combination = tuple(chosen[n].lower() for n in names)
+        if combination in seen:
+            raise ValidationError(
+                {"variants": f"Two variants have the same options: {' / '.join(chosen[n] for n in names)}."}
+            )
+        seen.add(combination)
+
+
 def _price(value):
     try:
         return Decimal(str(value or "0")).quantize(Decimal("0.01"))
@@ -396,6 +465,12 @@ def save_product(store, data, product=None, user=None):
             raise ValidationError({"sku": "Every product needs a SKU."})
         check_skus(store, skus, exclude_product=product, allowed_skus=original_skus)
 
+    if "options" in data:
+        product.options = data["options"]
+        product.save(update_fields=["options", "updated_at"])
+    if "options" in data or "variants" in data:
+        check_variant_options(product)  # inside the save's transaction: a mismatch saves nothing
+
     # "Continue selling when out of stock" on its own (no variant list): applies to every variant
     if "continue_selling" in data and "variants" not in data:
         product.variants.update(continue_selling=bool(data["continue_selling"]))
@@ -548,6 +623,10 @@ def _apply_variant(variant, row, default_price=None):
         variant.weight = row["weight"]
     if "sku" in row:
         variant.sku = (row["sku"] or "").strip() or None
+    if "options" in row:
+        # Merged in: any other metadata keys stay as they are
+        chosen = {str(k).strip(): str(v if v is not None else "").strip() for k, v in (row["options"] or {}).items()}
+        variant.metadata = {**(variant.metadata or {}), "options": chosen}
     variant.save()
     return variant
 
@@ -598,14 +677,24 @@ def _replace_variants(product, data):
         variant.delete()
 
 
+@transaction.atomic
 def create_variant(product, data):
-    return _apply_variant(ProductVariant(product=product), data)
+    variant = _apply_variant(ProductVariant(product=product), data)
+    check_variant_options(product)
+    return variant
 
 
+@transaction.atomic
 def update_variant(variant, data):
+    """Changes only the fields sent; never touches the product's other variants."""
     row = {"price": data.get("price", variant.price), "sku": data.get("sku", variant.sku),
            "weight": data.get("weight", variant.weight)}
-    return _apply_variant(variant, row)
+    for key in ("compare_at_price", "continue_selling", "options"):
+        if key in data:
+            row[key] = data[key]
+    _apply_variant(variant, row)
+    check_variant_options(variant.product)
+    return variant
 
 
 def delete_variant(variant):

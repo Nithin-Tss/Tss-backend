@@ -16,7 +16,8 @@ from .models import (
     unique_handle,
 )
 from .services import (
-    RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_skus, set_manual_products, sync_collection,
+    RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_skus, clean_options, set_manual_products,
+    sync_collection, variant_options,
 )
 
 
@@ -104,6 +105,8 @@ class VariantInputSerializer(serializers.Serializer):
     )
     weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
     continue_selling = serializers.BooleanField(required=False)
+    # This variant's value for each of the product's options, e.g. {"Size": "Single"}
+    options = serializers.DictField(child=serializers.CharField(allow_blank=True, max_length=255), required=False)
 
     def validate_sku(self, value):
         return value.strip()
@@ -152,6 +155,7 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
         required=False,
     )
     variants = VariantInputSerializer(many=True, required=False)
+    options = serializers.JSONField(required=False)
     category_id = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), required=False, allow_null=True
     )
@@ -189,6 +193,9 @@ class ProductInputSerializer(StoreScopedSerializerMixin, serializers.Serializer)
             if blanks:
                 data = {**data, **blanks}
         return super().to_internal_value(data)
+
+    def validate_options(self, value):
+        return clean_options(value)
 
     def validate_variants(self, rows):
         ids = [str(r["id"]) for r in rows if r.get("id")]
@@ -254,7 +261,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "id", "title", "status", "description", "category", "category_id", "product_type",
             "vendor", "seo_title", "seo_description", "theme_template", "is_taxable", "price", "sku",
             "collections", "tags", "variants", "quantity", "images", "sales_channels", "createdAt", "updatedAt",
-            *EXTRA_FIELDS,
+            "options", *EXTRA_FIELDS,
         ]
 
     def _variants(self, product):
@@ -288,6 +295,7 @@ class ProductSerializer(serializers.ModelSerializer):
                 "weight": str(v.weight),
                 "continue_selling": v.continue_selling,
                 "quantity": sum(i.available for i in v.inventory_items.all()),
+                "options": variant_options(v),
             }
             for v in self._variants(product)
         ]
@@ -577,11 +585,32 @@ class VariantSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer)
     price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
     sku = serializers.CharField(max_length=100)
     weight = serializers.DecimalField(max_digits=10, decimal_places=3, min_value=0, required=False)
+    compare_at_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True,
+    )
+    continue_selling = serializers.BooleanField(required=False)
+    options = serializers.DictField(
+        child=serializers.CharField(allow_blank=True, max_length=255), required=False, write_only=True,
+    )
 
     class Meta:
         model = ProductVariant
-        fields = ["id", "product", "sku", "price", "weight", "created_at", "updated_at"]
+        fields = [
+            "id", "product", "sku", "price", "compare_at_price", "weight", "continue_selling", "options",
+            "created_at", "updated_at",
+        ]
         read_only_fields = ["created_at", "updated_at"]
+
+    def to_internal_value(self, data):
+        # The admin sends "" for an empty compare-at price
+        if hasattr(data, "get") and data.get("compare_at_price") == "":
+            data = {**data, "compare_at_price": None}
+        return super().to_internal_value(data)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["options"] = variant_options(instance)
+        return data
 
     def validate_sku(self, value):
         value = value.strip()

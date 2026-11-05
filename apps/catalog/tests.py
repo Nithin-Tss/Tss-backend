@@ -2625,3 +2625,142 @@ class CatalogDatabaseConstraintTests(TestCase):
         sales_channels_for(self.a)
         self.assertEqual(SalesChannel.objects.filter(store=self.a).count(), 3)
         self.assertFalse(SalesChannel.objects.filter(store=self.b).exists())
+
+
+class ProductOptionsTests(APITestCase):
+    """Product.options (names and value order) and each variant's values in ProductVariant.metadata["options"]."""
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "opts@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.product = self.client.post(URL, {"title": "Cola", "price": "10", "sku": "C1"}, format="json").json()
+        self.url = f"{URL}{self.product['id']}/"
+        self.first = self.product["variants"][0]["id"]
+
+    def size_options(self, *values):
+        return [{"name": "Size", "values": list(values)}]
+
+    def variant_ids(self):
+        return {str(i) for i in ProductVariant.objects.filter(product_id=self.product["id"]).values_list("id", flat=True)}
+
+    def add_pack(self):
+        r = self.client.patch(self.url, {
+            "options": self.size_options("Single", "Pack of 6"),
+            "variants": [
+                {"id": self.first, "options": {"Size": "Single"}},
+                {"sku": "C6", "price": "30", "options": {"Size": "Pack of 6"}},
+            ],
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_options_are_validated(self):
+        bad = [
+            [{"name": n, "values": ["a"]} for n in ("A", "B", "C", "D")],  # more than 3
+            [{"name": "  ", "values": ["a"]}],  # blank name
+            [{"name": "Size", "values": ["Single", " "]}],  # blank value
+            [{"name": "Size", "values": ["Single", "single"]}],  # duplicate value
+            [{"name": "Size", "values": ["a"]}, {"name": "size", "values": ["b"]}],  # duplicate name
+            [{"name": "Size", "values": []}],  # no values
+        ]
+        for options in bad:
+            r = self.client.patch(self.url, {"options": options}, format="json")
+            self.assertEqual(r.status_code, 400, options)
+            self.assertIn("options", r.json())
+        self.assertEqual(Product.objects.get(pk=self.product["id"]).options, [])
+
+    def test_duplicate_combinations_and_mismatches_save_nothing(self):
+        cases = [
+            [{"id": self.first, "options": {"Size": "Single"}},
+             {"sku": "C2", "price": "1", "options": {"Size": "Single"}}],  # same combination twice
+            [{"id": self.first, "options": {"Size": "Large"}}],  # not a listed value
+            [{"id": self.first, "options": {}}],  # missing an option
+            [{"id": self.first, "options": {"Size": "Single", "Colour": "Red"}}],  # an unknown option
+        ]
+        for variants in cases:
+            r = self.client.patch(
+                self.url, {"options": self.size_options("Single", "Pack of 6"), "variants": variants}, format="json"
+            )
+            self.assertEqual(r.status_code, 400, variants)
+            self.assertIn("variants", r.json())
+        self.assertEqual(Product.objects.get(pk=self.product["id"]).options, [])
+        self.assertEqual(self.variant_ids(), {self.first})
+
+    def test_ids_prices_and_stock_survive_option_changes(self):
+        location = self.client.post("/api/v1/inventory/locations/", {"name": "Sydney"}, format="json").json()["id"]
+        r = self.client.post(
+            "/api/v1/inventory/items/set/", {"variant": self.first, "location": location, "available": 7}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        data = self.add_pack()
+        pack = next(v["id"] for v in data["variants"] if v["id"] != self.first)
+
+        # Rename a value and reorder: both variants keep their ids, prices and stock
+        r = self.client.patch(self.url, {
+            "options": self.size_options("Pack of 6", "One can"),
+            "variants": [
+                {"id": self.first, "options": {"Size": "One can"}},
+                {"id": pack, "options": {"Size": "Pack of 6"}},
+            ],
+        }, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        variants = {v["id"]: v for v in r.json()["variants"]}
+        self.assertEqual(set(variants), {self.first, pack})
+        self.assertEqual(variants[self.first]["price"], "10.00")
+        self.assertEqual(variants[self.first]["options"], {"Size": "One can"})
+        self.assertEqual(variants[pack]["price"], "30.00")
+        self.assertEqual(r.json()["options"], self.size_options("Pack of 6", "One can"))
+        self.assertEqual(InventoryItem.objects.get(variant_id=self.first).available, 7)
+
+    def test_option_values_merge_into_metadata(self):
+        ProductVariant.objects.filter(pk=self.first).update(metadata={"note": "keep me"})
+        self.add_pack()
+        self.assertEqual(
+            ProductVariant.objects.get(pk=self.first).metadata, {"note": "keep me", "options": {"Size": "Single"}}
+        )
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"price": "11"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["options"], {"Size": "Single"})
+        self.assertEqual(ProductVariant.objects.get(pk=self.first).metadata["note"], "keep me")
+
+    def test_variants_without_options_keep_working(self):
+        r = self.client.patch(
+            self.url, {"title": "Cola 375ML", "variants": [{"id": self.first, "price": "12"}]}, format="json"
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["options"], [])
+        self.assertEqual(r.json()["variants"][0]["options"], {})
+        r = self.client.post(VARIANTS, {"product": self.product["id"], "sku": "C2", "price": "5"}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()["options"], {})
+
+    def test_single_variant_changes_never_remove_other_variants(self):
+        self.add_pack()
+        r = self.client.patch(self.url, {"options": self.size_options("Single", "Pack of 6", "Case")}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        r = self.client.post(VARIANTS, {
+            "product": self.product["id"], "sku": "C24", "price": "90", "options": {"Size": "Case"},
+        }, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        case = r.json()["id"]
+        ids = self.variant_ids()
+        self.assertEqual(len(ids), 3)
+
+        # Inline and bulk edits go to one variant at a time
+        r = self.client.patch(f"{VARIANTS}{self.first}/", {"price": "9.50", "compare_at_price": "12"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.variant_ids(), ids)
+
+        # A duplicate combination on one variant is refused and changes nothing
+        r = self.client.patch(f"{VARIANTS}{case}/", {"options": {"Size": "Single"}}, format="json")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(ProductVariant.objects.get(pk=case).metadata["options"], {"Size": "Case"})
+
+        # Saving the product form without a variant list leaves every variant alone
+        r = self.client.patch(self.url, {"title": "Cola range"}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.variant_ids(), ids)
+
+        # Deleting one variant deletes only that one
+        self.assertEqual(self.client.delete(f"{VARIANTS}{case}/").status_code, 204)
+        self.assertEqual(self.variant_ids(), ids - {case})

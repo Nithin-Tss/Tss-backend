@@ -220,6 +220,10 @@ class Product(models.Model):
     column6 = models.TextField(null=True, blank=True)
     column7 = models.TextField(null=True, blank=True)
 
+    # Option names and the order of their values, e.g. [{"name": "Size", "values": ["Single", "Pack of 6"]}].
+    # Each variant's chosen values are in ProductVariant.metadata["options"], e.g. {"Size": "Single"}.
+    options = models.JSONField(default=list, blank=True)
+
 
 
 
