@@ -2,6 +2,7 @@ import logging
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 _STORE_ID = OpenApiParameter("id", OpenApiTypes.UUID, OpenApiParameter.PATH, description="Store id")
 
+_DOMAIN_ID = OpenApiParameter("domain_id", OpenApiTypes.INT, OpenApiParameter.PATH, description="Domain id")
+
 
 @extend_schema_view(
     retrieve=extend_schema(parameters=[_STORE_ID]),
@@ -30,6 +33,8 @@ _STORE_ID = OpenApiParameter("id", OpenApiTypes.UUID, OpenApiParameter.PATH, des
     reopen=extend_schema(parameters=[_STORE_ID]),
     policies=extend_schema(parameters=[_STORE_ID]),
     permanent_delete=extend_schema(parameters=[_STORE_ID]),
+    domains=extend_schema(parameters=[_STORE_ID]),
+    domain=extend_schema(parameters=[_STORE_ID, _DOMAIN_ID]),
 )
 class StoreViewSet(
     mixins.ListModelMixin,
@@ -132,6 +137,44 @@ class StoreViewSet(
             self.check_settings_access(store, ["policies"])
             save_policies(store, request.data)
         return Response(read_policies(store, request.build_absolute_uri(shop_url(store))))
+
+    @action(detail=True, methods=["get", "post"])
+    def domains(self, request, pk=None):
+        """
+        GET  /stores/<id>/domains/   {target, domains: [{id, host, kind, primary, status}]}; status is checked live
+        POST /stores/<id>/domains/   {host, kind: "storefront" | "account"} connect a domain
+        """
+        from . import domains as dom
+
+        store = self.get_object()
+        if request.method == "POST":
+            self.check_settings_access(store, ["store_slug"])
+            dom.add_domain(store, request.data.get("host"), request.data.get("kind") or "storefront")
+        return Response(dom.listing(store))
+
+    @extend_schema(methods=["POST"], operation_id="stores_domains_make_primary")
+    @extend_schema(methods=["DELETE"], operation_id="stores_domains_remove")
+    @action(detail=True, methods=["post", "delete"], url_path=r"domains/(?P<domain_id>\d+)")
+    def domain(self, request, pk=None, domain_id=None):
+        """
+        POST   /stores/<id>/domains/<n>/   make it the primary storefront domain
+        DELETE /stores/<id>/domains/<n>/   remove it (the primary one can't be removed)
+        """
+        from . import domains as dom
+
+        store = self.get_object()
+        self.check_settings_access(store, ["store_slug"])
+        d = get_object_or_404(store.domains, pk=domain_id)
+        if request.method == "DELETE":
+            if d.host == store.domain:
+                raise ValidationError({"detail": "Make another domain primary before removing this one."})
+            d.delete()
+        else:
+            if d.kind != "storefront":
+                raise ValidationError({"detail": "Only a storefront domain can be primary."})
+            store.domain = d.host
+            store.save(update_fields=["domain", "updated_at"])
+        return Response(dom.listing(store))
 
     @action(detail=True, methods=["post"])
     def reopen(self, request, pk=None):

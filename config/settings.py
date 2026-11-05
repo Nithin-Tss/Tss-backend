@@ -467,7 +467,13 @@ SPECTACULAR_SETTINGS = {
     'SCHEMA_PATH_PREFIX': r'/api/v1',
     'COMPONENT_SPLIT_REQUEST': True,
     'ENUM_GENERATE_CHOICE_DESCRIPTION': True,
-    'ENUM_NAME_OVERRIDES': {'PublishStatusEnum': 'apps.catalog.models.Collection.STATUSES'},
+    'ENUM_NAME_OVERRIDES': {
+        'PublishStatusEnum': 'apps.catalog.models.Collection.STATUSES',
+        # Store settings reuse the same choice lists across several fields
+        'PrivacyModeEnum': 'apps.tenancy.serializers.PRIVACY_MODES',
+        'ConsentModeEnum': 'apps.tenancy.serializers.CONSENT_MODES',
+        'FieldModeEnum': 'apps.tenancy.serializers.FIELD_MODES',
+    },
     'SERVERS': [{'url': '/', 'description': 'Current host'}],
     # Swagger UI: groups start collapsed (264 operations is a lot), a search box, sorted groups,
     # and the sign-in token survives a page refresh.

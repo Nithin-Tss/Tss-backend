@@ -3443,6 +3443,17 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         },
         "customer": _customer_drop(customer, customer_user, store, base_url) if customer else (_sample_customer_drop(base_url) if editor else None),
         "customer_logged_in": customer is not None,
+        # Settings > Customer accounts
+        "show_sign_in_links": bool(getattr(store, "show_sign_in_links", True)),
+        "store_credit_enabled": bool(getattr(store, "store_credit_enabled", True)),
+        # Settings > Checkout
+        "checkout_settings": {
+            "require_login": bool(store.checkout_require_login),
+            "full_name": store.checkout_full_name,
+            "company": store.checkout_company,
+            "address2": store.checkout_address2,
+            "phone": store.checkout_phone,
+        },
         "error": auth_error or "",
         "success": auth_success or "",
         "order_completed": order_completed,

@@ -61,6 +61,18 @@ class Store(models.Model):
     double_opt_in_email = models.BooleanField(default=False)
     double_opt_in_sms = models.BooleanField(default=False)
 
+    # Settings > Customer accounts: sign-in links in the storefront header / checkout, and store credit.
+    show_sign_in_links = models.BooleanField(default=True)
+    store_credit_enabled = models.BooleanField(default=True)
+
+    # Settings > Checkout: sign-in rule and which customer fields the checkout form asks for.
+    # Field modes: "hidden", "optional" or "required" (full name: "first_last" or "last_only").
+    checkout_require_login = models.BooleanField(default=False)
+    checkout_full_name = models.CharField(max_length=20, default="first_last")
+    checkout_company = models.CharField(max_length=20, default="hidden")
+    checkout_address2 = models.CharField(max_length=20, default="optional")
+    checkout_phone = models.CharField(max_length=20, default="optional")
+
     # Checkout pricing: tax is a percentage of (subtotal - discount); shipping is
     # a flat fee, waived once the discounted subtotal reaches free_shipping_threshold.
     # ShippingRate rows (by destination country and cart weight) override the flat fee.
@@ -437,3 +449,19 @@ class AccessLog(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.subject}"
+
+
+class StoreDomain(models.Model):
+    """A hostname connected to a store: its storefront domains and its customer-account domain."""
+
+    STOREFRONT = "storefront"
+    ACCOUNT = "account"
+    KINDS = [(STOREFRONT, "Online Store"), (ACCOUNT, "Customer Account")]
+
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="domains")
+    host = models.CharField(max_length=253, unique=True)
+    kind = models.CharField(max_length=20, choices=KINDS, default=STOREFRONT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "host"]

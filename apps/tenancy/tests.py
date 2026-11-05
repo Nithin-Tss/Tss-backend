@@ -499,7 +499,9 @@ class StoreAdminOwnerTest(TestCase):
                 "cancellation_window_minutes": "60", "return_window_starts_from": "delivery",
                 "return_shipping": "free", "restocking_fee_percent": "0",
                 "cookie_banner": "automated", "data_sharing_opt_out": "automated",
-                "checkout_email_marketing": "unchecked", "checkout_sms_marketing": "hidden", **fields}
+                "checkout_email_marketing": "unchecked", "checkout_sms_marketing": "hidden",
+                "checkout_full_name": "first_last", "checkout_company": "hidden",
+                "checkout_address2": "optional", "checkout_phone": "optional", **fields}
         return self.client.post(self.URL + "add/", data)
 
     def test_admin_add_store_makes_the_owner(self):
@@ -757,3 +759,25 @@ class PolicySettingsTest(StoreClientMixin, APITestCase):
         self.ok("patch", f"{self.url}policies/", {"cookiePolicy": "x"}, expect=400)
         self.ok("patch", f"{self.url}policies/", {"legalNotice": "x" * 200001}, expect=400)
         self.ok("patch", f"{self.url}policies/", {"legalNotice": 5}, expect=400)
+
+
+class DomainsApiTest(StoreClientMixin, APITestCase):
+    def test_connect_make_primary_and_remove(self):
+        token, store = self.sign_up("owner@example.com", "Domain store")
+        url = f"/api/v1/stores/{store['storeId']}/domains/"
+        self.assertEqual(self.ok("get", url)["domains"], [])
+
+        self.ok("post", url, {"host": "not a domain"}, expect=400)
+        listed = self.ok("post", url, {"host": "https://Shop.Example.com/", "kind": "storefront"})
+        row = listed["domains"][0]
+        self.assertEqual((row["host"], row["primary"], row["status"]), ("shop.example.com", False, "invalid_dns"))
+        self.ok("post", url, {"host": "shop.example.com"}, expect=400)  # duplicate
+
+        listed = self.ok("post", f"{url}{row['id']}/")
+        self.assertTrue(listed["domains"][0]["primary"])
+        self.assertEqual(Store.objects.get(pk=store["storeId"]).domain, "shop.example.com")
+        self.ok("delete", f"{url}{row['id']}/", expect=400)  # primary can't go
+
+        acct = self.ok("post", url, {"host": "accounts.example.com", "kind": "account"})["domains"][-1]
+        self.ok("post", f"{url}{acct['id']}/", expect=400)
+        self.assertEqual(len(self.ok("delete", f"{url}{acct['id']}/")["domains"]), 1)

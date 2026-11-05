@@ -604,21 +604,24 @@
               Delivery address
             </h2>
             <div class="checkout-form-grid">
+              {%- assign ck = checkout_settings -%}
               <div class="checkout-form-row">
+                {%- if ck.full_name != 'last_only' -%}
                 <div class="checkout-field">
                   <label for="checkout-first-name">First name *</label>
                   <input type="text" id="checkout-first-name" name="first_name" required placeholder="First name" value="{{ prefill.first_name | default: '' | escape }}">
                 </div>
+                {%- endif -%}
                 <div class="checkout-field">
                   <label for="checkout-last-name">Last name *</label>
                   <input type="text" id="checkout-last-name" name="last_name" required placeholder="Last name" value="{{ prefill.last_name | default: '' | escape }}">
                 </div>
               </div>
 
-              {%- if s.show_company_field -%}
+              {%- if ck.company != 'hidden' -%}
                 <div class="checkout-field">
-                  <label for="checkout-company">Company (optional)</label>
-                  <input type="text" id="checkout-company" name="company">
+                  <label for="checkout-company">Company{% if ck.company == 'required' %} *{% else %} (optional){% endif %}</label>
+                  <input type="text" id="checkout-company" name="company"{% if ck.company == 'required' %} required{% endif %}>
                 </div>
               {%- endif -%}
 
@@ -627,10 +630,12 @@
                 <input type="text" id="checkout-address1" name="address1" required placeholder="House number and street name" value="{{ saved.address1 | default: '' | escape }}">
               </div>
 
+              {%- if ck.address2 != 'hidden' -%}
               <div class="checkout-field">
-                <label for="checkout-address2">Apartment, suite, unit (optional)</label>
-                <input type="text" id="checkout-address2" name="address2" value="{{ saved.address2 | default: '' | escape }}">
+                <label for="checkout-address2">Apartment, suite, unit{% if ck.address2 == 'required' %} *{% else %} (optional){% endif %}</label>
+                <input type="text" id="checkout-address2" name="address2"{% if ck.address2 == 'required' %} required{% endif %} value="{{ saved.address2 | default: '' | escape }}">
               </div>
+              {%- endif -%}
 
               <div class="checkout-form-row">
                 <div class="checkout-field">
@@ -654,10 +659,10 @@
                 </div>
               </div>
 
-              {%- if s.show_phone_field != false -%}
+              {%- if ck.phone != 'hidden' -%}
                 <div class="checkout-field">
-                  <label for="checkout-phone">Phone number *</label>
-                  <input type="tel" id="checkout-phone" name="phone" placeholder="{{ shop.phone_code | default: '+91' }} Phone number" value="{{ prefill.phone | default: saved.phone | default: '' | escape }}">
+                  <label for="checkout-phone">Phone number{% if ck.phone == 'required' %} *{% else %} (optional){% endif %}</label>
+                  <input type="tel" id="checkout-phone" name="phone"{% if ck.phone == 'required' %} required{% endif %} placeholder="{{ shop.phone_code | default: '+91' }} Phone number" value="{{ prefill.phone | default: saved.phone | default: '' | escape }}">
                 </div>
               {%- endif -%}
             </div>

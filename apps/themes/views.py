@@ -2629,6 +2629,12 @@ def storefront_checkout(request, store_slug):
     if cart_new:
         request._cart_session = (cart_session, True)
 
+    # Settings > Checkout: shoppers must sign in first
+    if store.checkout_require_login and request.method in ("GET", "POST") and get_storefront_customer(store, request)[0] is None:
+        if request.method == "GET":
+            return HttpResponseRedirect(f"{shop_url(store)}/account/login?return_to={quote('/checkout')}")
+        return JsonResponse({"error": "Sign in to your account to check out."}, status=403)
+
     if request.method == "POST":
         is_json = "application/json" in request.headers.get("Accept", "") or request.content_type == "application/json"
         data = _json_body(request) if request.content_type == "application/json" else request.POST
@@ -2687,10 +2693,16 @@ def storefront_checkout(request, store_slug):
             error, error_field = _first_message(e.detail), "email"
         if error:
             pass
-        elif not first_name or not last_name:
-            error = "First and last name are required."
+        elif not last_name or (store.checkout_full_name != "last_only" and not first_name):
+            error = "Last name is required." if store.checkout_full_name == "last_only" else "First and last name are required."
         elif not address1 or not city or not postal_code:
             error = "Delivery address, city and postal code are required."
+        elif store.checkout_company == "required" and not (data.get("company") or "").strip():
+            error = "Company name is required."
+        elif store.checkout_address2 == "required" and not address2:
+            error = "Apartment, suite or unit is required."
+        elif store.checkout_phone == "required" and not phone:
+            error = "Phone number is required."
         else:
             error = None
 
@@ -2704,15 +2716,15 @@ def storefront_checkout(request, store_slug):
             shipping_address = {
                 "first_name": first_name,
                 "last_name": last_name,
-                "company": (data.get("company") or "").strip(),
+                "company": (data.get("company") or "").strip() if store.checkout_company != "hidden" else "",
                 "address1": address1,
-                "address2": address2,
+                "address2": address2 if store.checkout_address2 != "hidden" else "",
                 "city": city,
                 "province": state,
                 "state": state,
                 "postal_code": postal_code,
                 "country": country,
-                "phone": phone,
+                "phone": phone if store.checkout_phone != "hidden" else "",
             }
             checkout = commerce_services.start_checkout(
                 cart,

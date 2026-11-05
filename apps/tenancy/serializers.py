@@ -17,6 +17,8 @@ RETURN_STARTS_FROM = ["delivery", "fulfillment", "order"]
 RETURN_SHIPPING = ["free", "customer_pays"]
 PRIVACY_MODES = ["automated", "always", "off"]
 CONSENT_MODES = ["hidden", "unchecked", "prechecked"]
+FIELD_MODES = ["hidden", "optional", "required"]
+FULL_NAME_MODES = ["first_last", "last_only"]
 MAX_CANCELLATION_MINUTES = 60 * 24 * 30
 MAX_RETURN_DAYS = 365
 
@@ -71,6 +73,13 @@ class StoreSerializer(serializers.ModelSerializer):
     )
     doubleOptInEmail = serializers.BooleanField(source="double_opt_in_email", required=False)
     doubleOptInSms = serializers.BooleanField(source="double_opt_in_sms", required=False)
+    showSignInLinks = serializers.BooleanField(source="show_sign_in_links", required=False)
+    storeCreditEnabled = serializers.BooleanField(source="store_credit_enabled", required=False)
+    checkoutRequireLogin = serializers.BooleanField(source="checkout_require_login", required=False)
+    checkoutFullName = serializers.ChoiceField(source="checkout_full_name", choices=FULL_NAME_MODES, required=False)
+    checkoutCompany = serializers.ChoiceField(source="checkout_company", choices=FIELD_MODES, required=False)
+    checkoutAddress2 = serializers.ChoiceField(source="checkout_address2", choices=FIELD_MODES, required=False)
+    checkoutPhone = serializers.ChoiceField(source="checkout_phone", choices=FIELD_MODES, required=False)
     taxRate = serializers.DecimalField(source="tax_rate", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False)
     pricesIncludeTax = serializers.BooleanField(source="prices_include_tax", required=False)
     taxShipping = serializers.BooleanField(source="tax_shipping", required=False)
@@ -91,7 +100,8 @@ class StoreSerializer(serializers.ModelSerializer):
             "cancellationsEnabled", "cancellationWindowMinutes", "returnsEnabled", "returnWindowDays",
             "returnWindowStartsFrom", "returnWindowExtendWeekends", "returnShipping", "restockingFeePercent",
             "cookieBanner", "dataSharingOptOut", "networkIntelligence", "checkoutEmailMarketing",
-            "checkoutSmsMarketing", "doubleOptInEmail", "doubleOptInSms",
+            "checkoutSmsMarketing", "doubleOptInEmail", "doubleOptInSms", "showSignInLinks", "storeCreditEnabled",
+            "checkoutRequireLogin", "checkoutFullName", "checkoutCompany", "checkoutAddress2", "checkoutPhone",
             "taxRate", "pricesIncludeTax", "taxShipping", "shippingFlatRate", "freeShippingThreshold",
             "role", "roles", "permissions",
         ]
