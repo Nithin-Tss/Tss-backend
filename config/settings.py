@@ -533,6 +533,7 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 # Password hashing: Argon2 for new passwords. Older PBKDF2 hashes still work
 # and are upgraded to Argon2 automatically the next time that user signs in.
 PASSWORD_HASHERS = [
+    'apps.core.hashers.LightArgon2PasswordHasher',
     'django.contrib.auth.hashers.Argon2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
