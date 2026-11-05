@@ -14,7 +14,7 @@ from django.db.backends.sqlite3 import base
 
 SCHEMAS = (
     "identity", "tenancy", "customers", "catalog", "inventory", "purchasing",
-    "commerce", "payments", "orders", "delivery", "wishlist", "discounts",
+    "commerce", "payments", "orders", "delivery", "wishlist", "metafields", "discounts",
     "gift_cards", "fulfillment", "themes", "media", "audit", "webhooks", "platform_admin", "analytics", "jobs",
 )
 

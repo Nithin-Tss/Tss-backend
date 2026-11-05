@@ -118,6 +118,7 @@ INSTALLED_APPS = [
     'apps.tenancy',
     'apps.customers',
     'apps.catalog',
+    'apps.metafields',
     'apps.inventory',
     'apps.purchasing',
     'apps.commerce',

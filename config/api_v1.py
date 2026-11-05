@@ -26,6 +26,7 @@ urlpatterns = [
     path("assistant/", include("apps.assistant.urls")),
     path("", include("apps.platform_admin.urls")),
     path("catalog/", include("apps.catalog.urls")),
+    path("metafields/", include("apps.metafields.urls")),
     path("customers/", include("apps.customers.urls")),
     path("orders/", include("apps.orders.urls")),
     path("inventory/", include("apps.inventory.urls")),

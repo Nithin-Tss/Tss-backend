@@ -252,7 +252,7 @@ def permission_for(area, method, action=None, overrides=None):
 # Which area owns a model's records, for checking that a request that points at
 # another area's records (an order line naming a product) may see that area.
 _AREA_BY_APP = {
-    "catalog": "products", "customers": "customers", "wishlist": "customers",
+    "catalog": "products", "metafields": "products", "customers": "customers", "wishlist": "customers",
     "inventory": "inventory", "discounts": "discounts", "gift_cards": "gift_cards",
     "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes", "media": "themes",
     "orders": "orders", "payments": "orders", "commerce": "orders",

@@ -53,6 +53,7 @@ from apps.purchasing.models import PurchaseOrder
 from apps.tenancy.models import ShippingRate, ShippingZone, Store, TaxRate
 from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
 from apps.wishlist.models import Wishlist, WishlistItem
+from apps.metafields.models import Metafield, MetafieldDefinition, Metaobject, MetaobjectDefinition
 
 from .test_flow import StoreClientMixin
 
@@ -478,6 +479,14 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
             MediaAsset.objects.create(store=store, original_name="banner.png", mime_type="image/png", file_size=40),
             ApiKey.objects.create(store=store, name="Sync", prefix=owner_email[0] * 8, secret_hash="0" * 64,
                                   scopes=["products.view"], created_by=User.objects.get(email=owner_email)),
+        ]
+        meta_def = MetafieldDefinition.objects.create(store=store, owner_type="product", key="origin", name="Origin",
+                                                      type="single_line_text")
+        object_def = MetaobjectDefinition.objects.create(store=store, type="author", name="Author",
+                                                         fields=[{"key": "name", "type": "single_line_text"}])
+        records += [
+            meta_def, Metafield.objects.create(store=store, definition=meta_def, owner_id=product.pk, value="India"),
+            object_def, Metaobject.objects.create(store=store, definition=object_def, handle="jane", values={}),
         ]
         endpoint = WebhookEndpoint.objects.create(store=store, url="https://example.com/hook", events=["*"])
         records += [endpoint, WebhookDelivery.objects.create(endpoint=endpoint, event_type="ping", payload={})]
