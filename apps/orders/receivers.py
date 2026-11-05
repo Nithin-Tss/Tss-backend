@@ -1,12 +1,12 @@
-"""Reactions to order_placed: the shopper's confirmation email."""
-import logging
+"""The shopper's order confirmation email.
 
-from apps.core.tasks import send_email_async
-from django.dispatch import receiver
+Sending it is now done by apps.notifications (Settings > Notifications), which can switch it off and sets the sender
+name and reply address. This module keeps the wording of the message.
+"""
 
-from .services import order_placed
 
-logger = logging.getLogger(__name__)
+def customer_email(order):
+    return order.customer_email or getattr(order.customer, "email", None)
 
 
 def confirmation_body(order):
@@ -23,15 +23,3 @@ def confirmation_body(order):
             f"Total: {order.total} {order.currency_code}",
         ]
     )
-
-
-@receiver(order_placed)
-def email_confirmation(sender, order, **kwargs):
-    # Runs after commit; a failed email must never undo or break the order
-    email = order.customer_email or getattr(order.customer, "email", None)
-    if not email:
-        return
-    try:
-        send_email_async(f"Order {order.order_number} confirmed", confirmation_body(order), [email])
-    except Exception:
-        logger.exception("Could not send the confirmation for order %s", order.pk)

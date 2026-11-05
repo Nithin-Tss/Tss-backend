@@ -39,6 +39,7 @@ urlpatterns = [
     path("delivery/", include("apps.delivery.urls")),
     path("wishlists/", include("apps.wishlist.urls")),
     path("webhooks/", include("apps.webhooks.urls")),
+    path("notifications/", include("apps.notifications.urls")),
     path("reports/overview/", OverviewView.as_view(), name="reports-overview"),
     path("reports/analytics/", AnalyticsView.as_view(), name="reports-analytics"),
     path("reports/live/", LiveView.as_view(), name="reports-live"),

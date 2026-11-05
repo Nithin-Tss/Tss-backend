@@ -59,6 +59,18 @@ def send_email_async(subject, body, recipients):
     send_email.delay(subject, body, list(recipients))
 
 
+@shared_task(bind=True, autoretry_for=(OSError,), retry_backoff=True, retry_backoff_max=600, max_retries=5)
+def send_email_with_sender(self, subject, body, recipients, from_email=None, reply_to=""):
+    from django.core.mail import EmailMessage
+
+    EmailMessage(subject, body, from_email or None, list(recipients), reply_to=[reply_to] if reply_to else None).send()
+
+
+def send_store_email(subject, body, recipients, from_email=None, reply_to=""):
+    """Queue an email with a store's sender name and reply address. Inline when no broker is configured."""
+    send_email_with_sender.delay(subject, body, list(recipients), from_email=from_email, reply_to=reply_to)
+
+
 @shared_task
 def heartbeat():
     """Every minute from beat: proves beat and a worker are both alive (see apps/core/monitoring.py)."""

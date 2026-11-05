@@ -256,7 +256,7 @@ _AREA_BY_APP = {
     "inventory": "inventory", "discounts": "discounts", "gift_cards": "gift_cards",
     "purchasing": "purchasing", "fulfillment": "fulfillment", "themes": "themes", "media": "themes",
     "orders": "orders", "payments": "orders", "commerce": "orders",
-    "delivery": "shipping", "webhooks": "webhooks",
+    "delivery": "shipping", "webhooks": "webhooks", "notifications": "notifications",
 }
 _AREA_BY_MODEL = {"ApiKey": "api_keys", "DraftOrder": "draft_orders", "DraftOrderDetail": "draft_orders", "Shipment": "fulfillment", "ShippingRate": "shipping", "ShippingZone": "shipping", "ShippingZoneLocation": "shipping", "TaxRate": "shipping"}
 
