@@ -3079,8 +3079,13 @@ def storefront_login(request, store_slug):
         return_to = f"{base}{return_to}"
 
     customer, user = get_storefront_customer(store, request)
+    stale_session = False
     if customer is not None and request.method == "GET":
-        return _account_redirect(store, request, user)
+        if request.GET.get("switch"):
+            # Opened from the theme editor: show the form for a different customer, not the old session's account
+            customer, user, stale_session = None, None, True
+        else:
+            return _account_redirect(store, request, user)
 
     error = None
     if request.method == "POST":
@@ -3123,7 +3128,10 @@ def storefront_login(request, store_slug):
         store, "login", request=request, customer_page="login",
         customer=customer, customer_user=user, auth_error=error
     )
-    return _storefront_response(html, status=400 if error else 200, request=request, store=store)
+    response = _storefront_response(html, status=400 if error else 200, request=request, store=store)
+    if stale_session:
+        clear_storefront_customer_cookie(response, store)
+    return response
 
 
 @xframe_options_exempt
