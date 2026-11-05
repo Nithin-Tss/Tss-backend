@@ -395,7 +395,7 @@ PANEL_KEYS = (
 # ":not(#tss)" adds an id's weight, so these win over the header's and the sign-in page's own (longer) rules.
 # Fields on the checkout page keep the checkout's look.
 _FIELD = "body:not(.template-checkout) :is(.form-input,.newsletter__input):not(#tss)"
-_MENU = "body .site-header__nav :is(.site-nav__dropdown,.mega-menu):not(#tss)"
+_MENU = "body .site-header__nav :is(.site-nav__dropdown,.mega-menu,.site-nav__more):not(#tss)"
 _HEADER_ICONS = ":is(.site-header__search,.site-header__account,.site-header__wishlist) svg"
 _MOTION = "html.tss-js body :is(.tss-anim-fade,.tss-anim-slide-up)"
 MENU_SHADOWS = {"none": "none", "strong": "0 18px 40px rgba(0,0,0,.28)"}

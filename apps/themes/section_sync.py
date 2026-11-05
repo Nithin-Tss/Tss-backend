@@ -54,6 +54,12 @@ SYNCED_SECTIONS = {
     "header": {
         "path": "sections/header.liquid", "label": "Header", "snippet": "header",
         "originals": {
+            # updated starter whose mega menu panel is as wide as the header (columns line up with the logo)
+            "6db58b4c80ee6565b043b9382523609055289d16f9321e04f9e5a283ceac1a85",  # LF
+            "ba8bb48c098eec35e7b2b21397dfbd8d63ada6784e356fffb0398313b8649d8c",  # CRLF
+            # updated starter with the ShopNow-style navigation (full-width panels, More, mobile drawer)
+            "d8989f6198f2593c81303fd80a9b64eecbd0c91cda3fd05fe5297f2c2c0205d3",  # LF
+            "fb57134df11b1de0f109858ee9209016634cf327f01ec87e3df2fe783225d2bb",  # CRLF
             # updated starter with the mega menu look settings and the column "Shop All" link
             "8cfe7c6a3f81bc906f7d9c6c75be2113e9d109e041ce033605dcce93ad0042a7",  # LF
             "6842a0fcc327395aa20f37fc0980fdb1e2f0f0a5075e3a7aeeda3b5348b2010b",  # CRLF
@@ -127,7 +133,9 @@ PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 6: show the guest wishlist item count beside existing header hearts
 # Revision 13: untouched headers get the mega menu look settings and the column "Shop All" link
-ORIGINALS_REVISION = 13
+# Revision 14: untouched headers get the ShopNow-style navigation (the snippet it replaces changed too)
+# Revision 15: untouched headers get the mega menu panel that is as wide as the header
+ORIGINALS_REVISION = 15
 
 
 def is_original_snippet(name, content):
