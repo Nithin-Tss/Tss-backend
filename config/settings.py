@@ -133,6 +133,7 @@ INSTALLED_APPS = [
     'apps.media',
     'apps.audit',
     'apps.webhooks',
+    'apps.notifications',
     'apps.platform_admin',
 ]
 
