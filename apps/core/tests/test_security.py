@@ -652,6 +652,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
+        "CarrierWebhookView",  # couriers call it; the per-gateway webhook secret is the credential
         "StoreStripeWebhookView",  # same, per store: verified against that store's own webhook secret
         "JobsHealthView",  # uptime pinger; answers 404 without X-Health-Token or a platform admin (apps/core/health.py)
         # API docs: open in tests/dev, admin-only in production (SPECTACULAR_SETTINGS SERVE_PERMISSIONS)

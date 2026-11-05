@@ -6,14 +6,93 @@ from apps.fulfillment.models import Fulfillment
 
 from apps.tenancy.models import ShippingRate, ShippingZone, ShippingZoneLocation, TaxRate
 
+from apps.payments import crypto
+
+from . import providers
 from .models import DeliveryGateway, Shipment, ShipmentItem, TrackingEvent
 
 
 class DeliveryGatewaySerializer(serializers.ModelSerializer):
+    """
+    `credentials` (a dict of the provider's secrets) and `webhook_secret` are write-only: they are stored
+    encrypted and only ever reported back as has_credentials / has_webhook_secret. A blank value keeps what is stored.
+    """
+    credentials = serializers.DictField(child=serializers.CharField(allow_blank=True), write_only=True, required=False)
+    webhook_secret = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    has_credentials = serializers.SerializerMethodField()
+    has_webhook_secret = serializers.SerializerMethodField()
+    webhook_url = serializers.SerializerMethodField()
+    tracking_url_template = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
     class Meta:
         model = DeliveryGateway
-        fields = ["id", "name", "code", "is_active", "created_at", "updated_at"]
-        extra_kwargs = {"is_active": {"default": True}}
+        fields = [
+            "id", "name", "code", "kind", "provider", "is_active", "credentials", "webhook_secret",
+            "has_credentials", "has_webhook_secret", "webhook_url", "tracking_url_template", "metadata",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["metadata", "created_at", "updated_at"]
+        extra_kwargs = {"is_active": {"default": True}, "kind": {"required": False}, "provider": {"required": False}}
+
+    def get_has_credentials(self, gateway):
+        return bool(gateway.credentials_enc)
+
+    def get_has_webhook_secret(self, gateway):
+        return bool(gateway.webhook_secret_enc)
+
+    def get_webhook_url(self, gateway):
+        request = self.context.get("request")
+        path = f"/api/v1/delivery/webhooks/{gateway.id}/"
+        return request.build_absolute_uri(path) if request else path
+
+    def validate(self, attrs):
+        provider = providers.get_provider(attrs.get("provider", getattr(self.instance, "provider", "manual")))
+        attrs["provider"], attrs["kind"] = provider.code, provider.kind
+        creds = attrs.get("credentials")
+        if creds is not None:
+            creds = {k: v for k, v in creds.items() if v}
+            unknown = set(creds) - set(provider.credential_fields)
+            if unknown:
+                raise serializers.ValidationError({"credentials": f"Unknown field(s): {', '.join(sorted(unknown))}."})
+            if self.instance and provider.code == self.instance.provider:
+                creds = {**providers.get_credentials(self.instance), **creds}  # blank keeps the stored value
+            attrs["credentials"] = creds
+        elif self.instance is None and provider.fields:
+            attrs["credentials"] = {}
+        if self.instance is None and provider.fields:
+            probe = {**attrs["credentials"]}
+            if probe.get("api_token"):  # a token replaces the login
+                probe.setdefault("email", "-"), probe.setdefault("password", "-")
+            missing = provider.missing_credentials(probe)
+            if missing:
+                raise serializers.ValidationError({"credentials": f"Needs: {', '.join(missing)}."})
+        return attrs
+
+    def _store_secrets(self, gateway, validated):
+        creds = validated.pop("credentials", None)
+        secret = validated.pop("webhook_secret", None)
+        template = validated.pop("tracking_url_template", None)
+        if creds is not None:
+            providers.set_credentials(gateway, creds)
+        if secret:
+            gateway.webhook_secret_enc = crypto.encrypt(secret)
+        if template is not None:
+            gateway.metadata = {**(gateway.metadata or {}), "tracking_url_template": template.strip()}
+        return gateway
+
+    def create(self, validated_data):
+        extra = {k: validated_data.pop(k) for k in ("credentials", "webhook_secret", "tracking_url_template") if k in validated_data}
+        gateway = super().create(validated_data)
+        self._store_secrets(gateway, extra)
+        gateway.save()
+        return gateway
+
+    def update(self, instance, validated_data):
+        extra = {k: validated_data.pop(k) for k in ("credentials", "webhook_secret", "tracking_url_template") if k in validated_data}
+        gateway = super().update(instance, validated_data)
+        self._store_secrets(gateway, extra)
+        gateway.save()
+        return gateway
 
     def validate_code(self, value):
         value = value.strip().lower()
@@ -47,13 +126,22 @@ class ShipmentSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
     tracking_events = serializers.SerializerMethodField()
     gateway_name = serializers.CharField(source="delivery_gateway.name", read_only=True)
+    gateway_kind = serializers.CharField(source="delivery_gateway.kind", read_only=True)
     order = serializers.UUIDField(source="fulfillment.order_id", read_only=True)
+    driver = serializers.SerializerMethodField()
+    eta = serializers.SerializerMethodField()
+
+    def get_driver(self, shipment):
+        return (shipment.metadata or {}).get("driver")
+
+    def get_eta(self, shipment):
+        return (shipment.metadata or {}).get("eta")
 
     class Meta:
         model = Shipment
         fields = [
-            "id", "order", "fulfillment", "delivery_gateway", "gateway_name", "tracking_number",
-            "status", "shipped_at", "delivered_at", "items", "tracking_events", "created_at", "updated_at",
+            "id", "order", "fulfillment", "delivery_gateway", "gateway_name", "gateway_kind", "tracking_number",
+            "tracking_url", "label_url", "driver", "eta", "status", "shipped_at", "delivered_at", "items", "tracking_events", "created_at", "updated_at",
         ]
         read_only_fields = fields
 
@@ -72,6 +160,15 @@ class ShipSerializer(StoreScopedSerializerMixin, serializers.Serializer):
     fulfillment = serializers.PrimaryKeyRelatedField(queryset=Fulfillment.objects.all())
     delivery_gateway = serializers.PrimaryKeyRelatedField(queryset=DeliveryGateway.objects.all())
     tracking_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    # Local delivery: who is driving, and when they expect to arrive
+    driver_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    driver_phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    eta = serializers.DateTimeField(required=False)
+    # Courier APIs: parcel size (cm) and weight (kg)
+    weight = serializers.DecimalField(max_digits=8, decimal_places=3, min_value=0, required=False)
+    length = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=0, required=False)
+    breadth = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=0, required=False)
+    height = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=0, required=False)
 
 
 class ShippingZoneLocationSerializer(serializers.ModelSerializer):

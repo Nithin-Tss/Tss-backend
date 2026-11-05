@@ -15,6 +15,7 @@ from rest_framework.test import APIClient, APITestCase
 PUBLIC_PREFIXES = (
     "/api/v1/auth/", "/api/v1/storefront/", "/api/v1/schema/", "/api/v1/docs/", "/api/v1/redoc/",
     "/api/v1/payments/stripe/webhook/",
+    "/api/v1/delivery/webhooks/",  # couriers; the per-gateway secret is the credential
     "/api/v1/assistant/",  # answers 404 unless ASSISTANT_REAL_MODE is set
 )
 # Answers 503 on purpose when the third-party service isn't configured

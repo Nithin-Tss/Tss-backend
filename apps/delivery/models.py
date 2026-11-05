@@ -7,6 +7,10 @@ from apps.orders.models import OrderItem
 from apps.tenancy.models import Store
 
 
+LOCAL, CARRIER = "local", "carrier"
+KIND_CHOICES = [(LOCAL, "Local delivery"), (CARRIER, "Third-party carrier")]
+
+
 class DeliveryGateway(models.Model):
     id = models.UUIDField(
         primary_key=True,
@@ -21,6 +25,11 @@ class DeliveryGateway(models.Model):
     )
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=50)
+    # "local" = the store's own drivers; "carrier" = a third-party courier (see providers.py)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES, default=CARRIER)
+    provider = models.CharField(max_length=30, default="manual")
+    credentials_enc = models.TextField(blank=True, default="")  # encrypted JSON, never returned by the API
+    webhook_secret_enc = models.TextField(blank=True, default="")
     is_active = models.BooleanField()
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -70,6 +79,9 @@ class Shipment(models.Model):
         blank=True,
     )
     status = models.CharField(max_length=30)
+    provider_shipment_id = models.CharField(max_length=100, blank=True, default="")
+    tracking_url = models.URLField(max_length=500, blank=True, default="")
+    label_url = models.URLField(max_length=500, blank=True, default="")
     shipped_at = models.DateTimeField(
         null=True,
         blank=True,

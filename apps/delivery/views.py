@@ -1,11 +1,17 @@
 from rest_framework import mixins, status
 from rest_framework.decorators import action
+from django.shortcuts import get_object_or_404
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
+
+from apps.core.permissions import HasStorePermission, IsStoreMember
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.core.viewsets import StoreScopedGenericViewSet, StoreScopedViewSet
 from apps.tenancy.models import ShippingRate, ShippingZone, TaxRate
 
-from . import services
+from . import providers, services
 from .models import DeliveryGateway, Shipment
 from .serializers import (
     DeliveryGatewaySerializer,
@@ -79,8 +85,11 @@ class ShipmentViewSet(
         data = ShipSerializer(data=request.data, context={"request": request})
         data.is_valid(raise_exception=True)
         v = data.validated_data
+        driver = {"name": v.get("driver_name"), "phone": v.get("driver_phone"), "eta": v["eta"].isoformat() if v.get("eta") else None}
+        parcel = {k: float(v[k]) for k in ("weight", "length", "breadth", "height") if k in v}
         shipment = services.ship(
-            request.store, v["fulfillment"], v["delivery_gateway"], v.get("tracking_number") or None
+            request.store, v["fulfillment"], v["delivery_gateway"], v.get("tracking_number") or None,
+            driver=driver, parcel=parcel,
         )
         return Response(
             ShipmentSerializer(self.get_queryset().get(pk=shipment.pk)).data,
@@ -94,3 +103,36 @@ class ShipmentViewSet(
         shipment = self.get_object()
         services.add_event(shipment, **data.validated_data)
         return Response(ShipmentSerializer(self.get_queryset().get(pk=shipment.pk)).data)
+
+
+class CarrierWebhookView(APIView):
+    """
+    POST /api/v1/delivery/webhooks/<gateway_id>/   a courier reporting parcel status.
+    Public URL, but every request must carry the secret stored on that gateway, so only the courier can use it.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request, gateway_id):
+        gateway = get_object_or_404(DeliveryGateway, pk=gateway_id, is_active=True, is_deleted=False, kind="carrier")
+        provider = providers.get_provider(gateway.provider)
+        try:
+            provider.verify_webhook(gateway, request)
+        except ValidationError:
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+        applied = services.apply_carrier_events(gateway, provider.parse_webhook(request.data))
+        return Response({"applied": applied})
+
+
+class ProviderListView(APIView):
+    """GET /api/v1/delivery/providers/  the delivery options an owner can set up, and what each needs."""
+
+    permission_classes = [IsAuthenticated, IsStoreMember, HasStorePermission]
+    permission_resource = "shipping"
+
+    def get(self, request):
+        return Response([
+            {"code": p.code, "label": p.label, "kind": p.kind, "credential_fields": list(p.credential_fields), "fields": list(p.fields)}
+            for p in providers.REGISTRY.values()
+        ])

@@ -378,3 +378,102 @@ class OrderKeepsItsTaxAfterSettingsChangeTest(CommerceIntegrationBase):
         detail = self.shopper.get(f"{self.base}/checkout/{cid}/").data
         self.assertEqual(detail["tax_amount"], "41.17")  # 499.00 * 8.25% = 41.1675 -> half up
         self.assertEqual(detail["total_amount"], "540.17")
+
+
+class DeliveryPartnerIntegrationTest(RbacTestBase):
+    """Local delivery with a driver, and third-party couriers (booking + status webhooks)."""
+
+    def make_fulfillment(self):
+        self.as_owner()
+        product = self.ok("post", "/api/v1/catalog/products/", {
+            "title": "Shirt", "status": "active", "price": "100", "sku": "S-9",
+        }, expect=201)
+        warehouse = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)
+        self.ok("post", "/api/v1/inventory/items/set/", {
+            "variant": product["variants"][0]["id"], "location": warehouse["id"], "available": 5,
+        })
+        order = self.ok("post", "/api/v1/orders/", {"items": [{"product": product["id"], "quantity": 1}]}, expect=201)
+        return self.ok("post", "/api/v1/fulfillments/", {"order": order["id"]}, expect=201)
+
+    def test_providers_are_listed(self):
+        self.as_owner()
+        codes = {p["code"] for p in self.ok("get", "/api/v1/delivery/providers/")}
+        self.assertEqual(codes, {"local", "manual", "shiprocket"})
+
+    def test_local_delivery_needs_a_driver_and_walks_to_delivered(self):
+        fulfillment = self.make_fulfillment()
+        gw = self.ok("post", GATEWAYS, {"name": "Our van", "code": "van", "provider": "local"}, expect=201)
+        self.assertEqual(gw["kind"], "local")
+        body = {"fulfillment": fulfillment["id"], "delivery_gateway": gw["id"]}
+        self.ok("post", SHIPMENTS, body, expect=400)  # no driver named
+        shipment = self.ok("post", SHIPMENTS, {**body, "driver_name": "Ravi", "driver_phone": "9876543210"}, expect=201)
+        self.assertEqual(shipment["driver"], {"name": "Ravi", "phone": "9876543210"})
+        shipment = self.ok("post", f"{SHIPMENTS}{shipment['id']}/events/", {"status": "out_for_delivery"})
+        self.assertEqual(shipment["status"], "out_for_delivery")
+        shipment = self.ok("post", f"{SHIPMENTS}{shipment['id']}/events/", {"status": "delivered"})
+        self.assertEqual(shipment["status"], "delivered")
+
+    def test_courier_shipment_builds_a_tracking_link(self):
+        fulfillment = self.make_fulfillment()
+        gw = self.ok("post", GATEWAYS, {
+            "name": "Speedy", "code": "speedy", "provider": "manual",
+            "tracking_url_template": "https://speedy.example/t/{tracking}",
+        }, expect=201)
+        body = {"fulfillment": fulfillment["id"], "delivery_gateway": gw["id"]}
+        shipment = self.ok("post", SHIPMENTS, {**body, "tracking_number": "AB123"}, expect=201)
+        self.assertEqual(shipment["tracking_url"], "https://speedy.example/t/AB123")
+
+    def test_credentials_are_encrypted_and_never_returned(self):
+        self.as_owner()
+        creds = {"email": "a@b.com", "password": "hunter2", "pickup_location": "Primary"}
+        gw = self.ok("post", GATEWAYS, {"name": "SR", "code": "sr", "provider": "shiprocket", "credentials": creds}, expect=201)
+        self.assertNotIn("hunter2", str(gw))
+        self.assertTrue(gw["has_credentials"])
+        from apps.delivery.models import DeliveryGateway
+        row = DeliveryGateway.objects.get(pk=gw["id"])
+        self.assertNotIn("hunter2", row.credentials_enc)
+        # a blank password on edit keeps the stored one
+        self.ok("patch", f"{GATEWAYS}{gw['id']}/", {"credentials": {"email": "new@b.com", "password": ""}})
+        from apps.delivery import providers
+        row.refresh_from_db()
+        self.assertEqual(providers.get_credentials(row), {**creds, "email": "new@b.com"})
+        self.ok("post", GATEWAYS, {"name": "SR2", "code": "sr2", "provider": "shiprocket"}, expect=400)
+
+    def test_shiprocket_books_parcel_and_webhook_delivers_it(self):
+        from unittest import mock
+
+        from apps.delivery import providers
+
+        fulfillment = self.make_fulfillment()
+        creds = {"email": "a@b.com", "password": "pw", "pickup_location": "Primary"}
+        gw = self.ok("post", GATEWAYS, {
+            "name": "SR", "code": "sr", "provider": "shiprocket", "credentials": creds, "webhook_secret": "s3cret",
+        }, expect=201)
+
+        calls = []
+
+        def fake_http(method, url, body=None, headers=None, timeout=15):
+            calls.append(url)
+            if url.endswith("/auth/login"):
+                return {"token": "tok"}
+            if url.endswith("/orders/create/adhoc"):
+                return {"order_id": 1, "shipment_id": 77}
+            return {"response": {"data": {"awb_code": "AWB9"}}}
+
+        with mock.patch.object(providers.ShiprocketProvider, "http", staticmethod(fake_http)):
+            shipment = self.ok("post", SHIPMENTS, {"fulfillment": fulfillment["id"], "delivery_gateway": gw["id"]}, expect=201)
+        self.assertEqual(shipment["tracking_number"], "AWB9")
+        self.assertEqual(shipment["tracking_url"], "https://shiprocket.co/tracking/AWB9")
+        self.assertEqual(len(calls), 3)
+
+        hook = f"/api/v1/delivery/webhooks/{gw['id']}/"
+        anon = APIClient()
+        payload = {"awb": "AWB9", "current_status": "Out For Delivery", "current_timestamp": "2026-11-05T10:00:00"}
+        self.assertEqual(anon.post(hook, payload, format="json").status_code, 401)
+        self.assertEqual(anon.post(hook, payload, format="json", HTTP_X_API_KEY="wrong").status_code, 401)
+        r = anon.post(hook, payload, format="json", HTTP_X_API_KEY="s3cret")
+        self.assertEqual(r.json(), {"applied": 1})
+        self.assertEqual(anon.post(hook, payload, format="json", HTTP_X_API_KEY="s3cret").json(), {"applied": 0})  # repeat
+        anon.post(hook, {**payload, "current_status": "Delivered", "current_timestamp": "2026-11-05T12:00:00"},
+                  format="json", HTTP_X_API_KEY="s3cret")
+        self.assertEqual(self.ok("get", f"{SHIPMENTS}{shipment['id']}/")["status"], "delivered")
