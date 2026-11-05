@@ -1205,6 +1205,12 @@ def render_section(name, *, theme_id, content, values, env, env_key, context, ed
     # so the customizer can always find it
     if editor and (config["wrapper"] or "data-tss-section=" not in html):
         html = f"<div{marker}>{html}</div>"
+    # What comes before the root element (the header's announcement bar) is wrapped as a part of the
+    # section, so the customizer selects it and replaces it along with the section
+    elif editor:
+        root = html.rfind("<", 0, html.index("data-tss-section="))
+        if html[:root].strip():
+            html = f'<div data-tss-part="{escape(name)}" style="display:contents">{html[:root]}</div>{html[root:]}'
     logger.debug("section_sync: rendered %s in %.1f ms", name, (time.perf_counter() - started) * 1000)
     return Markup(html)
 

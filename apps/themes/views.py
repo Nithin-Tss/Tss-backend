@@ -567,6 +567,22 @@ PREVIEW_EDITOR = """
   function byId(id) { return all().filter(function (el) { return el.getAttribute("data-tss-section") === id; })[0]; }
   // The page's own sections; fixed ones (the footer) can be selected but not moved
   function movable() { return all().filter(function (el) { return !el.hasAttribute("data-tss-fixed"); }); }
+  // What a section renders before its root element (the header's announcement bar)
+  function parts(id) { return [].slice.call(document.querySelectorAll("[data-tss-part]")).filter(function (el) { return el.getAttribute("data-tss-part") === id; }); }
+  // The section under a click, also from one of its parts
+  function sectionAt(target) {
+    var part = target.closest("[data-tss-part]");
+    return part ? byId(part.getAttribute("data-tss-part")) : target.closest("[data-tss-section]");
+  }
+  function findBlock(section, block) {
+    var id = section.getAttribute("data-tss-section");
+    var scopes = [section].concat(parts(id));
+    for (var i = 0; i < scopes.length; i++) {
+      var el = scopes[i].querySelector('[data-tss-block="' + block + '"]');
+      if (el) return el;
+    }
+    return null;
+  }
 
   var line = document.createElement("div");
   line.className = "tss-drop-line";
@@ -585,7 +601,7 @@ PREVIEW_EDITOR = """
     document.querySelectorAll(".tss-block-selected").forEach(function (el) { el.classList.remove("tss-block-selected"); });
     var section = selected ? byId(selected) : null;
     if (section && selectedBlock !== null) {
-      var blockEl = section.querySelector('[data-tss-block="' + selectedBlock + '"]');
+      var blockEl = findBlock(section, selectedBlock);
       if (blockEl) blockEl.classList.add("tss-block-selected");
     }
     // Picked in the customizer's sections list: bring it into view
@@ -632,10 +648,10 @@ PREVIEW_EDITOR = """
     e.preventDefault();
     e.stopPropagation();
     if (e.target.closest(".tss-handle")) return;
-    var section = e.target.closest("[data-tss-section]");
+    var section = sectionAt(e.target);
     if (!section) { send({ type: "select", id: "", block: null }); return; }
     var blockEl = e.target.closest("[data-tss-block]");
-    var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
   }, true);
 
@@ -656,10 +672,10 @@ PREVIEW_EDITOR = """
     if (!editing) return;
     e.preventDefault();
     e.stopPropagation();
-    var section = e.target.closest("[data-tss-section]");
+    var section = sectionAt(e.target);
     if (!section) { send({ type: "select", id: "", block: null }); return; }
     var blockEl = e.target.closest("[data-tss-block]");
-    var block = blockEl && section.contains(blockEl) ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
   }, true);
   document.addEventListener("submit", function (e) { if (editing) e.preventDefault(); }, true);
@@ -766,14 +782,18 @@ PREVIEW_EDITOR = """
     var tpl = document.createElement("template");
     tpl.innerHTML = message.html;
     var fresh = tpl.content.querySelector("[data-tss-section]");
+    var freshParts = [].slice.call(tpl.content.querySelectorAll("[data-tss-part]"));
     var old = byId(message.id);
-    if (!fresh) { if (old) old.remove(); return; }
+    if (!fresh) { if (old) old.remove(); parts(message.id).forEach(function (el) { el.remove(); }); return; }
     swapPending(fresh);
     fresh.querySelectorAll(".tss-anim-fade,.tss-anim-slide-up").forEach(function (x) { x.classList.add("tss-in"); });
     preload(fresh, function () {
       var current = byId(message.id);
       if (current) current.replaceWith(fresh);
       else if (!place(fresh, message.index)) { send({ type: "need-reload" }); return; }
+      // The old parts go, the new ones (if any) go just before the section
+      parts(message.id).forEach(function (el) { el.remove(); });
+      freshParts.forEach(function (el) { fresh.before(el); runScripts(el); });
       runScripts(fresh);
       enhance(fresh);
       select(selected, selectedBlock);
@@ -806,7 +826,7 @@ PREVIEW_EDITOR = """
     var m = e.data;
     if (!m || m.source !== "tss-editor") return;
     if (m.type === "patch") patch(m);
-    else if (m.type === "remove") { var el = byId(m.id); if (el) el.remove(); }
+    else if (m.type === "remove") { var el = byId(m.id); if (el) el.remove(); parts(m.id).forEach(function (p) { p.remove(); }); }
     else if (m.type === "order") reorder(m.ids || []);
     // A reorder or removal the customizer timed: "change made -> preview updated"
     if ((m.type === "remove" || m.type === "order") && m.token) send({ type: "patched", id: m.id || "", token: m.token });
