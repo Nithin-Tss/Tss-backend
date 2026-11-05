@@ -1374,6 +1374,43 @@ SECTIONS["static-text"] = {
     },
 }
 
+# "Why SipNow": eyebrow, heading and sub-text over a panel of four icon features.
+# Markup and styles are in rendering.py (_render_why_sipnow).
+WHY_SIPNOW_ICONS = ["award", "bolt", "tag", "bars", "truck", "heart", "gift", "shield", "bottle", "glass"]
+_WHY_SIPNOW_FEATURES = [
+    ("Premium Quality", "Handpicked products selected for exceptional taste and quality.", "award"),
+    ("Fast Delivery", "Your favourites arrive quickly, carefully packed and ready to enjoy.", "bolt"),
+    ("Best Prices", "Premium bottles and delicious discoveries at prices you will love.", "tag"),
+    ("Huge Selection", "Explore a cellar of wines, spirits and drinks for every occasion.", "bars"),
+]
+_WHY_SIPNOW_FEATURE_SETTINGS = {}
+for _n, (_title, _text, _icon) in enumerate(_WHY_SIPNOW_FEATURES, 1):
+    _WHY_SIPNOW_FEATURE_SETTINGS[f"feature_{_n}_icon"] = _choice(
+        "content", f"Feature {_n} icon", WHY_SIPNOW_ICONS, _icon,
+        labels={"award": "Star award", "bolt": "Lightning bolt", "tag": "Price tag", "bars": "Selection bars"},
+    )
+    _WHY_SIPNOW_FEATURE_SETTINGS[f"feature_{_n}_title"] = _opt("content", "text", f"Feature {_n} title", _title, max=80)
+    _WHY_SIPNOW_FEATURE_SETTINGS[f"feature_{_n}_text"] = _opt("content", "textarea", f"Feature {_n} text", _text, max=300)
+
+SECTIONS["why-sipnow"] = {
+    "name": "Why SipNow",
+    "pages": CONTENT_PAGES,
+    "settings": {
+        "eyebrow": _opt("content", "text", "Eyebrow", "The SipNow difference", max=80),
+        "heading": _opt("content", "text", "Heading", "Why SipNow", max=120),
+        "subheading": _opt("content", "textarea", "Sub-text", "Four reasons our inner circle keeps coming back.", max=300),
+        **_WHY_SIPNOW_FEATURE_SETTINGS,
+        "heading_colour": _opt("style", "color", "Heading and feature title colour", "#4B163F"),
+        "body_colour": _opt("style", "color", "Sub-text and description colour", "#3D3438"),
+        "eyebrow_colour": _opt("style", "color", "Eyebrow colour", "#8A5A18"),
+        "section_background": _opt("style", "color", "Section background", "#FFFFFF"),
+        "panel_background": _opt("style", "color", "Panel background", "#F7F7F5"),
+        "icon_background": _opt("style", "color", "Icon box colour", "#F5E8B8"),
+        "icon_colour": _opt("style", "color", "Icon colour", "#5B3B12"),
+        **common_settings(width="full", spacing_top=0, spacing_bottom=0),
+    },
+}
+
 # "Find your match" quiz: a banner whose button opens a popup quiz. Markup, styles and script
 # are all in starter/sections/match-quiz.liquid (so Edit code can change them).
 # Two ways to pick the result: "priority" (each answer has its own result and the questions are checked in

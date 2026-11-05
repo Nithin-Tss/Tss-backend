@@ -2409,6 +2409,75 @@ def _render_custom(section, store, env, base_url, theme=None):
     )
 
 
+# Line icons for the "Why SipNow" features (24x24, drawn with the icon colour)
+WHY_SIPNOW_ICON_PATHS = {
+    "award": '<circle cx="12" cy="9" r="6.5"/><path d="M12 5.6l1.05 2.15 2.35.34-1.7 1.66.4 2.35L12 11l-2.1 1.1.4-2.35-1.7-1.66 2.35-.34z"/><path d="M8.2 14.3L7 21l5-2.6 5 2.6-1.2-6.7"/>',
+    "bolt": '<path d="M13 2.5L4.5 13.5H11l-1 8 8.5-11H12z"/>',
+    "tag": '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.83 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    "bars": '<path d="M5 21V8M12 21V4M19 21V10M3 21h18"/><path d="M3 8h4M10 4h4M17 10h4"/>',
+    "truck": '<path d="M2 6h11v10H2zM13 9h4l3 3v4h-7"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/>',
+    "heart": '<path d="M12 20s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.3 4.3 4.3 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10z"/>',
+    "gift": '<path d="M3 8h18v4H3zM5 12v9h14v-9M12 8v13"/><path d="M12 8C10 4 6.5 4.5 7.5 7c.4 1 2.5 1 4.5 1zM12 8c2-4 5.5-3.5 4.5-1-.4 1-2.5 1-4.5 1z"/>',
+    "shield": '<path d="M12 2.5l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10v-6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+    "bottle": '<path d="M10 2h4v4.2c0 .9.5 1.6 1.2 2.2A4.5 4.5 0 0 1 17 12v8.5a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 7 20.5V12a4.5 4.5 0 0 1 1.8-3.6c.7-.6 1.2-1.3 1.2-2.2z"/><path d="M7 14h10M7 18.5h10"/>',
+    "glass": '<path d="M7 3h10l-.6 6a4.4 4.4 0 0 1-8.8 0zM12 13.5V21M8 21h8"/>',
+}
+
+WHY_SIPNOW_CSS = """<style>
+.why-sipnow{background:var(--ws-section);text-align:center}
+.why-sipnow .page-width{padding-top:80px;padding-bottom:80px}
+.why-sipnow .why-sipnow__eyebrow{margin:0 0 12px;font-family:"Inter",system-ui,sans-serif;font-size:12px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--ws-eyebrow)}
+.why-sipnow .why-sipnow__heading{margin:0;font-family:Georgia,serif;font-size:56px;font-weight:700;line-height:1.1;color:var(--ws-heading);text-wrap:balance}
+.why-sipnow .why-sipnow__sub{margin:14px auto 0;max-width:560px;font-family:"Inter",system-ui,sans-serif;font-size:16px;line-height:1.6;color:var(--ws-body)}
+.why-sipnow__panel{margin:44px auto 0;max-width:1180px;padding:42px 34px;background:var(--ws-panel);border-radius:20px;box-shadow:0 12px 35px rgba(62,35,42,.10);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:28px;text-align:center}
+.why-sipnow__item{display:flex;flex-direction:column;align-items:center;min-width:0}
+.why-sipnow__icon{width:54px;height:54px;border-radius:10px;background:var(--ws-icon-bg);color:var(--ws-icon);display:grid;place-items:center}
+.why-sipnow__icon svg{width:28px;height:28px}
+.why-sipnow .why-sipnow__title{margin:18px 0 0;font-family:"Inter",system-ui,sans-serif;font-size:18px;font-weight:700;line-height:1.3;color:var(--ws-heading)}
+.why-sipnow .why-sipnow__text{margin:8px 0 0;font-family:"Inter",system-ui,sans-serif;font-size:14px;line-height:1.6;color:var(--ws-body)}
+@media (max-width:749px){
+.why-sipnow .page-width{padding-top:56px;padding-bottom:56px}
+.why-sipnow .why-sipnow__heading{font-size:40px}
+.why-sipnow__panel{grid-template-columns:repeat(2,minmax(0,1fr));padding:32px 20px;gap:28px 16px;margin-top:32px}
+}
+</style>"""
+
+
+def _render_why_sipnow(section):
+    """The "Why SipNow" section: eyebrow, heading, sub-text, then four icon features in a panel."""
+    s = section["settings"]
+    colours = {
+        "--ws-section": s["section_background"], "--ws-panel": s["panel_background"],
+        "--ws-heading": s["heading_colour"], "--ws-body": s["body_colour"], "--ws-eyebrow": s["eyebrow_colour"],
+        "--ws-icon-bg": s["icon_background"], "--ws-icon": s["icon_colour"],
+    }
+    style = ";".join(f"{name}:{value}" for name, value in colours.items())
+
+    items = []
+    for n in range(1, 5):
+        title, text = s.get(f"feature_{n}_title") or "", s.get(f"feature_{n}_text") or ""
+        if not title and not text:
+            continue
+        icon = WHY_SIPNOW_ICON_PATHS.get(s.get(f"feature_{n}_icon"), "")
+        items.append(
+            '<div class="why-sipnow__item">'
+            '<div class="why-sipnow__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" '
+            f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{icon}</svg></div>'
+            f'<h3 class="why-sipnow__title">{escape(title)}</h3>'
+            f'<p class="why-sipnow__text">{escape(text)}</p></div>'
+        )
+
+    eyebrow = f'<p class="why-sipnow__eyebrow">{escape(s["eyebrow"])}</p>' if s.get("eyebrow") else ""
+    heading = f'<h2 class="why-sipnow__heading">{escape(s["heading"])}</h2>' if s.get("heading") else ""
+    sub = f'<p class="why-sipnow__sub">{escape(s["subheading"])}</p>' if s.get("subheading") else ""
+    panel = f'<div class="why-sipnow__panel">{"".join(items)}</div>' if items else ""
+    return Markup(
+        f'{google_fonts_link({"inter"})}{WHY_SIPNOW_CSS}'
+        f'<section id="section-{escape(section["id"])}" class="section why-sipnow" style="{escape(style)}">'
+        f'<div class="page-width">{eyebrow}{heading}{sub}{panel}</div></section>'
+    )
+
+
 def _error_box(where, error):
     return Markup(
         '<div style="margin:16px;padding:12px 16px;border:1px solid #e5484d;border-radius:8px;'
@@ -3420,6 +3489,9 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
         if section["type"] == "custom":
             html.append(_render_custom(section, store, env, base_url, theme_button))
+
+        elif section["type"] == "why-sipnow":
+            html.append(_render_why_sipnow(section))
 
         elif path not in files:
             html.append(Markup(f"<!-- {escape(path)} is missing -->"))
