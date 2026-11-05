@@ -28,6 +28,7 @@ _STORE_ID = OpenApiParameter("id", OpenApiTypes.UUID, OpenApiParameter.PATH, des
     partial_update=extend_schema(parameters=[_STORE_ID]),
     destroy=extend_schema(parameters=[_STORE_ID]),
     reopen=extend_schema(parameters=[_STORE_ID]),
+    policies=extend_schema(parameters=[_STORE_ID]),
     permanent_delete=extend_schema(parameters=[_STORE_ID]),
 )
 class StoreViewSet(
@@ -114,6 +115,23 @@ class StoreViewSet(
         self.check_owner(instance)
         logger.warning("Store %s (%s) closed by user %s", instance.store_slug, instance.store_id, self.request.user.email)
         close_store(instance)
+
+    @action(detail=True, methods=["get", "patch"])
+    def policies(self, request, pk=None):
+        """
+        GET   /stores/<id>/policies/   the written policies: {privacyPolicy: {title, handle, body, visible, url}, ...}
+        PATCH /stores/<id>/policies/   {privacyPolicy: "<html>", ...} write them; each one with text shows on its page
+        (/pages/privacy-policy, /pages/refund-policy, /pages/terms-of-service, /pages/shipping-policy,
+        /pages/contact-information, /pages/legal-notice); a blank one hides its page.
+        """
+        from apps.themes.rendering import shop_url
+        from apps.themes.services import read_policies, save_policies
+
+        store = self.get_object()
+        if request.method == "PATCH":
+            self.check_settings_access(store, ["policies"])
+            save_policies(store, request.data)
+        return Response(read_policies(store, request.build_absolute_uri(shop_url(store))))
 
     @action(detail=True, methods=["post"])
     def reopen(self, request, pk=None):

@@ -2273,3 +2273,80 @@ def save_template_code(store_theme, name, content, base_version=None, client="",
     _publish_template(store_theme, name, source, version, after, content, client, started_at)
     return SimpleNamespace(file_path=path, file_size=file.file_size,
                            sync={"section": name, "kind": "template", "version": version, "conflict": conflict, "template": after})
+
+
+# ---------------------------------------------------------------- policies
+#
+# Settings > Policies: each written policy is the body of a store page at a fixed address, so it shows
+# on /pages/<handle> (and in the sitemap and the link pickers) like any other page. Emptying a policy
+# hides its page; the Pages admin can still edit them.
+
+POLICY_PAGES = {
+    "privacyPolicy": ("Privacy policy", "privacy-policy"),
+    "refundPolicy": ("Return and refund policy", "refund-policy"),
+    "termsOfService": ("Terms of service", "terms-of-service"),
+    "shippingPolicy": ("Shipping policy", "shipping-policy"),
+    "contactInformation": ("Contact information", "contact-information"),
+    "legalNotice": ("Legal notice", "legal-notice"),
+}
+MAX_POLICY_LENGTH = 200000
+
+
+def policy_pages(store):
+    """{key: StorePage or None} for the store's designated policy pages."""
+    by_handle = {p.handle: p for p in StorePage.objects.filter(store=store, handle__in=[h for _, h in POLICY_PAGES.values()])}
+    return {key: by_handle.get(handle) for key, (_, handle) in POLICY_PAGES.items()}
+
+
+def read_policies(store, base_url=""):
+    """Each policy as the admin edits it: {key: {title, handle, body, visible, url}}."""
+    result = {}
+    for key, page in policy_pages(store).items():
+        title, handle = POLICY_PAGES[key]
+        result[key] = {
+            "title": page.title if page else title,
+            "handle": handle,
+            "body": page.body if page else "",
+            "visible": bool(page and page.status == StorePage.VISIBLE),
+            "url": f"{base_url}/pages/{handle}",
+        }
+    return result
+
+
+def save_policies(store, data):
+    """
+    Write the policies in `data` ({key: body}); keys that are left out stay as they are. A policy with
+    text goes live on its page; a blank one hides the page.
+    """
+    unknown = sorted(set(data) - set(POLICY_PAGES))
+    if unknown:
+        raise exceptions.ValidationError({unknown[0]: "Unknown policy."})
+    for key, body in data.items():
+        if not isinstance(body, str):
+            raise exceptions.ValidationError({key: "Must be text."})
+        if len(body) > MAX_POLICY_LENGTH:
+            raise exceptions.ValidationError({key: f"Can be at most {MAX_POLICY_LENGTH} characters."})
+
+    with transaction.atomic():
+        existing = policy_pages(store)
+        # Policy pages use the starter's policy layout when the theme has it
+        template = "page.policy" if data and "page.policy" in page_template_keys(get_store_theme(store).custom_data) else ""
+        for key, body in data.items():
+            title, handle = POLICY_PAGES[key]
+            page = existing[key]
+            # Rich text editors leave an empty paragraph behind when cleared
+            has_text = bool(re.sub(r"<[^>]*>|&nbsp;|\s", "", body))
+            body = body if has_text else ""
+            if page is None:
+                if not has_text:
+                    continue
+                StorePage.objects.create(
+                    store=store, title=title, handle=handle, body=body, template=template,
+                    status=StorePage.VISIBLE, published_at=timezone.now(),
+                )
+                continue
+            page.body = body
+            page.status = StorePage.VISIBLE if has_text else StorePage.HIDDEN
+            if has_text and not page.published_at:
+                page.published_at = timezone.now()
+            page.save(update_fields=["body", "status", "published_at", "updated_at"])

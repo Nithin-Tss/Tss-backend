@@ -244,17 +244,28 @@ def cancel_order(order, user=None, refuse_if_paid=False):
     return order
 
 
+def customer_cancel_minutes(store):
+    """How long after ordering a shopper may cancel: the store's Policies rule (None when shoppers can't cancel)."""
+    if not store.cancellations_enabled:
+        return None
+    return store.cancellation_window_minutes
+
+
 def customer_cancel_deadline(order):
-    """The moment a shopper can no longer cancel this order themselves (settings.ORDER_CUSTOMER_CANCEL_MINUTES)."""
-    return order.created_at + timedelta(minutes=settings.ORDER_CUSTOMER_CANCEL_MINUTES)
+    """The moment a shopper can no longer cancel this order themselves (the store's cancellation window)."""
+    minutes = customer_cancel_minutes(order.store)
+    if minutes is None:
+        return order.created_at  # cancellations are off: the window is already over
+    return order.created_at + timedelta(minutes=minutes)
 
 
-def customer_cancel_window_text():
-    """The window in words for the message shoppers see: "1 hour", "2 hours", "30 minutes"."""
-    minutes = settings.ORDER_CUSTOMER_CANCEL_MINUTES
-    if minutes % 60 == 0:
-        hours = minutes // 60
-        return f"{hours} hour" + ("" if hours == 1 else "s")
+def customer_cancel_window_text(store):
+    """The window in words for the message shoppers see: "1 hour", "2 days", "30 minutes"."""
+    minutes = customer_cancel_minutes(store) or 0
+    for size, unit in ((1440, "day"), (60, "hour")):
+        if minutes and minutes % size == 0:
+            n = minutes // size
+            return f"{n} {unit}" + ("" if n == 1 else "s")
     return f"{minutes} minute" + ("" if minutes == 1 else "s")
 
 
