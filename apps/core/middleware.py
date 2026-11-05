@@ -83,3 +83,18 @@ class SecurityHeadersMiddleware:
             # Responses carry account and order data: keep them out of shared caches.
             response.headers.setdefault("Cache-Control", "no-store")
         return response
+
+
+from django.middleware.gzip import GZipMiddleware  # noqa: E402
+
+
+class ApiGZipMiddleware(GZipMiddleware):
+    """
+    GZip for API/HTML responses (the product list is ~2.4MB of JSON that shrinks about tenfold).
+    Server-Sent Events are left alone: compression would make proxies hold the stream back.
+    """
+
+    def process_response(self, request, response):
+        if response.get("Content-Type", "").startswith("text/event-stream"):
+            return response
+        return super().process_response(request, response)

@@ -142,6 +142,7 @@ AUTH_USER_MODEL = "identity.User"
 MIDDLEWARE = [
     'apps.core.request_log.RequestLogMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'apps.core.middleware.ApiGZipMiddleware',
     'apps.core.middleware.SecurityHeadersMiddleware',
     'apps.core.middleware.RequestValidationMiddleware',
     'apps.audit.middleware.AuditMiddleware',

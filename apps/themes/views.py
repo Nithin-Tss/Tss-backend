@@ -665,7 +665,7 @@ PREVIEW_EDITOR = """
       e.preventDefault();
       e.stopPropagation();
       var action = form.getAttribute("action") || "/collections/all";
-      var cleanPath = (action.replace(/^https?:\/\/[^/]+/, "").replace(/^\/s\/[^/]+/, "") || "/collections/all").split("?")[0];
+      var cleanPath = (action.replace(/^https?:\\/\\/[^/]+/, "").replace(/^\\/s\\/[^/]+/, "") || "/collections/all").split("?")[0];
       var path = q ? cleanPath + "?q=" + encodeURIComponent(q) : cleanPath;
       send({ type: "navigate", path: path });
     }
