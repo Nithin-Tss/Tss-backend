@@ -406,6 +406,8 @@ class Collection(models.Model):
     match = models.CharField(max_length=10, default="all")
     # Automated: product ids kept out even when they match ("Exclude")
     excluded_products = models.JSONField(default=list, blank=True)
+    # Ids of other collections whose products also show here, nested: what they include shows too ("Include products from collections")
+    include_collections = models.JSONField(default=list, blank=True)
     # Unused; from the first version of the Add collection page
     conditions = models.JSONField(default=list, blank=True)
     theme_template = models.CharField(max_length=100, default="Default collection", blank=True)

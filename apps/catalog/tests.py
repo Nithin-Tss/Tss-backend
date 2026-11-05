@@ -2764,3 +2764,393 @@ class ProductOptionsTests(APITestCase):
         # Deleting one variant deletes only that one
         self.assertEqual(self.client.delete(f"{VARIANTS}{case}/").status_code, 204)
         self.assertEqual(self.variant_ids(), ids - {case})
+
+
+class IncludeCollectionsTests(APITestCase):
+    """"Include products from collections": a collection also shows the products of the ones ticked on it."""
+
+    COLLECTIONS = "/api/v1/catalog/collections/"
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "include@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+        self.n = 0
+
+    # ------------------------------------------------------------------ helpers
+    def product(self, title, **extra):
+        self.n += 1
+        body = {"title": title, "status": "active", "price": "10", "sku": f"INC-{self.n}",
+                "location": self.location["id"], "quantity": 5, **extra}
+        r = self.client.post(URL, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def collection(self, name, products=(), include=(), **extra):
+        body = {"name": name, "products": [p["id"] for p in products], "include_collections": list(include), **extra}
+        r = self.client.post(self.COLLECTIONS, body, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def save(self, collection, expect=200, **body):
+        r = self.client.patch(f"{self.COLLECTIONS}{collection['id']}/", body, format="json")
+        self.assertEqual(r.status_code, expect, r.content)
+        return r.json()
+
+    def fetch(self, collection):
+        return self.client.get(f"{self.COLLECTIONS}{collection['id']}/").json()
+
+    def page(self, collection):
+        r = self.client.get(f"/s/{self.store.store_slug}/collections/{collection['handle']}")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    # ------------------------------------------------------------------ what shoppers see
+    def test_ticked_collections_products_show_with_the_collections_own_products(self):
+        shiraz = self.collection("Shiraz", [self.product("Barossa Shiraz")])
+        pinot = self.collection("Pinot Noir", [self.product("Otago Pinot")])
+        self.collection("Rose", [self.product("Provence Rose")])
+        red = self.collection("Red Wine", [self.product("House Red")], include=[shiraz["id"], pinot["id"]])
+
+        html = self.page(red)
+
+        for shown in ("House Red", "Barossa Shiraz", "Otago Pinot"):
+            self.assertIn(shown, html)
+        self.assertNotIn("Provence Rose", html)  # Rose was not ticked
+
+    def test_a_product_in_both_collections_counts_once(self):
+        both = self.product("Both")
+        shiraz = self.collection("Shiraz", [both])
+        red = self.collection("Red Wine", [both, self.product("Only red")], include=[shiraz["id"]])
+
+        self.assertEqual(self.fetch(red)["products_count"], 2)
+
+    def test_a_product_added_to_or_removed_from_a_ticked_collection_updates_this_one(self):
+        first, second = self.product("First wine"), self.product("Second wine")
+        shiraz = self.collection("Shiraz", [first])
+        red = self.collection("Red Wine", include=[shiraz["id"]])
+        self.assertIn("First wine", self.page(red))
+        self.assertNotIn("Second wine", self.page(red))
+
+        self.save(shiraz, products=[first["id"], second["id"]])
+        self.assertIn("Second wine", self.page(red))
+        self.assertEqual(self.fetch(red)["products_count"], 2)
+
+        self.save(shiraz, products=[second["id"]])
+        html = self.page(red)
+        self.assertNotIn("First wine", html)
+        self.assertIn("Second wine", html)
+
+    def test_automated_and_manual_collections_can_both_include_others(self):
+        acme = self.product("Acme wine", vendor="Acme")
+        other = self.product("Other wine", vendor="Other")
+        by_rule = self.collection(
+            "Acme", type="automated", rules=[{"field": "vendor", "operator": "equals", "value": "Acme"}]
+        )
+        hand = self.collection("Hand picked", [other])
+
+        auto = self.collection(
+            "Auto", type="automated", include=[hand["id"]],
+            rules=[{"field": "vendor", "operator": "equals", "value": "Acme"}],
+        )
+        manual = self.collection("Manual", include=[by_rule["id"]])
+
+        self.assertEqual(self.fetch(auto)["products_count"], 2)
+        html = self.page(auto)
+        self.assertIn("Acme wine", html)
+        self.assertIn("Other wine", html)
+        self.assertIn("Acme wine", self.page(manual))
+        # Included products are not copied into the collection's own products
+        self.assertEqual(self.fetch(manual)["products"], [])
+        self.assertEqual(self.fetch(auto)["products"], [acme["id"]])
+
+    def test_included_products_are_never_copied_into_the_hand_picked_ones(self):
+        shiraz = self.collection("Shiraz", [self.product("Barossa Shiraz")])
+        red = self.collection("Red Wine", [self.product("House Red")], include=[shiraz["id"]])
+
+        saved = self.save(red, name="Red wines")  # the admin page saves again without touching the products
+
+        self.assertEqual(len(saved["products"]), 1)
+        self.assertEqual(ProductCollection.objects.filter(collection_id=red["id"]).count(), 1)
+
+    def test_inclusion_is_nested_through_every_level(self):
+        barossa = self.collection("Barossa Shiraz", [self.product("In Barossa")])
+        shiraz = self.collection("Shiraz", [self.product("In Shiraz")], include=[barossa["id"]])
+        red = self.collection("Red Wine", [self.product("In Red")], include=[shiraz["id"]])
+
+        html = self.page(red)
+
+        for shown in ("In Red", "In Shiraz", "In Barossa"):
+            self.assertIn(shown, html)
+        self.assertEqual(self.fetch(red)["products_count"], 3)
+        # The API still lists only what was ticked on Red Wine itself
+        self.assertEqual(self.fetch(red)["include_collections"], [shiraz["id"]])
+
+    def test_anything_added_later_at_any_level_shows_up(self):
+        barossa = self.collection("Barossa Shiraz")
+        shiraz = self.collection("Shiraz", include=[barossa["id"]])
+        red = self.collection("Red Wine", include=[shiraz["id"]])
+        late = self.product("Added late")
+        self.assertNotIn("Added late", self.page(red))
+
+        self.save(barossa, products=[late["id"]])  # two levels down
+        self.assertIn("Added late", self.page(red))
+
+        deeper = self.collection("Deeper", [self.product("Deepest")])
+        self.save(barossa, include_collections=[deeper["id"]])  # a new level below
+        self.assertIn("Deepest", self.page(red))
+        self.assertEqual(self.fetch(red)["products_count"], 2)  # Added late, Deepest
+
+        self.save(barossa, include_collections=[])  # and cut off again
+        self.assertNotIn("Deepest", self.page(red))
+
+    def test_a_product_reachable_in_several_ways_counts_once(self):
+        both = self.product("Everywhere")
+        bottom = self.collection("Bottom", [both])
+        left = self.collection("Left", [both], include=[bottom["id"]])
+        right = self.collection("Right", include=[bottom["id"]])
+        top = self.collection("Top", [both], include=[left["id"], right["id"], bottom["id"]])
+
+        self.assertEqual(self.fetch(top)["products_count"], 1)
+
+    def test_a_deleted_collection_in_the_middle_cuts_off_what_is_below_it(self):
+        barossa = self.collection("Barossa Shiraz", [self.product("In Barossa")])
+        shiraz = self.collection("Shiraz", [self.product("In Shiraz")], include=[barossa["id"]])
+        red = self.collection("Red Wine", include=[shiraz["id"]])
+
+        self.assertEqual(self.client.delete(f"{self.COLLECTIONS}{shiraz['id']}/").status_code, 204)
+
+        html = self.page(red)
+        self.assertNotIn("In Shiraz", html)
+        self.assertNotIn("In Barossa", html)  # only reachable through Shiraz
+        self.assertEqual(self.fetch(red)["include_collections"], [])
+
+    def test_nesting_stops_at_the_depth_limit(self):
+        from .services import MAX_INCLUDE_DEPTH, collection_source_ids
+
+        chain = [Collection.objects.create(store=self.store, name=f"Level {i}") for i in range(MAX_INCLUDE_DEPTH + 3)]
+        for upper, lower in zip(chain, chain[1:]):
+            Collection.objects.filter(pk=upper.pk).update(include_collections=[str(lower.pk)])
+        top = Collection.objects.get(pk=chain[0].pk)
+
+        sources = collection_source_ids(top)
+
+        self.assertEqual(len(sources), MAX_INCLUDE_DEPTH + 1)  # itself and ten levels below it
+        self.assertEqual([str(pk) for pk in sources], [str(c.pk) for c in chain[:MAX_INCLUDE_DEPTH + 1]])
+
+    def test_a_loop_already_in_the_data_does_not_hang_or_repeat(self):
+        from .services import collection_source_ids
+
+        a = Collection.objects.create(store=self.store, name="A")
+        b = Collection.objects.create(store=self.store, name="B")
+        Collection.objects.filter(pk=a.pk).update(include_collections=[str(b.pk)])
+        Collection.objects.filter(pk=b.pk).update(include_collections=[str(a.pk)])
+
+        self.assertEqual([str(pk) for pk in collection_source_ids(Collection.objects.get(pk=a.pk))], [str(a.pk), str(b.pk)])
+        self.assertEqual(self.client.get(f"{self.COLLECTIONS}{a.pk}/").status_code, 200)
+
+    def test_the_included_collections_are_looked_up_with_one_query_however_deep(self):
+        from .services import collection_source_ids
+
+        previous = []
+        for level in range(6):
+            made = self.collection(f"Level {level}", include=previous)
+            previous = [made["id"]]
+        top = Collection.objects.get(pk=made["id"])
+
+        with self.assertNumQueries(1):
+            self.assertEqual(len(collection_source_ids(top)), 6)
+            collection_source_ids(top)  # asked again on the same collection: remembered
+
+    def test_clearing_the_list_stops_including(self):
+        shiraz = self.collection("Shiraz", [self.product("Barossa Shiraz")])
+        red = self.collection("Red Wine", include=[shiraz["id"]])
+
+        saved = self.save(red, include_collections=[])
+
+        self.assertEqual(saved["include_collections"], [])
+        self.assertNotIn("Barossa Shiraz", self.page(red))
+
+    # ------------------------------------------------------------------ the rules
+    def test_a_collection_cannot_include_itself(self):
+        red = self.collection("Red Wine")
+
+        r = self.client.patch(f"{self.COLLECTIONS}{red['id']}/", {"include_collections": [red["id"]]}, format="json")
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["include_collections"], ["A collection can't include itself."])
+        self.assertEqual(self.fetch(red)["include_collections"], [])
+
+    def test_two_collections_cannot_include_each_other(self):
+        a = self.collection("A")
+        b = self.collection("B", include=[a["id"]])
+
+        r = self.client.patch(f"{self.COLLECTIONS}{a['id']}/", {"include_collections": [b["id"]]}, format="json")
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["include_collections"], ["A and B can't include each other."])
+        self.assertEqual(self.fetch(a)["include_collections"], [])
+
+    def test_a_longer_loop_is_refused_too(self):
+        a = self.collection("A")
+        b = self.collection("B", include=[a["id"]])
+        c = self.collection("C", include=[b["id"]])
+
+        r = self.client.patch(f"{self.COLLECTIONS}{a['id']}/", {"include_collections": [c["id"]]}, format="json")  # A -> C -> B -> A
+
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            r.json()["include_collections"],
+            ["C already includes A through other collections, so A and C can't include each other."],
+        )
+        self.assertEqual(self.fetch(a)["include_collections"], [])
+
+    def test_a_list_that_is_not_a_loop_is_accepted(self):
+        a, b = self.collection("A"), self.collection("B")
+        c = self.collection("C", include=[a["id"]])
+
+        saved = self.save(b, include_collections=[a["id"], c["id"]])  # B -> A and B -> C -> A: no way back to B
+
+        self.assertEqual(sorted(saved["include_collections"]), sorted([a["id"], c["id"]]))
+
+    def test_unknown_and_other_stores_collections_are_refused(self):
+        other_client = APIClient()
+        other_token, other_store_id = signup(other_client, "include-other@example.com")
+        other_client.credentials(HTTP_AUTHORIZATION="Bearer " + other_token, HTTP_X_STORE_ID=other_store_id)
+        theirs = other_client.post(self.COLLECTIONS, {"name": "Theirs"}, format="json").json()
+        red = self.collection("Red Wine")
+
+        for missing in (theirs["id"], "11111111-1111-1111-1111-111111111111"):
+            self.save(red, expect=400, include_collections=[missing])
+        self.assertEqual(self.fetch(red)["include_collections"], [])
+
+    # ------------------------------------------------------------------ keeping the list right
+    def test_a_deleted_ticked_collection_is_removed_from_the_list(self):
+        shiraz = self.collection("Shiraz", [self.product("Barossa Shiraz")])
+        pinot = self.collection("Pinot Noir", [self.product("Otago Pinot")])
+        red = self.collection("Red Wine", include=[shiraz["id"], pinot["id"]])
+
+        self.assertEqual(self.client.delete(f"{self.COLLECTIONS}{shiraz['id']}/").status_code, 204)
+
+        self.assertEqual(self.fetch(red)["include_collections"], [pinot["id"]])
+        self.assertEqual(Collection.objects.get(pk=red["id"]).include_collections, [pinot["id"]])  # cleaned in the database
+        html = self.page(red)
+        self.assertNotIn("Barossa Shiraz", html)
+        self.assertIn("Otago Pinot", html)
+
+    def test_a_stale_id_left_in_the_list_is_ignored(self):
+        shiraz = self.collection("Shiraz", [self.product("Barossa Shiraz")])
+        red = self.collection("Red Wine", include=[shiraz["id"]])
+        ProductCollection.objects.filter(collection_id=shiraz["id"]).delete()
+        Collection.objects.filter(pk=shiraz["id"]).delete()  # removed outside the API (e.g. the Django admin)
+
+        self.assertEqual(self.fetch(red)["include_collections"], [])
+        self.assertEqual(self.fetch(red)["products_count"], 0)
+        self.assertNotIn("Barossa Shiraz", self.page(red))
+
+    def test_the_header_menu_lists_a_collection_that_is_filled_only_through_an_include(self):
+        barossa = self.collection("Barossa", [self.product("Barossa Shiraz")])
+        shiraz = self.collection("Shiraz", include=[barossa["id"]])
+        self.collection("Red Wine", include=[shiraz["id"]])  # filled two levels down
+        self.collection("Empty one")
+
+        html = self.client.get(f"/s/{self.store.store_slug}/").content.decode()
+
+        self.assertIn("Red Wine", html)
+        self.assertNotIn("Empty one", html)
+
+    # ------------------------------------------------------------------ the item grid on the collection page
+    def preview(self, **body):
+        r = self.client.post(f"{self.COLLECTIONS}preview/", body, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_the_grid_lists_products_from_added_collections_nested_and_labelled(self):
+        barossa = self.collection("Barossa Shiraz", [self.product("In Barossa")])
+        shiraz = self.collection("Shiraz", [self.product("In Shiraz")], include=[barossa["id"]])
+        pinot = self.collection("Pinot Noir", [self.product("In Pinot")])
+        own = self.product("Own pick")
+
+        data = self.preview(type="manual", products=[own["id"]], include_collections=[shiraz["id"], pinot["id"]])
+
+        self.assertEqual(data["included_count"], 3)
+        labels = {p["title"]: p["from_collection"]["name"] for p in data["included"]}
+        # A nested product is labelled with the collection that was added, not the one it sits in
+        self.assertEqual(labels, {"In Shiraz": "Shiraz", "In Barossa": "Shiraz", "In Pinot": "Pinot Noir"})
+        self.assertEqual({p["from_collection"]["id"] for p in data["included"]}, {shiraz["id"], pinot["id"]})
+
+    def test_the_grid_shows_a_product_once_and_keeps_the_collections_own_products_unlabelled(self):
+        both = self.product("Both")
+        a = self.collection("A", [both, self.product("Only A")])
+        b = self.collection("B", [both])
+
+        data = self.preview(type="manual", products=[both["id"]], include_collections=[a["id"], b["id"]])
+
+        # "Both" is the collection's own pick, so only "Only A" comes from outside
+        self.assertEqual([p["title"] for p in data["included"]], ["Only A"])
+        self.assertEqual(data["included_count"], 1)
+
+        # Not picked by hand: it comes once, through the first collection that was added
+        data = self.preview(type="manual", products=[], include_collections=[b["id"], a["id"]])
+        self.assertEqual(data["included_count"], 2)
+        by_title = {p["title"]: p["from_collection"]["name"] for p in data["included"]}
+        self.assertEqual(by_title, {"Both": "B", "Only A": "A"})
+
+    def test_the_grid_for_an_automated_collection_adds_included_products_to_the_matching_ones(self):
+        acme = self.product("Acme wine", vendor="Acme")
+        hand = self.collection("Hand picked", [self.product("Other wine"), acme])
+
+        data = self.preview(
+            type="automated", rules=[{"field": "vendor", "operator": "equals", "value": "Acme"}],
+            include_collections=[hand["id"]],
+        )
+
+        self.assertEqual([p["title"] for p in data["products"]], ["Acme wine"])
+        self.assertEqual(data["count"], 1)
+        # Acme wine is already matched by the rule, so only the other product is "from Hand picked"
+        self.assertEqual([(p["title"], p["from_collection"]["name"]) for p in data["included"]], [("Other wine", "Hand picked")])
+        self.assertEqual(data["included_count"], 1)
+
+    def test_the_grid_follows_an_unsaved_change_and_copies_nothing(self):
+        shiraz = self.collection("Shiraz", [self.product("In Shiraz")])
+        red = self.collection("Red Wine")
+        before = ProductCollection.objects.count()
+
+        added = self.preview(type="manual", products=[], include_collections=[shiraz["id"]])
+        removed = self.preview(type="manual", products=[], include_collections=[])
+
+        self.assertEqual((added["included_count"], removed["included_count"]), (1, 0))
+        self.assertEqual(removed["included"], [])
+        self.assertEqual(ProductCollection.objects.count(), before)
+        self.assertEqual(self.fetch(red)["include_collections"], [])  # nothing is saved until Save
+
+    def test_the_grid_ignores_deleted_collections_and_refuses_bad_ids(self):
+        shiraz = self.collection("Shiraz", [self.product("In Shiraz")])
+        gone = "11111111-1111-1111-1111-111111111111"
+
+        data = self.preview(type="manual", products=[], include_collections=[gone, shiraz["id"]])
+        self.assertEqual([p["title"] for p in data["included"]], ["In Shiraz"])
+
+        for body in ({"include_collections": ["nope"]}, {"include_collections": "x"}, {"products": ["nope"], "type": "manual"}):
+            r = self.client.post(f"{self.COLLECTIONS}preview/", body, format="json")
+            self.assertEqual(r.status_code, 400, body)
+
+    def test_the_grid_only_sees_this_stores_collections(self):
+        other_client = APIClient()
+        other_token, other_store_id = signup(other_client, "preview-other@example.com")
+        other_client.credentials(HTTP_AUTHORIZATION="Bearer " + other_token, HTTP_X_STORE_ID=other_store_id)
+        theirs = other_client.post(self.COLLECTIONS, {"name": "Theirs"}, format="json").json()
+
+        data = self.preview(type="manual", products=[], include_collections=[theirs["id"]])
+
+        self.assertEqual((data["included"], data["included_count"]), ([], 0))
+
+    def test_the_list_of_other_collections_is_the_stores_current_collections(self):
+        # The admin page lists /collections/ minus the one being edited, so a new collection shows up at once
+        a = self.collection("A")
+        self.assertEqual([c["id"] for c in self.client.get(self.COLLECTIONS).json()], [a["id"]])
+        b = self.collection("B")
+        self.assertEqual({c["id"] for c in self.client.get(self.COLLECTIONS).json()}, {a["id"], b["id"]})

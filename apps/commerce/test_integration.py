@@ -657,7 +657,7 @@ class ConcurrentStockTests(TransactionTestCase):
 
 
 class CustomerCancelWindowTests(CommerceIntegrationBase):
-    """A shopper can cancel their own order for ORDER_CUSTOMER_CANCEL_MINUTES (default 60); staff have no limit."""
+    """A shopper can cancel their own order within the store\'s cancellation window (default 60 minutes); staff have no limit."""
 
     NEW_MESSAGE = "Orders can only be cancelled within 1 hour of ordering. Please contact the store."
 
@@ -720,23 +720,34 @@ class CustomerCancelWindowTests(CommerceIntegrationBase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("Orders with shipped items can't be cancelled.", str(r.json()))
 
-    def test_the_window_is_a_setting_and_the_message_follows_it(self):
-        from django.test import override_settings
+    def set_rules(self, **fields):
+        type(self.store).objects.filter(pk=self.store.pk).update(**fields)
 
+    def test_the_window_is_a_store_rule_and_the_message_follows_it(self):
         order = self.placed(minutes_ago=100)
-        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=30):
-            r = self.cancel(order)
-            self.assertEqual(r.status_code, 400)
-            self.assertIn("within 30 minutes of ordering", str(r.data))
-        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=120):
-            self.assertEqual(self.cancel(order).status_code, 200)
+        self.set_rules(cancellation_window_minutes=30)
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("within 30 minutes of ordering", str(r.data))
+        self.set_rules(cancellation_window_minutes=120)
+        self.assertEqual(self.cancel(order).status_code, 200)
         other = self.placed(minutes_ago=100)
-        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=60 * 24):
-            self.assertEqual(self.cancel(other).status_code, 200)
-        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=120):
-            self.assertEqual(orders_services.customer_cancel_window_text(), "2 hours")
-        with override_settings(ORDER_CUSTOMER_CANCEL_MINUTES=60):
-            self.assertEqual(orders_services.customer_cancel_window_text(), "1 hour")
+        self.set_rules(cancellation_window_minutes=60 * 24)
+        self.assertEqual(self.cancel(other).status_code, 200)
+        self.store.refresh_from_db()
+        self.assertEqual(orders_services.customer_cancel_window_text(self.store), "1 day")
+        self.set_rules(cancellation_window_minutes=120)
+        self.store.refresh_from_db()
+        self.assertEqual(orders_services.customer_cancel_window_text(self.store), "2 hours")
+
+    def test_a_store_with_cancellations_off_refuses_shoppers_but_not_staff(self):
+        self.set_rules(cancellations_enabled=False)
+        order = self.placed()
+        r = self.cancel(order)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("doesn't accept cancellations online", str(r.data))
+        self.assertIsNone(self.shopper.get(f"{self.base}/orders/{order['id']}/").data["customer_cancel_until"])
+        self.assertEqual(self.staff.post(f"/api/v1/orders/{order['id']}/cancel/").status_code, 200)
 
     def test_the_order_tells_the_storefront_until_when_it_can_be_cancelled(self):
         order = self.placed()

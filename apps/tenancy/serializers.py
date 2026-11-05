@@ -13,6 +13,14 @@ from .services import platform_membership
 UNIT_SYSTEMS = ["metric", "imperial"]
 WEIGHT_UNITS = ["kg", "g", "lb", "oz"]
 AUTO_FULFILL = ["all", "gift_cards", "none"]
+RETURN_STARTS_FROM = ["delivery", "fulfillment", "order"]
+RETURN_SHIPPING = ["free", "customer_pays"]
+PRIVACY_MODES = ["automated", "always", "off"]
+CONSENT_MODES = ["hidden", "unchecked", "prechecked"]
+FIELD_MODES = ["hidden", "optional", "required"]
+FULL_NAME_MODES = ["first_last", "last_only"]
+MAX_CANCELLATION_MINUTES = 60 * 24 * 30
+MAX_RETURN_DAYS = 365
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -38,6 +46,40 @@ class StoreSerializer(serializers.ModelSerializer):
     orderSuffix = serializers.CharField(source="order_suffix", required=False, allow_blank=True, max_length=10)
     autoFulfill = serializers.ChoiceField(source="auto_fulfill", choices=AUTO_FULFILL, required=False)
     autoArchive = serializers.BooleanField(source="auto_archive", required=False)
+    cancellationsEnabled = serializers.BooleanField(source="cancellations_enabled", required=False)
+    cancellationWindowMinutes = serializers.IntegerField(
+        source="cancellation_window_minutes", required=False, min_value=1, max_value=MAX_CANCELLATION_MINUTES
+    )
+    returnsEnabled = serializers.BooleanField(source="returns_enabled", required=False)
+    returnWindowDays = serializers.IntegerField(
+        source="return_window_days", required=False, allow_null=True, min_value=1, max_value=MAX_RETURN_DAYS
+    )
+    returnWindowStartsFrom = serializers.ChoiceField(
+        source="return_window_starts_from", choices=RETURN_STARTS_FROM, required=False
+    )
+    returnWindowExtendWeekends = serializers.BooleanField(source="return_window_extend_weekends", required=False)
+    returnShipping = serializers.ChoiceField(source="return_shipping", choices=RETURN_SHIPPING, required=False)
+    restockingFeePercent = serializers.DecimalField(
+        source="restocking_fee_percent", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False
+    )
+    cookieBanner = serializers.ChoiceField(source="cookie_banner", choices=PRIVACY_MODES, required=False)
+    dataSharingOptOut = serializers.ChoiceField(source="data_sharing_opt_out", choices=PRIVACY_MODES, required=False)
+    networkIntelligence = serializers.BooleanField(source="network_intelligence", required=False)
+    checkoutEmailMarketing = serializers.ChoiceField(
+        source="checkout_email_marketing", choices=CONSENT_MODES, required=False
+    )
+    checkoutSmsMarketing = serializers.ChoiceField(
+        source="checkout_sms_marketing", choices=CONSENT_MODES, required=False
+    )
+    doubleOptInEmail = serializers.BooleanField(source="double_opt_in_email", required=False)
+    doubleOptInSms = serializers.BooleanField(source="double_opt_in_sms", required=False)
+    showSignInLinks = serializers.BooleanField(source="show_sign_in_links", required=False)
+    storeCreditEnabled = serializers.BooleanField(source="store_credit_enabled", required=False)
+    checkoutRequireLogin = serializers.BooleanField(source="checkout_require_login", required=False)
+    checkoutFullName = serializers.ChoiceField(source="checkout_full_name", choices=FULL_NAME_MODES, required=False)
+    checkoutCompany = serializers.ChoiceField(source="checkout_company", choices=FIELD_MODES, required=False)
+    checkoutAddress2 = serializers.ChoiceField(source="checkout_address2", choices=FIELD_MODES, required=False)
+    checkoutPhone = serializers.ChoiceField(source="checkout_phone", choices=FIELD_MODES, required=False)
     taxRate = serializers.DecimalField(source="tax_rate", max_digits=5, decimal_places=2, min_value=0, max_value=100, required=False)
     pricesIncludeTax = serializers.BooleanField(source="prices_include_tax", required=False)
     taxShipping = serializers.BooleanField(source="tax_shipping", required=False)
@@ -55,6 +97,11 @@ class StoreSerializer(serializers.ModelSerializer):
             "storeId", "storeName", "storeSlug", "domain", "status", "createdAt", "fieldLabels",
             "contactEmail", "phone", "address", "currency", "backupRegion", "unitSystem",
             "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
+            "cancellationsEnabled", "cancellationWindowMinutes", "returnsEnabled", "returnWindowDays",
+            "returnWindowStartsFrom", "returnWindowExtendWeekends", "returnShipping", "restockingFeePercent",
+            "cookieBanner", "dataSharingOptOut", "networkIntelligence", "checkoutEmailMarketing",
+            "checkoutSmsMarketing", "doubleOptInEmail", "doubleOptInSms", "showSignInLinks", "storeCreditEnabled",
+            "checkoutRequireLogin", "checkoutFullName", "checkoutCompany", "checkoutAddress2", "checkoutPhone",
             "taxRate", "pricesIncludeTax", "taxShipping", "shippingFlatRate", "freeShippingThreshold",
             "role", "roles", "permissions",
         ]

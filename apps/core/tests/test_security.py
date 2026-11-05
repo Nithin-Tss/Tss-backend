@@ -635,7 +635,8 @@ def api_routes():
                 continue
             if not route.startswith("api/v1/"):
                 continue
-            url = re.sub(r"\(\?P<\w+>[^)]*\)", ZERO_UUID, route)  # router regex groups
+            url = re.sub(r"\(\?P<\w+>\\d\+\)", "1", route)  # numeric router groups, e.g. domain_id
+            url = re.sub(r"\(\?P<\w+>[^)]*\)", ZERO_UUID, url)  # other router regex groups
             url = re.sub(r"<uuid:\w+>", ZERO_UUID, url)
             url = re.sub(r"<(?:slug|str):\w+>", "x", url)
             url = re.sub(r"<int:\w+>", "1", url)

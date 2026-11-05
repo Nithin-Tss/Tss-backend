@@ -247,10 +247,12 @@ class OrderCancelView(SessionOrdersMixin, StorefrontView):
         # (the shopper's session id is the only proof here, so refunds go through staff).
         order = self.session_order(request, order_id)
         # Shoppers only: staff cancel without a time limit (orders.services.cancel_order does not check it)
+        if not order.store.cancellations_enabled:
+            raise ValidationError("This store doesn't accept cancellations online. Please contact the store.")
         if timezone.now() > orders_services.customer_cancel_deadline(order):
             raise ValidationError(
-                f"Orders can only be cancelled within {orders_services.customer_cancel_window_text()} of ordering. "
-                "Please contact the store."
+                f"Orders can only be cancelled within {orders_services.customer_cancel_window_text(order.store)} "
+                "of ordering. Please contact the store."
             )
         order = orders_services.cancel_order(order, refuse_if_paid=True)
         return Response(ShopperOrderSerializer(order).data)

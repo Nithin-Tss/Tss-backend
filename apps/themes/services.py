@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 50
+STARTER_REVISION = 52
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -237,6 +237,10 @@ STARTER_UPGRADES = {
     },
     # Revision 19: the header's wishlist heart is a "Wishlist icon" block that renders snippets/wishlist.liquid
     "sections/header.liquid": {
+        "3c397975d7ccc807b322de2f895e9907043d6b97b3b53f18b5143588a36fbdfb",  # revision 51: before the mega menu panel followed the header width
+        "06abcf0322802d08414f520abb64c726e4c24c0c474c3ec7e34decb1a397474e",  # revision 51: before the mega menu panel followed the header width (CRLF)
+        "a6c7d0813a1059fc6f28fc7d7ca18503bf6e03c6a6827beb6209e39ce3ec460a",  # revision 50: before the ShopNow-style navigation
+        "3fcc073642dc12db2a015c663e9381733a822cb9d4c819f470292ccaf8910011",  # revision 50: before the ShopNow-style navigation (CRLF)
         "5f762425519ec74471a1758ad9ba87509887f7562738958bc9c54491f19ce3d4",  # revision 49: before the mega menu look settings and Shop All
         "184f6cf6357886e396e971eb1a96548a17f80878557c68e3c281b2c866a32e03",  # revision 49: before the mega menu look settings and Shop All (CRLF)
         "968932f6ec131d7062429bba9cbb3e2005fb711bf51c0f552c9a9c15ff9e78ad",  # revision 47: before the rotating announcement bar
@@ -273,7 +277,13 @@ STARTER_UPGRADES = {
         "0987e907fc71ca53d60862620a3adea06198870982b9895bfdf748b15594f7e3",  # revision 50: before the social link click listener
         "0dc7cbfbf4afbd1e07d916c8a0da1c239d2a28ac51595beee81fb86630c35524",  # revision 50: same, with CRLF line endings
     },
-    "snippets/header.liquid": {"6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1"},
+    "snippets/header.liquid": {
+        "d8989f6198f2593c81303fd80a9b64eecbd0c91cda3fd05fe5297f2c2c0205d3",  # revision 51: before the mega menu panel followed the header width
+        "fb57134df11b1de0f109858ee9209016634cf327f01ec87e3df2fe783225d2bb",  # revision 51: before the mega menu panel followed the header width (CRLF)
+        "8cfe7c6a3f81bc906f7d9c6c75be2113e9d109e041ce033605dcce93ad0042a7",  # revision 50: before the ShopNow-style navigation
+        "6842a0fcc327395aa20f37fc0980fdb1e2f0f0a5075e3a7aeeda3b5348b2010b",  # revision 50: before the ShopNow-style navigation (CRLF)
+        "6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1",
+    },
     "sections/footer.liquid": {
         "2c9bc12df53d8dbeba97ced10cbee17a107be0ca18dd58822bb09cc6cc6825bc",  # revision 45: before the footer style, utility and mobile settings
         "8fc8359490e9824b2d4c442e6793f72113569e865840dd0ca11653cbf419024e",  # revision 45: same, with CRLF line endings
@@ -2273,3 +2283,80 @@ def save_template_code(store_theme, name, content, base_version=None, client="",
     _publish_template(store_theme, name, source, version, after, content, client, started_at)
     return SimpleNamespace(file_path=path, file_size=file.file_size,
                            sync={"section": name, "kind": "template", "version": version, "conflict": conflict, "template": after})
+
+
+# ---------------------------------------------------------------- policies
+#
+# Settings > Policies: each written policy is the body of a store page at a fixed address, so it shows
+# on /pages/<handle> (and in the sitemap and the link pickers) like any other page. Emptying a policy
+# hides its page; the Pages admin can still edit them.
+
+POLICY_PAGES = {
+    "privacyPolicy": ("Privacy policy", "privacy-policy"),
+    "refundPolicy": ("Return and refund policy", "refund-policy"),
+    "termsOfService": ("Terms of service", "terms-of-service"),
+    "shippingPolicy": ("Shipping policy", "shipping-policy"),
+    "contactInformation": ("Contact information", "contact-information"),
+    "legalNotice": ("Legal notice", "legal-notice"),
+}
+MAX_POLICY_LENGTH = 200000
+
+
+def policy_pages(store):
+    """{key: StorePage or None} for the store's designated policy pages."""
+    by_handle = {p.handle: p for p in StorePage.objects.filter(store=store, handle__in=[h for _, h in POLICY_PAGES.values()])}
+    return {key: by_handle.get(handle) for key, (_, handle) in POLICY_PAGES.items()}
+
+
+def read_policies(store, base_url=""):
+    """Each policy as the admin edits it: {key: {title, handle, body, visible, url}}."""
+    result = {}
+    for key, page in policy_pages(store).items():
+        title, handle = POLICY_PAGES[key]
+        result[key] = {
+            "title": page.title if page else title,
+            "handle": handle,
+            "body": page.body if page else "",
+            "visible": bool(page and page.status == StorePage.VISIBLE),
+            "url": f"{base_url}/pages/{handle}",
+        }
+    return result
+
+
+def save_policies(store, data):
+    """
+    Write the policies in `data` ({key: body}); keys that are left out stay as they are. A policy with
+    text goes live on its page; a blank one hides the page.
+    """
+    unknown = sorted(set(data) - set(POLICY_PAGES))
+    if unknown:
+        raise exceptions.ValidationError({unknown[0]: "Unknown policy."})
+    for key, body in data.items():
+        if not isinstance(body, str):
+            raise exceptions.ValidationError({key: "Must be text."})
+        if len(body) > MAX_POLICY_LENGTH:
+            raise exceptions.ValidationError({key: f"Can be at most {MAX_POLICY_LENGTH} characters."})
+
+    with transaction.atomic():
+        existing = policy_pages(store)
+        # Policy pages use the starter's policy layout when the theme has it
+        template = "page.policy" if data and "page.policy" in page_template_keys(get_store_theme(store).custom_data) else ""
+        for key, body in data.items():
+            title, handle = POLICY_PAGES[key]
+            page = existing[key]
+            # Rich text editors leave an empty paragraph behind when cleared
+            has_text = bool(re.sub(r"<[^>]*>|&nbsp;|\s", "", body))
+            body = body if has_text else ""
+            if page is None:
+                if not has_text:
+                    continue
+                StorePage.objects.create(
+                    store=store, title=title, handle=handle, body=body, template=template,
+                    status=StorePage.VISIBLE, published_at=timezone.now(),
+                )
+                continue
+            page.body = body
+            page.status = StorePage.VISIBLE if has_text else StorePage.HIDDEN
+            if has_text and not page.published_at:
+                page.published_at = timezone.now()
+            page.save(update_fields=["body", "status", "published_at", "updated_at"])

@@ -228,16 +228,22 @@ PRE_MEGA_LOOK_MOBILE_CSS = (
 )
 
 
+def rev50_header():
+    """The starter header of revision 50 (before the ShopNow-style navigation), saved as a fixture."""
+    from pathlib import Path
+
+    return (Path(__file__).parent / "test_fixtures" / "header.rev50.liquid").read_text(encoding="utf-8")
+
+
 def pre_mega_look_header():
     """
-    The starter header of revision 48, before the mega menu look settings and the column "Shop All" link: the current
-    starter with those changes taken out. Its hash is registered in STARTER_UPGRADES.
+    The starter header of revision 48, before the mega menu look settings and the column "Shop All" link: the revision 50
+    starter (a saved fixture, so it does not move with the current starter) with those changes taken out. Its hash is
+    registered in STARTER_UPGRADES.
     """
     import re
 
-    from .services import starter_files
-
-    header = starter_files()["sections/header.liquid"]
+    header = rev50_header()
     # the --mega-* assigns at the top and the variables on the <header>
     start = header.index("{%- comment -%}\n  Mega menu look:")
     end = header.index("{%- assign mega_shop_all_label")
@@ -2732,7 +2738,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 50)
+        self.assertEqual(theme.theme_data["starter_revision"], 52)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2756,6 +2762,19 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         end = older.index('    if (target.closest("[data-cart-checkout-soon]")) {')
         return older[:start] + older[end:]
 
+    def register_as_older(self, *texts):
+        """The older copies are rebuilt from the current snippet, so their hashes move whenever the snippet changes.
+        Register them for this test only; the shipped hashes in STARTER_UPGRADES are covered by the constants test."""
+        import hashlib
+        from unittest import mock
+
+        from .services import STARTER_UPGRADES
+
+        hashes = {hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts}
+        patcher = mock.patch.dict(STARTER_UPGRADES, {self.SNIPPET: STARTER_UPGRADES[self.SNIPPET] | hashes})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_the_snippet_from_before_clear_cart_is_registered_for_the_upgrade(self):
         import hashlib
 
@@ -2763,8 +2782,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
 
         text = self.snippet_before_clear_cart()
         self.assertNotIn("data-cart-clear", text)
-        for variant in (text, text.replace("\n", "\r\n")):  # an LF copy and a CRLF copy
-            self.assertIn(hashlib.sha256(variant.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        self.register_as_older(text, text.replace("\n", "\r\n"))  # an LF copy and a CRLF copy
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
         theme.theme_data = {**theme.theme_data, "starter_revision": 37}
@@ -2811,7 +2829,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         text = self.snippet_before_link_ids()
         self.assertNotIn("tagLinks", text)
         self.assertIn("A header that draws its own cart icon", text)  # still the revision-22 file, with the badge code
-        self.assertIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])
+        self.register_as_older(text)
         # a store with that copy gets the new one, an edited copy stays as it is
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=text, file_size=len(text.encode("utf-8")))
@@ -2826,7 +2844,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         from .services import STARTER_UPGRADES, starter_files
 
         old = self.old_cart_snippet()
-        self.assertIn(hashlib.sha256(old.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.SNIPPET])  # a real older file
+        self.register_as_older(old)
         theme = self.theme().theme
         theme.files.filter(file_path=self.SNIPPET).update(content=old, file_size=len(old.encode("utf-8")))
         theme.theme_data = {**theme.theme_data, "starter_revision": 21}
@@ -2942,7 +2960,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 50)
+        self.assertEqual(STARTER_REVISION, 52)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3761,7 +3779,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 50)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 52)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -5796,6 +5814,62 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
                     self.assertEqual(r.json()["field"], "email")
                     self.assertEqual(Order.objects.count(), 0)
 
+    def _checkout_session(self):
+        import re
+        self.add_theme(source="blank", name="Main Theme")
+        home = self.shopper.get(f"{self.base}/")
+        session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
+        self.shopper.post(
+            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            content_type="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+        return session_id
+
+    def _post_checkout(self, session_id, **extra):
+        form = {
+            "email": "jv@example.com", "first_name": "Jav", "last_name": "V", "address1": "1 Main Street",
+            "city": "Pune", "postal_code": "411001", "country": "India", "payment_method": "cod", **extra,
+        }
+        return self.shopper.post(
+            f"{self.base}/checkout/", data=json.dumps(form), content_type="application/json",
+            HTTP_ACCEPT="application/json", HTTP_X_CART_SESSION=session_id,
+        )
+
+    def test_checkout_settings_make_phone_company_and_address2_required(self):
+        from apps.orders.models import Order
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(
+            checkout_phone="required", checkout_company="required", checkout_address2="required")
+        for message, extra in (
+            ("Company name is required.", {}),
+            ("Apartment, suite or unit is required.", {"company": "Acme"}),
+            ("Phone number is required.", {"company": "Acme", "address2": "Flat 2"}),
+        ):
+            r = self._post_checkout(session_id, **extra)
+            self.assertEqual((r.status_code, r.json()["error"]), (400, message))
+        self.assertEqual(Order.objects.count(), 0)
+        r = self._post_checkout(session_id, company="Acme", address2="Flat 2", phone="9876543210")
+        self.assertEqual(r.status_code, 200, r.content[:200])
+
+    def test_checkout_last_name_only_does_not_need_a_first_name(self):
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        r = self._post_checkout(session_id, first_name="")
+        self.assertEqual(r.status_code, 400)
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(checkout_full_name="last_only")
+        r = self._post_checkout(session_id, first_name="")
+        self.assertEqual(r.status_code, 200, r.content[:200])
+
+    def test_checkout_can_require_sign_in(self):
+        from apps.tenancy.models import Store
+        session_id = self._checkout_session()
+        Store.objects.filter(store_slug=self.store["storeSlug"]).update(checkout_require_login=True)
+        page = self.shopper.get(f"{self.base}/checkout")
+        self.assertEqual(page.status_code, 302)
+        self.assertIn("/account/login", page["Location"])
+        self.assertEqual(self._post_checkout(session_id).status_code, 403)
+
     def test_checkout_refuses_to_place_order_with_bad_email_already_saved_on_it(self):
         import re
         from apps.commerce.models import Checkout
@@ -7402,7 +7476,7 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         self.assertIn("Jackets", nav)
         self.assertNotIn("mega-menu__promo", nav)
 
-    def test_standard_dropdown_when_is_mega_false(self):
+    def test_an_item_with_children_opens_the_full_width_panel_even_when_not_marked_mega(self):
         menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
         l1 = self.MenuItem.objects.create(
             menu=menu, title="Explore", url="/collections/all", order=0, is_mega=False,
@@ -7419,10 +7493,11 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         html = r.content.decode("utf-8")
         nav = self.nav_html(html)
 
-        self.assertIn("site-header__item--has-dropdown", nav)
-        self.assertIn('class="site-nav__dropdown"', nav)
-        self.assertNotIn("site-header__item--mega", nav)
-        self.assertNotIn('class="mega-menu"', nav)
+        self.assertIn("site-header__item--mega", nav)
+        self.assertIn('class="mega-menu"', nav)
+        # the small dropdown no longer exists
+        self.assertNotIn("site-header__item--has-dropdown", nav)
+        self.assertNotIn('class="site-nav__dropdown"', nav)
         self.assertIn("Guides", nav)
         self.assertIn('Guides<span class="menu-badge">Pro</span>', nav)
         self.assertIn("Quickstart", nav)
@@ -7439,7 +7514,7 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         nav = self.nav_html(html)
 
         self.assertNotIn("site-header__item--mega", nav)
-        self.assertNotIn("site-header__item--has-dropdown", nav)
+        self.assertNotIn("site-header__disclosure", nav.split("site-header__item--more")[0])
         self.assertIn(f'href="/s/{self.slug}/pages/contact">Contact</a>', nav)
 
     def test_all_five_presets_render_mega_menu_properly(self):
@@ -7494,18 +7569,17 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         html = r.content.decode("utf-8")
         nav = self.nav_html(html)
 
-        # Trigger button and link ARIA
-        self.assertIn('aria-haspopup="true"', nav)
+        # Disclosure button (desktop) and drill-down button (mobile)
+        self.assertIn('class="site-header__disclosure"', nav)
         self.assertIn('aria-expanded="false"', nav)
         self.assertIn('aria-controls="mega-menu-', nav)
-        self.assertIn('class="site-header__mobile-toggle"', nav)
-        self.assertIn('class="site-header__toggle-icon"', nav)
+        self.assertIn("data-nav-drill", nav)
 
         # Mega menu container ARIA
         self.assertIn('role="region"', nav)
         self.assertIn('aria-label="Shop"', nav)
 
-        # Level 2 column toggle for mobile accordion
+        # Level 2 column toggle for the mobile accordion setting
         self.assertIn('class="mega-menu__column-header"', nav)
         self.assertIn('class="mega-menu__col-toggle"', nav)
         self.assertIn('class="mega-menu__toggle-icon"', nav)
@@ -7522,7 +7596,7 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         self.assertIn("Escape", html)
         self.assertIn("@media (max-width: 768px)", html)
 
-    def test_dropdown_responsive_markup_and_aria(self):
+    def test_an_item_that_was_a_small_dropdown_gets_the_same_panel_markup_and_aria(self):
         menu = self.Menu.objects.create(store=self.store_obj, name="Main menu", handle="main-menu")
         l1 = self.MenuItem.objects.create(
             menu=menu, title="Pages", url="/collections/all", order=0, is_mega=False,
@@ -7539,13 +7613,11 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         html = r.content.decode("utf-8")
         nav = self.nav_html(html)
 
-        self.assertIn('aria-haspopup="true"', nav)
-        self.assertIn('aria-controls="dropdown-', nav)
-        self.assertIn('class="site-header__mobile-toggle"', nav)
-        self.assertIn('role="menu"', nav)
-        self.assertIn('role="menuitem"', nav)
-        self.assertIn('class="site-nav__dropdown-header"', nav)
-        self.assertIn('class="site-nav__dropdown-toggle"', nav)
+        self.assertIn('aria-controls="mega-menu-', nav)
+        self.assertIn('class="site-header__disclosure"', nav)
+        self.assertIn('role="region"', nav)
+        for old in ("role=\"menu\"", "role=\"menuitem\"", "site-nav__dropdown", "site-header__mobile-toggle"):
+            self.assertNotIn(old, nav)
 
 
 class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
@@ -7554,6 +7626,11 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
     PREVIOUS_STARTER_HEADER_HASHES = (
         "5f762425519ec74471a1758ad9ba87509887f7562738958bc9c54491f19ce3d4",  # LF
         "184f6cf6357886e396e971eb1a96548a17f80878557c68e3c281b2c866a32e03",  # CRLF
+    )
+    # the revision 50 header (before the ShopNow-style navigation): its own hashes are registered too
+    REV50_STARTER_HEADER_HASHES = (
+        "a6c7d0813a1059fc6f28fc7d7ca18503bf6e03c6a6827beb6209e39ce3ec460a",  # LF
+        "3fcc073642dc12db2a015c663e9381733a822cb9d4c819f470292ccaf8910011",  # CRLF
     )
 
     def setUp(self):
@@ -7622,14 +7699,17 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
         self.assertIn("Port", nav)
         self.assertEqual(nav.count('class="mega-menu__shop-all"'), 1)  # only Red Wine's
 
-    def test_shop_all_can_be_turned_off_and_the_heading_links_again(self):
+    def test_turning_shop_all_off_never_makes_the_desktop_heading_a_link(self):
         self.wine_menu()
         self.save_settings(mega_show_shop_all=False)
         nav = self.nav()
-        self.assertNotIn('class="mega-menu__shop-all"', nav)
-        self.assertIn(
-            f'<a class="mega-menu__column-title mega-menu__column-title--link" href="/s/{self.slug}/collections/all">Red Wine</a>',
-            nav)
+        self.assertNotIn('class="mega-menu__shop-all"', nav)  # no Shop All at the end of the column on desktop
+        self.assertIn('<div class="mega-menu__column-title">Red Wine</div>', nav)
+        self.assertNotIn("mega-menu__column-title--link", nav)
+        self.assertNotIn('<a class="mega-menu__column-title', nav)
+        # the column's link is kept for the mobile accordion, hidden on desktop
+        self.assertIn('class="mega-menu__shop-all mega-menu__shop-all--mobile-only"', nav)
+        self.assertIn("a.mega-menu__shop-all--mobile-only {\n      display: none;", self.home())
 
     def test_shop_all_text_can_be_changed(self):
         self.wine_menu()
@@ -7638,14 +7718,16 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
         self.assertIn('href="/s/%s/collections/all">Browse all</a>' % self.slug, nav)
         self.assertNotIn(">Shop All</a>", nav)
 
-    def test_shop_all_is_inside_its_column_and_hidden_until_the_column_opens_on_mobile(self):
+    def test_the_columns_shop_all_is_inside_its_column_and_only_shows_on_mobile_in_an_opened_accordion_column(self):
         self.wine_menu()
         html = self.home()
         nav = self.nav()
         column = nav[nav.index('<div class="mega-menu__column'):]
         self.assertLess(column.index('<ul class="mega-menu__sublinks"'), column.index("mega-menu__shop-all"))
-        self.assertIn(".mega-menu__column--has-sublinks:not(.is-col-open) a.mega-menu__shop-all", html)
-        self.assertIn("@media (max-width: 768px)", html)
+        mobile = html[html.index("@media (max-width: 768px)"):]
+        self.assertIn("body .site-header__nav a.mega-menu__shop-all {\n        display: none;", mobile)
+        self.assertIn(
+            'body .site-header[data-mobile-accordion="true"] .mega-menu__column--has-sublinks.is-col-open a.mega-menu__shop-all', mobile)
 
     # ---------------------------------------------------------------- the look
 
@@ -7678,7 +7760,7 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
         self.assertIn("color: var(--mega-link-color, var(--text));", html)
         self.assertIn("font-size: var(--mega-heading-size, 15px);", html)
         self.assertIn("min-height: var(--mega-row, 38px);", html)
-        self.assertIn("text-transform: none;", html[html.index("a.mega-menu__column-title"):])
+        self.assertIn("text-transform: none;", html[html.index(".mega-menu__column-title {"):])
         self.assertIn("text-decoration: underline;", html[html.index("a.mega-menu__shop-all"):])
 
     def test_the_panel_follows_the_header_colour_until_it_has_its_own(self):
@@ -7768,7 +7850,7 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_UPGRADES, starter_files
 
-        for digest in self.PREVIOUS_STARTER_HEADER_HASHES:
+        for digest in self.PREVIOUS_STARTER_HEADER_HASHES + self.REV50_STARTER_HEADER_HASHES:
             self.assertIn(digest, STARTER_UPGRADES["sections/header.liquid"])
         current = starter_files()["sections/header.liquid"]
         for text in (current, current.replace("\n", "\r\n")):
@@ -7799,13 +7881,564 @@ class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
         from .services import starter_files
 
         snippet = starter_files()["snippets/header.liquid"]
-        self.assertIn('<a class="mega-menu__shop-all" href="{{ col.url }}">{{ mega_shop_all_label }}</a>', snippet)
+        self.assertIn('href="{{ col.url }}">{{ mega_shop_all_label }}</a>', snippet)
+        self.assertIn('<a class="mega-menu__item-shop-all" href="{{ href }}">{{ mega_shop_all_label }} {{ label }}</a>', snippet)
+        self.assertNotIn("column-title--link", snippet)
         self.assertIn("font-size: var(--mega-heading-size, 15px);", snippet)
         self.assertIn("--mega-bg:{{ settings.header_bg }};", snippet)
         # the snippet's mega menu CSS is the section's
         section = starter_files()["sections/header.liquid"]
         start, end = "/* Mega menu container", "/* Promo banner */"
         self.assertEqual(section[section.index(start):section.index(end)], snippet[snippet.index(start):snippet.index(end)])
+
+
+class HeaderShopNowNavigationTest(StoreClientMixin, APITestCase):
+    """
+    The header navigation modelled on ShopNow (Shopify Horizon): full-width panels with plain-text column headings,
+    "Shop All", a disclosure button per item, "More", and on mobile a left drawer with a drill-down. Admin > Menus stays
+    the source of the menu; the header's look settings stay in step with Edit code. The script is not run here: its
+    behaviour is checked through the markup it works on and the code it ships.
+    """
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("shopnow-nav@example.com", "ShopNow Nav Store")
+        self.slug = self.store["storeSlug"]
+
+    # ---------------------------------------------------------------- helpers
+
+    def menu(self, items):
+        """Admin > Menus: the navbar menu is created once, then its items are replaced."""
+        if getattr(self, "menu_id", None):
+            self.ok("patch", f"/api/v1/themes/menus/{self.menu_id}/", {"items": items})
+        else:
+            self.menu_id = self.ok("post", "/api/v1/themes/menus/", {"name": "Main menu", "items": items}, expect=201)["id"]
+
+    def wine_menu(self, url="/collections/all", columns=None):
+        columns = columns or [("Red Wine", "/collections/all", ["Shiraz", "Pinot Noir"]), ("Bubbles", "", ["Prosecco"])]
+        self.menu([{
+            "title": "Wine", "url": url,
+            "children": [
+                {"title": title, "url": col_url, "children": [{"title": link, "url": "/collections/all"} for link in links]}
+                for title, col_url, links in columns
+            ],
+        }])
+
+    def home(self):
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def nav(self):
+        html = self.home()
+        start = html.index('<nav class="site-header__nav"')
+        return html[start:html.index("</nav>", start)]
+
+    def header_html(self):
+        html = self.home()
+        return html[html.index('<header class="site-header"'):html.index("</header>")]
+
+    def header_tag(self):
+        html = self.home()
+        start = html.index('<header class="site-header"')
+        return html[start:html.index(">", html.index("style=", start))]
+
+    def header(self):
+        return self.ok("get", "/api/v1/themes/sections/")["header"]
+
+    def save_settings(self, **changes):
+        values = self.header()["values"]
+        values["settings"].update(changes)
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+
+    def header_code(self):
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        return next(f["content"] for f in files if f["path"] == "sections/header.liquid")
+
+    # ---------------------------------------------------------------- desktop: headings, Shop All
+
+    def test_column_headings_are_plain_text_whatever_the_shop_all_setting(self):
+        self.wine_menu()
+        for show in (True, False):
+            self.save_settings(mega_show_shop_all=show)
+            nav = self.nav()
+            self.assertIn('<div class="mega-menu__column-title">Red Wine</div>', nav, show)
+            self.assertIn('<div class="mega-menu__column-title">Bubbles</div>', nav, show)
+            self.assertNotIn('<a class="mega-menu__column-title', nav, show)
+            self.assertNotIn("mega-menu__column-title--link", nav, show)
+        self.assertNotIn("a.mega-menu__column-title", self.home())  # and no CSS for a heading link
+
+    def test_the_columns_link_is_shop_all_at_the_end_of_the_column(self):
+        self.wine_menu()
+        nav = self.nav()
+        self.assertEqual(nav.count('class="mega-menu__shop-all"'), 1)  # Bubbles has no link
+        self.assertIn(f'<a class="mega-menu__shop-all" href="/s/{self.slug}/collections/all">Shop All</a>', nav)
+        self.assertLess(nav.index("Pinot Noir"), nav.index('class="mega-menu__shop-all"'))
+        self.assertLess(nav.index('class="mega-menu__shop-all"'), nav.index("Prosecco"))  # before the next column
+
+    def test_an_item_with_a_real_link_shows_shop_all_item_at_the_top_of_its_panel(self):
+        self.wine_menu()
+        nav = self.nav()
+        top = f'<a class="mega-menu__item-shop-all" href="/s/{self.slug}/collections/all">Shop All Wine</a>'
+        self.assertIn(top, nav)
+        self.assertEqual(nav.count('class="mega-menu__item-shop-all"'), 1)
+        self.assertLess(nav.index(top), nav.index('<div class="mega-menu__columns">'))  # at the top
+        self.save_settings(mega_shop_all_label="Browse all")
+        self.assertIn(">Browse all Wine</a>", self.nav())
+
+    def test_the_item_shop_all_does_not_depend_on_the_column_shop_all_setting(self):
+        self.wine_menu()
+        self.save_settings(mega_show_shop_all=False)
+        self.assertIn(">Shop All Wine</a>", self.nav())
+
+    def test_an_item_without_a_real_link_has_no_shop_all(self):
+        for url in ("#", ""):
+            self.wine_menu(url=url)
+            nav = self.nav()
+            self.assertNotIn("mega-menu__item-shop-all", nav, repr(url))
+            self.assertNotIn("Shop All Wine", nav, repr(url))
+            self.assertIn("Red Wine", nav, repr(url))  # its panel is still there
+
+    # ---------------------------------------------------------------- desktop: panels and the disclosure button
+
+    def test_every_item_with_children_opens_the_full_width_panel(self):
+        self.menu([
+            {"title": "Plain", "url": "/collections/all", "is_mega": False,
+             "children": [{"title": "Group", "url": "/collections/all", "children": [{"title": "Leaf", "url": "/collections/all"}]}]},
+            {"title": "Marked", "url": "/collections/all", "is_mega": True,
+             "children": [{"title": "Other group", "url": "/collections/all", "children": []}]},
+        ])
+        nav = self.nav()
+        self.assertEqual(nav.count("site-header__item--mega"), 2)
+        self.assertEqual(nav.count('class="mega-menu"'), 2)
+        for gone in ("site-nav__dropdown", "has-dropdown", 'role="menu"'):
+            self.assertNotIn(gone, nav)
+
+    def test_an_item_without_children_is_a_plain_link(self):
+        self.menu([{"title": "Contact", "url": "/pages/contact"}])
+        nav = self.nav()
+        self.assertNotIn('class="mega-menu"', nav)
+        self.assertNotIn("data-nav-item data-nav-label", nav)
+        self.assertIn(f'<a class="site-header__link" href="/s/{self.slug}/pages/contact">Contact</a>', nav)
+
+    def test_each_item_has_a_disclosure_button_wired_to_its_panel(self):
+        self.wine_menu()
+        nav = self.nav()
+        match = re.search(
+            r'<button class="site-header__disclosure" type="button" aria-expanded="false" aria-controls="(mega-menu-[^"]+)"', nav)
+        self.assertIsNotNone(match)
+        self.assertIn(f'<div class="mega-menu" id="{match.group(1)}" role="region"', nav)
+        self.assertIn('aria-label="Wine menu"', nav)
+        # next to the item's own link, which stays a link
+        self.assertLess(nav.index(f'<a class="site-header__link" href="/s/{self.slug}/collections/all">Wine'),
+                        nav.index("site-header__disclosure"))
+
+    def test_an_item_without_a_link_is_itself_the_disclosure_button(self):
+        self.wine_menu(url="#")
+        nav = self.nav()
+        self.assertIn('<button class="site-header__link site-header__disclosure site-header__disclosure--label" type="button" '
+                      'aria-expanded="false" aria-controls="mega-menu-', nav)
+        self.assertNotIn('<a class="site-header__link" href="#"', nav)
+
+    def test_the_panel_follows_the_button_so_tab_walks_its_links(self):
+        self.wine_menu()
+        nav = self.nav()
+        self.assertLess(nav.index("site-header__disclosure"), nav.index('<div class="mega-menu"'))
+        self.assertLess(nav.index('<div class="mega-menu"'), nav.index("Shiraz"))
+        self.assertNotIn('tabindex="-1"', nav)
+        self.assertIn('<a class="mega-menu__sublink"', nav)
+
+    def test_closed_panels_are_inert(self):
+        self.wine_menu()
+        nav = self.nav()
+        panels = re.findall(r'<div class="mega-menu"[^>]*>', nav)
+        self.assertEqual(len(panels), 1)
+        self.assertTrue(all(" inert" in tag for tag in panels), panels)
+        self.assertRegex(nav, r'<div class="site-nav__more"[^>]* inert>')  # More starts closed too
+        script = self.home()
+        self.assertIn("panel.removeAttribute('inert')", script)  # opening makes it live
+        self.assertIn("panel.setAttribute('inert', '')", script)  # closing makes it inert again
+
+    def test_keyboard_and_pointer_behaviour_is_in_the_script(self):
+        script = self.home()
+        for needle in (
+            "toggle.addEventListener('click'",      # Enter and Space press the button, which toggles
+            "if (isOpen(item)) setOpen(item, false); else openItem(item, 'pinned');",
+            "event.key !== 'Escape'",               # Esc closes ...
+            "if (focused && toggle) toggle.focus();",  # ... and returns focus to the button
+            "document.addEventListener('pointerdown'",  # click outside closes
+            "item.leaveTimer",                      # hover has a short grace period
+            "item.addEventListener('focusout'",     # Tab out of the item closes it
+        ):
+            self.assertIn(needle, script)
+        self.assertIn("initMegaMenus", script)
+
+    # ---------------------------------------------------------------- desktop: colours and reveal
+
+    def test_the_top_level_hover_colour_defaults_to_the_heading_colour(self):
+        self.wine_menu()
+        setting = self.header()["spec"]["settings"]["mega_top_hover_color"]
+        self.assertEqual(setting["default"], "")
+        self.assertEqual(setting["type"], "color_optional")
+        self.assertNotIn("--mega-top-hover", self.header_tag())
+        html = self.home()
+        self.assertIn("color: var(--mega-top-hover, var(--mega-heading-color, var(--accent)));", html)
+        self.assertIn(".site-header__item.is-open > .site-header__link", html)  # hover and active
+
+    def test_the_top_level_hover_colour_can_be_set(self):
+        self.wine_menu()
+        self.save_settings(mega_top_hover_color="#C9A35A")
+        self.assertIn("--mega-top-hover:#C9A35A;", self.header_tag())
+
+    def test_the_reveal_slides_for_360ms_and_fades_for_270ms_and_respects_reduced_motion(self):
+        self.wine_menu()
+        html = " ".join(self.home().split())
+        self.assertIn("clip-path 0.36s cubic-bezier(0.4, 0, 0.2, 1)", html)
+        self.assertIn("transform 0.36s cubic-bezier(0.4, 0, 0.2, 1)", html)
+        self.assertIn("opacity 0.27s ease", html)
+        self.assertIn("clip-path: inset(0 0 100% 0);", html)  # closed: clipped away
+        start = html.index("@media (prefers-reduced-motion: reduce) { body .site-header__nav .mega-menu,")
+        reduced = html[start:html.index("} }", start)]
+        self.assertIn("transition: none !important;", reduced)
+        self.assertIn("animation: none !important;", reduced)
+        for selector in (".mega-menu", ".site-nav__more", ".site-header__drawer", ".site-header__backdrop"):
+            self.assertIn(selector, reduced)
+
+    def test_items_that_do_not_fit_move_into_more(self):
+        self.menu([{"title": f"Item {n}", "url": "/collections/all",
+                    "children": [{"title": "Group", "url": "/collections/all", "children": [{"title": "Leaf", "url": "/collections/all"}]}]}
+                   for n in range(6)])
+        nav = self.nav()
+        self.assertEqual(nav.count("data-nav-top"), 6)
+        self.assertIn('<div class="site-header__item site-header__item--more" data-nav-item data-nav-more hidden>', nav)
+        self.assertIn("data-nav-more-panel", nav)
+        self.assertIn(">More<", nav)
+        script = self.home()
+        self.assertIn("nav.scrollWidth > nav.clientWidth + 1", script)
+        self.assertIn("tops[i].hidden = true;", script)  # from the last one back
+        self.assertIn("ResizeObserver", script)
+        # More lists the moved items with their column headings as text
+        self.assertIn("'site-nav__more-title'", script)
+        self.assertIn("flex-wrap: nowrap;", self.home())
+
+    def test_more_is_never_shown_on_mobile_where_the_menu_is_a_drawer(self):
+        self.wine_menu()
+        mobile = self.home()
+        mobile = mobile[mobile.index("@media (max-width: 768px)"):]
+        self.assertIn("body .site-header__nav .site-header__item--more {\n        display: none !important;", mobile)
+
+    # ---------------------------------------------------------------- mobile: header row
+
+    def test_the_mobile_header_row_is_logo_menu_button_space_search_icons(self):
+        self.wine_menu()
+        header = self.header_html()
+        self.assertLess(header.index('class="site-header__logo"'), header.index('class="site-header__hamburger"'))
+        self.assertLess(header.index('class="site-header__hamburger"'), header.index('class="site-header__actions"'))
+        for icon in ('data-header-search', 'class="site-header__wishlist"', 'class="site-header__cart"'):
+            self.assertGreater(header.index(icon), header.index('class="site-header__actions"'))  # all in the icons group
+        mobile = self.home()
+        mobile = mobile[mobile.index("@media (max-width: 768px)"):]
+        self.assertIn("flex-wrap: nowrap;", mobile)
+        self.assertIn("margin-left: auto;", mobile[mobile.index(".site-header__actions"):])  # the space
+        self.assertIn("body .site-header .site-header__search-block {\n        order: -1;", mobile)  # search before the icons
+
+    def test_the_menu_button_is_a_labelled_disclosure_for_the_drawer(self):
+        self.wine_menu()
+        header = self.header_html()
+        self.assertRegex(
+            header,
+            r'<button class="site-header__hamburger" type="button" aria-expanded="false" aria-controls="site-nav-[^"]+" '
+            r'aria-label="Open menu" data-nav-open>')
+        self.assertIn('id="site-nav-', header)
+
+    def test_no_menu_button_without_the_navigation(self):
+        self.save_settings(show_nav=False)
+        header = self.header_html()
+        self.assertNotIn("site-header__hamburger", header)
+        self.assertNotIn("data-nav-drawer", header)
+
+    def test_the_mobile_logo_height_and_menu_text_size_have_defaults_and_ranges(self):
+        settings = self.header()["spec"]["settings"]
+        self.assertEqual(settings["mobile_logo_height"]["default"], 42)
+        self.assertEqual(settings["mobile_logo_height"]["unit"], "px")
+        self.assertEqual(settings["mobile_menu_text_size"]["default"], 12)
+        self.assertEqual(settings["mobile_menu_text_size"]["unit"], "px")
+        tag = self.header_tag()
+        self.assertIn("--logo-height-mobile:42px;", tag)
+        self.assertIn("--mobile-menu-size:12px;", tag)
+        html = self.home()
+        self.assertIn("height: var(--logo-height-mobile, 42px) !important;", html)
+        self.assertIn("font-size: var(--mobile-menu-size, 12px);", html)
+
+    def test_the_mobile_logo_height_and_menu_text_size_reach_the_storefront_and_stay_in_range(self):
+        self.save_settings(mobile_logo_height=60, mobile_menu_text_size=15)
+        tag = self.header_tag()
+        self.assertIn("--logo-height-mobile:60px;", tag)
+        self.assertIn("--mobile-menu-size:15px;", tag)
+        self.save_settings(mobile_logo_height=900, mobile_menu_text_size=1)
+        tag = self.header_tag()
+        self.assertIn("--logo-height-mobile:96px;", tag)
+        self.assertIn("--mobile-menu-size:10px;", tag)
+
+    # ---------------------------------------------------------------- mobile: drawer
+
+    def test_the_drawer_comes_from_the_left_over_a_backdrop(self):
+        self.wine_menu()
+        header = self.header_html()
+        self.assertIn('<div class="site-header__backdrop" data-nav-backdrop hidden></div>', header)
+        self.assertLess(header.index("data-nav-backdrop"), header.index("data-nav-drawer"))
+        self.assertLess(header.index("data-nav-drawer"), header.index('<nav class="site-header__nav"'))  # the menu is inside
+        html = " ".join(self.home().split())
+        self.assertIn("transform: translateX(-100%);", html)  # closed: off to the left
+        self.assertIn("body .site-header__drawer { position: fixed; top: 0; bottom: 0; left: 0;", html)
+
+    def test_the_drawer_script_locks_scroll_traps_focus_and_closes_on_backdrop_and_esc(self):
+        script = self.home()
+        for needle in (
+            "html.style.overflow = 'hidden';",                       # scroll lock ...
+            "html.style.overflow = scrollState[0];",                 # ... and its release
+            "drawer.setAttribute('aria-modal', 'true');",
+            "if (event.key !== 'Tab' || !drawerOpen) return;",       # focus trap
+            "if (!root.contains(active)) { event.preventDefault(); first.focus(); }",
+            "else if (event.shiftKey && active === first) { event.preventDefault(); last.focus(); }",
+            "else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }",
+            "backdrop.addEventListener('click', function () { closeDrawer(true); });",
+            "if (drawerOpen) { event.preventDefault(); closeDrawer(true); return; }",  # Esc
+            "if (restoreFocus && burger) burger.focus();",
+        ):
+            self.assertIn(needle, script)
+
+    # ---------------------------------------------------------------- mobile: drill-down
+
+    def test_a_top_item_opens_its_own_panel_with_back_arrow_centred_title_and_close(self):
+        self.wine_menu()
+        nav = self.nav()
+        drill = re.search(r'<button class="site-header__drill" type="button" aria-expanded="false" aria-controls="(mega-menu-[^"]+)" data-nav-drill>Wine', nav)
+        self.assertIsNotNone(drill)
+        head = nav[nav.index('<div class="mega-menu__mobile-head">'):nav.index('<div class="page-width mega-menu__inner">')]
+        self.assertLess(head.index("data-nav-back"), head.index('<span class="mega-menu__mobile-title">Wine</span>'))
+        self.assertLess(head.index("mega-menu__mobile-title"), head.index("data-nav-close"))
+        self.assertIn('aria-label="Back to main menu"', head)
+        self.assertIn('aria-label="Close menu"', head)
+        mobile = " ".join(self.home().split())
+        mobile = mobile[mobile.index("@media (max-width: 768px)"):]
+        self.assertIn("grid-template-columns: 52px 1fr 52px;", mobile)  # back | centred title | close
+        self.assertIn("text-align: center;", mobile[mobile.index(".mega-menu__mobile-title"):])
+        self.assertIn("drill.addEventListener('click'", self.home())
+
+    def test_the_panel_lists_headings_with_their_links_then_shop_all(self):
+        self.wine_menu()
+        nav = self.nav()
+        self.assertIn(f'<a class="mega-menu__column-link" href="/s/{self.slug}/collections/all">Red Wine</a>', nav)  # a heading link
+        self.assertIn('<span class="mega-menu__column-link">Bubbles</span>', nav)  # no link: text
+        self.assertLess(nav.index("Prosecco"), nav.index('class="mega-menu__item-shop-all-mobile"'))  # then Shop All
+        self.assertIn(f'<a class="mega-menu__item-shop-all-mobile" href="/s/{self.slug}/collections/all">Shop All</a>', nav)
+        self.assertEqual(nav.count('class="mega-menu__item-shop-all-mobile"'), 1)
+
+    def test_the_accordion_setting_is_off_by_default(self):
+        self.wine_menu()
+        setting = self.header()["spec"]["settings"]["mobile_accordion"]
+        self.assertIs(setting["default"], False)
+        self.assertEqual(setting["type"], "checkbox")
+        self.assertIn('data-mobile-accordion="false"', self.header_html())
+
+    def test_with_the_accordion_on_headings_expand_and_collapse_their_links(self):
+        self.wine_menu()
+        self.save_settings(mobile_accordion=True)
+        self.assertIn('data-mobile-accordion="true"', self.header_html())
+        nav = self.nav()
+        self.assertRegex(nav, r'<button class="mega-menu__col-toggle" type="button" aria-expanded="false" aria-controls="mega-col-[^"]+">Red Wine')
+        self.assertEqual(nav.count('class="mega-menu__col-toggle"'), 2)  # one per column with links
+        html = " ".join(self.home().split())
+        # only the accordion setting turns the toggle on and collapses the links
+        self.assertIn('body .site-header[data-mobile-accordion="true"] .mega-menu__col-toggle { display: flex;', html)
+        self.assertIn(':not(.is-col-open) .mega-menu__sublinks', html)
+        self.assertIn("column.classList.add('is-col-open')", html)
+
+    # ---------------------------------------------------------------- Shop All colours
+
+    def test_the_colour_settings_are_empty_by_default_and_follow_the_theme(self):
+        self.wine_menu()
+        settings = self.header()["spec"]["settings"]
+        for key in ("mega_heading_color", "mega_top_hover_color", "mega_shop_all_color", "mega_shop_all_color_mobile"):
+            self.assertEqual(settings[key]["default"], "", key)
+            self.assertEqual(settings[key]["type"], "color_optional", key)
+        tag = self.header_tag()
+        for variable in ("--mega-heading-color", "--mega-top-hover", "--mega-shop-all", "--mega-shop-all-mobile"):
+            self.assertNotIn(variable, tag)
+        html = self.home()
+        self.assertIn("color: var(--mega-shop-all, var(--mega-heading-color, var(--accent)));", html)
+        self.assertIn("color: var(--mega-shop-all-mobile, var(--mega-heading-color, var(--accent)));", html)
+
+    def test_the_colour_settings_reach_the_storefront_when_set(self):
+        self.wine_menu()
+        self.save_settings(mega_heading_color="#111111", mega_shop_all_color="#222222", mega_shop_all_color_mobile="#333333")
+        tag = self.header_tag()
+        self.assertIn("--mega-heading-color:#111111;", tag)
+        self.assertIn("--mega-shop-all:#222222;", tag)
+        self.assertIn("--mega-shop-all-mobile:#333333;", tag)
+
+    def test_the_colour_settings_only_accept_colours(self):
+        self.wine_menu()
+        self.save_settings(mega_top_hover_color="red;}</style><script>x</script>", mega_shop_all_color="url(x)")
+        tag = self.header_tag()
+        self.assertNotIn("--mega-top-hover", tag)
+        self.assertNotIn("--mega-shop-all", tag)
+        self.assertNotIn("<script>x", self.home())
+
+    # ---------------------------------------------------------------- menu data and Edit code
+
+    def test_admin_menus_stays_the_source_of_the_columns_and_links(self):
+        spec = self.header()["spec"]
+        self.assertEqual(sorted(spec["blocks"]["link"]["settings"]), ["label", "url"])
+        self.wine_menu()
+        self.assertIn("Prosecco", self.nav())
+        self.menu([{"title": "Spirits", "url": "/collections/all",
+                    "children": [{"title": "Whisky", "url": "/collections/all", "children": [{"title": "Islay", "url": "/collections/all"}]}]}])
+        nav = self.nav()
+        self.assertIn("Islay", nav)
+        self.assertNotIn("Prosecco", nav)
+
+    def test_a_menu_link_block_still_picks_its_item_by_label(self):
+        self.wine_menu()
+        values = self.header()["values"]
+        values["blocks"] = [{"type": "link", "settings": {"label": "Wine", "url": "/pages/wine"}},
+                            {"type": "link", "settings": {"label": "Journal", "url": "/pages/journal"}}]
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+        nav = self.nav()
+        self.assertIn("Prosecco", nav)  # Wine's panel, from Admin > Menus
+        self.assertIn(f'<a class="site-header__link" href="/s/{self.slug}/pages/journal">Journal</a>', nav)
+
+    def test_the_new_settings_are_edited_in_code_and_the_sidebar_follows(self):
+        code = self.header_code()
+        markup, schema_text, _ = sync.split(code)
+        schema = json.loads(schema_text)
+        ids = {s["id"] for s in schema["settings"]}
+        for key in ("mega_top_hover_color", "mega_shop_all_color", "mega_shop_all_color_mobile",
+                    "mobile_logo_height", "mobile_menu_text_size", "mobile_accordion"):
+            self.assertIn(key, ids)
+        for setting in schema["settings"]:
+            if setting["id"] == "mobile_logo_height":
+                setting["default"] = 50
+            if setting["id"] == "mobile_accordion":
+                setting["default"] = True
+        start = code.index("{% schema %}")
+        changed = code[:start] + "{% schema %}\n" + json.dumps(schema, indent=2) + "\n{% endschema %}\n"
+        r = self.client.post("/api/v1/themes/files/", {"path": "sections/header.liquid", "content": changed}, format="json")
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        settings = self.header()["spec"]["settings"]
+        self.assertEqual(settings["mobile_logo_height"]["default"], 50)
+        self.assertIn("--logo-height-mobile:50px;", self.header_tag())
+        self.assertIn('data-mobile-accordion="true"', self.header_html())
+
+    def test_a_value_saved_in_the_sidebar_is_written_back_into_the_code(self):
+        self.save_settings(mobile_logo_height=64, mobile_menu_text_size=14, mobile_accordion=True, mega_top_hover_color="#AA0000")
+        schema = sync.parse(self.header_code())
+        by_id = {s["id"]: s for s in schema["settings"]}
+        self.assertEqual(by_id["mobile_logo_height"]["default"], 64)
+        self.assertEqual(by_id["mobile_menu_text_size"]["default"], 14)
+        self.assertIs(by_id["mobile_accordion"]["default"], True)
+        self.assertEqual(by_id["mega_top_hover_color"]["default"], "#AA0000")
+
+    # ---------------------------------------------------------------- upgrading existing stores
+
+    def test_the_saved_revision_50_header_is_the_real_one_and_both_revision_50_files_are_registered_for_the_upgrade(self):
+        from .services import STARTER_UPGRADES
+
+        header = rev50_header()
+        crlf = header.replace("\n", "\r\n")
+        self.assertEqual(hashlib.sha256(header.encode("utf-8")).hexdigest(), "a6c7d0813a1059fc6f28fc7d7ca18503bf6e03c6a6827beb6209e39ce3ec460a")
+        self.assertEqual(hashlib.sha256(crlf.encode("utf-8")).hexdigest(), "3fcc073642dc12db2a015c663e9381733a822cb9d4c819f470292ccaf8910011")
+        for text in (header, crlf):
+            self.assertIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES["sections/header.liquid"])
+        # the revision 50 snippet: only its hashes are kept (nothing needs its text)
+        for digest in ("8cfe7c6a3f81bc906f7d9c6c75be2113e9d109e041ce033605dcce93ad0042a7",
+                       "6842a0fcc327395aa20f37fc0980fdb1e2f0f0a5075e3a7aeeda3b5348b2010b"):
+            self.assertIn(digest, STARTER_UPGRADES["snippets/header.liquid"])
+            self.assertIn(digest, sync.SYNCED_SECTIONS["header"]["originals"])  # themes still on it are checked again
+
+    def test_the_new_header_and_snippet_are_not_registered_as_old(self):
+        from .services import STARTER_UPGRADES, starter_files
+
+        for path in ("sections/header.liquid", "snippets/header.liquid"):
+            current = starter_files()[path]
+            for text in (current, current.replace("\n", "\r\n")):
+                self.assertNotIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[path], path)
+        snippet = starter_files()["snippets/header.liquid"]
+        self.assertTrue(sync.is_original_snippet("header", snippet))
+        self.assertTrue(sync.is_original_snippet("header", snippet.replace("\n", "\r\n")))
+        self.assertGreaterEqual(sync.ORIGINALS_REVISION, 14)
+
+    def test_the_mega_menu_panel_is_as_wide_as_the_header_so_columns_line_up_with_the_logo(self):
+        import re
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        # The platform widens every .page-width (rendering.SECTION_CSS), so the panel's own max-width: var(--page)
+        # kept it 200px narrower than the header on wide screens and pushed the columns to the right of the logo.
+        for path in ("sections/header.liquid", "snippets/header.liquid"):
+            code = starter_files()[path]
+            rule = code[code.index(".site-header__nav .mega-menu__inner {"):]
+            rule = rule[:rule.index("}")]
+            self.assertIsNone(re.search(r"^\s*max-width\s*:", rule, re.M), path)  # the comment may name it; a declaration may not
+            self.assertIn('class="page-width mega-menu__inner"', code)
+        # the revision 51 files (which had the cap) are registered, so untouched stores get the fix
+        for digest in ("3c397975d7ccc807b322de2f895e9907043d6b97b3b53f18b5143588a36fbdfb",
+                       "06abcf0322802d08414f520abb64c726e4c24c0c474c3ec7e34decb1a397474e"):
+            self.assertIn(digest, STARTER_UPGRADES["sections/header.liquid"])
+        for digest in ("d8989f6198f2593c81303fd80a9b64eecbd0c91cda3fd05fe5297f2c2c0205d3",
+                       "fb57134df11b1de0f109858ee9209016634cf327f01ec87e3df2fe783225d2bb"):
+            self.assertIn(digest, STARTER_UPGRADES["snippets/header.liquid"])
+            self.assertIn(digest, sync.SYNCED_SECTIONS["header"]["originals"])
+
+    def test_an_untouched_revision_50_header_is_upgraded_and_keeps_its_history(self):
+        from apps.tenancy.models import Store
+
+        from . import services
+
+        store_theme = services.get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+        theme = store_theme.theme
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                old = rev50_header().replace("\n", newline)
+                theme.files.filter(file_path="sections/header.liquid").update(content=old, file_size=len(old.encode("utf-8")))
+                theme.theme_data = {**theme.theme_data, "starter_revision": 50}
+                theme.save()
+                services._upgrade_untouched_starter_files(theme)
+                stored = theme.files.get(file_path="sections/header.liquid").content
+                self.assertEqual(stored, services.starter_files()["sections/header.liquid"])
+                self.assertIn("data-nav-drawer", stored)
+                self.assertTrue(sync.history_of(theme, "header"))  # the replaced header can be restored
+        html = self.home()
+        self.assertIn('class="site-header__hamburger"', html)
+
+    def test_an_edited_revision_50_header_stays_as_the_owner_left_it(self):
+        from apps.tenancy.models import Store
+
+        from . import services
+
+        store_theme = services.get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+        theme = store_theme.theme
+        mine = rev50_header() + "\n<!-- my own change -->\n"
+        theme.files.filter(file_path="sections/header.liquid").update(content=mine, file_size=len(mine.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 50}
+        theme.save()
+        services._upgrade_untouched_starter_files(theme)
+        self.assertEqual(theme.files.get(file_path="sections/header.liquid").content, mine)
+        theme.refresh_from_db()
+        self.assertEqual(theme.theme_data["starter_revision"], services.STARTER_REVISION)  # checked once, left alone
+
+    def test_the_snippet_is_in_step_with_the_section(self):
+        from .services import starter_files
+
+        section, snippet = starter_files()["sections/header.liquid"], starter_files()["snippets/header.liquid"]
+        start, end = "    body .site-header {\n      position: sticky;", "  </style>"
+        css = section[section.index(start):section.index("</style>", section.index(start))].rstrip()
+        self.assertEqual(css, snippet[snippet.index(start):snippet.index(end, snippet.index(start))].rstrip())
+        script = lambda text: text[text.index("(function () {\n      var DESKTOP"):text.index("})();", text.index("var DESKTOP")) + 5]
+        self.assertEqual(script(section), script(snippet))
+        for needle in ("data-nav-drawer", "data-nav-more", "mega-menu__item-shop-all", "mega-menu__column-link", "inert"):
+            self.assertIn(needle, snippet)
+        self.assertNotIn("column-title--link", snippet)
 
 
 class ThemePerformanceCacheTest(StoreClientMixin, APITestCase):
@@ -8416,7 +9049,7 @@ class ThemeSettingsPhase2Test(StoreClientMixin, APITestCase):
         "body:not(.template-checkout) :is(.form-input,.newsletter__input):not(#tss){border-radius:999px;"
         "border-color:#999999;background:#FFFFFF;height:50px;min-height:0}",
         ":is(:focus,:focus-visible){border-color:#0055FF;outline-color:#0055FF}",
-        "body .site-header__nav :is(.site-nav__dropdown,.mega-menu):not(#tss){border-radius:0px;box-shadow:none;"
+        "body .site-header__nav :is(.site-nav__dropdown,.mega-menu,.site-nav__more):not(#tss){border-radius:0px;box-shadow:none;"
         "border-color:transparent}",
     ]
 

@@ -39,6 +39,40 @@ class Store(models.Model):
     auto_fulfill = models.CharField(max_length=20, default="gift_cards")
     auto_archive = models.BooleanField(default=True)
 
+    # Settings > Policies: rules. Cancellation applies to orders not yet shipped (shoppers cancel
+    # within the window); return rules describe what shoppers may send back and on what terms.
+    cancellations_enabled = models.BooleanField(default=True)
+    cancellation_window_minutes = models.PositiveIntegerField(default=60)
+    returns_enabled = models.BooleanField(default=False)
+    # Days a shopper has to return an item; blank = no time limit
+    return_window_days = models.PositiveIntegerField(null=True, blank=True, default=7)
+    return_window_starts_from = models.CharField(max_length=20, default="delivery")  # delivery | fulfillment | order
+    return_window_extend_weekends = models.BooleanField(default=False)
+    return_shipping = models.CharField(max_length=20, default="free")  # free | customer_pays
+    restocking_fee_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    # Settings > Customer privacy. Banner / opt-out page: "automated" (shown only where the law needs it),
+    # "always" or "off". Checkout marketing consent: "hidden", "unchecked" or "prechecked".
+    cookie_banner = models.CharField(max_length=20, default="automated")
+    data_sharing_opt_out = models.CharField(max_length=20, default="automated")
+    network_intelligence = models.BooleanField(default=True)
+    checkout_email_marketing = models.CharField(max_length=20, default="unchecked")
+    checkout_sms_marketing = models.CharField(max_length=20, default="hidden")
+    double_opt_in_email = models.BooleanField(default=False)
+    double_opt_in_sms = models.BooleanField(default=False)
+
+    # Settings > Customer accounts: sign-in links in the storefront header / checkout, and store credit.
+    show_sign_in_links = models.BooleanField(default=True)
+    store_credit_enabled = models.BooleanField(default=True)
+
+    # Settings > Checkout: sign-in rule and which customer fields the checkout form asks for.
+    # Field modes: "hidden", "optional" or "required" (full name: "first_last" or "last_only").
+    checkout_require_login = models.BooleanField(default=False)
+    checkout_full_name = models.CharField(max_length=20, default="first_last")
+    checkout_company = models.CharField(max_length=20, default="hidden")
+    checkout_address2 = models.CharField(max_length=20, default="optional")
+    checkout_phone = models.CharField(max_length=20, default="optional")
+
     # Checkout pricing: tax is a percentage of (subtotal - discount); shipping is
     # a flat fee, waived once the discounted subtotal reaches free_shipping_threshold.
     # ShippingRate rows (by destination country and cart weight) override the flat fee.
@@ -415,3 +449,19 @@ class AccessLog(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.subject}"
+
+
+class StoreDomain(models.Model):
+    """A hostname connected to a store: its storefront domains and its customer-account domain."""
+
+    STOREFRONT = "storefront"
+    ACCOUNT = "account"
+    KINDS = [(STOREFRONT, "Online Store"), (ACCOUNT, "Customer Account")]
+
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="domains")
+    host = models.CharField(max_length=253, unique=True)
+    kind = models.CharField(max_length=20, choices=KINDS, default=STOREFRONT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "host"]

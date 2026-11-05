@@ -16,7 +16,8 @@ from .models import (
     unique_handle,
 )
 from .services import (
-    RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_skus, clean_options, set_manual_products,
+    RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_included_collections, check_skus, clean_options,
+    collection_product_ids, collection_source_ids, direct_included_ids, included_collection_ids, set_manual_products,
     sync_collection, variant_options,
 )
 
@@ -369,6 +370,7 @@ class CollectionSerializer(serializers.ModelSerializer):
     rules = CollectionRuleSerializer(many=True, required=False)
     products = serializers.ListField(child=serializers.UUIDField(), required=False, write_only=True, max_length=5000)
     excluded_products = serializers.ListField(child=serializers.UUIDField(), required=False, max_length=5000)
+    include_collections = serializers.ListField(child=serializers.UUIDField(), required=False, max_length=500)
     products_count = serializers.SerializerMethodField()
     sales_channels = serializers.SerializerMethodField()
     sales_channels_count = serializers.SerializerMethodField()
@@ -387,6 +389,7 @@ class CollectionSerializer(serializers.ModelSerializer):
             "rules",
             "products",
             "excluded_products",
+            "include_collections",
             "theme_template",
             "seo_title",
             "seo_description",
@@ -399,6 +402,9 @@ class CollectionSerializer(serializers.ModelSerializer):
         read_only_fields = ["created_at", "updated_at"]
 
     def get_products_count(self, obj):
+        # Products of the collections it includes count too, once each
+        if included_collection_ids(obj):
+            return Product.objects.filter(pk__in=collection_product_ids(obj)).count()
         if hasattr(obj, "products_count_annotated"):
             return obj.products_count_annotated
         return obj.product_collections.count()
@@ -410,7 +416,8 @@ class CollectionSerializer(serializers.ModelSerializer):
     def get_sales_channels(self, obj):
         from apps.catalog.models import SalesChannel
 
-        if hasattr(obj, "_prefetched_objects_cache") and "product_collections" in obj._prefetched_objects_cache:
+        sources = collection_source_ids(obj)
+        if len(sources) == 1 and hasattr(obj, "_prefetched_objects_cache") and "product_collections" in obj._prefetched_objects_cache:
             channels_dict = {}
             for pc in obj.product_collections.all():
                 product = getattr(pc, "product", None)
@@ -435,7 +442,7 @@ class CollectionSerializer(serializers.ModelSerializer):
 
         channels = (
             SalesChannel.objects.filter(
-                product_sales_channels__product__product_collections__collection=obj
+                product_sales_channels__product__product_collections__collection__in=sources
             )
             .distinct()
             .order_by("created_at")
@@ -455,7 +462,10 @@ class CollectionSerializer(serializers.ModelSerializer):
 
     def to_representation(self, obj):
         data = super().to_representation(obj)
+        # products: only the ones held by this collection itself, so saving never copies included ones in
         data["products"] = [str(pc.product_id) for pc in obj.product_collections.all()]
+        # Only collections that still exist; the list is read fresh so a deleted one drops out
+        data["include_collections"] = [str(pk) for pk in direct_included_ids(obj)]
         return data
 
     def validate_name(self, value):
@@ -469,6 +479,14 @@ class CollectionSerializer(serializers.ModelSerializer):
 
     def validate_excluded_products(self, value):
         return [str(pk) for pk in dict.fromkeys(value)]
+
+    def validate_include_collections(self, value):
+        request = self.context.get("request")
+        store = getattr(request, "store", None) or getattr(self.instance, "store", None)
+        ids = [str(pk) for pk in dict.fromkeys(value)]
+        if store is not None:
+            check_included_collections(store, ids, self.instance)
+        return ids
 
     def validate_products(self, value):
         request = self.context.get("request")
@@ -539,7 +557,7 @@ class CollectionSerializer(serializers.ModelSerializer):
             ])
         # Counts and prefetched rows read before this save are out of date now
         instance._prefetched_objects_cache = {}
-        for attr in ("products_count_annotated", "sales_channels_count_annotated"):
+        for attr in ("products_count_annotated", "sales_channels_count_annotated", "_source_ids"):
             instance.__dict__.pop(attr, None)
 
         if instance.type == Collection.AUTOMATED:

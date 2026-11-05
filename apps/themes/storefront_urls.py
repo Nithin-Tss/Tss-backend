@@ -2,6 +2,7 @@
 from django.urls import path
 
 from .sitemap_views import storefront_robots_txt_view, storefront_sitemap_view
+from .privacy_views import storefront_cookie_consent, storefront_data_opt_out, storefront_marketing_confirm
 from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
@@ -34,6 +35,9 @@ urlpatterns = [
     path("<slug:store_slug>/checkout", storefront_checkout, name="storefront-checkout-page-noslash"),
     path("<slug:store_slug>/checkout/", storefront_checkout, name="storefront-checkout-page"),
     path("<slug:store_slug>/checkout/order/<uuid:order_id>/", storefront_checkout_order, name="storefront-checkout-order"),
+    path("<slug:store_slug>/privacy/consent", storefront_cookie_consent, name="storefront-cookie-consent"),
+    path("<slug:store_slug>/privacy/opt-out", storefront_data_opt_out, name="storefront-data-opt-out"),
+    path("<slug:store_slug>/privacy/confirm/<str:token>", storefront_marketing_confirm, name="storefront-marketing-confirm"),
     path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
     path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),

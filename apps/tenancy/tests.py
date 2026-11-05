@@ -495,7 +495,13 @@ class StoreAdminOwnerTest(TestCase):
     def add_store(self, **fields):
         data = {"store_name": "Admin made", "store_slug": "admin-made", "status": "active",
                 "currency": "INR", "unit_system": "metric", "weight_unit": "kg", "timezone": "Asia/Kolkata",
-                "auto_fulfill": "gift_cards", "tax_rate": "0", "shipping_flat_rate": "0", **fields}
+                "auto_fulfill": "gift_cards", "tax_rate": "0", "shipping_flat_rate": "0",
+                "cancellation_window_minutes": "60", "return_window_starts_from": "delivery",
+                "return_shipping": "free", "restocking_fee_percent": "0",
+                "cookie_banner": "automated", "data_sharing_opt_out": "automated",
+                "checkout_email_marketing": "unchecked", "checkout_sms_marketing": "hidden",
+                "checkout_full_name": "first_last", "checkout_company": "hidden",
+                "checkout_address2": "optional", "checkout_phone": "optional", **fields}
         return self.client.post(self.URL + "add/", data)
 
     def test_admin_add_store_makes_the_owner(self):
@@ -690,3 +696,88 @@ class StoreDomainTests(TestCase):
         self.assertIn('href="/"', r.content.decode())
         self.assertEqual(r["Location"], "/cart")
         self.assertEqual(r.cookies["c"]["path"], "/")
+
+
+class PolicySettingsTest(StoreClientMixin, APITestCase):
+    """Settings > Policies: the rules are store fields; each written policy shows on its own page."""
+
+    def setUp(self):
+        _token, self.store = self.sign_up("policies@example.com", "Policy store")
+        self.url = f"/api/v1/stores/{self.store['storeId']}/"
+
+    def test_rules_default_and_can_be_changed(self):
+        got = self.ok("get", self.url)
+        self.assertTrue(got["cancellationsEnabled"])
+        self.assertEqual(got["cancellationWindowMinutes"], 60)
+        self.assertFalse(got["returnsEnabled"])
+        self.assertEqual(got["returnWindowDays"], 7)
+
+        saved = self.ok("patch", self.url, {
+            "returnsEnabled": True, "returnWindowDays": 14, "returnWindowStartsFrom": "order",
+            "returnWindowExtendWeekends": True, "returnShipping": "customer_pays", "restockingFeePercent": "10",
+            "cancellationsEnabled": False, "cancellationWindowMinutes": 1440,
+        })
+        self.assertEqual(
+            (saved["returnWindowDays"], saved["returnShipping"], saved["restockingFeePercent"], saved["cancellationsEnabled"]),
+            (14, "customer_pays", "10.00", False),
+        )
+        self.ok("patch", self.url, {"returnWindowDays": None})  # no time limit
+
+    def test_rules_are_validated(self):
+        for bad in ({"restockingFeePercent": "101"}, {"returnWindowDays": 0}, {"returnShipping": "free-ish"},
+                    {"cancellationWindowMinutes": 0}, {"returnWindowStartsFrom": "never"}):
+            self.ok("patch", self.url, bad, expect=400)
+
+    def test_a_written_policy_shows_on_its_page_and_clearing_it_hides_the_page(self):
+        empty = self.ok("get", f"{self.url}policies/")
+        self.assertEqual(set(empty), {
+            "privacyPolicy", "refundPolicy", "termsOfService", "shippingPolicy", "contactInformation", "legalNotice",
+        })
+        self.assertFalse(any(p["visible"] for p in empty.values()))
+
+        saved = self.ok("patch", f"{self.url}policies/", {
+            "privacyPolicy": "<p>We keep your data safe.</p>", "refundPolicy": "<p>Refunds within 7 days.</p>",
+        })
+        self.assertTrue(saved["privacyPolicy"]["visible"])
+        self.assertEqual(saved["privacyPolicy"]["handle"], "privacy-policy")
+        self.assertTrue(saved["privacyPolicy"]["url"].endswith("/pages/privacy-policy"))
+        self.assertFalse(saved["termsOfService"]["visible"])
+
+        pages = {p["handle"]: p for p in self.ok("get", "/api/v1/themes/pages/")}
+        self.assertEqual(pages["privacy-policy"]["body"], "<p>We keep your data safe.</p>")
+        self.assertEqual(pages["refund-policy"]["status"], "visible")
+        self.assertNotIn("terms-of-service", pages)
+
+        # Editing again updates the same page; a cleared rich-text editor (an empty paragraph) hides it
+        self.ok("patch", f"{self.url}policies/", {"privacyPolicy": "<p>Updated.</p>", "refundPolicy": "<p><br></p>"})
+        pages = {p["handle"]: p for p in self.ok("get", "/api/v1/themes/pages/")}
+        self.assertEqual(pages["privacy-policy"]["body"], "<p>Updated.</p>")
+        self.assertEqual(pages["refund-policy"]["status"], "hidden")
+        self.assertEqual(sum(1 for p in pages.values() if p["handle"] == "privacy-policy"), 1)
+
+    def test_unknown_or_oversized_policies_are_refused(self):
+        self.ok("patch", f"{self.url}policies/", {"cookiePolicy": "x"}, expect=400)
+        self.ok("patch", f"{self.url}policies/", {"legalNotice": "x" * 200001}, expect=400)
+        self.ok("patch", f"{self.url}policies/", {"legalNotice": 5}, expect=400)
+
+
+class DomainsApiTest(StoreClientMixin, APITestCase):
+    def test_connect_make_primary_and_remove(self):
+        token, store = self.sign_up("owner@example.com", "Domain store")
+        url = f"/api/v1/stores/{store['storeId']}/domains/"
+        self.assertEqual(self.ok("get", url)["domains"], [])
+
+        self.ok("post", url, {"host": "not a domain"}, expect=400)
+        listed = self.ok("post", url, {"host": "https://Shop.Example.com/", "kind": "storefront"})
+        row = listed["domains"][0]
+        self.assertEqual((row["host"], row["primary"], row["status"]), ("shop.example.com", False, "invalid_dns"))
+        self.ok("post", url, {"host": "shop.example.com"}, expect=400)  # duplicate
+
+        listed = self.ok("post", f"{url}{row['id']}/")
+        self.assertTrue(listed["domains"][0]["primary"])
+        self.assertEqual(Store.objects.get(pk=store["storeId"]).domain, "shop.example.com")
+        self.ok("delete", f"{url}{row['id']}/", expect=400)  # primary can't go
+
+        acct = self.ok("post", url, {"host": "accounts.example.com", "kind": "account"})["domains"][-1]
+        self.ok("post", f"{url}{acct['id']}/", expect=400)
+        self.assertEqual(len(self.ok("delete", f"{url}{acct['id']}/")["domains"]), 1)

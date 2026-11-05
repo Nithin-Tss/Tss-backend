@@ -55,6 +55,7 @@ from .services import (
     create_variant,
 
     delete_product,
+    forget_included_collection,
     delete_all_products,
     delete_products,
 
@@ -63,6 +64,7 @@ from .services import (
     ACTIVE,
     NO_PRICE_MESSAGE,
     import_products,
+    included_product_sources,
 
     matching_products,
 
@@ -437,8 +439,11 @@ class CollectionViewSet(StoreScopedViewSet):
     """
     /api/v1/catalog/collections/           list, create
     /api/v1/catalog/collections/<id>/      retrieve, update, delete
-    /api/v1/catalog/collections/preview/   POST {rules, match, excluded_products} -> products an
-                                           automated collection with these (unsaved) rules would hold
+    /api/v1/catalog/collections/preview/   POST {rules, match, excluded_products, include_collections,
+                                           type, products} -> products an automated collection with these (unsaved)
+                                           rules would hold ("products"), and the ones that come from the ticked
+                                           collections, nested too, not already its own ("included", each with
+                                           "from_collection"; "included_count" is the full total)
     """
 
     permission_resource = "products"
@@ -468,8 +473,10 @@ class CollectionViewSet(StoreScopedViewSet):
         )
 
     def perform_destroy(self, instance):
-        # Its product links and rules go with it; the products themselves stay
+        # Its product links and rules go with it; the products themselves stay. Collections that
+        # ticked it simply lose it from their list.
         with transaction.atomic():
+            forget_included_collection(instance)
             instance.product_collections.all().delete()
             super().perform_destroy(instance)
 
@@ -480,20 +487,46 @@ class CollectionViewSet(StoreScopedViewSet):
         rules = CollectionRuleSerializer(data=request.data.get("rules") or [], many=True)
         rules.is_valid(raise_exception=True)
         match = "any" if request.data.get("match") == "any" else "all"
-        excluded = request.data.get("excluded_products") or []
-        if not isinstance(excluded, list):
-            raise ValidationError({"excluded_products": "Send a list of product ids."})
-        try:
-            excluded = [str(uuid.UUID(str(pk))) for pk in excluded]
-        except ValueError:
-            raise ValidationError({"excluded_products": "Every id must be a valid product id."})
+        excluded = self._ids(request.data.get("excluded_products"), "excluded_products", "product")
+        manual = request.data.get("type") == Collection.MANUAL
 
-        matches = matching_products(request.store, rules.validated_data, match, excluded)
-        products = ProductViewSet.queryset.filter(pk__in=matches.values("pk"))
+        if manual:  # the products picked by hand are the collection's own; the page already has them
+            own = self._ids(request.data.get("products"), "products", "product")
+            products = ProductViewSet.queryset.none()
+        else:
+            matches = matching_products(request.store, rules.validated_data, match, excluded)
+            own = [str(pk) for pk in matches.values_list("pk", flat=True)]
+            products = ProductViewSet.queryset.filter(pk__in=matches.values("pk"))
+
+        # Products coming from the collections ticked on this (maybe unsaved) collection, nested ones too
+        ticked = self._ids(request.data.get("include_collections"), "include_collections", "collection")
+        sources, names = included_product_sources(request.store, ticked, exclude=own)
+        included = list(ProductViewSet.queryset.filter(pk__in=list(sources)[:self.PREVIEW_LIMIT]))
+        order = {pk: i for i, pk in enumerate(sources)}
+        included.sort(key=lambda p: order[str(p.pk)])
+        included_data = ProductSerializer(included, many=True).data
+        for row, product in zip(included_data, included):
+            source = sources[str(product.pk)]
+            row["from_collection"] = {"id": source, "name": names[source]}
+
         return Response({
             "count": products.count(),
             "products": ProductSerializer(products[:self.PREVIEW_LIMIT], many=True).data,
+            "included_count": len(sources),
+            "included": included_data,
         })
+
+    @staticmethod
+    def _ids(value, field, what):
+        """A list of ids from the request, as strings."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValidationError({field: f"Send a list of {what} ids."})
+        try:
+            return [str(uuid.UUID(str(pk))) for pk in value]
+        except ValueError:
+            raise ValidationError({field: f"Every id must be a valid {what} id."})
 
 
 
