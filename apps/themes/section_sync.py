@@ -54,6 +54,9 @@ SYNCED_SECTIONS = {
     "header": {
         "path": "sections/header.liquid", "label": "Header", "snippet": "header",
         "originals": {
+            # updated starter with the mega menu look settings and the column "Shop All" link
+            "8cfe7c6a3f81bc906f7d9c6c75be2113e9d109e041ce033605dcce93ad0042a7",  # LF
+            "6842a0fcc327395aa20f37fc0980fdb1e2f0f0a5075e3a7aeeda3b5348b2010b",  # CRLF
             # updated starter with mega menu promo banner positioning fixes
             "8481aa5f4caa9a1613845c03495d2da44ecf84e6d40d3182a30ab7ee7b36b13f",  # LF
             "b032320da08033cfe341492498a1848dc5d8d29bbacb03b58b1ca3974f074995",  # CRLF
@@ -123,7 +126,8 @@ SYNCED_FILES = {
 PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 
 # Revision 6: show the guest wishlist item count beside existing header hearts
-ORIGINALS_REVISION = 12
+# Revision 13: untouched headers get the mega menu look settings and the column "Shop All" link
+ORIGINALS_REVISION = 13
 
 
 def is_original_snippet(name, content):

@@ -12,6 +12,17 @@
   page: everything the cart does is in snippets/cart.liquid.
 {%- endcomment -%}
 {%- assign s = section.settings -%}
+{%- comment -%}
+  Mega menu look: the Mega menu settings become --mega-* variables on the <header>, which the CSS below reads.
+  The panel takes its own colour, else the header colour, else the page background. Link colour: its own, else the
+  header text colour, else the theme text colour; heading colour: its own, else the accent colour. "Shop All" is the column's link
+  from Admin > Menus (the columns and links themselves are edited there).
+{%- endcomment -%}
+{%- assign mega_bg = s.mega_bg | default: s.background -%}
+{%- assign mega_link_color = s.mega_link_color | default: s.text_color -%}
+{%- assign mega_shop_all = true -%}
+{%- if s.mega_show_shop_all == false -%}{%- assign mega_shop_all = false -%}{%- endif -%}
+{%- assign mega_shop_all_label = s.mega_shop_all_label | default: 'Shop All' -%}
 {%- assign link_blocks = section.blocks | where: 'type', 'link' -%}
 {%- assign wishlist_blocks = section.blocks | where: 'type', 'wishlist' -%}
 {%- assign cart_blocks = section.blocks | where: 'type', 'cart' -%}
@@ -19,6 +30,14 @@
 {%- capture header_style -%}
   {% if s.background != blank %}background:{{ s.background }};{% endif %}
   {% if s.text_color != blank %}color:{{ s.text_color }};{% endif %}
+  {% if mega_bg != blank %}--mega-bg:{{ mega_bg }};{% endif %}
+  {% if s.mega_heading_color != blank %}--mega-heading-color:{{ s.mega_heading_color }};{% endif %}
+  --mega-heading-size:{{ s.mega_heading_size | default: 15 }}px;
+  {% if mega_link_color != blank %}--mega-link-color:{{ mega_link_color }};{% endif %}
+  --mega-link-size:{{ s.mega_link_size | default: 17 }}px;
+  --mega-row:{{ s.mega_row_spacing | default: 38 }}px;
+  --mega-gap:{{ s.mega_column_gap | default: 80 }}px;
+  --mega-pad-left:{{ s.mega_padding_left | default: 0 }}px;
 {%- endcapture -%}
 {%- comment -%}
   Announcement bar: the "Announcement text" setting is the first message and each "Announcement" block
@@ -206,7 +225,7 @@
                         {%- for col in item.columns -%}
                           <div class="mega-menu__column{% if col.links.size > 0 %} mega-menu__column--has-sublinks{% endif %}">
                             <div class="mega-menu__column-header">
-                              {%- if col.url != blank and col.url != '#' -%}
+                              {%- if col.url != blank and col.url != '#' and mega_shop_all == false -%}
                                 <a class="mega-menu__column-title mega-menu__column-title--link" href="{{ col.url }}">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
                               {%- else -%}
                                 <div class="mega-menu__column-title">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</div>
@@ -226,6 +245,9 @@
                                 {%- endfor -%}
                               </ul>
                             {%- endif -%}
+                          {%- if mega_shop_all and col.url != blank and col.url != '#' -%}
+                            <a class="mega-menu__shop-all" href="{{ col.url }}">{{ mega_shop_all_label }}</a>
+                          {%- endif -%}
                           </div>
                         {%- endfor -%}
                       </div>
@@ -327,7 +349,7 @@
                         {%- for col in item.columns -%}
                           <div class="mega-menu__column{% if col.links.size > 0 %} mega-menu__column--has-sublinks{% endif %}">
                             <div class="mega-menu__column-header">
-                              {%- if col.url != blank and col.url != '#' -%}
+                              {%- if col.url != blank and col.url != '#' and mega_shop_all == false -%}
                                 <a class="mega-menu__column-title mega-menu__column-title--link" href="{{ col.url }}">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
                               {%- else -%}
                                 <div class="mega-menu__column-title">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</div>
@@ -347,6 +369,9 @@
                                 {%- endfor -%}
                               </ul>
                             {%- endif -%}
+                          {%- if mega_shop_all and col.url != blank and col.url != '#' -%}
+                            <a class="mega-menu__shop-all" href="{{ col.url }}">{{ mega_shop_all_label }}</a>
+                          {%- endif -%}
                           </div>
                         {%- endfor -%}
                       </div>
@@ -692,7 +717,8 @@
       color: var(--text);
       opacity: 1;
     }
-    /* Mega menu container */
+    /* Mega menu container. The panel follows the header colour (--mega-bg is set on the header from
+       the "Mega menu background" or the header colour); headings, links and spacing come from the --mega-* variables. */
     body .site-header__nav .site-header__item--mega {
       position: static;
     }
@@ -703,8 +729,8 @@
       right: 0;
       width: 100%;
       max-width: 100%;
-      background: var(--bg);
-      color: var(--text);
+      background: var(--mega-bg, var(--bg));
+      color: var(--mega-link-color, var(--text));
       border-top: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
       box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
@@ -729,8 +755,8 @@
     body .site-header__nav .mega-menu__inner {
       display: flex;
       gap: 32px;
-      padding-top: 24px;
-      padding-bottom: 28px;
+      padding-top: 28px;
+      padding-bottom: 32px;
       align-items: flex-start;
       justify-content: space-between;
       box-sizing: border-box;
@@ -740,14 +766,19 @@
     body .site-header__nav .mega-menu__columns {
       flex: 1 1 auto;
       min-width: 0;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 24px 32px;
-      align-content: start;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 32px var(--mega-gap, 80px);
+      padding-left: var(--mega-pad-left, 0px);
+      box-sizing: border-box;
       max-width: 100%;
     }
     body .site-header__nav .mega-menu__column {
-      min-width: 130px;
+      min-width: 150px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
     }
     body .site-header__nav .mega-menu__column-header {
       display: flex;
@@ -759,11 +790,12 @@
     body .site-header__nav a.mega-menu__column-title {
       display: flex;
       align-items: center;
-      font-size: 13px;
+      font-size: var(--mega-heading-size, 15px);
       font-weight: 700;
-      color: var(--text);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      line-height: 1.3;
+      color: var(--mega-heading-color, var(--accent));
+      text-transform: none;
+      letter-spacing: normal;
       opacity: 1;
       border-radius: 0;
       padding: 0;
@@ -771,7 +803,8 @@
       text-decoration: none;
     }
     body .site-header__nav a.mega-menu__column-title:hover {
-      color: var(--accent);
+      color: var(--mega-heading-color, var(--accent));
+      opacity: 0.8;
     }
     body .site-header__nav .mega-menu__sublinks {
       list-style: none;
@@ -779,7 +812,7 @@
       padding: 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 0;
     }
     body .site-header__nav .mega-menu__sublink-item {
       margin: 0;
@@ -788,23 +821,45 @@
     body .site-header__nav a.mega-menu__sublink {
       display: inline-flex;
       align-items: center;
-      font-size: 13px;
+      min-height: var(--mega-row, 38px);
+      font-size: var(--mega-link-size, 17px);
       font-weight: 400;
-      color: var(--muted);
+      color: var(--mega-link-color, var(--text));
       text-decoration: none;
       text-transform: none;
       letter-spacing: normal;
-      opacity: 0.85;
-      padding: 3px 0;
+      opacity: 1;
+      padding: 0;
       border-radius: 0;
       background: transparent;
       transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
     }
     body .site-header__nav a.mega-menu__sublink:hover {
-      color: var(--text);
+      color: var(--mega-heading-color, var(--accent));
       opacity: 1;
       transform: translateX(2px);
       background: transparent;
+    }
+    /* "Shop All": the column's own link, at the end of the column */
+    body .site-header__nav a.mega-menu__shop-all {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--mega-row, 38px);
+      font-size: var(--mega-link-size, 17px);
+      font-weight: 600;
+      color: var(--mega-heading-color, var(--accent));
+      text-decoration: underline;
+      text-underline-offset: 4px;
+      text-transform: none;
+      letter-spacing: normal;
+      opacity: 1;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    body .site-header__nav a.mega-menu__shop-all:hover {
+      color: var(--mega-heading-color, var(--accent));
+      opacity: 0.8;
     }
     /* Promo banner */
     body .site-header__nav .mega-menu__promo {
@@ -997,8 +1052,10 @@
       body .site-header__nav .mega-menu__columns {
         display: flex;
         flex-direction: column;
+        flex-wrap: nowrap;
         gap: 10px;
         width: 100%;
+        padding-left: 0;
       }
       body .site-header__nav .mega-menu__column {
         width: 100%;
@@ -1053,17 +1110,24 @@
         padding-left: 14px;
         padding-top: 4px;
         padding-bottom: 8px;
-        gap: 6px;
+        gap: 0;
       }
       body .site-header__nav .mega-menu__column.is-col-open .mega-menu__sublinks {
         display: flex;
       }
       body .site-header__nav a.mega-menu__sublink {
-        min-height: 38px;
+        min-height: var(--mega-row, 38px);
         display: flex;
         align-items: center;
-        padding: 6px 0;
-        font-size: 14px;
+        padding: 0;
+      }
+      /* Shop All sits inside the opened column */
+      body .site-header__nav .mega-menu__column--has-sublinks:not(.is-col-open) a.mega-menu__shop-all {
+        display: none;
+      }
+      body .site-header__nav a.mega-menu__shop-all {
+        display: flex;
+        padding: 0 0 0 14px;
       }
       body .site-header__nav .mega-menu__promo {
         width: 100%;
@@ -1409,7 +1473,17 @@
     {"type": "checkbox", "id": "sticky", "label": "Keep the header at the top while scrolling", "default": true},
     {"type": "checkbox", "id": "border", "label": "Line under the header", "default": true},
     {"type": "color", "id": "background", "label": "Header colour", "default": "", "info": "None uses the background colour."},
-    {"type": "color", "id": "text_color", "label": "Header text colour", "default": ""}
+    {"type": "color", "id": "text_color", "label": "Header text colour", "default": ""},
+    {"type": "color", "id": "mega_bg", "label": "Mega menu background", "default": "", "info": "The panel that opens under a menu item with columns (set in Admin > Menus). None uses the header colour."},
+    {"type": "color", "id": "mega_heading_color", "label": "Mega menu heading colour", "default": "", "info": "The column headings and the Shop All link. None uses the accent colour."},
+    {"type": "range", "id": "mega_heading_size", "label": "Mega menu heading size", "min": 12, "max": 28, "step": 1, "unit": "px", "default": 15},
+    {"type": "color", "id": "mega_link_color", "label": "Mega menu link colour", "default": "", "info": "None uses the header text colour, else the theme text colour. Make it readable on the panel colour."},
+    {"type": "range", "id": "mega_link_size", "label": "Mega menu link size", "min": 12, "max": 28, "step": 1, "unit": "px", "default": 17},
+    {"type": "range", "id": "mega_row_spacing", "label": "Mega menu row spacing", "min": 20, "max": 64, "step": 1, "unit": "px", "default": 38, "info": "The height of each link row."},
+    {"type": "range", "id": "mega_column_gap", "label": "Mega menu column gap", "min": 16, "max": 200, "step": 2, "unit": "px", "default": 80},
+    {"type": "range", "id": "mega_padding_left", "label": "Mega menu left padding", "min": 0, "max": 200, "step": 5, "unit": "px", "default": 0, "info": "Extra space before the first column. 0 lines the columns up with the logo."},
+    {"type": "checkbox", "id": "mega_show_shop_all", "label": "Show Shop All in each column", "default": true, "info": "A link to the column's own link from Admin > Menus, at the end of the column. A column without a link has none."},
+    {"type": "text", "id": "mega_shop_all_label", "label": "Shop All text", "default": "Shop All"}
   ],
   "blocks": [
     {

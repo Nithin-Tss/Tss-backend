@@ -61,11 +61,209 @@ HEADER_ICONS_LOOP = """    {%- assign has_actions = false -%}
 """
 
 
-def pre_rotation_header():
-    """The starter header from before the rotating announcement bar (revision 47): one message and four options."""
+PRE_MEGA_LOOK_CSS = """    /* Mega menu container */
+    body .site-header__nav .site-header__item--mega {
+      position: static;
+    }
+    body .site-header__nav .mega-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      width: 100%;
+      max-width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      transform: translateY(8px);
+      text-align: left;
+      box-sizing: border-box;
+      overflow-x: clip;
+    }
+    body .site-header__nav .site-header__item--mega:hover .mega-menu,
+    body .site-header__nav .site-header__item--mega.is-open .mega-menu,
+    body .site-header__nav .site-header__item--mega:focus-within .mega-menu {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    body .site-header__nav .mega-menu__inner {
+      display: flex;
+      gap: 32px;
+      padding-top: 24px;
+      padding-bottom: 28px;
+      align-items: flex-start;
+      justify-content: space-between;
+      box-sizing: border-box;
+      max-width: var(--page);
+      width: 100%;
+    }
+    body .site-header__nav .mega-menu__columns {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 24px 32px;
+      align-content: start;
+      max-width: 100%;
+    }
+    body .site-header__nav .mega-menu__column {
+      min-width: 130px;
+    }
+    body .site-header__nav .mega-menu__column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    body .site-header__nav .mega-menu__column-title,
+    body .site-header__nav a.mega-menu__column-title {
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 1;
+      border-radius: 0;
+      padding: 0;
+      margin: 0;
+      text-decoration: none;
+    }
+    body .site-header__nav a.mega-menu__column-title:hover {
+      color: var(--accent);
+    }
+    body .site-header__nav .mega-menu__sublinks {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    body .site-header__nav .mega-menu__sublink-item {
+      margin: 0;
+      padding: 0;
+    }
+    body .site-header__nav a.mega-menu__sublink {
+      display: inline-flex;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 400;
+      color: var(--muted);
+      text-decoration: none;
+      text-transform: none;
+      letter-spacing: normal;
+      opacity: 0.85;
+      padding: 3px 0;
+      border-radius: 0;
+      background: transparent;
+      transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+    }
+    body .site-header__nav a.mega-menu__sublink:hover {
+      color: var(--text);
+      opacity: 1;
+      transform: translateX(2px);
+      background: transparent;
+    }
+"""
+
+PRE_MEGA_LOOK_MOBILE_CSS = (
+    (
+        '''      body .site-header__nav .mega-menu__columns {
+        display: flex;
+        flex-direction: column;
+        flex-wrap: nowrap;
+        gap: 10px;
+        width: 100%;
+        padding-left: 0;
+      }''',
+        '''      body .site-header__nav .mega-menu__columns {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+      }''',
+    ),
+    (
+        '''        padding-bottom: 8px;
+        gap: 0;
+      }''',
+        '''        padding-bottom: 8px;
+        gap: 6px;
+      }''',
+    ),
+    (
+        '''      body .site-header__nav a.mega-menu__sublink {
+        min-height: var(--mega-row, 38px);
+        display: flex;
+        align-items: center;
+        padding: 0;
+      }
+      /* Shop All sits inside the opened column */
+      body .site-header__nav .mega-menu__column--has-sublinks:not(.is-col-open) a.mega-menu__shop-all {
+        display: none;
+      }
+      body .site-header__nav a.mega-menu__shop-all {
+        display: flex;
+        padding: 0 0 0 14px;
+      }''',
+        '''      body .site-header__nav a.mega-menu__sublink {
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        padding: 6px 0;
+        font-size: 14px;
+      }''',
+    ),
+)
+
+
+def pre_mega_look_header():
+    """
+    The starter header of revision 48, before the mega menu look settings and the column "Shop All" link: the current
+    starter with those changes taken out. Its hash is registered in STARTER_UPGRADES.
+    """
+    import re
+
     from .services import starter_files
 
     header = starter_files()["sections/header.liquid"]
+    # the --mega-* assigns at the top and the variables on the <header>
+    start = header.index("{%- comment -%}\n  Mega menu look:")
+    end = header.index("{%- assign mega_shop_all_label")
+    header = header[:start] + header[header.index("\n", end) + 1:]
+    start = header.index("  {% if mega_bg != blank %}--mega-bg")
+    header = header[:start] + header[header.index("{%- endcapture -%}", start):]
+    # "Shop All" in every column, and the heading that links only when Shop All is off
+    header, shop_all = re.subn(
+        r"[ \t]*\{%- if mega_shop_all and col\.url != blank and col\.url != '#' -%\}\n.*?\{%- endif -%\}\n", "", header, flags=re.S)
+    assert shop_all == 2
+    assert header.count(" and mega_shop_all == false") == 2
+    header = header.replace(" and mega_shop_all == false", "")
+    # the CSS of the mega menu panel and its mobile accordion
+    start, end = header.index("    /* Mega menu container"), header.index("    /* Promo banner */")
+    header = header[:start] + PRE_MEGA_LOOK_CSS + header[end:]
+    for new, old in PRE_MEGA_LOOK_MOBILE_CSS:
+        assert header.count(new) == 1, new[:60]
+        header = header.replace(new, old)
+    # the settings
+    start = header.index(',\n    {"type": "color", "id": "mega_bg"')
+    return header[:start] + header[header.index("\n  ],", start):]
+
+
+def pre_rotation_header():
+    """The starter header from before the rotating announcement bar (revision 47): one message and four options."""
+    header = pre_mega_look_header()
     bar_start = header.index("{%- comment -%}\n  Announcement bar:")
     bar_end = header.index('<header class="site-header"')
     settings_start = header.index('    {"type": "text", "id": "announcement_text"')
@@ -2534,7 +2732,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 48)
+        self.assertEqual(theme.theme_data["starter_revision"], 49)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2744,7 +2942,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 48)
+        self.assertEqual(STARTER_REVISION, 49)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3563,7 +3761,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 48)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 49)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -7263,6 +7461,266 @@ class StorefrontMegaMenuRenderingTest(StoreClientMixin, APITestCase):
         self.assertIn('role="menuitem"', nav)
         self.assertIn('class="site-nav__dropdown-header"', nav)
         self.assertIn('class="site-nav__dropdown-toggle"', nav)
+
+
+class HeaderMegaMenuLookTest(StoreClientMixin, APITestCase):
+    """The mega menu's look (column headings, links, Shop All, colours, spacing) and how it reaches the storefront."""
+
+    PREVIOUS_STARTER_HEADER_HASHES = (
+        "5f762425519ec74471a1758ad9ba87509887f7562738958bc9c54491f19ce3d4",  # LF
+        "184f6cf6357886e396e971eb1a96548a17f80878557c68e3c281b2c866a32e03",  # CRLF
+    )
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("megalook@example.com", "Mega Look Store")
+        self.slug = self.store["storeSlug"]
+
+    def wine_menu(self, columns=None):
+        """Wine > Red Wine > Shiraz, Pinot Noir ... in Admin > Menus, the only place the columns and links are built."""
+        columns = columns or [("Red Wine", "/collections/all", ["Shiraz", "Pinot Noir"])]
+        self.ok("post", "/api/v1/themes/menus/", {"name": "Main menu", "items": [{
+            "title": "Wine", "url": "/collections/all", "is_mega": True,
+            "children": [
+                {"title": title, "url": url, "children": [{"title": link, "url": "/collections/all"} for link in links]}
+                for title, url, links in columns
+            ],
+        }]}, expect=201)
+
+    def home(self):
+        r = self.client.get(f"/s/{self.slug}/")
+        self.assertEqual(r.status_code, 200)
+        return r.content.decode()
+
+    def nav(self):
+        html = self.home()
+        start = html.index('<nav class="site-header__nav"')
+        return html[start:html.index("</nav>", start)]
+
+    def header_tag(self):
+        html = self.home()
+        start = html.index('<header class="site-header"')
+        return html[start:html.index(">", html.index("style=", start))]
+
+    def header(self):
+        return self.ok("get", "/api/v1/themes/sections/")["header"]
+
+    def save_settings(self, **changes):
+        values = self.header()["values"]
+        values["settings"].update(changes)
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"header": values}, "client": "test"})
+
+    # ---------------------------------------------------------------- Shop All
+
+    def test_a_column_ends_with_an_underlined_shop_all_link_to_the_columns_url(self):
+        self.wine_menu()
+        nav = self.nav()
+        self.assertIn('<div class="mega-menu__column-title">Red Wine</div>', nav)  # the heading is text
+        self.assertNotIn("mega-menu__column-title--link", nav)
+        self.assertEqual(nav.count('class="mega-menu__shop-all"'), 1)
+        self.assertIn(f'<a class="mega-menu__shop-all" href="/s/{self.slug}/collections/all">Shop All</a>', nav)
+        self.assertLess(nav.index("Pinot Noir"), nav.index("mega-menu__shop-all"))  # at the end of the column
+        self.assertLess(nav.index("mega-menu__column-title"), nav.index("Shiraz"))  # the heading comes first
+
+    def test_each_column_has_its_own_shop_all_after_its_own_links(self):
+        self.wine_menu([("Red Wine", "/collections/all", ["Shiraz"]), ("White Wine", "/collections/all", ["Riesling"])])
+        nav = self.nav()
+        self.assertEqual(nav.count('class="mega-menu__shop-all"'), 2)
+        first, second = nav.index("mega-menu__shop-all"), nav.rindex("mega-menu__shop-all")
+        self.assertLess(nav.index("Shiraz"), first)
+        self.assertLess(first, nav.index("White Wine"))
+        self.assertLess(nav.index("Riesling"), second)
+
+    def test_a_column_without_a_link_has_no_shop_all(self):
+        self.wine_menu([("Other Wine", "", ["Port"]), ("Red Wine", "/collections/all", ["Shiraz"])])
+        nav = self.nav()
+        self.assertIn('<div class="mega-menu__column-title">Other Wine</div>', nav)
+        self.assertIn("Port", nav)
+        self.assertEqual(nav.count('class="mega-menu__shop-all"'), 1)  # only Red Wine's
+
+    def test_shop_all_can_be_turned_off_and_the_heading_links_again(self):
+        self.wine_menu()
+        self.save_settings(mega_show_shop_all=False)
+        nav = self.nav()
+        self.assertNotIn('class="mega-menu__shop-all"', nav)
+        self.assertIn(
+            f'<a class="mega-menu__column-title mega-menu__column-title--link" href="/s/{self.slug}/collections/all">Red Wine</a>',
+            nav)
+
+    def test_shop_all_text_can_be_changed(self):
+        self.wine_menu()
+        self.save_settings(mega_shop_all_label="Browse all")
+        nav = self.nav()
+        self.assertIn('href="/s/%s/collections/all">Browse all</a>' % self.slug, nav)
+        self.assertNotIn(">Shop All</a>", nav)
+
+    def test_shop_all_is_inside_its_column_and_hidden_until_the_column_opens_on_mobile(self):
+        self.wine_menu()
+        html = self.home()
+        nav = self.nav()
+        column = nav[nav.index('<div class="mega-menu__column'):]
+        self.assertLess(column.index('<ul class="mega-menu__sublinks"'), column.index("mega-menu__shop-all"))
+        self.assertIn(".mega-menu__column--has-sublinks:not(.is-col-open) a.mega-menu__shop-all", html)
+        self.assertIn("@media (max-width: 768px)", html)
+
+    # ---------------------------------------------------------------- the look
+
+    def test_the_look_settings_are_in_the_header_with_the_designed_defaults(self):
+        settings = self.header()["spec"]["settings"]
+        expected = {
+            "mega_bg": "", "mega_heading_color": "", "mega_heading_size": 15, "mega_link_color": "",
+            "mega_link_size": 17, "mega_row_spacing": 38, "mega_column_gap": 80, "mega_padding_left": 0,
+            "mega_show_shop_all": True, "mega_shop_all_label": "Shop All",
+        }
+        for key, default in expected.items():
+            self.assertIn(key, settings)
+            self.assertEqual(settings[key]["default"], default, key)
+            self.assertEqual(self.header()["values"]["settings"][key], default, key)
+        self.assertEqual(settings["mega_heading_size"]["unit"], "px")
+
+    def test_the_default_look_reaches_the_storefront(self):
+        self.wine_menu()
+        tag = self.header_tag()
+        for declaration in (
+            "--mega-heading-size:15px;", "--mega-link-size:17px;", "--mega-row:38px;", "--mega-gap:80px;",
+            "--mega-pad-left:0px;",
+        ):
+            self.assertIn(declaration, tag)
+        # no colour is fixed: the CSS falls back to the theme's accent and text colours
+        self.assertNotIn("--mega-heading-color", tag)
+        self.assertNotIn("--mega-link-color", tag)
+        html = self.home()
+        self.assertIn("color: var(--mega-heading-color, var(--accent));", html)
+        self.assertIn("color: var(--mega-link-color, var(--text));", html)
+        self.assertIn("font-size: var(--mega-heading-size, 15px);", html)
+        self.assertIn("min-height: var(--mega-row, 38px);", html)
+        self.assertIn("text-transform: none;", html[html.index("a.mega-menu__column-title"):])
+        self.assertIn("text-decoration: underline;", html[html.index("a.mega-menu__shop-all"):])
+
+    def test_the_panel_follows_the_header_colour_until_it_has_its_own(self):
+        self.wine_menu()
+        self.save_settings(background="")
+        self.assertNotIn("--mega-bg", self.header_tag())  # no header colour: the page background
+        self.assertIn("background: var(--mega-bg, var(--bg));", self.home())
+        self.save_settings(background="#A31736")
+        self.assertIn("--mega-bg:#A31736;", self.header_tag())
+        self.save_settings(mega_bg="#112233")
+        self.assertIn("--mega-bg:#112233;", self.header_tag())
+        self.assertIn("background:#A31736;", self.header_tag())  # the header itself keeps its colour
+
+    def test_link_colour_follows_the_header_text_colour_until_it_has_its_own(self):
+        self.wine_menu()
+        self.save_settings(text_color="#F5E6C8")
+        self.assertIn("--mega-link-color:#F5E6C8;", self.header_tag())
+        self.save_settings(mega_link_color="#FFFFFF")  # what the burgundy store sets
+        tag = self.header_tag()
+        self.assertIn("--mega-link-color:#FFFFFF;", tag)
+        self.assertNotIn("--mega-link-color:#F5E6C8;", tag)
+        self.save_settings(mega_link_color="", text_color="")
+        self.assertNotIn("--mega-link-color", self.header_tag())
+
+    def test_heading_colour_is_only_set_when_the_owner_picks_one(self):
+        self.wine_menu()
+        self.assertNotIn("--mega-heading-color", self.header_tag())
+        self.save_settings(mega_heading_color="#C9A35A")  # what the burgundy store sets
+        self.assertIn("--mega-heading-color:#C9A35A;", self.header_tag())
+
+    def test_changed_look_settings_reach_the_storefront_right_away(self):
+        self.wine_menu()
+        self.save_settings(
+            mega_heading_color="#FFD700", mega_heading_size=18, mega_link_color="#EEEEEE", mega_link_size=20,
+            mega_row_spacing=44, mega_column_gap=120, mega_padding_left=75,
+        )
+        tag = self.header_tag()
+        for declaration in (
+            "--mega-heading-color:#FFD700;", "--mega-heading-size:18px;", "--mega-link-color:#EEEEEE;",
+            "--mega-link-size:20px;", "--mega-row:44px;", "--mega-gap:120px;", "--mega-pad-left:75px;",
+        ):
+            self.assertIn(declaration, tag)
+
+    def test_look_settings_are_kept_inside_their_ranges_and_colours_stay_safe(self):
+        self.wine_menu()
+        self.save_settings(mega_heading_size=500, mega_row_spacing=1, mega_link_color="red;}</style><script>x</script>")
+        tag = self.header_tag()
+        self.assertIn("--mega-heading-size:28px;", tag)
+        self.assertIn("--mega-row:20px;", tag)
+        self.assertNotIn("--mega-link-color", tag)  # not a colour: back to the default (none)
+        self.assertNotIn("<script>x", self.home())
+
+    def test_the_look_settings_follow_edit_code(self):
+        import json
+
+        files = self.ok("get", "/api/v1/themes/files/")["files"]
+        code = next(f["content"] for f in files if f["path"] == "sections/header.liquid")
+        markup, schema_text, _ = sync.split(code)
+        schema = json.loads(schema_text)
+        for setting in schema["settings"]:
+            if setting["id"] == "mega_shop_all_label":
+                setting["default"] = "View all"
+            if setting["id"] == "mega_link_size":
+                setting["max"] = 40
+        start = code.index("{% schema %}")
+        changed = code[:start] + "{% schema %}\n" + json.dumps(schema, indent=2) + "\n{% endschema %}\n"
+        r = self.client.post("/api/v1/themes/files/", {"path": "sections/header.liquid", "content": changed}, format="json")
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        settings = self.header()["spec"]["settings"]
+        self.assertEqual(settings["mega_shop_all_label"]["default"], "View all")
+        self.assertEqual(settings["mega_link_size"]["max"], 40)
+        # ... and a value changed in the sidebar is read by the same markup
+        self.wine_menu()
+        self.save_settings(mega_shop_all_label="See everything", mega_link_size=30)
+        self.assertIn("--mega-link-size:30px;", self.header_tag())
+        self.assertIn(">See everything</a>", self.nav())
+
+    def test_the_columns_still_come_only_from_admin_menus(self):
+        spec = self.header()["spec"]
+        self.assertEqual(sorted(spec["blocks"]), ["announcement", "cart", "link", "search", "wishlist"])
+        self.assertEqual(sorted(spec["blocks"]["link"]["settings"]), ["label", "url"])  # no columns or links in the blocks
+
+    # ---------------------------------------------------------------- existing stores and the snippet
+
+    def test_the_previous_header_is_registered_for_the_upgrade_and_the_new_one_is_not(self):
+        import hashlib
+
+        from .services import STARTER_UPGRADES, starter_files
+
+        for digest in self.PREVIOUS_STARTER_HEADER_HASHES:
+            self.assertIn(digest, STARTER_UPGRADES["sections/header.liquid"])
+        current = starter_files()["sections/header.liquid"]
+        for text in (current, current.replace("\n", "\r\n")):
+            self.assertNotIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES["sections/header.liquid"])
+
+    def test_the_new_header_snippet_is_a_known_original_so_untouched_themes_get_the_section(self):
+        from .services import starter_files
+
+        snippet = starter_files()["snippets/header.liquid"]
+        self.assertTrue(sync.is_original_snippet("header", snippet))
+        self.assertTrue(sync.is_original_snippet("header", snippet.replace("\n", "\r\n")))
+        self.assertGreaterEqual(sync.ORIGINALS_REVISION, 13)
+
+    def test_an_edited_header_is_not_replaced_by_the_upgrade(self):
+        from . import services
+        from apps.tenancy.models import Store
+
+        store_theme = services.get_store_theme(Store.objects.get(store_id=self.store["storeId"]))
+        theme = store_theme.theme
+        edited = edited_header()
+        theme.files.filter(file_path="sections/header.liquid").update(content=edited, file_size=len(edited.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 48}
+        theme.save()
+        services._upgrade_untouched_starter_files(theme)
+        self.assertEqual(theme.files.get(file_path="sections/header.liquid").content, edited)
+
+    def test_the_header_snippet_has_the_same_column_layout_and_shop_all(self):
+        from .services import starter_files
+
+        snippet = starter_files()["snippets/header.liquid"]
+        self.assertIn('<a class="mega-menu__shop-all" href="{{ col.url }}">{{ mega_shop_all_label }}</a>', snippet)
+        self.assertIn("font-size: var(--mega-heading-size, 15px);", snippet)
+        self.assertIn("--mega-bg:{{ settings.header_bg }};", snippet)
+        # the snippet's mega menu CSS is the section's
+        section = starter_files()["sections/header.liquid"]
+        start, end = "/* Mega menu container", "/* Promo banner */"
+        self.assertEqual(section[section.index(start):section.index(end)], snippet[snippet.index(start):snippet.index(end)])
 
 
 class ThemePerformanceCacheTest(StoreClientMixin, APITestCase):

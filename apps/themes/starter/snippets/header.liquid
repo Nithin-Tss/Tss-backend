@@ -1,4 +1,12 @@
+{%- comment -%}
+  Mega menu look: the panel follows the header colour; headings, links and "Shop All" use the --mega-* defaults of the
+  CSS below. The synced header section (sections/header.liquid) has settings for all of them.
+{%- endcomment -%}
+{%- assign mega_shop_all = true -%}
+{%- assign mega_shop_all_label = 'Shop All' -%}
 {%- capture header_style -%}
+  {% if settings.header_bg != blank %}--mega-bg:{{ settings.header_bg }};{% endif %}
+  {% if settings.header_text != blank %}--mega-link-color:{{ settings.header_text }};{% endif %}
   {% if settings.header_bg != blank %}background:{{ settings.header_bg }};{% endif %}
   {% if settings.header_text != blank %}color:{{ settings.header_text }};{% endif %}
 {%- endcapture -%}
@@ -40,7 +48,7 @@
                         {%- for col in item.columns -%}
                           <div class="mega-menu__column{% if col.links.size > 0 %} mega-menu__column--has-sublinks{% endif %}">
                             <div class="mega-menu__column-header">
-                              {%- if col.url != blank and col.url != '#' -%}
+                              {%- if col.url != blank and col.url != '#' and mega_shop_all == false -%}
                                 <a class="mega-menu__column-title mega-menu__column-title--link" href="{{ col.url }}">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</a>
                               {%- else -%}
                                 <div class="mega-menu__column-title">{{ col.label }}{%- if col.badge != blank -%}<span class="menu-badge">{{ col.badge }}</span>{%- endif -%}</div>
@@ -60,6 +68,9 @@
                                 {%- endfor -%}
                               </ul>
                             {%- endif -%}
+                          {%- if mega_shop_all and col.url != blank and col.url != '#' -%}
+                            <a class="mega-menu__shop-all" href="{{ col.url }}">{{ mega_shop_all_label }}</a>
+                          {%- endif -%}
                           </div>
                         {%- endfor -%}
                       </div>
@@ -318,7 +329,8 @@
       color: var(--text);
       opacity: 1;
     }
-    /* Mega menu container */
+    /* Mega menu container. The panel follows the header colour (--mega-bg is set on the header from
+       the "Mega menu background" or the header colour); headings, links and spacing come from the --mega-* variables. */
     body .site-header__nav .site-header__item--mega {
       position: static;
     }
@@ -329,8 +341,8 @@
       right: 0;
       width: 100%;
       max-width: 100%;
-      background: var(--bg);
-      color: var(--text);
+      background: var(--mega-bg, var(--bg));
+      color: var(--mega-link-color, var(--text));
       border-top: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
       box-shadow: 0 16px 36px rgba(0, 0, 0, 0.12);
@@ -355,8 +367,8 @@
     body .site-header__nav .mega-menu__inner {
       display: flex;
       gap: 32px;
-      padding-top: 24px;
-      padding-bottom: 28px;
+      padding-top: 28px;
+      padding-bottom: 32px;
       align-items: flex-start;
       justify-content: space-between;
       box-sizing: border-box;
@@ -366,14 +378,19 @@
     body .site-header__nav .mega-menu__columns {
       flex: 1 1 auto;
       min-width: 0;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 24px 32px;
-      align-content: start;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 32px var(--mega-gap, 80px);
+      padding-left: var(--mega-pad-left, 0px);
+      box-sizing: border-box;
       max-width: 100%;
     }
     body .site-header__nav .mega-menu__column {
-      min-width: 130px;
+      min-width: 150px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
     }
     body .site-header__nav .mega-menu__column-header {
       display: flex;
@@ -385,11 +402,12 @@
     body .site-header__nav a.mega-menu__column-title {
       display: flex;
       align-items: center;
-      font-size: 13px;
+      font-size: var(--mega-heading-size, 15px);
       font-weight: 700;
-      color: var(--text);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      line-height: 1.3;
+      color: var(--mega-heading-color, var(--accent));
+      text-transform: none;
+      letter-spacing: normal;
       opacity: 1;
       border-radius: 0;
       padding: 0;
@@ -397,7 +415,8 @@
       text-decoration: none;
     }
     body .site-header__nav a.mega-menu__column-title:hover {
-      color: var(--accent);
+      color: var(--mega-heading-color, var(--accent));
+      opacity: 0.8;
     }
     body .site-header__nav .mega-menu__sublinks {
       list-style: none;
@@ -405,7 +424,7 @@
       padding: 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 0;
     }
     body .site-header__nav .mega-menu__sublink-item {
       margin: 0;
@@ -414,23 +433,45 @@
     body .site-header__nav a.mega-menu__sublink {
       display: inline-flex;
       align-items: center;
-      font-size: 13px;
+      min-height: var(--mega-row, 38px);
+      font-size: var(--mega-link-size, 17px);
       font-weight: 400;
-      color: var(--muted);
+      color: var(--mega-link-color, var(--text));
       text-decoration: none;
       text-transform: none;
       letter-spacing: normal;
-      opacity: 0.85;
-      padding: 3px 0;
+      opacity: 1;
+      padding: 0;
       border-radius: 0;
       background: transparent;
       transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
     }
     body .site-header__nav a.mega-menu__sublink:hover {
-      color: var(--text);
+      color: var(--mega-heading-color, var(--accent));
       opacity: 1;
       transform: translateX(2px);
       background: transparent;
+    }
+    /* "Shop All": the column's own link, at the end of the column */
+    body .site-header__nav a.mega-menu__shop-all {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--mega-row, 38px);
+      font-size: var(--mega-link-size, 17px);
+      font-weight: 600;
+      color: var(--mega-heading-color, var(--accent));
+      text-decoration: underline;
+      text-underline-offset: 4px;
+      text-transform: none;
+      letter-spacing: normal;
+      opacity: 1;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    body .site-header__nav a.mega-menu__shop-all:hover {
+      color: var(--mega-heading-color, var(--accent));
+      opacity: 0.8;
     }
     /* Promo banner */
     body .site-header__nav .mega-menu__promo {
@@ -623,8 +664,10 @@
       body .site-header__nav .mega-menu__columns {
         display: flex;
         flex-direction: column;
+        flex-wrap: nowrap;
         gap: 10px;
         width: 100%;
+        padding-left: 0;
       }
       body .site-header__nav .mega-menu__column {
         width: 100%;
@@ -679,17 +722,24 @@
         padding-left: 14px;
         padding-top: 4px;
         padding-bottom: 8px;
-        gap: 6px;
+        gap: 0;
       }
       body .site-header__nav .mega-menu__column.is-col-open .mega-menu__sublinks {
         display: flex;
       }
       body .site-header__nav a.mega-menu__sublink {
-        min-height: 38px;
+        min-height: var(--mega-row, 38px);
         display: flex;
         align-items: center;
-        padding: 6px 0;
-        font-size: 14px;
+        padding: 0;
+      }
+      /* Shop All sits inside the opened column */
+      body .site-header__nav .mega-menu__column--has-sublinks:not(.is-col-open) a.mega-menu__shop-all {
+        display: none;
+      }
+      body .site-header__nav a.mega-menu__shop-all {
+        display: flex;
+        padding: 0 0 0 14px;
       }
       body .site-header__nav .mega-menu__promo {
         width: 100%;
