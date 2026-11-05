@@ -680,7 +680,9 @@ PREVIEW_EDITOR = """
     var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
   }, true);
-  document.addEventListener("submit", function (e) { if (editing) e.preventDefault(); }, true);
+  // Also stopped from reaching the theme's own submit script (login/register forms), which would
+  // disable the button and show "Please wait..." for good, as nothing is ever sent
+  document.addEventListener("submit", function (e) { if (editing) { e.preventDefault(); e.stopPropagation(); } }, true);
   document.addEventListener("keydown", function (e) {
     if (editing && e.key === "Escape") send({ type: "escape" });
   });
