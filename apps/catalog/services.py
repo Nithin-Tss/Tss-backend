@@ -337,6 +337,149 @@ def set_manual_products(collection, product_ids):
     )
 
 
+# How many levels of "includes" are followed (Red Wine -> Shiraz -> Barossa Shiraz is 2)
+MAX_INCLUDE_DEPTH = 10
+
+
+def direct_included_ids(collection):
+    """Ids of the collections ticked on `collection` itself that still exist in its store (deleted ones are skipped)."""
+    wanted = {str(pk) for pk in collection.include_collections or []} - {str(collection.pk)}
+    if not wanted:
+        return []
+    return list(Collection.objects.filter(store=collection.store_id, pk__in=wanted).values_list("pk", flat=True))
+
+
+def collection_source_ids(collection):
+    """
+    The collections whose products show in `collection`: itself, the ones it includes, the ones those include, and
+    so on down to MAX_INCLUDE_DEPTH levels. Deleted ids are skipped, each collection is listed once (so a product is
+    never counted twice and a loop can't repeat). One query for the store's collections, then kept on `collection`.
+    """
+    cached = collection.__dict__.get("_source_ids")
+    if cached is not None:
+        return cached
+
+    sources = [collection.pk]
+    if collection.include_collections:
+        sources += walk_included(collection.pk, collection.include_collections, include_graph(collection.store_id))
+    collection.__dict__["_source_ids"] = sources
+    return sources
+
+
+def include_graph(store_id):
+    """{collection id: ids it ticked} for every collection of the store (one query); ids are strings."""
+    return {
+        str(pk): [str(i) for i in included or []]
+        for pk, included in Collection.objects.filter(store=store_id).values_list("pk", "include_collections")
+    }
+
+
+def walk_included(root, ticked, graph):
+    """
+    The collections reached from `ticked` through `graph`, nearest first, each once and never `root` itself.
+    Deleted ids (not in `graph`) are skipped; at most MAX_INCLUDE_DEPTH levels are followed.
+    """
+    seen, found, level = {str(root)}, [], [str(pk) for pk in ticked]
+    for _ in range(MAX_INCLUDE_DEPTH):
+        following = []
+        for pk in level:
+            if pk in seen or pk not in graph:
+                continue
+            seen.add(pk)
+            found.append(pk)
+            following.extend(graph[pk])
+        level = following
+        if not level:
+            break
+    return found
+
+
+def included_product_sources(store, ticked, exclude=()):
+    """
+    Products that come from the collections `ticked` (nested ones too), for the collection page's item grid.
+    Returns ({product id: id of the ticked collection it comes through}, {ticked id: name}). A product shows once,
+    under the first ticked collection that reaches it, and never when its id is in `exclude` (the collection's own).
+    Unknown or deleted ids are skipped.
+    """
+    graph = include_graph(store.pk)
+    ticked = [pk for pk in dict.fromkeys(str(pk) for pk in ticked) if pk in graph]
+    if not ticked:
+        return {}, {}
+    names = {str(pk): name for pk, name in Collection.objects.filter(store=store, pk__in=ticked).values_list("pk", "name")}
+    routes = {pk: [pk, *walk_included(pk, graph[pk], graph)] for pk in ticked}
+
+    products_of = {}
+    for collection_id, product_id in ProductCollection.objects.filter(
+        collection_id__in={c for route in routes.values() for c in route}
+    ).values_list("collection_id", "product_id"):
+        products_of.setdefault(str(collection_id), []).append(str(product_id))
+
+    taken, found = {str(pk) for pk in exclude}, {}
+    for pk in ticked:
+        for collection_id in routes[pk]:
+            for product_id in products_of.get(collection_id, ()):
+                if product_id not in taken:
+                    taken.add(product_id)
+                    found[product_id] = pk
+    return found, names
+
+
+def included_collection_ids(collection):
+    """Every collection included in `collection`, nested ones too (not itself)."""
+    return collection_source_ids(collection)[1:]
+
+
+def collection_product_ids(collection):
+    """Subquery of the product ids in `collection`: its own products plus those of the collections it includes."""
+    return ProductCollection.objects.filter(collection_id__in=collection_source_ids(collection)).values("product_id")
+
+
+def check_included_collections(store, ids, collection=None):
+    """
+    Raise a ValidationError unless `ids` can be ticked on `collection` (None: a collection not saved yet):
+    each must be another collection of this store, and none may lead back to `collection`.
+    """
+    # Raised from the serializer's field check, which files the message under "include_collections"
+    ids = [str(pk) for pk in dict.fromkeys(ids)]
+    if collection is not None and str(collection.pk) in ids:
+        raise ValidationError("A collection can't include itself.")
+
+    names = {str(pk): name for pk, name in Collection.objects.filter(store=store, pk__in=ids).values_list("pk", "name")}
+    if len(names) != len(ids):
+        raise ValidationError("One or more of these collections don't exist in this store.")
+    if collection is None:
+        return
+
+    # Follow the chain from every ticked collection: reaching `collection` again would be a loop
+    graph = {
+        str(pk): [str(i) for i in included or []]
+        for pk, included in Collection.objects.filter(store=store).exclude(include_collections=[]).values_list("pk", "include_collections")
+    }
+    for start in ids:
+        seen, todo = set(), [start]
+        while todo:
+            current = todo.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current == str(collection.pk):
+                if str(collection.pk) in graph.get(start, []):
+                    raise ValidationError(f"{collection.name} and {names[start]} can't include each other.")
+                raise ValidationError(
+                    f"{names[start]} already includes {collection.name} through other collections, "
+                    f"so {collection.name} and {names[start]} can't include each other."
+                )
+            todo.extend(graph.get(current, []))
+
+
+def forget_included_collection(collection):
+    """A deleted collection is taken off every list that ticked it."""
+    for other in Collection.objects.filter(store=collection.store_id).exclude(include_collections=[]):
+        kept = [pk for pk in other.include_collections if str(pk) != str(collection.pk)]
+        if kept != other.include_collections:
+            Collection.objects.filter(pk=other.pk).update(include_collections=kept)
+
+
 def published_collections(store):
     """Collections a shopper may see: Active and on the Online Store. Drafts stay hidden."""
     on_online_store = CollectionSalesChannel.objects.filter(collection=OuterRef("pk"), sales_channel__type=ONLINE)

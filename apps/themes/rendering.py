@@ -27,7 +27,9 @@ from django.utils.html import strip_tags
 from django.utils.text import slugify
 
 from apps.catalog.models import EXTRA_FIELDS, ProductCollection
-from apps.catalog.services import published_collections, published_products
+from apps.catalog.services import (
+    collection_product_ids, include_graph, published_collections, published_products, walk_included,
+)
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
@@ -2040,7 +2042,8 @@ def _products(store, base_url, collection=None, limit=None, exclude=None):
     qs = _catalog(store)
 
     if collection is not None:
-        qs = qs.filter(product_collections__collection=collection)
+        # Its own products and those of the collections it includes, each product once
+        qs = qs.filter(pk__in=collection_product_ids(collection))
     if exclude is not None:
         qs = qs.exclude(pk=exclude)
     if limit:
@@ -2512,15 +2515,33 @@ class _LazyList(Sequence):
 
 def _nav(store, base_url):
     """
-    The store's published collections that have at least one published product in them (one query). This is the
-    `collections` the header's automatic menu lists; a menu the owner built is not affected by it.
+    The store's published collections that have at least one published product in them (one query; one more only
+    when a collection includes others). This is the `collections` the header's automatic menu lists; a menu the
+    owner built is not affected by it.
     """
     filled = ProductCollection.objects.filter(
         collection=OuterRef("pk"), product__in=published_products(store).prefetch_related(None).order_by().values("pk")
     )
+    published =list(published_collections(store).annotate(own_products=Exists(filled)))
+    # A collection that includes others is also filled when one of them is (a second query, only then)
+    unfilled = [c for c in published if not c.own_products and c.include_collections]
+    reached, with_products = {}, set()
+    if unfilled:
+        graph = include_graph(store.pk)
+        reached = {c.pk: walk_included(c.pk, c.include_collections, graph) for c in unfilled}
+        with_products = {
+            str(pk) for pk in ProductCollection.objects.filter(
+                collection__store=store, collection_id__in={i for ids in reached.values() for i in ids},
+                product__in=published_products(store).prefetch_related(None).order_by().values("pk"),
+            ).values_list("collection_id", flat=True).distinct()
+        }
+    shown = [
+        c for c in published
+        if c.own_products or any(i in with_products for i in reached.get(c.pk, ()))
+    ]
     return [
         {"name": c.name, "url": collection_url(base_url, c), "has_products": True}
-        for c in published_collections(store).filter(Exists(filled))[:20]
+        for c in shown[:20]
     ]
 
 
