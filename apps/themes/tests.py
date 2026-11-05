@@ -2732,7 +2732,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 49)
+        self.assertEqual(theme.theme_data["starter_revision"], 50)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2942,7 +2942,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 49)
+        self.assertEqual(STARTER_REVISION, 50)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3761,7 +3761,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 49)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 50)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
@@ -6943,6 +6943,91 @@ class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
                 self.assertIn('data-variant-continue="{{ variant.continue_selling }}"', self.stored(theme))
 
     def test_a_store_that_edited_its_copy_keeps_it(self):
+        from . import services
+
+        theme = self.theme()
+        edited = self.previous_starter_file() + "\n<!-- my own change -->\n"
+        self.store_copy(theme, edited)
+        services._upgrade_untouched_starter_files(theme)
+        self.assertEqual(self.stored(theme), edited)
+        theme.refresh_from_db()
+        self.assertEqual(theme.theme_data["starter_revision"], services.STARTER_REVISION)  # checked once, left alone
+
+
+class SocialClickLayoutUpgradeTest(StoreClientMixin, APITestCase):
+    """Stores get the layout whose script also counts clicks on social links, unless they edited their own copy."""
+
+    PATH = "layout/theme.liquid"
+    PREVIOUS_HASH = "0987e907fc71ca53d60862620a3adea06198870982b9895bfdf748b15594f7e3"
+    PREVIOUS_HASH_CRLF = "0dc7cbfbf4afbd1e07d916c8a0da1c239d2a28ac51595beee81fb86630c35524"
+
+    # (new text, the text it replaced): undoing it gives the layout stores had before
+    CHANGES = (
+        ('''    // Clicks on links to other sites: the server keeps only the social network found in the address (facebook, instagram...).
+    function sendClick(e) {
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a || !/^https?:$/.test(a.protocol) || a.hostname === location.hostname) return;
+      navigator.sendBeacon("{{ shop.url }}/_track", new Blob([JSON.stringify({ type: "social_click", url: a.href })], { type: "text/plain;charset=UTF-8" }));
+    }
+    document.addEventListener("click", sendClick);
+    document.addEventListener("auxclick", sendClick);
+''', ''''''),
+    )
+
+    def setUp(self):
+        self.token, self.store = self.sign_up("click-upgrade@example.com", "Click Upgrade Store")
+
+    def theme(self):
+        from apps.tenancy.models import Store
+
+        from .services import get_store_theme
+
+        return get_store_theme(Store.objects.get(store_id=self.store["storeId"])).theme
+
+    def previous_starter_file(self):
+        from .services import starter_files
+
+        text = starter_files()[self.PATH]
+        for new, old in self.CHANGES:
+            self.assertEqual(text.count(new), 1, new[:60])
+            text = text.replace(new, old)
+        return text
+
+    def store_copy(self, theme, content):
+        theme.files.filter(file_path=self.PATH).update(content=content, file_size=len(content.encode("utf-8")))
+        theme.theme_data = {**theme.theme_data, "starter_revision": 49}
+        theme.save()
+
+    def stored(self, theme):
+        return theme.files.get(file_path=self.PATH).content
+
+    def test_the_layout_stores_had_before_is_registered_as_never_edited_and_the_new_one_is_not(self):
+        import hashlib
+
+        from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
+
+        previous = self.previous_starter_file()
+        self.assertEqual(hashlib.sha256(previous.encode("utf-8")).hexdigest(), self.PREVIOUS_HASH)
+        self.assertEqual(hashlib.sha256(previous.replace("\n", "\r\n").encode("utf-8")).hexdigest(), self.PREVIOUS_HASH_CRLF)
+        self.assertLessEqual({self.PREVIOUS_HASH, self.PREVIOUS_HASH_CRLF}, STARTER_UPGRADES[self.PATH])
+        self.assertGreaterEqual(STARTER_REVISION, 50)
+        current = starter_files()[self.PATH]
+        for text in (current, current.replace("\n", "\r\n")):
+            self.assertNotIn(hashlib.sha256(text.encode("utf-8")).hexdigest(), STARTER_UPGRADES[self.PATH])
+
+    def test_a_store_with_the_untouched_old_layout_gets_the_click_listener(self):
+        from . import services
+
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                theme = self.theme()
+                self.store_copy(theme, self.previous_starter_file().replace("\n", newline))
+                self.assertNotIn("social_click", self.stored(theme))
+                services._upgrade_untouched_starter_files(theme)
+                self.assertEqual(self.stored(theme), services.starter_files()[self.PATH])
+                self.assertIn('type: "social_click"', self.stored(theme))
+
+    def test_a_store_that_edited_its_layout_keeps_it(self):
         from . import services
 
         theme = self.theme()

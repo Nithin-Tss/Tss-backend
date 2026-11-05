@@ -23,6 +23,8 @@ The formulas, the store timezone and the cancelled-order rule are those of /repo
 * Session reports (Acquisition, Conversion) read analytics.storefront_sessions: a session counts on the day
   it started and is not tied to a currency or to the product / channel / customer filters. Conversion
   rate = sessions with an order / sessions. See apps.orders.services.
+* Social link clicks reads store_daily_metrics.social_clicks: clicks per network on the store-local day, added up
+  over every currency's row (a click has no currency).
 * Inventory reports are a snapshot of stock now. Sell-through = units sold / (units sold +
   units available); days remaining = units available / average units sold per day.
   They use the period only for the sales side.
@@ -275,10 +277,23 @@ def sessions_by_landing_page(ctx):
 
 
 def sessions_by_referrer(ctx):
-    columns, rows, totals = _session_group(
-        ctx, col("referrer", "Referrer"), ("referrer_host", "referrer_type"),
-        lambda r: {"referrer": r["referrer_host"] or r["referrer_type"].title(), "referrer_type": r["referrer_type"]})
-    columns.insert(1, col("referrer_type", "Type"))
+    """One row per referrer name and type ("facebook · social"): hosts like l.facebook.com and utm_source=facebook merge."""
+    columns = [col("referrer", "Referrer"), col("referrer_name", "Name"), col("referrer_type", "Type"),
+               SESSIONS, COMPLETED, CONVERSION]
+    from apps.orders.services import referrer_name  # imported here: the orders services import this app's reports
+
+    merged = {}
+    for r in (ctx.sessions().values("referrer_host", "referrer_type", "utm_source")
+              .annotate(n=Count("id"), done=Count("id", filter=Q(order__isnull=False)))):
+        name = referrer_name(r["referrer_host"], r["utm_source"])
+        row = merged.setdefault((name, r["referrer_type"]), {"n": 0, "done": 0})
+        row["n"] += r["n"]
+        row["done"] += r["done"]
+    rows = [{"referrer": f"{name} · {kind}", "referrer_name": name, "referrer_type": kind, "sessions": m["n"],
+             "sessions_completed": m["done"], "conversion_rate": base.rate(m["done"], m["n"])}
+            for (name, kind), m in sorted(merged.items(), key=lambda i: (-i[1]["n"], i[0]))]
+    totals = sum_totals(columns, rows)
+    totals["conversion_rate"] = base.rate(totals.get("sessions_completed", 0), totals.get("sessions", 0))
     return columns, rows, totals
 
 
@@ -290,6 +305,14 @@ def sessions_by_device_type(ctx):
 def sessions_by_location(ctx):
     return _session_group(ctx, col("country", "Country"), ("country",),
                           lambda r: {"country": r["country"] or "Unknown"})
+
+
+def social_link_clicks(ctx):
+    """Clicks on the storefront's social links per network (store_daily_metrics.social_clicks); not tied to a currency."""
+    columns = [col("network", "Network"), col("clicks", "Clicks", "number")]
+    rows = [{"network": network, "clicks": n}
+            for network, n in sorted(base.social_click_counts(ctx.store, ctx.start, ctx.end).items(), key=lambda i: (-i[1], i[0]))]
+    return columns, rows, sum_totals(columns, rows)
 
 
 def conversion_breakdown(ctx):
@@ -510,7 +533,7 @@ REPORTS = [
            sessions_over_time([SESSIONS, VISITORS, col("page_views", "Page views", "number")]), "line", "sessions", "date", "date", filters=()),
     report("sessions-by-landing-page", "Sessions by landing page", "Acquisition", "The page each visit started on, with its orders and conversion rate.",
            sessions_by_landing_page, "bar", "sessions", "landing_page", "-sessions", filters=()),
-    report("sessions-by-referrer", "Sessions by referrer", "Acquisition", "Where visits came from: search, social, email, other sites or direct.",
+    report("sessions-by-referrer", "Sessions by referrer", "Acquisition", "Where visits came from, by name and type (facebook · social, google · search, direct ...).",
            sessions_by_referrer, "bar", "sessions", "referrer", "-sessions", filters=()),
     report("sessions-by-device-type", "Sessions by device type", "Acquisition", "Visits from desktop, mobile and tablet.",
            sessions_by_device_type, "bar", "sessions", "device_type", "-sessions", filters=()),
@@ -518,6 +541,8 @@ REPORTS = [
            sessions_by_location, "bar", "sessions", "country", "-sessions", filters=()),
     report("visitors-over-time", "Visitors over time", "Acquisition", "Distinct visitors per day, and their sessions.",
            sessions_over_time([VISITORS, SESSIONS]), "line", "visitors", "date", "date", filters=()),
+    report("social-link-clicks", "Social link clicks", "Acquisition", "Clicks on the store's social links (facebook, instagram, whatsapp ...), by network.",
+           social_link_clicks, "bar", "clicks", "network", "-clicks", filters=()),
     report("conversion-rate-over-time", "Conversion rate over time", "Conversion", "Sessions that ended in an order, as a share of sessions, per day.",
            sessions_over_time([SESSIONS, WITH_CART, REACHED_CHECKOUT, COMPLETED, CONVERSION]), "line", "conversion_rate", "date", "date", filters=()),
     report("conversion-rate-breakdown", "Conversion rate breakdown", "Conversion", "Sessions, added to cart, reached checkout and completed.",

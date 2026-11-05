@@ -524,7 +524,7 @@ class ReportPagesTest(AnalyticsBase):
         for r in listed:
             names[r["category"]].append(r["name"])
         self.assertEqual(sorted(names), ["Acquisition", "Conversion", "Customers", "Finances", "Inventory", "Orders", "Sales"])
-        self.assertEqual(len(names["Acquisition"]), 6)
+        self.assertEqual(len(names["Acquisition"]), 7)
         self.assertEqual(len(names["Conversion"]), 2)
         self.assertEqual(len(names["Sales"]), 8)
         self.assertEqual(len(names["Orders"]), 3)
@@ -794,7 +794,9 @@ class CollectingTest(TrackingBase):
         for host, medium, kind in (("", "", "direct"), ("google.co.in", "", "search"), ("bing.com", "", "search"),
                                    ("l.facebook.com", "", "social"), ("t.co", "", "social"), ("instagram.com", "", "social"),
                                    ("mail.google.com", "", "email"), ("blog.example.org", "", "other"),
-                                   ("", "email", "email"), ("", "cpc", "search"), ("", "social", "social")):
+                                   ("", "email", "email"), ("", "cpc", "paid"), ("", "paid-social", "paid"), ("", "organic", "search"),
+                                   ("", "social", "social"), ("lm.facebook.com", "", "social"), ("fb.com", "", "social"),
+                                   ("l.instagram.com", "", "social"), ("google.com", "cpc", "paid")):
             self.assertEqual(order_services.referrer_type(host, medium), kind, (host, medium))
         self.assertEqual(order_services.referrer_host("https://www.Google.com/x", own_host="shop.example.com"), "google.com")
         self.assertEqual(order_services.referrer_host("https://shop.example.com/products", own_host="shop.example.com:8000"), "")
@@ -1050,9 +1052,9 @@ class SessionReportsTest(TrackingBase):
         self.assertEqual(pages["/products/p1"]["conversion_rate"], 0.0)
 
         referrers = {r["referrer"]: r for r in self.report("sessions-by-referrer", "2026-10-02")["rows"]}
-        self.assertEqual((referrers["google.com"]["referrer_type"], referrers["google.com"]["sessions"]), ("search", 1))
-        self.assertEqual(referrers["facebook.com"]["referrer_type"], "social")
-        self.assertEqual((referrers["Direct"]["referrer_type"], referrers["Direct"]["sessions"]), ("direct", 3))
+        self.assertEqual((referrers["google · search"]["referrer_type"], referrers["google · search"]["sessions"]), ("search", 1))
+        self.assertEqual(referrers["facebook · social"]["referrer_type"], "social")
+        self.assertEqual((referrers["direct · direct"]["referrer_type"], referrers["direct · direct"]["sessions"]), ("direct", 3))
 
         devices = {r["device_type"]: r["sessions"] for r in self.report("sessions-by-device-type", "2026-10-02")["rows"]}
         self.assertEqual(devices, {"desktop": 2, "mobile": 2, "tablet": 1})
@@ -1076,7 +1078,7 @@ class SessionReportsTest(TrackingBase):
 
         mine = self.analytics("2026-10-02")
         self.assertEqual(mine["metrics"]["sessions"]["value"], 5)
-        self.assertEqual("bing.com" in {r["referrer"] for r in mine["sessions_by_referrer"]}, False)
+        self.assertEqual("bing" in {r["referrer"] for r in mine["sessions_by_referrer"]}, False)
         self.assertEqual(sum(r["sessions"] for r in self.report("sessions-by-referrer", "2026-10-02")["rows"]), 5)
 
     def test_landing_pages_and_referrers_on_the_dashboard_and_nothing_to_show(self):
@@ -1085,6 +1087,7 @@ class SessionReportsTest(TrackingBase):
         data = self.analytics("2026-10-02")
         self.assertEqual(data["sessions_by_landing_page"][0], {"page": "/products/p1", "page_type": "product", "sessions": 3})
         self.assertEqual(data["sessions_by_referrer"][0], {"referrer": "Direct", "type": "direct", "sessions": 3})
+        self.assertIn({"referrer": "facebook", "type": "social", "sessions": 1}, data["sessions_by_referrer"])
 
     def test_session_reports_are_listed_and_need_the_reports_permission(self):
         listed = {r["id"]: r["category"] for r in self.ok("get", "/api/v1/reports/")}
@@ -1102,6 +1105,172 @@ class SessionReportsTest(TrackingBase):
             StorefrontSession.objects.filter(pk=s.pk).update(page_views=0)
         with self.assertRaises(IntegrityError), transaction.atomic():
             StorefrontSession.objects.filter(pk=s.pk).update(last_seen_at=self.at("2026-10-02 09:00"))
+
+
+class ReferrerSourcesTest(TrackingBase):
+    """Simulated visits: each source lands in the right row of "Sessions by referrer", with no link to click."""
+
+    def rows(self, **extra):
+        rows = self.report("sessions-by-referrer", "2026-10-02", **extra)["rows"]
+        return {r["referrer"]: r["sessions"] for r in rows}
+
+    def seed(self):
+        self.beacon("2026-10-02 09:00", visitor="visitor-000001", referrer="https://l.facebook.com/l.php?u=https%3A%2F%2Fshop")
+        self.beacon("2026-10-02 09:10", visitor="visitor-000002", referrer="https://l.instagram.com/?u=x")
+        self.beacon("2026-10-02 09:20", visitor="visitor-000003", utm_source="facebook", utm_medium="social")
+        self.beacon("2026-10-02 09:30", visitor="visitor-000004", referrer="https://www.google.co.in/")
+        self.beacon("2026-10-02 09:40", visitor="visitor-000005")
+
+    def test_each_simulated_visit_lands_in_its_own_row(self):
+        self.seed()
+        self.assertEqual(self.rows(), {"facebook · social": 2, "instagram · social": 1, "google · search": 1, "direct · direct": 1})
+
+    def test_rows_show_name_and_type_sorted_by_sessions_with_totals(self):
+        self.seed()
+        report = self.report("sessions-by-referrer", "2026-10-02")
+        self.assertEqual([c["key"] for c in report["columns"]][:3], ["referrer", "referrer_name", "referrer_type"])
+        self.assertEqual(report["rows"][0]["referrer"], "facebook · social")  # most sessions first
+        self.assertEqual((report["rows"][0]["referrer_name"], report["rows"][0]["referrer_type"]), ("facebook", "social"))
+        self.assertEqual(report["totals"]["sessions"], 5)
+
+    def test_every_facebook_and_instagram_host_is_the_same_row(self):
+        for i, host in enumerate(("facebook.com", "m.facebook.com", "l.facebook.com", "lm.facebook.com", "fb.com",
+                                  "instagram.com", "l.instagram.com")):
+            self.beacon("2026-10-02 09:00", visitor=f"visitor-00000{i}", referrer=f"https://{host}/x")
+        self.assertEqual(self.rows(), {"facebook · social": 5, "instagram · social": 2})
+
+    def test_utm_wins_over_the_referrer_host(self):
+        self.beacon("2026-10-02 09:00", referrer="https://www.google.com/", utm_source="instagram", utm_medium="social")
+        self.beacon("2026-10-02 09:00", visitor="visitor-000002", referrer="https://l.facebook.com/", utm_source="google", utm_medium="cpc")
+        self.assertEqual(self.rows(), {"instagram · social": 1, "google · paid": 1})
+
+    def test_our_own_store_is_not_a_referrer(self):
+        self.beacon("2026-10-02 09:00", referrer="http://testserver/products/p1")  # the test client's host
+        self.assertEqual(self.rows(), {"direct · direct": 1})
+
+    def test_compare_period_has_previous_totals(self):
+        self.seed()
+        self.beacon("2026-10-01 09:00", visitor="visitor-000009", referrer="https://l.facebook.com/")
+        report = self.report("sessions-by-referrer", "2026-10-02", compare="previous_period")
+        self.assertEqual(report["previous_totals"]["sessions"], 1)
+        self.assertEqual(report["totals"]["sessions"], 5)
+
+    def test_a_visit_from_another_store_or_a_bot_is_not_counted(self):
+        self.beacon("2026-10-02 09:00", store=self.other_store(), referrer="https://l.facebook.com/")
+        self.beacon("2026-10-02 09:00", referrer="https://l.facebook.com/", ua="Googlebot/2.1")
+        self.assertEqual(self.rows(), {})
+
+
+class SocialClickTest(TrackingBase):
+    """Clicks on social links: store_daily_metrics.social_clicks, counted through the /_track beacon."""
+
+    def click(self, local, url, store=None, ua=DESKTOP, origin="null"):
+        """POST the click beacon as the layout's script does, with the clock at `local` (store time)."""
+        store = store or self.shop
+        with mock.patch("django.utils.timezone.now", return_value=self.at(local)):
+            return self.shopper.post(
+                f"/s/{store.store_slug}/_track", data=json.dumps({"type": "social_click", "url": url}),
+                content_type="text/plain;charset=UTF-8", HTTP_USER_AGENT=ua, HTTP_ORIGIN=origin)
+
+    def clicks(self, store=None):
+        """{day: social_clicks} of the store's metric rows."""
+        return {m.metric_date.isoformat(): m.social_clicks
+                for m in StoreDailyMetric.objects.filter(store=store or self.shop)}
+
+    def rows(self, start="2026-10-02", end=None, **extra):
+        return {r["network"]: r["clicks"] for r in self.report("social-link-clicks", start, end, **extra)["rows"]}
+
+    def test_the_network_comes_from_the_link_address(self):
+        for url, network in (("https://www.facebook.com/shop", "facebook"), ("https://m.facebook.com/x", "facebook"),
+                             ("https://fb.me/x", "facebook"), ("https://instagram.com/shop", "instagram"),
+                             ("https://wa.me/919999999999", "whatsapp"), ("https://api.whatsapp.com/send?phone=1", "whatsapp"),
+                             ("https://youtu.be/abc", "youtube"), ("https://www.youtube.com/@shop", "youtube"),
+                             ("https://x.com/shop", "x"), ("https://twitter.com/shop", "x"),
+                             ("https://in.linkedin.com/company/shop", "linkedin"), ("https://pin.it/abc", "pinterest"),
+                             ("https://www.tiktok.com/@shop", "tiktok"), ("https://t.me/shop", "telegram"),
+                             ("https://example.org/", ""), ("https://www.google.com/", ""), ("mailto:a@b.co", ""),
+                             ("tel:+911234567890", ""), ("not a url", ""), ("", ""), (None, "")):
+            self.assertEqual(order_services.social_network(url), network, url)
+        self.assertEqual(order_services.social_network("https://shop.example.com/", own_host="shop.example.com"), "")
+
+    def test_a_click_creates_the_days_row_and_counts_per_network(self):
+        self.assertEqual(self.click("2026-10-02 10:00", "https://www.facebook.com/shop").headers["X-Visit-Tracking"], "counted")
+        self.click("2026-10-02 10:05", "https://l.facebook.com/shop")
+        self.click("2026-10-02 11:00", "https://wa.me/919999999999")
+
+        self.assertEqual(self.clicks(), {"2026-10-02": {"facebook": 2, "whatsapp": 1}})
+        row = StoreDailyMetric.objects.get(store=self.shop)
+        self.assertEqual((row.currency_code, row.total_orders, row.gross_sales, row.net_sales), ("INR", 0, 0, 0))
+        self.assertEqual(self.rows(), {"facebook": 2, "whatsapp": 1})
+
+    def test_a_new_row_without_clicks_starts_empty(self):
+        row = StoreDailyMetric.objects.create(store=self.shop, metric_date=date(2026, 10, 2), currency_code="INR")
+        row.refresh_from_db()
+        self.assertEqual(row.social_clicks, {})
+
+    def test_days_follow_the_store_timezone_and_stores_are_kept_apart(self):
+        other = self.other_store()
+        self.click("2026-10-02 00:30", "https://instagram.com/shop")  # 19:00 UTC on 1 Oct
+        self.click("2026-10-02 23:30", "https://instagram.com/shop")
+        self.click("2026-10-03 00:30", "https://instagram.com/shop")
+        self.click("2026-10-02 10:00", "https://instagram.com/other", store=other)
+
+        self.assertEqual(self.clicks(), {"2026-10-02": {"instagram": 2}, "2026-10-03": {"instagram": 1}})
+        self.assertEqual(self.clicks(other), {"2026-10-02": {"instagram": 1}})
+        self.assertEqual(self.rows("2026-10-02", "2026-10-03"), {"instagram": 3})
+
+    def test_bots_other_links_bad_bodies_and_foreign_origins_are_not_counted(self):
+        self.assertEqual(self.click("2026-10-02 10:00", "https://facebook.com/x", ua="Googlebot/2.1").headers["X-Visit-Tracking"], "ignored")
+        self.assertEqual(self.click("2026-10-02 10:00", "https://facebook.com/x", ua="curl/8").headers["X-Visit-Tracking"], "ignored")
+        self.assertEqual(self.click("2026-10-02 10:00", "https://example.org/").headers["X-Visit-Tracking"], "ignored")
+        self.assertEqual(self.click("2026-10-02 10:00", "http://testserver/").headers["X-Visit-Tracking"], "ignored")  # our own site
+        self.assertEqual(self.click("2026-10-02 10:00", "https://facebook.com/x", origin="https://evil.example").status_code, 403)
+        self.assertEqual(self.shopper.post(f"/s/{self.shop.store_slug}/_track", data="{not json", content_type="text/plain",
+                                           HTTP_USER_AGENT=DESKTOP, HTTP_ORIGIN="null").status_code, 204)
+        self.assertEqual(self.clicks(), {})
+
+    def test_a_visit_beacon_is_still_a_visit_and_counts_no_click(self):
+        self.beacon("2026-10-02 10:00", referrer="https://l.facebook.com/")
+        self.assertEqual(self.sessions().count(), 1)
+        self.assertEqual(self.clicks(), {})
+
+    def test_the_nightly_rebuild_keeps_clicks_and_a_click_keeps_sales(self):
+        self.click("2026-10-02 10:00", "https://facebook.com/shop")
+        Order.objects.filter(pk=self.order().pk).update(created_at=self.at("2026-10-02 12:00"))
+        reports.aggregate_daily_metrics(self.shop, date(2026, 10, 2), date(2026, 10, 2))
+        row = StoreDailyMetric.objects.get(store=self.shop)
+        self.assertEqual((row.social_clicks, row.total_orders, row.gross_sales), ({"facebook": 1}, 1, Decimal("100.00")))
+
+        self.click("2026-10-02 13:00", "https://facebook.com/shop")
+        reports.aggregate_daily_metrics(self.shop, date(2026, 10, 2), date(2026, 10, 2))
+        row.refresh_from_db()
+        self.assertEqual((row.social_clicks, row.total_orders, row.gross_sales), ({"facebook": 2}, 1, Decimal("100.00")))
+
+    def test_every_currency_row_is_added_up_in_the_report(self):
+        self.click("2026-10-02 10:00", "https://facebook.com/shop")
+        StoreDailyMetric.objects.create(store=self.shop, metric_date=date(2026, 10, 2), currency_code="USD",
+                                        social_clicks={"facebook": 4, "tiktok": 1})
+        self.assertEqual(self.rows(), {"facebook": 5, "tiktok": 1})
+
+    def test_report_columns_totals_sorting_and_compare(self):
+        self.click("2026-10-01 10:00", "https://facebook.com/shop")
+        for minute in range(3):
+            self.click(f"2026-10-02 10:0{minute}", "https://instagram.com/shop")
+        self.click("2026-10-02 11:00", "https://facebook.com/shop")
+
+        report = self.report("social-link-clicks", "2026-10-02", compare="previous_period")
+        self.assertEqual((report["category"], report["name"]), ("Acquisition", "Social link clicks"))
+        self.assertEqual([c["key"] for c in report["columns"]], ["network", "clicks"])
+        self.assertEqual([(r["network"], r["clicks"]) for r in report["rows"]], [("instagram", 3), ("facebook", 1)])  # most first
+        self.assertEqual((report["totals"]["clicks"], report["previous_totals"]["clicks"]), (4, 1))
+        self.assertEqual(report["compare_from"], date(2026, 10, 1).isoformat())
+        response = self.client.get("/api/v1/reports/social-link-clicks/?from=2026-10-02&to=2026-10-02&format=csv")
+        lines = b"".join(response.streaming_content).decode("utf-8-sig").splitlines()
+        self.assertEqual(lines[1:], ["instagram,3", "facebook,1"])
+
+    def test_a_store_never_sees_another_stores_clicks(self):
+        self.click("2026-10-02 10:00", "https://facebook.com/shop", store=self.other_store())
+        self.assertEqual(self.rows(), {})
 
 
 class LiveViewTest(TrackingBase):

@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 49
+STARTER_REVISION = 50
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -270,6 +270,8 @@ STARTER_UPGRADES = {
         "5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9",
         "1e15fb022e606f4564860490a7b4e62843f4cbba02475d210af15c77e8ca7c3f",  # revision 40: before the utility bar
         "4dba4b04f36e6b14a9b43dc8ced1387eda1d44a0c78d6dd4d86d9f89df15cc2d",  # revision 40: before the utility bar (CRLF)
+        "0987e907fc71ca53d60862620a3adea06198870982b9895bfdf748b15594f7e3",  # revision 50: before the social link click listener
+        "0dc7cbfbf4afbd1e07d916c8a0da1c239d2a28ac51595beee81fb86630c35524",  # revision 50: same, with CRLF line endings
     },
     "snippets/header.liquid": {"6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1"},
     "sections/footer.liquid": {

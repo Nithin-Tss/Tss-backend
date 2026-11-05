@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
                 ('landing_path', models.CharField(blank=True, default='', max_length=255)),
                 ('landing_page_type', models.CharField(choices=[('home', 'home'), ('product', 'product'), ('collection', 'collection'), ('cart', 'cart'), ('checkout', 'checkout'), ('other', 'other')], default='other', max_length=20)),
                 ('referrer_host', models.CharField(blank=True, default='', max_length=255)),
-                ('referrer_type', models.CharField(choices=[('direct', 'direct'), ('search', 'search'), ('social', 'social'), ('email', 'email'), ('other', 'other')], default='direct', max_length=20)),
+                ('referrer_type', models.CharField(choices=[('direct', 'direct'), ('search', 'search'), ('social', 'social'), ('email', 'email'), ('paid', 'paid'), ('other', 'other')], default='direct', max_length=20)),
                 ('utm_source', models.CharField(blank=True, default='', max_length=100)),
                 ('utm_medium', models.CharField(blank=True, default='', max_length=100)),
                 ('utm_campaign', models.CharField(blank=True, default='', max_length=100)),

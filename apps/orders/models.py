@@ -394,8 +394,9 @@ class OrderIdempotencyKey(models.Model):
 class StoreDailyMetric(models.Model):
     """
     One store's sales for one day (in the store's timezone) in one currency, rebuilt from
-    orders and refunds by apps.core.reports.aggregate_daily_metrics(). Derived data: safe
-    to recompute any time. Lives in its own "analytics" schema.
+    orders and refunds by apps.core.reports.aggregate_daily_metrics(). The sales columns are
+    derived data: safe to recompute any time. social_clicks is the exception (see below).
+    Lives in its own "analytics" schema.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     store = models.ForeignKey(
@@ -413,6 +414,9 @@ class StoreDailyMetric(models.Model):
     net_sales = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     items_sold = models.PositiveIntegerField(default=0)
     average_order_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    # Clicks on the storefront's social links that day, per network: {"facebook": 12, "instagram": 5}. Not derived from
+    # orders: only record_social_click() writes it (atomically), and aggregate_daily_metrics() leaves it alone.
+    social_clicks = models.JSONField(default=dict, db_default={}, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -444,7 +448,7 @@ class StorefrontSession(models.Model):
     Lives in the "analytics" schema, next to StoreDailyMetric.
     """
     PAGE_TYPES = [(k, k) for k in ("home", "product", "collection", "cart", "checkout", "other")]
-    REFERRER_TYPES = [(k, k) for k in ("direct", "search", "social", "email", "other")]
+    REFERRER_TYPES = [(k, k) for k in ("direct", "search", "social", "email", "paid", "other")]
     DEVICE_TYPES = [(k, k) for k in ("desktop", "mobile", "tablet")]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

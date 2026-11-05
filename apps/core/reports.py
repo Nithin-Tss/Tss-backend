@@ -209,6 +209,16 @@ def aggregate_daily_metrics(store, start, end):
     return len(fresh)
 
 
+def social_click_counts(store, start, end):
+    """{network: clicks} for the store's local dates start..end, added up over every currency's row."""
+    counts = {}
+    for clicks in (StoreDailyMetric.objects.filter(store=store, metric_date__range=(start, end))
+                   .exclude(social_clicks={}).values_list("social_clicks", flat=True)):
+        for network, n in clicks.items():
+            counts[network] = counts.get(network, 0) + n
+    return counts
+
+
 class DailyMetricsView(ReportsBase):
     def get(self, request):
         days = parse_days(request)
@@ -443,9 +453,14 @@ def sessions_by_landing_page(sessions, limit=10):
 
 
 def sessions_by_referrer(sessions, limit=10):
-    return [{"referrer": r["referrer_host"] or r["referrer_type"].title(), "type": r["referrer_type"], "sessions": r["n"]}
-            for r in sessions.values("referrer_host", "referrer_type").annotate(n=Count("id"))
-            .order_by("-n", "referrer_host")[:limit]]
+    from apps.orders.services import referrer_name  # imported here: the orders services import this module
+
+    merged = {}
+    for r in sessions.values("referrer_host", "referrer_type", "utm_source").annotate(n=Count("id")):
+        key = (referrer_name(r["referrer_host"], r["utm_source"]), r["referrer_type"])
+        merged[key] = merged.get(key, 0) + r["n"]
+    return [{"referrer": name.title() if name == "direct" else name, "type": kind, "sessions": n}
+            for (name, kind), n in sorted(merged.items(), key=lambda i: (-i[1], i[0]))[:limit]]
 
 
 def top_products(orders, limit=10):

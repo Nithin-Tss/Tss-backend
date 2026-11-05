@@ -27,6 +27,14 @@
   <script data-visit-beacon data-visit-cart="{{ cart_session }}">
   (function () {
     if (window.parent !== window || !/^https?:$/.test(location.protocol) || !navigator.sendBeacon) return;
+    // Clicks on links to other sites: the server keeps only the social network found in the address (facebook, instagram...).
+    function sendClick(e) {
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a || !/^https?:$/.test(a.protocol) || a.hostname === location.hostname) return;
+      navigator.sendBeacon("{{ shop.url }}/_track", new Blob([JSON.stringify({ type: "social_click", url: a.href })], { type: "text/plain;charset=UTF-8" }));
+    }
+    document.addEventListener("click", sendClick);
+    document.addEventListener("auxclick", sendClick);
     // The shopper's cart id, or "" on a page without the cart when the browser has no cart cookie (the server blanks it:
     // that id would be new on every load). The attribute is not data-cart-session: only the cart's own markup makes the server set the cookie.
     var cart = document.currentScript.getAttribute("data-visit-cart") || "";

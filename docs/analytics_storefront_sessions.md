@@ -6,6 +6,7 @@ no page-view table, no rollup table and no change to `store_daily_metrics`. Why 
 be rebuilt from orders, but visits exist nowhere else.
 
 **Migration.** `orders.0014_storefront_sessions` (creates one table; the `analytics` schema already exists from `orders.0012`).
+`orders.0014_storefront_sessions` only lists "paid" as a referrer type (a Django choice: no SQL, no schema change).
 
 ## Columns
 
@@ -19,7 +20,7 @@ be rebuilt from orders, but visits exist nowhere else.
 | landing_path | varchar(255) | no | store-relative path, query string removed; `''` if unknown |
 | landing_page_type | varchar(20) | no | home / product / collection / cart / checkout / other |
 | referrer_host | varchar(255) | no | host only, no path or query; `''` = none |
-| referrer_type | varchar(20) | no | direct / search / social / email / other |
+| referrer_type | varchar(20) | no | direct / search / social / email / paid / other |
 | utm_source, utm_medium, utm_campaign | varchar(100) | no | `''` if absent |
 | device_type | varchar(10) | no | desktop / mobile / tablet |
 | country | varchar(2) | no | from the `CF-IPCountry` header when present, else `''` |

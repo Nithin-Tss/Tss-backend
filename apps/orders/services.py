@@ -4,12 +4,13 @@ in the same database transaction: both happen, or neither does.
 """
 import logging
 import re
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import F
 from django.dispatch import Signal
 from django.utils import timezone
@@ -21,7 +22,7 @@ from apps.inventory import services as inventory
 
 from apps.catalog.services import ARCHIVED
 
-from .models import Order, OrderItem, StorefrontSession
+from .models import Order, OrderItem, StoreDailyMetric, StorefrontSession
 
 OPEN, CANCELLED, CLOSED = "open", "cancelled", "closed"
 UNFULFILLED, PARTIAL, FULFILLED = "unfulfilled", "partial", "fulfilled"
@@ -430,7 +431,34 @@ SOCIAL_HOSTS = ("facebook.", "fb.com", "instagram.", "t.co", "twitter.", "x.com"
 EMAIL_HOSTS = ("mail.", "webmail.", "outlook.", "email.")
 EMAIL_MEDIUMS = ("email", "e-mail", "newsletter")
 SOCIAL_MEDIUMS = ("social", "social-media", "social_media", "sm")
-SEARCH_MEDIUMS = ("cpc", "ppc", "paid-search", "paidsearch", "organic", "search")
+SEARCH_MEDIUMS = ("organic", "search")
+PAID_MEDIUMS = ("cpc", "ppc", "paid", "paidsearch", "paid-search", "paid_search", "paidsocial", "paid-social",
+                "paid_social", "cpm", "display", "banner", "retargeting")
+
+# Known sources: (name, type, host tokens, utm_source aliases). A host token without a dot matches any label of the
+# host ("google" is google.com, google.co.in, www.google.de); one with a dot matches that domain and its subdomains
+# ("fb.com" is fb.com and l.fb.com). So m.facebook.com, l.facebook.com and lm.facebook.com are all "facebook".
+KNOWN_SOURCES = (
+    ("facebook", "social", ("facebook", "fb.com", "fb.me", "fb.watch"), ("facebook", "fb", "meta")),
+    ("instagram", "social", ("instagram", "instagr.am"), ("instagram", "ig", "insta")),
+    ("youtube", "social", ("youtube", "youtu.be"), ("youtube", "yt")),
+    ("whatsapp", "social", ("whatsapp", "wa.me"), ("whatsapp", "wa")),
+    ("x", "social", ("twitter", "x.com", "t.co"), ("x", "twitter")),
+    ("linkedin", "social", ("linkedin", "lnkd.in"), ("linkedin",)),
+    ("pinterest", "social", ("pinterest", "pin.it"), ("pinterest",)),
+    ("reddit", "social", ("reddit",), ("reddit",)),
+    ("tiktok", "social", ("tiktok",), ("tiktok",)),
+    ("snapchat", "social", ("snapchat",), ("snapchat",)),
+    ("telegram", "social", ("telegram", "t.me"), ("telegram",)),
+    ("threads", "social", ("threads.net",), ("threads",)),
+    ("google", "search", ("google",), ("google", "googleads", "google-ads", "adwords")),
+    ("bing", "search", ("bing",), ("bing",)),
+    ("duckduckgo", "search", ("duckduckgo",), ("duckduckgo", "ddg")),
+    ("yahoo", "search", ("yahoo",), ("yahoo",)),
+    ("baidu", "search", ("baidu",), ("baidu",)),
+    ("yandex", "search", ("yandex",), ("yandex",)),
+    ("ecosia", "search", ("ecosia",), ("ecosia",)),
+)
 
 
 def is_bot(user_agent):
@@ -463,16 +491,51 @@ def referrer_host(referrer, own_host=""):
     return "" if host == own else host[:255]
 
 
+def _source_key(utm_source):
+    key = str(utm_source or "").strip().lower()[:100]
+    key = key[4:] if key.startswith("www.") else key
+    return key[:-4] if key.endswith(".com") else key
+
+
+def _known_host(host):
+    """(name, type) of a known site for a referring host, else None."""
+    labels = host.split(".")
+    for name, kind, tokens, _ in KNOWN_SOURCES:
+        for token in tokens:
+            if (token in labels) if "." not in token else (host == token or host.endswith("." + token)):
+                return name, kind
+    return None
+
+
+def _known_source(utm_source):
+    key = _source_key(utm_source)
+    for name, kind, _, aliases in KNOWN_SOURCES:
+        if key in aliases:
+            return name, kind
+    return None
+
+
 def referrer_type(host, utm_medium="", utm_source=""):
-    """direct / search / social / email / other. A campaign's utm_medium says more than the referring host."""
-    medium = (utm_medium or "").lower()
+    """
+    direct / search / social / email / paid / other. The campaign (utm_medium, then a known utm_source) says more
+    than the referring host, which is looked at last.
+    """
+    medium = (utm_medium or "").strip().lower()
+    if medium in PAID_MEDIUMS:
+        return "paid"
     if medium in EMAIL_MEDIUMS:
         return "email"
     if medium in SOCIAL_MEDIUMS:
         return "social"
+    source = _known_source(utm_source)
+    if source:
+        return source[1]
     if host:
         if host.startswith(EMAIL_HOSTS):
             return "email"
+        known = _known_host(host)
+        if known:
+            return known[1]
         if any(h in host for h in SEARCH_HOSTS):
             return "search"
         if any(host == h or host.endswith("." + h) or (h.endswith(".") and h in host) for h in SOCIAL_HOSTS):
@@ -480,7 +543,22 @@ def referrer_type(host, utm_medium="", utm_source=""):
         return "other"
     if medium in SEARCH_MEDIUMS:
         return "search"
-    return "other" if medium or utm_source else "direct"
+    return "other" if medium or str(utm_source or "").strip() else "direct"
+
+
+def referrer_name(host, utm_source=""):
+    """
+    Who sent the visit: "facebook", "instagram", "google", ... for known sources (utm_source first, then the
+    referring host); else the utm_source as written ("newsletter"), else the host, else "direct".
+    """
+    source = _known_source(utm_source)
+    if source:
+        return source[0]
+    key = _source_key(utm_source)
+    if key:
+        return key
+    known = None if host.startswith(EMAIL_HOSTS) else _known_host(host)
+    return known[0] if known else host or "direct"
 
 
 def store_path(path, slug):
@@ -579,3 +657,69 @@ def mark_cart_event(store, cart_session, *, added_to_cart=False, reached_checkou
                 StorefrontSession.objects.filter(pk=session.pk).update(updated_at=now, **changes)
     except Exception:  # noqa: BLE001 - analytics must never break a cart or an order
         logger.exception("Could not record a storefront cart event")
+
+
+# Clicks on the storefront's social links are counted per network per day in store_daily_metrics.social_clicks.
+# The same beacon sends {"type": "social_click", "url": ...}; only the network found in the URL is kept.
+
+def social_network(url, own_host=""):
+    """"facebook", "instagram", "whatsapp", ... for a link to a known social site (from KNOWN_SOURCES), else ""."""
+    known = _known_host(referrer_host(url, own_host))
+    return known[0] if known and known[1] == "social" else ""
+
+
+_COUNT_SOCIAL_CLICK = f"""
+INSERT INTO {StoreDailyMetric._meta.db_table} AS m
+    (id, store_id, metric_date, currency_code, total_orders, gross_sales, total_refunds, net_sales, items_sold,
+     average_order_value, social_clicks, created_at, updated_at)
+VALUES (%s, %s, %s, %s, 0, 0, 0, 0, 0, 0, jsonb_build_object(%s::text, 1), %s, %s)
+ON CONFLICT (store_id, metric_date, currency_code) DO UPDATE
+SET social_clicks = jsonb_set(m.social_clicks, ARRAY[%s::text], to_jsonb(COALESCE((m.social_clicks ->> %s::text)::int, 0) + 1)),
+    updated_at = EXCLUDED.updated_at
+"""
+
+
+def _count_click_portable(store, day, network, now):
+    """
+    The same count for databases without jsonb_set (SQLite, used by the tests). The row is created if missing, then the
+    new counts are written only if the row still holds the counts that were read (compare-and-set); when another click
+    got there first, read again and retry. So no count is lost here either.
+    """
+    currency = store.currency or "INR"
+    row, _ = StoreDailyMetric.objects.get_or_create(store=store, metric_date=day, currency_code=currency)
+    for _ in range(10):
+        before = dict(row.social_clicks)
+        after = {**before, network: before.get(network, 0) + 1}
+        if StoreDailyMetric.objects.filter(pk=row.pk, social_clicks=before).update(social_clicks=after, updated_at=now):
+            return
+        row.refresh_from_db(fields=["social_clicks"])
+    raise RuntimeError("Could not count a social link click: the row kept changing")
+
+
+def record_social_click(store, *, url, user_agent="", own_host="", now=None):
+    """
+    Count one click on a social link on the store's local day. The day's row is created if it is missing and the
+    network's count goes up inside the database, so two clicks at once never lose a count: one upsert on PostgreSQL,
+    compare-and-set elsewhere. The row is the store's own currency's (a click has no currency); the report adds up
+    every currency's row.
+    Returns True when counted; False for a bot, a link that is not a known social site, or an error (never raised).
+    """
+    network = social_network(url, own_host)
+    if not network or is_bot(user_agent):
+        return False
+    from apps.core.reports import store_tz  # imported here: this app's services are imported by the reports
+
+    now = now or timezone.now()
+    day = now.astimezone(store_tz(store)).date()
+    try:
+        with transaction.atomic():
+            if connection.vendor == "postgresql":
+                with connection.cursor() as cursor:
+                    cursor.execute(_COUNT_SOCIAL_CLICK, [uuid.uuid4(), store.pk, day, store.currency or "INR", network,
+                                                         now, now, network, network])
+            else:
+                _count_click_portable(store, day, network, now)
+    except Exception:  # noqa: BLE001 - analytics must never break the storefront
+        logger.exception("Could not record a social link click")
+        return False
+    return True

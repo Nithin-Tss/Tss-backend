@@ -2431,8 +2431,8 @@ def _track_origin_ok(request):
 @csrf_exempt
 def storefront_track(request, store_slug):
     """
-    POST /s/<store_slug>/_track: one page load of the storefront, sent by the layout's script with
-    navigator.sendBeacon. Always answers 204 and nothing else, whatever the body: bots, editor previews
+    POST /s/<store_slug>/_track: one page load of the storefront (or, with {"type": "social_click", "url": ...},
+    one click on a social link), sent by the layout's script with navigator.sendBeacon. Always answers 204 and nothing else, whatever the body: bots, editor previews
     and bad payloads are dropped quietly. See apps.orders.orders_services.
     """
     if request.method == "OPTIONS":
@@ -2459,14 +2459,18 @@ def storefront_track(request, store_slug):
                     host = request.get_host()
                 except DisallowedHost:
                     host = ""
-                counted = orders_services.record_pageview(
-                    store,
-                    visitor_id=body.get("visitor_id"), path=body.get("path"), referrer=body.get("referrer"),
-                    utm_source=body.get("utm_source"), utm_medium=body.get("utm_medium"),
-                    utm_campaign=body.get("utm_campaign"),
-                    cart_session=cart_data.clean_id(str(body.get("cart_session") or "")),
-                    user_agent=user_agent, country=request.META.get("HTTP_CF_IPCOUNTRY", ""), own_host=host,
-                )
+                if body.get("type") == "social_click":
+                    counted = orders_services.record_social_click(
+                        store, url=body.get("url"), user_agent=user_agent, own_host=host) or None
+                else:
+                    counted = orders_services.record_pageview(
+                        store,
+                        visitor_id=body.get("visitor_id"), path=body.get("path"), referrer=body.get("referrer"),
+                        utm_source=body.get("utm_source"), utm_medium=body.get("utm_medium"),
+                        utm_campaign=body.get("utm_campaign"),
+                        cart_session=cart_data.clean_id(str(body.get("cart_session") or "")),
+                        user_agent=user_agent, country=request.META.get("HTTP_CF_IPCOUNTRY", ""), own_host=host,
+                    )
                 if counted is not None:
                     response["X-Visit-Tracking"] = "counted"
     for name, value in CART_API_HEADERS.items():
