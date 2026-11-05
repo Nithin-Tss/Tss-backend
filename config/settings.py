@@ -521,7 +521,13 @@ JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
 # makes sign-out and single-use refresh tokens work (see apps/core/tokens.py).
 # Without "remember me" the cookie ends when the browser closes.
 # Remove expired rows now and then with: python manage.py clearsessions
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+# Every API request reads its session row to check the sign-in is live. cached_db serves that from the cache
+# (still writing to the database). A per-process cache can't see a sign-out done by another worker, so
+# without Redis this is only used with a single worker; otherwise it stays on the database.
+if os.getenv('REDIS_URL') or os.getenv('WEB_CONCURRENCY', '1') == '1':
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+else:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_AGE = int(JWT_REMEMBER_ME_REFRESH_LIFETIME.total_seconds())
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'

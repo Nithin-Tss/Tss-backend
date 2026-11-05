@@ -3,6 +3,7 @@ import uuid
 from rest_framework import exceptions
 from rest_framework.permissions import BasePermission
 
+from apps.tenancy import membership_cache
 from apps.tenancy.models import StoreMembership
 from apps.tenancy.access import membership_permissions
 from apps.tenancy.services import OWNER, SUSPENDED
@@ -62,11 +63,16 @@ class IsStoreMember(BasePermission):
         except ValueError:
             raise exceptions.ParseError(f"{STORE_HEADER} is not a valid store id.")
 
-        membership = (
-            StoreMembership.objects.select_related("store")
-            .filter(user=request.user, store_id=store_id, status=ACTIVE)
-            .first()
-        )
+        membership = membership_cache.get(request.user.pk, store_id)
+        if membership is None:
+            membership = (
+                StoreMembership.objects.select_related("store")
+                .filter(user=request.user, store_id=store_id, status=ACTIVE)
+                .first()
+            )
+            if membership is not None:
+                membership_permissions(membership)  # computed once, cached with it
+                membership_cache.put(request.user.pk, store_id, membership)
 
         if membership is None and request.user.is_owner:
             # Platform admin: owner access to every store that isn't closed
