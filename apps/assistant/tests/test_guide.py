@@ -45,7 +45,7 @@ class GuideFileTests(SimpleTestCase):
         for label in ("Copyright line", "Show the utility bar", "Utility bar text", "Phone number", "Email address"):
             self.assertIn(f'"label": "{label}"', footer, label)
             self.assertIn(label, text, label)
-        for block in ('"name": "Logo"', '"name": "Text"', '"name": "Links"'):
+        for block in ('"name": "Logo and text"', '"name": "Text"', '"name": "Menu column"', '"name": "Social links"'):
             self.assertIn(block, footer, block)
         self.assertIn("sections/header.liquid", text)
         self.assertIn("sections/footer.liquid", text)

@@ -87,6 +87,9 @@ SYNCED_SECTIONS = {
     "footer": {
         "path": "sections/footer.liquid", "label": "Footer", "snippet": "footer",
         "originals": {
+            # previous starter, before the footer blocks (menu columns, social icons, accordion)
+            "aed60ddb600d8c22f5c29b97a8898a9abcaa3dccc1114878e288acaa9d11a0da",  # LF
+            "fe2823e8cfb36ada85b3091d01914fe232bab461e6d7918df2bc78deb9c57802",  # CRLF
             # starter before the footer style, utility and mobile settings
             "2c9bc12df53d8dbeba97ced10cbee17a107be0ca18dd58822bb09cc6cc6825bc",  # LF
             "8fc8359490e9824b2d4c442e6793f72113569e865840dd0ca11653cbf419024e",  # CRLF
@@ -135,7 +138,8 @@ PATH_TO_SECTION = {spec["path"]: name for name, spec in SYNCED_FILES.items()}
 # Revision 13: untouched headers get the mega menu look settings and the column "Shop All" link
 # Revision 14: untouched headers get the ShopNow-style navigation (the snippet it replaces changed too)
 # Revision 15: untouched headers get the mega menu panel that is as wide as the header
-ORIGINALS_REVISION = 15
+# Revision 16: untouched footers get the block footer (menu columns, social icons, bottom strip, mobile accordion)
+ORIGINALS_REVISION = 16
 
 
 def is_original_snippet(name, content):
@@ -190,7 +194,7 @@ def split(content):
     return content[: match.start()] + blank + content[match.end():], match.group(1), match.start(1)
 
 
-SETTING_TYPES = {"text", "textarea", "richtext", "url", "image", "image_picker", "checkbox", "select", "radio", "color", "range", "number", "menu"}
+SETTING_TYPES = {"text", "textarea", "richtext", "url", "image", "image_picker", "checkbox", "select", "radio", "color", "range", "number", "menu", "social", "menu_ref"}
 UI_ONLY_TYPES = {"header", "paragraph"}
 
 
@@ -716,7 +720,9 @@ def _field(s):
     base = {"label": label, "group": "content"}
     if s.get("info"):
         base["help"] = s["info"]
-    if kind in ("text", "textarea", "richtext", "url", "image", "image_picker", "menu"):
+    if isinstance(s.get("show_if"), dict):
+        base["show_if"] = s["show_if"]  # only shown while the other options match (the customizer reads it)
+    if kind in ("text", "textarea", "richtext", "url", "image", "image_picker", "menu", "social", "menu_ref"):
         return {**base, "type": "image" if kind == "image_picker" else kind, "default": str(s.get("default", "")), "max": MAX_TEXT}
     if kind == "checkbox":
         return {**base, "type": "checkbox", "default": bool(s.get("default", False))}
@@ -760,6 +766,76 @@ def spec_of(name, schema):
     }
 
 
+# ======================================================================= social links
+
+# network -> (label, 24x24 line icon). A "social" setting is one "network | url | label | icon image" line
+# per link; the Liquid gets each as {network, label, url, icon, svg}.
+SOCIAL_NETWORKS = {
+    "facebook": ("Facebook", '<path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/>'),
+    "instagram": ("Instagram", '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1"/>'),
+    "youtube": ("YouTube", '<rect x="2" y="5" width="20" height="14" rx="4"/><path d="M10 9l5 3-5 3z"/>'),
+    "tiktok": ("TikTok", '<path d="M16 3v10.5a4.5 4.5 0 1 1-4.5-4.5M16 3c.3 2.6 2 4.4 5 4.6"/>'),
+    "x": ("X", '<path d="M4 4l16 16M20 4L4 20"/>'),
+    "threads": ("Threads", '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.9 7.9"/>'),
+    "linkedin": ("LinkedIn", '<path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/>'),
+    "pinterest": ("Pinterest", '<circle cx="12" cy="12" r="9"/><path d="M11 17l1.5-7.5a2.3 2.3 0 1 1 1.7 3.7"/>'),
+    "snapchat": ("Snapchat", '<path d="M12 3c-3 0-5 2-5 5v3l-3 2 3 1c0 2-2 3-3 3.5 2 1 4 .5 5 1.5.7.7 1.3 1 3 1s2.3-.3 3-1c1-1 3-.5 5-1.5-1-.5-3-1.5-3-3.5l3-1-3-2V8c0-3-2-5-5-5z"/>'),
+    "whatsapp": ("WhatsApp", '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>'),
+    "telegram": ("Telegram", '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>'),
+    "bluesky": ("Bluesky", '<path d="M12 11c-1-2-3-5-6-6-2-1-3 0-2 3 .4 2 1 4.500 3.500 5C4 14 3.500 16 5.500 18s4.500-1 6.500-4c2 3 4.500 6 6.500 4s1.500-4-1.500-4.500c2.500-.5 3.100-3 3.500-5 1-3 0-4-2-3-3 1-5 4-6 6z"/>'),
+    "custom": ("Link", '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>'),
+}
+MAX_SOCIAL = 20
+MAX_MENU_REF = 100
+
+
+def _social_parts(line):
+    network, url, label, icon = ([p.strip() for p in line.split("|")] + ["", "", "", ""])[:4]
+    network = network.lower()
+    return (network if network in SOCIAL_NETWORKS else "custom"), url, label.replace("|", " "), icon
+
+
+def _social_lines(value, strict, where):
+    """The valid "network | url | label | icon" lines of a social setting (at most MAX_SOCIAL)."""
+    lines = []
+    for line in str(value or "").splitlines():
+        if not line.strip():
+            continue
+        network, url, label, icon = _social_parts(line)
+        for kind, link in (("link", url), ("icon", icon)):
+            if link and not _SAFE_URL.match(link):
+                if strict:
+                    raise ValueError(f'{where}: the {kind} "{link}" must start with https://, http://, mailto:, tel:, / or #.')
+                if kind == "link":
+                    url = ""
+                else:
+                    icon = ""
+        if url:
+            lines.append(" | ".join([network, url, label, icon]).rstrip(" |"))
+    return lines[:MAX_SOCIAL]
+
+
+def _host(url):
+    host = re.sub(r"^[a-z]+:(//)?", "", url, flags=re.I).split("/")[0]
+    return host.removeprefix("www.") or "Link"
+
+
+def social_items(value, link):
+    """[{network, label, url, icon, svg}] for the Liquid: svg is the network's line icon, icon a custom image."""
+    items = []
+    for line in _social_lines(value, False, ""):
+        network, url, label, icon = _social_parts(line)
+        name, path = SOCIAL_NETWORKS[network]
+        items.append({
+            "network": network, "label": label or (name if network != "custom" else _host(url)), "url": link(url),
+            "icon": link(icon) if icon else "",
+            "svg": Markup('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+                          'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
+                          + path + "</svg>"),
+        })
+    return items
+
+
 # ======================================================================= values
 
 def _clean(spec, value, strict, where):
@@ -793,6 +869,10 @@ def _clean(spec, value, strict, where):
                 continue
             lines.append(line)
         return "\n".join(lines)
+    if kind == "social":
+        return "\n".join(_social_lines(value, strict, where))
+    if kind == "menu_ref":
+        return value.strip()[:MAX_MENU_REF]
     return value
 
 
@@ -1161,19 +1241,25 @@ def menu_links(text, link):
     return links
 
 
-def _resolved_value(field, value, link):
+def _resolved_value(field, value, link, menus=None):
     if field["type"] == "menu":
         return menu_links(value, link)
+    if field["type"] == "social":
+        return social_items(value, link)
+    if field["type"] == "menu_ref":
+        return menus(value) if value and menus else []
     if field["type"] == "url" and value:
         return link(value)  # "/collections/all" -> this store's page
     return value
 
 
-def render_section(name, *, theme_id, content, values, env, env_key, context, editor=False, link=lambda u: u):
+def render_section(name, *, theme_id, content, values, env, env_key, context, editor=False, link=lambda u: u, menus=None):
     """
     HTML of a synced section. Liquid sees section.settings and section.blocks
     (each with .settings, and .attrs for the customizer's Edit mode); menu
-    settings arrive as lists of {label, url}, url settings as this store's links.
+    settings arrive as lists of {label, url}, url settings as this store's links, social
+    settings as lists of icons, and menu_ref settings (a menu from Admin > Menus, found by
+    `menus(handle_or_id)`) as lists of {label, url}.
     Output is escaped by the environment.
     """
     started = time.perf_counter()
@@ -1191,7 +1277,7 @@ def render_section(name, *, theme_id, content, values, env, env_key, context, ed
     config = SYNCED_SECTIONS[name]
 
     def resolved(fields, settings):
-        return {k: _resolved_value(fields[k], v, link) for k, v in settings.items()}
+        return {k: _resolved_value(fields[k], v, link, menus) for k, v in settings.items()}
 
     blocks = []
     for index, block in enumerate(clean["blocks"]):

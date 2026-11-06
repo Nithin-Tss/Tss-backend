@@ -1401,6 +1401,44 @@ def dead_menu_urls(store, urls):
     return dead
 
 
+def menu_resolver(store, base_url):
+    """
+    menus(ref) for a synced section's menu picker: [{"label", "url"}] from the menu of Admin > Menus whose id
+    or handle is `ref`. It lists the menu's top-level links; a heading with no link of its own lists its
+    sub-links in its place. Links to products and collections that shoppers can't open are left out.
+    Read on every render, so the section follows the menu when it changes. [] for an unknown menu.
+    """
+    found = {}
+
+    def resolve_menu(ref):
+        ref = str(ref or "").strip()
+        if ref in found:
+            return found[ref]
+        menus = Menu.objects.filter(store=store).prefetch_related("items")
+        try:
+            menu = menus.filter(pk=uuid.UUID(ref)).first()
+        except ValueError:
+            menu = menus.filter(handle=ref).first()
+        links = []
+        if menu is not None:
+            items = list(menu.items.all())
+            dead = dead_menu_urls(store, [i.url for i in items if i.url])
+            by_parent = {}
+            for item in sorted(items, key=lambda i: (i.order, i.created_at)):
+                by_parent.setdefault(item.parent_id, []).append(item)
+
+            def live(item):
+                return bool(item.title and item.url and item.url not in dead)
+
+            for top in by_parent.get(None, []):
+                shown = [top] if live(top) else [c for c in by_parent.get(top.id, []) if live(c)]
+                links.extend({"label": i.title, "url": _resolve_link(base_url, i.url)} for i in shown)
+        found[ref] = links
+        return links
+
+    return resolve_menu
+
+
 NAVBAR_MENU_HANDLES = ("main-menu", "header", "navbar", "main")
 NOT_NAVBAR = ("footer", "account")
 
@@ -2578,6 +2616,7 @@ def _synced_html(store, store_theme, name, section, data, env, env_key, context,
         name, theme_id=store_theme.theme_id, content=section["content"],
         values=raw if raw is not None else section["values"], env=env, env_key=env_key,
         context=context, editor=editor, link=lambda url: _resolve_link(shop_url(store), url),
+        menus=menu_resolver(store, shop_url(store)),
     )
 
 
@@ -2642,6 +2681,7 @@ def render_synced_section_fast(store, name, custom_data):
             name, theme_id=row["theme_id"], content=row["content"], values=(data.get("sections") or {}).get(name) or {},
             env=env, env_key=("fast", base_url, settings["currency_symbol"]),
             context=context, editor=True, link=lambda url: _resolve_link(base_url, url),
+            menus=menu_resolver(store, base_url),
         )
     except Exception:  # e.g. it renders a snippet: the full way has them
         sync.invalidate(row["theme_id"], path)

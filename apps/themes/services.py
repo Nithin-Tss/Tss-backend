@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 52
+STARTER_REVISION = 53
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -285,6 +285,8 @@ STARTER_UPGRADES = {
         "6e36e4b3429052522d9242b9f5cbb83c98ae509b028f38bc0381169ff4c9dec1",
     },
     "sections/footer.liquid": {
+        "aed60ddb600d8c22f5c29b97a8898a9abcaa3dccc1114878e288acaa9d11a0da",  # revision 53: before the footer blocks (menu columns, social icons, accordion)
+        "fe2823e8cfb36ada85b3091d01914fe232bab461e6d7918df2bc78deb9c57802",  # revision 53: same, with CRLF line endings
         "2c9bc12df53d8dbeba97ced10cbee17a107be0ca18dd58822bb09cc6cc6825bc",  # revision 45: before the footer style, utility and mobile settings
         "8fc8359490e9824b2d4c442e6793f72113569e865840dd0ca11653cbf419024e",  # revision 45: same, with CRLF line endings
         "f37dffa266ec5f3a173bf9eec4b7a87547bd9389118ffa9597aeeacf4d32ff3d",  # revision 41: before the utility bar
@@ -418,6 +420,7 @@ def _prepare(store_theme, new_store=False):
     _upgrade_untouched_starter_files(store_theme.theme)
     _add_synced_sections(store_theme.theme, store_theme.custom_data)
     _add_wishlist_blocks(store_theme)
+    _convert_footer_social(store_theme)
     _offer_wishlist_icon_block(store_theme.theme)
     _offer_cart_icon_block(store_theme.theme)
     _offer_search_block(store_theme)
@@ -680,6 +683,43 @@ def _add_wishlist_blocks(store_theme):
             store_theme.save(update_fields=["custom_data", "updated_at"])
 
     theme.theme_data = {**(theme.theme_data or {}), "wishlist_blocks": 1}
+    theme.save(update_fields=["theme_data", "updated_at"])
+
+
+FOOTER_SOCIAL_NETWORKS = ("instagram", "facebook", "x", "tiktok", "youtube", "pinterest", "linkedin")
+
+
+def _footer_social_lines(settings):
+    """The footer's Social links in the "network | url" lines of its icons setting."""
+    return "\n".join(f"{n} | {settings[n].strip()}" for n in FOOTER_SOCIAL_NETWORKS if str(settings.get(n) or "").strip())
+
+
+def _convert_footer_social(store_theme):
+    """
+    Once per store, when its footer file offers social icons: a Social links block that has one address per
+    network (instagram, facebook, ...) becomes a list of icons, with the same networks in the same order.
+    A footer file the owner edited keeps the old settings, and is looked at again later.
+    """
+    theme = store_theme.theme
+    if (theme.theme_data or {}).get("footer_social_icons"):
+        return
+    file = theme.files.filter(file_path="sections/footer.liquid").first()
+    if file is None or '"id": "icons"' not in file.content:
+        return
+    saved = (store_theme.custom_data.get("sections") or {}).get("footer")
+    if saved:
+        blocks, changed = [], False
+        for block in saved.get("blocks") or []:
+            settings = block.get("settings") if isinstance(block, dict) else None
+            if block.get("type") == "social" and isinstance(settings, dict) and "icons" not in settings:
+                rest = {k: v for k, v in settings.items() if k not in FOOTER_SOCIAL_NETWORKS}
+                block = {**block, "settings": {**rest, "icons": _footer_social_lines(settings)}}
+                changed = True
+            blocks.append(block)
+        if changed:
+            store_theme.custom_data = _with_section(store_theme.custom_data, "footer", {**saved, "blocks": blocks})
+            store_theme.save(update_fields=["custom_data", "updated_at"])
+    theme.theme_data = {**(theme.theme_data or {}), "footer_social_icons": 1}
     theme.save(update_fields=["theme_data", "updated_at"])
 
 
@@ -1631,7 +1671,7 @@ def _add_header_wishlist_styles(content):
 
 def _add_footer_logo_block(content):
     """Add (or bring up to date) the Logo block of a standard synced footer; None when nothing changes."""
-    if '"id": "position"' in content and '"type": "logo"' in content:
+    if "site-footer__brand" in content or ('"id": "position"' in content and '"type": "logo"' in content):
         return None
     nl = "\r\n" if "\r\n" in content else "\n"
     starter = starter_files()["sections/footer.liquid"].replace("\r\n", "\n")
@@ -1639,9 +1679,12 @@ def _add_footer_logo_block(content):
     def part(text, start, end):
         return text[text.index(start):text.index(end)]
 
-    markup = part(starter, "          {%- when 'logo' -%}", "          {%- when 'text' -%}").replace("\n", nl)
-    block = part(starter, '    {\n      "type": "logo"', '    {\n      "type": "text"').replace("\n", nl)
-    css = part(starter, "  .site-footer__logo {", "  .site-footer__nav strong").replace("\n", nl)
+    try:
+        markup = part(starter, "          {%- when 'logo' -%}", "          {%- when 'text' -%}").replace("\n", nl)
+        block = part(starter, '    {\n      "type": "logo"', '    {\n      "type": "text"').replace("\n", nl)
+        css = part(starter, "  .site-footer__logo {", "  .site-footer__nav strong").replace("\n", nl)
+    except ValueError:
+        return None  # the starter footer is built from other blocks now: a footer of the old kind keeps its own
     if '"type": "logo"' in content:  # an earlier version of the block: swap in the current one
         try:
             content = content.replace(part(content, "          {%- when 'logo' -%}", "          {%- when 'text' -%}"), markup, 1)
@@ -1662,6 +1705,8 @@ def _add_footer_logo_block(content):
 
 def _add_footer_icon_setting(content):
     """Ensure footer image upload field is in Text block settings, not section settings, and rendered above description."""
+    if "site-footer__brand" in content:
+        return None  # the block footer has its images in its blocks already
     newline = "\r\n" if "\r\n" in content else "\n"
     patched = content
 
@@ -1907,15 +1952,18 @@ def _seed_header(s, store_name):
 
 
 def _seed_footer(s, store_name):
-    """The footer's Theme settings as the footer section's values."""
+    """The footer's Theme settings as the footer section's values (None: none were set, the footer's own default content)."""
+    custom = ("footer_text", "footer_menu", "footer_copyright", "footer_bg", "footer_text_color", *(f"footer_{k}" for k in FOOTER_SOCIAL_NETWORKS))
+    if not any(s.get(key) for key in custom):
+        return None
     blocks = []
     if s.get("footer_text"):
         blocks.append({"type": "text", "settings": {"heading": store_name, "text": s["footer_text"]}})
     if s.get("footer_show_links", True):
         blocks.append({"type": "links", "settings": {"heading": "", "menu": s.get("footer_menu") or "Home | /\nShop all | /collections/all"}})
-    social = {k: s.get(f"footer_{k}", "") for k in ("instagram", "facebook", "x", "tiktok", "youtube", "pinterest", "linkedin")}
-    if any(social.values()):
-        blocks.append({"type": "social", "settings": social})
+    social = _footer_social_lines({k: s.get(f"footer_{k}", "") for k in FOOTER_SOCIAL_NETWORKS})
+    if social:
+        blocks.append({"type": "social", "settings": {"icons": social}})
     return {
         "settings": {"copyright": s.get("footer_copyright", ""), "background": s.get("footer_bg", ""),
                      "text_color": s.get("footer_text_color", "")},

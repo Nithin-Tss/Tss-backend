@@ -60,7 +60,8 @@ steps:
 2. In the list on the left, click the "Footer" row (Links, social and copyright).
 3. For the line at the very bottom, change "Copyright line". Leave it empty to show the year and the store name.
 4. For a thin strip with contact details, tick "Show the utility bar", then fill "Utility bar text", "Phone number" and "Email address".
-5. For the footer's content, use "Blocks": the "Logo", "Text" and "Links" blocks. In a "Links" block, write one link per line as: Label | /page
+5. For the footer's content, use "Blocks" and add as many as you like: "Logo and text", "Menu column", "Social links", "Text", "Newsletter" and "Payment icons". In a "Menu column", add links and pick where each goes, or choose "A menu in Admin > Menus" to follow one of your menus. In "Social links", add a network and its address for each icon.
+6. For the line at the bottom, tick which policies to link. "Accordion on mobile" folds the menu columns on phones.
 note: Changes save automatically. The file behind this is sections/footer.liquid.
 
 ## edit-theme-code

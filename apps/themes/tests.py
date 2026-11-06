@@ -17,6 +17,7 @@ from rest_framework.test import APITestCase
 from apps.core.tests.test_flow import StoreClientMixin
 
 from . import section_sync as sync
+from .services import get_store_theme
 
 
 # The starter header's loop over the wishlist and cart icons, in block order
@@ -585,7 +586,7 @@ class FooterSyncTest(SyncedSectionMixin, APITestCase):
         self.save_values(values)
         good = self.code()
 
-        broken = good.replace('"max_blocks": 9,', '"max_blocks": 9')
+        broken = good.replace('"max_blocks": 30,', '"max_blocks": 30')
         self.assertNotEqual(broken, good)
         error = self.save_code(broken, expect=400)
         self.assertIn("schema is not valid JSON", error["content"][0] if isinstance(error["content"], list) else error["content"])
@@ -620,7 +621,7 @@ class FooterSyncTest(SyncedSectionMixin, APITestCase):
 
     def test_unsafe_links_are_refused(self):
         values = self.footer()["values"]
-        values["blocks"] = [{"type": "social", "settings": {"instagram": "javascript:alert(1)"}}]
+        values["blocks"] = [{"type": "social", "settings": {"icons": "instagram | javascript:alert(1)"}}]
         self.ok("patch", "/api/v1/themes/settings/", {"sections": {"footer": values}}, expect=400)
         values["blocks"] = [{"type": "links", "settings": {"menu": "Evil | javascript:alert(1)"}}]
         self.ok("patch", "/api/v1/themes/settings/", {"sections": {"footer": values}}, expect=400)
@@ -699,6 +700,384 @@ class FooterSyncTest(SyncedSectionMixin, APITestCase):
         self.assertNotIn("footer", types)
         schema = self.ok("get", "/api/v1/themes/schema/")
         self.assertNotIn("footer", schema["sections"])
+
+
+class FooterBlocksTest(SyncedSectionMixin, APITestCase):
+    """The owner-controlled footer: blocks (logo, menu columns, social icons, ...), the bottom strip, the mobile accordion."""
+
+    NAME = "footer"
+    EMAIL = "footer-blocks@example.com"
+    timings = {"sidebar -> code + preview": [], "code save -> blocks + preview": []}
+
+    def values(self, blocks=None, **settings):
+        values = self.section()["values"]
+        values["settings"].update(settings)
+        if blocks is not None:
+            values["blocks"] = blocks
+        return values
+
+    def column(self, heading, menu, **extra):
+        return {"type": "links", "settings": {"heading": heading, "menu": menu, **extra}}
+
+    def base(self):
+        return f"/s/{self.store['storeSlug']}"
+
+    def footer_columns(self, html):
+        """How many menu columns are accordions (the attribute on the element, not the CSS and script that name it)."""
+        return len(re.findall(r"<nav[^>]* data-footer-col", html))
+
+    def home_after(self, blocks, **settings):
+        self.save_values(self.values(blocks, **settings))
+        return self.home()
+
+    def test_a_new_store_starts_with_the_default_footer(self):
+        home = self.home()
+        for text in ("Explore", "Offer services", "Other Services", "Shop all", 'aria-label="Social links"',
+                     'aria-label="Instagram"', "Privacy Policy", "Tell shoppers about your store."):
+            self.assertIn(text, home)
+        self.assertIn(f"© {time.strftime('%Y')} Footer Store", home.replace("&copy;", "©"))
+        self.assertEqual([b["type"] for b in self.section()["values"]["blocks"]], ["logo", "links", "links", "links", "social"])
+
+    def test_the_page_has_one_footer_landmark(self):
+        home = self.home()
+        self.assertEqual(home.count("<footer"), 1)
+        self.assertEqual(home.count("</footer>"), 1)
+        blocks = [{"type": "logo", "settings": {}}, self.column("A", "x | /a"),
+                  {"type": "social", "settings": {"icons": "facebook | https://facebook.com/x"}},
+                  {"type": "newsletter", "settings": {}}, {"type": "payment", "settings": {}}]
+        self.assertEqual(self.home_after(blocks).count("<footer"), 1)
+
+    def test_blocks_can_be_added_in_any_number_duplicated_reordered_and_removed(self):
+        column = self.column("Column", "One | /one")
+        blocks = [{"type": "logo", "settings": {}}] + [
+            self.column(f"Col {i}", f"Link {i} | /pages/p{i}") for i in range(8)] + [column, dict(column)]
+        saved, preview = self.save_values(self.values(blocks))
+        self.assertEqual(len(saved["values"]["blocks"]), 11)
+        headings = re.findall(r'class="site-footer__heading"[^>]*>([^<]+)<', preview)
+        self.assertEqual(headings, [f"Col {i}" for i in range(8)] + ["Column", "Column"])
+
+        reordered = self.section()["values"]["blocks"]
+        reordered.reverse()
+        reordered.pop()  # removes the logo, now last
+        _, preview = self.save_values(self.values(reordered))
+        self.assertLess(preview.index("Column"), preview.index("Col 7"))
+        self.assertLess(preview.index("Col 7"), preview.index("Col 0"))
+        defaults = self.schema_of(self.code())["default"]["blocks"]
+        self.assertEqual([b["type"] for b in defaults], ["links"] * 10)  # written into the code, in this order
+        self.assertEqual(defaults[0]["settings"]["heading"], "Column")
+
+    def test_menu_column_with_typed_links(self):
+        home = self.home_after([self.column(
+            "Shop", "Everything | /collections/all\nA product | /products/abc\nSite | https://example.com/x")])
+        self.assertIn(f'<a href="{self.base()}/collections/all">Everything</a>', home)
+        self.assertIn(f'href="{self.base()}/products/abc"', home)
+        self.assertIn('href="https://example.com/x"', home)
+
+    def test_menu_column_follows_a_menu_from_admin_menus(self):
+        menu = self.ok("post", "/api/v1/themes/menus/", {"name": "Footer links", "items": [
+            {"title": "Our story", "url": "/pages/about"}, {"title": "Journal", "url": "/blogs/news"}]}, expect=201)
+        column = {"type": "links", "settings": {"heading": "Company", "source": "menu", "menu_ref": menu["handle"],
+                                                "menu": "Typed | /typed"}}
+        home = self.home_after([column])
+        self.assertIn(f'href="{self.base()}/pages/about">Our story</a>', home)
+        self.assertLess(home.index("Our story"), home.index("Journal"))
+        self.assertNotIn("Typed", home)  # the menu is used instead of the typed links
+
+        # The menu changes: the footer follows it, with no change to the footer
+        self.ok("put", f"/api/v1/themes/menus/{menu['id']}/", {"name": "Footer links", "items": [
+            {"title": "Careers", "url": "/pages/careers"}, {"title": "Our story", "url": "/pages/about"}]})
+        home = self.home()
+        self.assertIn("Careers", home)
+        self.assertNotIn("Journal", home)
+        self.assertLess(home.index("Careers"), home.index("Our story"))
+
+        # Found by id as well, and the customizer's preview shows it too
+        column["settings"]["menu_ref"] = menu["id"]
+        _, preview = self.save_values(self.values([column]))
+        self.assertIn("Careers", preview)
+
+    def test_menu_column_lists_sublinks_of_a_heading_without_a_link(self):
+        menu = self.ok("post", "/api/v1/themes/menus/", {"name": "Grouped", "items": [
+            {"title": "Help", "url": "", "children": [{"title": "Delivery", "url": "/pages/delivery"}]},
+            {"title": "Home", "url": "/"}]}, expect=201)
+        column = {"type": "links", "settings": {"heading": "Info", "source": "menu", "menu_ref": menu["id"]}}
+        home = self.home_after([column])
+        self.assertIn(">Delivery</a>", home)
+        self.assertIn(">Home</a>", home)
+        self.assertNotIn(">Help</a>", home)
+
+    def test_menu_column_with_a_missing_menu_or_another_stores_menu_shows_nothing(self):
+        mine = (self.token, self.store["storeId"])
+        _, other = self.sign_up("other-menu@example.com", "Other Menu Store")
+        private = self.ok("post", "/api/v1/themes/menus/", {"name": "Private", "items": [
+            {"title": "Secret link", "url": "/secret"}]}, expect=201)
+        self.use(*mine)
+        for ref in ("no-such-menu", private["handle"], private["id"]):
+            column = {"type": "links", "settings": {"heading": "Menu", "source": "menu", "menu_ref": ref}}
+            self.assertNotIn("Secret link", self.home_after([column]), ref)
+
+    def test_social_links_are_icons_side_by_side_in_new_tabs(self):
+        icons = "\n".join([
+            "facebook | https://facebook.com/shop", "instagram | https://instagram.com/shop", "youtube | https://youtube.com/@shop",
+            "tiktok | https://tiktok.com/@shop", "x | https://x.com/shop", "threads | https://threads.net/@shop",
+            "linkedin | https://linkedin.com/company/shop", "pinterest | https://pinterest.com/shop",
+            "snapchat | https://snapchat.com/add/shop", "whatsapp | https://wa.me/919999900000",
+            "telegram | https://t.me/shop", "bluesky | https://bsky.app/profile/shop",
+            "custom | https://example.com/me | My site | https://example.com/icon.png"])
+        block = {"type": "social", "settings": {"icons": icons, "size": 28, "shape": "square", "border": False,
+                                                 "color": "#112233", "background": "#EEEEEE", "border_color": "#FF0000"}}
+        home = self.home_after([block])
+        self.assertEqual(home.count('target="_blank" rel="noopener noreferrer"'), 13)
+        for name in ("Facebook", "Instagram", "YouTube", "TikTok", "X", "Threads", "LinkedIn", "Pinterest", "Snapchat",
+                     "WhatsApp", "Telegram", "Bluesky", "My site"):
+            self.assertIn(f'aria-label="{name}"', home)
+        self.assertIn('<img src="https://example.com/icon.png"', home)
+        self.assertEqual(home.count('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"'), 12)
+        self.assertIn("--sf-icon:28px", home)
+        self.assertIn("--sf-icon-color:#112233", home)
+        self.assertIn("--sf-icon-bg:#EEEEEE", home)
+        self.assertIn("--sf-icon-border:#FF0000", home)
+        self.assertIn('data-shape="square"', home)
+        self.assertIn('data-border="false"', home)
+        self.assertEqual(home.count('class="site-footer__social"'), 1)  # one list, its items in a row
+        self.assertEqual(home.count("<li><a href"), 13)
+        self.assertIn("display: flex; flex-direction: row; flex-wrap: wrap", home)
+
+    def test_social_links_with_unsafe_addresses_are_refused(self):
+        for bad in ("javascript:alert(1)", "data:text/html,x", "//evil.example"):
+            block = {"type": "social", "settings": {"icons": f"custom | {bad}"}}
+            self.ok("patch", "/api/v1/themes/settings/", {"sections": {"footer": self.values([block])}}, expect=400)
+        block = {"type": "social", "settings": {"icons": "custom | https://ok.example | x | javascript:alert(1)"}}
+        self.ok("patch", "/api/v1/themes/settings/", {"sections": {"footer": self.values([block])}}, expect=400)
+
+    def test_social_text_is_escaped_unknown_networks_are_custom_and_the_list_is_capped(self):
+        icons = ("custom | https://a.example | <script>x()</script>\nmyspace | https://b.example\n"
+                 + "\n".join(f"custom | https://e.example/{i}" for i in range(40)))
+        home = self.home_after([{"type": "social", "settings": {"icons": icons}}])
+        self.assertNotIn("<script>x()</script>", home)
+        self.assertEqual(home.count('target="_blank"'), sync.MAX_SOCIAL)
+        self.assertIn('aria-label="b.example"', home)
+
+    def test_bottom_strip_copyright_tokens_and_chosen_policies(self):
+        home = self.home_after([], copyright="© {year} {store} - made in India", policy_privacy=False, policy_refund=True,
+                               policy_shipping=True, policy_terms=False, divider_color="#AABBCC")
+        self.assertIn(f"© {time.strftime('%Y')} Footer Store - made in India", home.replace("&copy;", "©"))
+        self.assertIn("/pages/refund-policy", home)
+        self.assertIn("/pages/shipping-policy", home)
+        self.assertNotIn("/pages/privacy-policy", home)
+        self.assertNotIn("/pages/terms-of-service", home)
+        self.assertIn("--sf-divider:#AABBCC", home)
+        home = self.home_after([], policy_privacy=True, policy_terms=True)
+        self.assertIn("/pages/privacy-policy", home)
+        self.assertIn("/pages/terms-of-service", home)
+        home = self.home_after([], show_copyright=False, policy_privacy=False, policy_terms=False, policy_refund=False,
+                               policy_shipping=False)
+        self.assertNotIn('<div class="page-width site-footer__legal">', home)
+
+    def test_section_style_settings_reach_the_page(self):
+        settings = dict(background="#101010", text_color="#DDDDDD", heading_color="#FFFFFF", link_color="#BBBBBB",
+                        link_hover_color="#FFCC00", heading_size=18, heading_case="uppercase", heading_spacing=1.5,
+                        link_size=15, column_gap=40, padding_top=60, padding_bottom=20, max_width=1200, text_align="center")
+        home = self.home_after([self.column("Shop", "All | /collections/all")], **settings)
+        footer = home[home.index("<footer"):home.index("</footer>")]
+        for fragment in ("background:#101010", "color:#DDDDDD", "--sf-hover:#FFCC00", "padding-top:60px", "padding-bottom:20px",
+                         "text-align:center", "max-width:1200px", "gap:40px"):
+            self.assertIn(fragment, footer)
+        self.assertIn('data-hover="true"', footer)
+        heading = re.search(r'<h2 class="site-footer__heading" style="([^"]*)"', footer).group(1)
+        for fragment in ("color:#FFFFFF", "font-size:18px", "text-transform:uppercase", "letter-spacing:1.5px"):
+            self.assertIn(fragment, heading)
+        link = re.search(r'<a href="[^"]*/collections/all" style="([^"]*)"', footer).group(1)
+        self.assertIn("color:#BBBBBB", link)
+        self.assertIn("font-size:15px", link)
+
+    def test_the_logo_column_is_wider_in_the_wide_layout_only(self):
+        blocks = [{"type": "logo", "settings": {}}, self.column("A", "a | /a"), self.column("B", "b | /b"), self.column("C", "c | /c")]
+        home = self.home_after(blocks)
+        self.assertIn('data-wide-first="true"', home)
+        self.assertIn("--sf-cols:3", home)
+        self.assertIn("grid-template-columns: 1.45fr repeat(var(--sf-cols), minmax(0, 1fr))", home)
+        self.assertIn('data-wide-first="false"', self.home_after(blocks, layout="equal"))
+        self.assertIn('data-wide-first="false"', self.home_after(blocks[1:]))  # no brand column in front
+
+    def test_mobile_accordion_markup_and_setting(self):
+        home = self.home()
+        self.assertIn('data-accordion="true"', home)
+        self.assertEqual(self.footer_columns(home), 3)  # the three menu columns, not the logo column
+        self.assertIn('id="footer-panel-2"', home)
+        for fragment in ("aria-expanded", "aria-controls", "site-footer__toggle", "createElement('button')", "max-width: 640px"):
+            self.assertIn(fragment, home)
+        brand = home[home.index('class="site-footer__brand'):]
+        self.assertNotIn("data-footer-col", brand[:brand.index("</div>")])
+        off = self.home_after(self.section()["values"]["blocks"], accordion_mobile=False)
+        self.assertIn('data-accordion="false"', off)
+        self.assertNotIn("createElement('button')", off)
+
+    def test_a_column_without_a_heading_is_not_an_accordion(self):
+        self.assertEqual(self.footer_columns(self.home_after([self.column("", "a | /a")])), 0)
+
+    def test_text_newsletter_and_payment_blocks(self):
+        blocks = [{"type": "text", "settings": {"heading": "About", "text": "Hand made"}},
+                  {"type": "newsletter", "settings": {"heading": "Join", "text": "Offers", "button_label": "Sign up"}},
+                  {"type": "payment", "settings": {"heading": "We accept", "methods": "Visa, UPI ,, RuPay"}}]
+        home = self.home_after(blocks)
+        self.assertIn("Hand made", home)
+        self.assertIn(">Sign up</button>", home)
+        payments = home[home.index('aria-label="Payment methods"'):]
+        self.assertEqual(re.findall(r"<li>([^<]*)</li>", payments[:payments.index("</ul>")]), ["Visa", "UPI", "RuPay"])
+
+    def test_the_new_settings_go_to_the_code_and_back(self):
+        block = {"type": "social", "settings": {"icons": "facebook | https://facebook.com/a\ninstagram | https://instagram.com/a"}}
+        column = {"type": "links", "settings": {"heading": "Co", "source": "menu", "menu_ref": "main-menu"}}
+        self.save_values(self.values([column, block], link_hover_color="#FF00AA"))
+        schema = self.schema_of(self.code())
+        defaults = schema["default"]["blocks"]
+        self.assertEqual(defaults[0]["settings"]["menu_ref"], "main-menu")
+        self.assertIn("instagram | https://instagram.com/a", defaults[1]["settings"]["icons"])
+        self.assertEqual(next(s for s in schema["settings"] if s["id"] == "link_hover_color")["default"], "#FF00AA")
+        # Edit code: one more social link in the schema's defaults shows in the customizer and on the page
+        edited = self.code().replace("instagram | https://instagram.com/a", "instagram | https://instagram.com/a\\ntelegram | https://t.me/a")
+        self.assertNotEqual(edited, self.code())
+        self.save_code(edited)
+        self.assertIn("telegram | https://t.me/a", self.section()["values"]["blocks"][1]["settings"]["icons"])
+        self.assertIn('aria-label="Telegram"', self.home())
+
+    def test_the_customizer_offers_every_block_and_setting(self):
+        spec = self.section()["spec"]
+        self.assertEqual(set(spec["blocks"]), {"logo", "links", "social", "text", "newsletter", "payment"})
+        self.assertEqual(spec["blocks"]["logo"]["name"], "Logo and text")
+        self.assertEqual(spec["blocks"]["links"]["name"], "Menu column")
+        menu_ref = spec["blocks"]["links"]["settings"]["menu_ref"]
+        self.assertEqual((menu_ref["type"], menu_ref["show_if"]), ("menu_ref", {"source": "menu"}))
+        self.assertEqual(spec["blocks"]["links"]["settings"]["menu"]["type"], "menu")
+        self.assertEqual(spec["blocks"]["social"]["settings"]["icons"]["type"], "social")
+        self.assertGreaterEqual(spec["max_blocks"], 30)
+        for key in ("accordion_mobile", "link_hover_color", "heading_size", "heading_case", "heading_spacing", "link_size",
+                    "column_gap", "padding_top", "padding_bottom", "max_width", "layout", "text_align", "background",
+                    "heading_color", "link_color", "text_color", "divider_color", "copyright", "policy_privacy"):
+            self.assertIn(key, spec["settings"])
+        self.assertTrue(spec["settings"]["accordion_mobile"]["default"])
+
+
+class FooterUpgradeTest(StoreClientMixin, APITestCase):
+    """Starter footers move to the block footer; edited footers and their saved content stay."""
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+        from .services import get_store_theme
+
+        _, store = self.sign_up("footer-upgrade@example.com", "Chegondis Store")
+        self.store = Store.objects.get(store_id=store["storeId"])
+        self.slug = store["storeSlug"]
+        self.theme = get_store_theme(self.store).theme
+
+    def footer_file(self):
+        from .models import ThemeFile
+
+        return ThemeFile.objects.get(theme=self.theme, file_path="sections/footer.liquid")
+
+    def theme_data(self, **changes):
+        data = dict(self.theme.__class__.objects.get(pk=self.theme.pk).theme_data)
+        for key, value in changes.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        self.theme.theme_data = data
+        self.theme.save()
+        return data
+
+    def set_footer(self, content, **theme_data):
+        file = self.footer_file()
+        file.content = content
+        file.save()
+        self.theme_data(**theme_data)
+
+    def test_the_previous_starter_footers_are_known_as_untouched(self):
+        from .services import STARTER_UPGRADES
+
+        for digest in ("aed60ddb600d8c22f5c29b97a8898a9abcaa3dccc1114878e288acaa9d11a0da",
+                       "fe2823e8cfb36ada85b3091d01914fe232bab461e6d7918df2bc78deb9c57802"):
+            self.assertIn(digest, STARTER_UPGRADES["sections/footer.liquid"])
+            self.assertIn(digest, sync.SYNCED_SECTIONS["footer"]["originals"])
+        self.assertGreaterEqual(sync.ORIGINALS_REVISION, 16)
+
+    def test_an_untouched_old_starter_footer_is_replaced_and_an_edited_one_is_not(self):
+        from unittest import mock
+
+        from . import services
+        from .services import starter_files
+
+        old = '{% schema %}{"name": "Footer", "settings": []}{% endschema %}<footer>old</footer>'
+        upgrades = {**services.STARTER_UPGRADES, "sections/footer.liquid": {hashlib.sha256(old.encode()).hexdigest()}}
+        with mock.patch.object(services, "STARTER_UPGRADES", upgrades):
+            self.set_footer(old, starter_revision=1)
+            get_store_theme(self.store)
+            self.assertEqual(self.footer_file().content, starter_files()["sections/footer.liquid"])
+
+            edited = old.replace("old", "mine")
+            self.set_footer(edited, starter_revision=1)
+            get_store_theme(self.store)
+            self.assertEqual(self.footer_file().content, edited)
+
+    def legacy_values(self):
+        return {
+            "settings": {"copyright": "© Chegondis", "background": "#0F2E24", "text_color": "#EAEAEA"},
+            "blocks": [
+                {"type": "text", "settings": {"heading": "Chegondis", "text": "Fresh from the farm"}},
+                {"type": "links", "settings": {"heading": "Explore", "menu": "Home | /\nShop all | /collections/all"}},
+                {"type": "links", "settings": {"heading": "Offer services", "menu": "Offers | /collections/promotions"}},
+                {"type": "links", "settings": {"heading": "Other Services", "menu": "FAQ | /pages/faq"}},
+                {"type": "social", "settings": {"instagram": "https://instagram.com/chegondis",
+                                                 "facebook": "https://facebook.com/chegondis",
+                                                 "youtube": "https://youtube.com/@chegondis"}},
+            ],
+        }
+
+    def save_legacy_footer(self):
+        store_theme = get_store_theme(self.store)
+        store_theme.custom_data = {**store_theme.custom_data, "sections": {"footer": self.legacy_values()}}
+        store_theme.save()
+        self.theme_data(footer_social_icons=None)
+
+    def test_a_stores_saved_footer_keeps_its_content_and_social_links_after_the_upgrade(self):
+        self.save_legacy_footer()
+        saved = get_store_theme(self.store).custom_data["sections"]["footer"]
+        social = saved["blocks"][4]["settings"]
+        self.assertEqual(social["icons"], "instagram | https://instagram.com/chegondis\n"
+                                          "facebook | https://facebook.com/chegondis\nyoutube | https://youtube.com/@chegondis")
+        self.assertNotIn("instagram", social)
+        self.assertEqual(saved["blocks"][:4], self.legacy_values()["blocks"][:4])
+
+        home = self.client.get(f"/s/{self.slug}/").content.decode()
+        footer = home[home.index("<footer"):]
+        order = [footer.index(text) for text in ("Fresh from the farm", ">Explore<", ">Offer services<", ">Other Services<",
+                                                'aria-label="Instagram"', 'aria-label="Facebook"', 'aria-label="YouTube"',
+                                                "© Chegondis")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("background:#0F2E24", home)
+        self.assertIn(f'href="/s/{self.slug}/collections/all">Shop all</a>', home)
+        self.assertEqual(home.count("<footer"), 1)
+
+    def test_the_conversion_runs_once(self):
+        self.save_legacy_footer()
+        get_store_theme(self.store)
+        self.assertEqual(self.theme_data()["footer_social_icons"], 1)
+        store_theme = get_store_theme(self.store)
+        store_theme.custom_data = {**store_theme.custom_data, "sections": {"footer": self.legacy_values()}}
+        store_theme.save()
+        get_store_theme(self.store)
+        self.assertIn("instagram", get_store_theme(self.store).custom_data["sections"]["footer"]["blocks"][4]["settings"])
+
+    def test_an_edited_old_footer_keeps_its_own_settings(self):
+        self.save_legacy_footer()
+        edited = self.footer_file().content.replace('"id": "icons"', '"id": "icon_list"')
+        self.assertNotEqual(edited, self.footer_file().content)
+        self.set_footer(edited, starter_revision=10 ** 6)
+        get_store_theme(self.store)
+        saved = get_store_theme(self.store).custom_data["sections"]["footer"]
+        self.assertEqual(saved["blocks"][4]["settings"]["instagram"], "https://instagram.com/chegondis")
+        self.assertNotIn("footer_social_icons", self.theme_data())
 
 
 class HeaderSyncTest(SyncedSectionMixin, APITestCase):
@@ -2738,7 +3117,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.assertFalse(self.theme().theme.files.filter(file_path="snippets/other").exists())
         theme = self.theme().theme
         self.assertTrue(theme.files.filter(file_path=self.SNIPPET).exists())
-        self.assertEqual(theme.theme_data["starter_revision"], 52)
+        self.assertEqual(theme.theme_data["starter_revision"], 53)
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
         self.assertIsNotNone(hashlib)
@@ -2960,7 +3339,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
 
         from .services import STARTER_REVISION, STARTER_UPGRADES, starter_files
 
-        self.assertEqual(STARTER_REVISION, 52)
+        self.assertEqual(STARTER_REVISION, 53)
         self.assertIn(
             "a4042599d876c80166e60601ed1a2763f264e79678ad99552f46c233402b1e49",
             STARTER_UPGRADES["sections/header.liquid"],
@@ -3779,7 +4158,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             self.assertIn(digest, STARTER_UPGRADES[path])
 
         store_theme = self.theme()
-        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 52)
+        self.assertEqual(store_theme.theme.theme_data["starter_revision"], 53)
         self.assertIn("{% render 'wishlist', mode: 'icon'", self.file("sections/header.liquid"))
         self.assertIn("section.wishlist_heart", self.file("sections/main-product.liquid"))
         self.assertIsNotNone(self.file(self.SNIPPET))
