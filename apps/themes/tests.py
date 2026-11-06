@@ -3479,7 +3479,7 @@ class HeaderSearchBlockPatchTest(StoreClientMixin, APITestCase):
         self.assertIn("input.focus()", sync.SEARCH_BLOCK_BRANCH)
         self.assertIn(".site-header__search-block{position:relative", rendering.SECTION_CSS)
         self.assertIn(".site-header__search-panel{position:absolute;top:100%;right:0", rendering.SECTION_CSS)
-        self.assertIn("width:min(92vw,420px)", rendering.SECTION_CSS)
+        self.assertIn("width:min(92vw,520px)", rendering.SECTION_CSS)
         self.assertIn(".tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}", rendering.SECTION_CSS)
 
     def test_custom_header_without_safe_insertion_points_is_left_untouched(self):

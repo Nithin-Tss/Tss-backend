@@ -141,28 +141,37 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .site-header__search-block{position:relative;display:inline-flex;align-items:center;order:-1;overflow:visible}
 .site-header__search{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}
 .site-header__search:focus-visible,.site-header__search-input:focus-visible,.site-header__search-submit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.site-header__search-panel{position:absolute;top:100%;right:0;left:auto;z-index:60;display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:min(92vw,420px);box-sizing:border-box;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:18px;background:var(--bg);color:var(--text);box-shadow:0 16px 40px rgba(0,0,0,.18)}
+.site-header__search-panel{position:absolute;top:100%;right:0;left:auto;z-index:60;width:min(92vw,520px)}
 .site-header__search-panel[hidden]{display:none}
+@keyframes tss-search-in{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
+.tss-search-overlay{position:fixed;inset:0;z-index:50;background:rgba(15,15,20,.38);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);animation:tss-fade .2s ease both}
+@keyframes tss-fade{from{opacity:0}to{opacity:1}}
+html body .site-header .site-header__search-panel{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;width:min(92vw,520px);box-sizing:border-box;margin-top:14px;padding:14px;border:1px solid rgba(0,0,0,.06);border-radius:22px;background:var(--bg,#fff);color:var(--text,#1A1916);box-shadow:0 30px 70px -12px rgba(0,0,0,.35),0 8px 20px rgba(0,0,0,.08);animation:tss-search-in .18s ease both}
+html body .site-header .site-header__search-panel[hidden]{display:none}
+html body .site-header .site-header__search-row{flex:0 0 100%;display:flex;align-items:center;gap:8px}
+html body .site-header .site-header__search-input{flex:1;min-width:0;height:auto;min-height:48px;padding:0 16px 0 46px;border:1.5px solid transparent;border-radius:999px;background-color:var(--soft,#f4f1ec);background-image:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23999'%20stroke-width='2.2'%20stroke-linecap='round'%3E%3Ccircle%20cx='11'%20cy='11'%20r='7'/%3E%3Cline%20x1='20'%20y1='20'%20x2='16.2'%20y2='16.2'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:17px center;background-size:18px;color:var(--text,#1A1916);font:inherit;font-size:15px;transition:border-color .15s,box-shadow .15s,background-color .15s}
+html body .site-header .site-header__search-input::placeholder{color:rgba(0,0,0,.42)}
+html body .site-header .site-header__search-input:focus,html body .site-header .site-header__search-input:focus-visible{outline:0;background-color:var(--bg,#fff);border-color:var(--accent,#A31736);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent,#A31736) 16%,transparent)}
+html body .site-header .site-header__search-input::-webkit-search-cancel-button{cursor:pointer}
+html body .site-header .site-header__search-submit,html body .site-header .site-header__actions .site-header__search-submit{height:48px;min-height:48px;padding:0 22px;border:0;border-radius:999px;background:var(--accent,#A31736)!important;color:#fff!important;font:inherit;font-size:14px;font-weight:600;letter-spacing:.01em;cursor:pointer;transition:transform .12s,box-shadow .15s}
+html body .site-header .site-header__search-submit:hover{transform:translateY(-1px);box-shadow:0 6px 16px color-mix(in srgb,var(--accent,#A31736) 40%,transparent)}
+html body .site-header .site-header__search-submit:active{transform:none}
+html body .site-header .tss-suggest{flex:0 0 100%;margin:14px -4px 0;padding:0 4px;max-height:min(62vh,440px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+html body .site-header .tss-suggest[hidden]{display:none}
+html body .site-header .tss-suggest__label{padding:2px 10px 8px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:rgba(0,0,0,.45)}
+html body .site-header .tss-suggest a.tss-suggest__item{display:flex;align-items:center;gap:14px;padding:9px 10px;margin:0 0 2px;border-radius:14px;color:var(--text,#1A1916)!important;background:transparent!important;text-decoration:none;transition:background .12s,transform .12s}
+html body .site-header .tss-suggest a.tss-suggest__item:hover,html body .site-header .tss-suggest a.tss-suggest__item.is-active{background:var(--soft,#f4f1ec)!important}
+html body .site-header .tss-suggest a.tss-suggest__item.is-active{transform:translateX(2px)}
+html body .site-header .tss-suggest__img{flex:0 0 58px;width:58px;height:58px;padding:4px;box-sizing:border-box;border-radius:12px;object-fit:contain;background:#fff;border:1px solid rgba(0,0,0,.06)}
+html body .site-header .tss-suggest__text{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+html body .site-header .tss-suggest__title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;font-weight:500;line-height:1.3;color:var(--text,#1A1916)!important}
+html body .site-header .tss-suggest__title mark{display:inline!important;background:color-mix(in srgb,var(--accent,#A31736) 14%,transparent);color:var(--accent,#A31736)!important;font-weight:700;border-radius:4px;padding:0 2px}
+html body .site-header .tss-suggest__meta{font-size:12px;color:rgba(0,0,0,.5)!important}
+html body .site-header .tss-suggest__price{flex:0 0 auto;font-size:15px;font-weight:700;color:var(--accent,#A31736)!important;white-space:nowrap}
+html body .site-header .tss-suggest a.tss-suggest__all{display:flex;align-items:center;justify-content:center;gap:6px;margin:8px 0 2px;padding:13px;border-radius:14px;background:var(--soft,#f4f1ec)!important;color:var(--accent,#A31736)!important;font-size:14px;font-weight:600;text-decoration:none;transition:background .12s,color .12s}
+html body .site-header .tss-suggest a.tss-suggest__all:hover,html body .site-header .tss-suggest a.tss-suggest__all.is-active{background:var(--accent,#A31736)!important;color:#fff!important}
+html body .site-header .tss-suggest__empty{padding:26px 10px;text-align:center;font-size:14px;color:rgba(0,0,0,.55)}
 .tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}
-.site-header__search-input{flex:1;min-width:0;min-height:44px;padding:0 14px 0 40px;border:1px solid var(--line);border-radius:12px;background:var(--soft) url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23888'%20stroke-width='2'%20stroke-linecap='round'%3E%3Ccircle%20cx='11'%20cy='11'%20r='8'/%3E%3Cline%20x1='21'%20y1='21'%20x2='16.65'%20y2='16.65'/%3E%3C/svg%3E") no-repeat 12px center/18px;color:inherit;font:inherit;transition:border-color .15s,box-shadow .15s}
-.site-header__search-input:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
-.site-header__search-input::-webkit-search-cancel-button{cursor:pointer}
-.site-header__search-submit{min-height:44px;padding:0 20px;border:0;border-radius:12px;background:var(--accent);color:var(--bg);font:inherit;font-weight:600;cursor:pointer;transition:opacity .15s}
-.site-header__search-submit:hover{opacity:.88}
-.tss-suggest{flex:0 0 100%;margin:2px 0 0;padding:6px 0 0;border-top:1px solid var(--line);max-height:min(60vh,380px);overflow-y:auto}
-.tss-suggest[hidden]{display:none}
-.tss-suggest__label{padding:4px 8px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.55}
-.tss-suggest__item{display:flex;align-items:center;gap:12px;padding:8px;border-radius:10px;color:inherit;text-decoration:none}
-.tss-suggest__item:hover,.tss-suggest__item.is-active{background:var(--soft)}
-.tss-suggest__img{flex:0 0 44px;width:44px;height:44px;border-radius:8px;object-fit:contain;background:var(--soft)}
-.tss-suggest__text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.tss-suggest__title{font-size:14px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tss-suggest__title mark{background:transparent;color:var(--accent);font-weight:700}
-.tss-suggest__meta{font-size:12px;opacity:.6}
-.tss-suggest__price{font-size:14px;font-weight:600;white-space:nowrap}
-.tss-suggest__all{display:block;margin-top:4px;padding:10px 8px;border-radius:10px;text-align:center;font-size:13px;font-weight:600;color:var(--accent);text-decoration:none}
-.tss-suggest__all:hover,.tss-suggest__all.is-active{background:var(--soft)}
-.tss-suggest__empty{padding:14px 8px;text-align:center;font-size:14px;opacity:.65}
 .site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
 .site-header__cart-count[hidden]{display:none}
 .site-header__actions+.site-header__actions{margin-left:0}
@@ -1005,6 +1014,10 @@ SEARCH_JS = Markup(r"""<script>
 
       // Live suggestions: matching products appear under the box as the shopper types
       if (input && form && panel) {
+        // A saved theme may carry its own older suggestion list: keep it out of sight, this one replaces it
+        block.querySelectorAll('.site-header__search-results').forEach(function (old) {
+          old.style.setProperty('display', 'none', 'important');
+        });
         var box = document.createElement('div');
         box.className = 'tss-suggest';
         box.hidden = true;
@@ -1080,7 +1093,7 @@ SEARCH_JS = Markup(r"""<script>
             var all = document.createElement('a');
             all.className = 'tss-suggest__all';
             all.href = action + '/collections/all?q=' + encodeURIComponent(q);
-            all.textContent = 'See all ' + (data.total || list.length) + ' results';
+            all.textContent = 'See all ' + (data.total || list.length) + ' results \u2192';
             box.appendChild(all);
           }
           active = -1;
@@ -1108,6 +1121,22 @@ SEARCH_JS = Markup(r"""<script>
           } else if (e.key === 'Escape') { hideBox(); }
         });
         document.addEventListener('click', function (e) { if (!block.contains(e.target)) hideBox(); });
+
+        // Dim the page behind the open panel; clicking the dimmed area closes it (the header's own outside-click handler does that)
+        var overlay = null;
+        function syncOverlay() {
+          if (!panel.hidden && !overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'tss-search-overlay';
+            document.body.appendChild(overlay);
+          } else if (panel.hidden && overlay) {
+            overlay.remove();
+            overlay = null;
+            hideBox();
+          }
+        }
+        new MutationObserver(syncOverlay).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+        syncOverlay();
       }
 
       function executeSearch() {
