@@ -4375,6 +4375,21 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
         home = self.ok("post", "/api/v1/themes/preview/?page=index", data)["html"]
         self.assertIn(f"/products/{other['id']}", home)
 
+    def test_preview_script_hands_the_product_back_link_to_the_viewer(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        html = self.ok("post", "/api/v1/themes/preview/?page=product", data)["html"]
+        # "< Back" is not followed as a store link (that always opened /collections/all): the viewer
+        # that keeps the visited pages is asked to go back
+        self.assertIn("[data-product-back]", html)
+        self.assertIn('type: "back"', html)
+        self.assertLess(html.index('type: "back"'), html.index("var page = storePage(e);"))
+
+    def test_collection_preview_reads_the_page_number_from_page_number(self):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        # ?page= names the template in the preview, so a storefront ?page=2 arrives as page_number
+        response = self.client.post("/api/v1/themes/preview/?page=collection&page_number=2&sort=newest", data, format="json")
+        self.assertEqual(response.status_code, 200)
+
     def test_unsaved_settings_show_in_preview_only(self):
         data = self.ok("get", "/api/v1/themes/settings/")
         data["templates"]["index"]["sections"]["featured"]["settings"]["show_vendor"] = True

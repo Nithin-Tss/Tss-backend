@@ -639,6 +639,15 @@ PREVIEW_EDITOR = """
     if (e.target.closest(".site-header__search-block, .site-header__search, .site-header__search-panel, .collection-search, input[type='search'], input[name='q']")) {
       return;
     }
+    // The product page's "< Back": the page is shown in a frame whose own history never grows, so the
+    // parent (which keeps the list of pages visited) takes us back. Its href is only the fallback.
+    var backLink = e.target.closest && e.target.closest("[data-product-back]");
+    if (backLink && !editing && e.button === 0 && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      send({ type: "back", fallback: backLink.getAttribute("data-back") || backLink.getAttribute("href") || "" });
+      return;
+    }
     var page = storePage(e);
     if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart)/.test(page))) {
       e.preventDefault();
@@ -1757,7 +1766,9 @@ def _preview_target(request):
             "collection": collection_data,
             "filters": parse_collection_filters(request.query_params),
             "sort": request.query_params.get("sort", "newest"),
-            "page_number": int(request.query_params.get("page", 1)) if str(request.query_params.get("page", "")).isdigit() else 1,
+            # "page" names the template here, so a storefront ?page=2 arrives as page_number
+            "page_number": int(request.query_params.get("page_number") or request.query_params.get("page") or 1)
+            if str(request.query_params.get("page_number") or request.query_params.get("page") or "1").isdigit() else 1,
         }
         return page, target, None
     if page == "product":
