@@ -1806,6 +1806,12 @@ class ThemePreviewView(StoreThemeView):
         customer_page = request.query_params.get("customer")
         if customer_page in ("login", "register", "account"):
             page, target, message = "index", {"customer_page": customer_page}, None
+            if customer_page == "account" and request.query_params.get(CUSTOMER_LINK_PARAM):
+                # Just signed in or registered in the preview: show that customer's own details (the token
+                # is the same signed, store-bound one the live store puts in its links), else the sample
+                shopper, shopper_user = get_storefront_customer(request.store, request)
+                if shopper is not None:
+                    target["customer"], target["customer_user"] = shopper, shopper_user
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
                              "fonts": ""})
@@ -3070,6 +3076,17 @@ def _storefront_response(html, status=200, request=None, store=None):
     return response
 
 
+def _auth_json(request, ok, redirect=None, error=None):
+    """The editor preview (a sandboxed page with no cookies) posts the sign-in and sign-up forms with
+    Accept: application/json and shows the outcome itself, instead of following the redirect."""
+    if "application/json" not in request.headers.get("Accept", ""):
+        return None
+    reply = JsonResponse({"ok": ok, "redirect": redirect, "error": error}, status=200 if ok else 400)
+    reply["Access-Control-Allow-Origin"] = "*"
+    reply["Cache-Control"] = "no-store"
+    return reply
+
+
 @xframe_options_exempt
 @csrf_exempt
 def storefront_login(request, store_slug):
@@ -3126,8 +3143,10 @@ def storefront_login(request, store_slug):
 
                 response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                 set_storefront_customer_cookie(response, store, user)
-                return response
+                return _auth_json(request, True, redirect=response["Location"]) or response
 
+    if error and (reply := _auth_json(request, False, error=error)):
+        return reply
     html = render_page(
         store, "login", request=request, customer_page="login",
         customer=customer, customer_user=user, auth_error=error
@@ -3203,7 +3222,7 @@ def storefront_register(request, store_slug):
 
                     response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
-                    return response
+                    return _auth_json(request, True, redirect=response["Location"]) or response
                 else:
                     error = "An account with this email already exists."
             else:
@@ -3240,10 +3259,12 @@ def storefront_register(request, store_slug):
 
                     response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
-                    return response
+                    return _auth_json(request, True, redirect=response["Location"]) or response
                 except Exception as e:
                     error = str(e) or "Unable to create account. Please try again."
 
+    if error and (reply := _auth_json(request, False, error=error)):
+        return reply
     html = render_page(
         store, "register", request=request, customer_page="register",
         customer=customer, customer_user=user, auth_error=error

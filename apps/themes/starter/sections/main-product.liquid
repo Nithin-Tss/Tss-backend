@@ -53,6 +53,11 @@
       {%- if s.show_price -%}
         <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.on_sale and product.price != nil %} <span class="price price--compare product__compare">{{ product.compare_at_price | money }}</span>{% endif %}</div>
       {%- endif -%}
+      {%- if s.show_stock -%}
+        <p class="product__stock{% if shown_out %} product__stock--out{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock and shown_variant.continue_selling != true %} product__stock--few{% endif %}" data-stock data-low="{{ low_stock }}">
+          {%- if shown_out %}{{ s.sold_out_label | default: 'Sold out' }}{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock and shown_variant.continue_selling != true %}Only a few left{% else %}In stock{% endif -%}
+        </p>
+      {%- endif -%}
 
       <hr class="product__divider">
 
@@ -98,12 +103,27 @@
         </div>
       {%- endif -%}
 
+      {%- comment -%} Variants that only differ by name (no options): tier cards, or a dropdown when chosen in the settings {%- endcomment -%}
+      {%- if show_options == false and product.variants.size > 1 and s.variant_style != 'dropdown' -%}
+        <div class="product__options" data-options>
+          <div class="product__tiers" data-tiers role="radiogroup" aria-label="Option">
+            {%- for variant in product.variants -%}
+              <button class="product__tier{% if variant.is_sold_out %} is-muted{% endif %}" type="button" role="radio" data-sku-tier="{{ variant.id }}"
+                aria-checked="{% if variant.id == shown_variant.id %}true{% else %}false{% endif %}">
+                <span class="product__tier-name">{{ variant.sku | default: 'Option' }}</span>
+                {%- if variant.price != nil %} <span class="product__tier-price">{{ variant.price | money }}</span>{% endif -%}
+              </button>
+            {%- endfor -%}
+          </div>
+        </div>
+      {%- endif -%}
+
       {%- comment -%} The "Wishlist heart" block: add, remove or move it in the customizer {%- endcomment -%}
       {%- if section.wishlist_heart -%}
-        {%- assign heart_label = section.wishlist_heart.label | default: 'Add to wishlist' -%}
-        {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, placement: 'product', size: section.wishlist_heart.size, label_text: heart_label, align: section.wishlist_heart.align, with_script: true %}
+        {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, placement: 'product', size: section.wishlist_heart.size, label_text: section.wishlist_heart.label, align: section.wishlist_heart.align, with_script: true %}
       {%- endif -%}
-      {%- comment -%} The "Cart icon" block: add, hide or move it in the customizer {%- endcomment -%}
+
+      {%- comment -%} The "Cart icon" block: add, remove or move it in the customizer {%- endcomment -%}
       {%- if section.cart_icon -%}
         <div class="product__cart-icon" style="text-align:{{ section.cart_icon.align | default: 'left' }}">{% render 'cart', mode: 'icon', count: cart_count, session: cart_session, settings: section.cart_icon %}</div>
       {%- endif -%}
@@ -125,6 +145,17 @@
                 {%- for o in product.options %} data-opt-{{ forloop.index0 }}="{{ variant.options[o.name] | escape }}"{%- endfor -%}></option>
             {%- endfor -%}
           </select>
+        {%- elsif product.variants.size > 1 -%}
+          <div{% if s.variant_style != 'dropdown' %} hidden{% endif %}>
+          <select name="variant" data-variant>
+            {%- for variant in product.variants -%}
+              <option value="{{ variant.id }}"{% if variant.id == shown_variant.id %} selected{% endif %}
+                data-variant-price="{{ variant.price | money }}"{% if variant.on_sale %} data-variant-compare="{{ variant.compare_at_price | money }}"{% endif %}
+                data-variant-available="{{ variant.available_total }}" data-variant-continue="{{ variant.continue_selling }}"
+                data-variant-label="{{ variant.sku | escape }}">{{ variant.sku | default: 'Option' }}{% if variant.price != nil %} — {{ variant.price | money }}{% endif %}</option>
+            {%- endfor -%}
+          </select>
+          </div>
         {%- elsif product.variants.size == 1 -%}
           <input type="hidden" name="variant" value="{{ product.variants.first.id }}">
         {%- endif -%}
@@ -263,6 +294,13 @@
 
       var left = Number(option.dataset.variantAvailable);
       var out = left <= 0 && option.dataset.variantContinue !== "true"; // an option that keeps selling is never sold out
+      var stock = root.querySelector("[data-stock]");
+      if (stock) {
+        var low = Number(stock.dataset.low) || 5;
+        stock.textContent = out ? (add ? add.dataset.soldOut : "Sold out") : left <= low && option.dataset.variantContinue !== "true" ? "Only a few left" : "In stock";
+        stock.classList.toggle("product__stock--out", out);
+        stock.classList.toggle("product__stock--few", !out && left <= low && option.dataset.variantContinue !== "true");
+      }
       if (add) {
         add.disabled = out;
         add.textContent = out ? add.dataset.soldOut : add.dataset.label;
@@ -332,6 +370,15 @@
       });
     });
     syncButtonStates();
+
+    root.querySelectorAll("[data-sku-tier]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        root.querySelectorAll("[data-sku-tier]").forEach(function (b) { b.setAttribute("aria-checked", b === btn ? "true" : "false"); });
+        for (var i = 0; i < optionEls.length; i++) {
+          if (optionEls[i].value === btn.getAttribute("data-sku-tier")) { applyVariant(optionEls[i]); break; }
+        }
+      });
+    });
 
     var decBtn = root.querySelector("[data-qty-decrement]");
     var incBtn = root.querySelector("[data-qty-increment]");

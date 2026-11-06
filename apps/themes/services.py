@@ -91,7 +91,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 53
+STARTER_REVISION = 54
 STARTER_UPGRADES = {
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
@@ -218,7 +218,10 @@ STARTER_UPGRADES = {
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
     # Revision 53: variant picker is option-value buttons (not a SKU dropdown), SKU removed from the page
+    # Revision 54: the "In stock" / "Only a few left" message is back on the product page
     "sections/main-product.liquid": {
+        "b7cc7c3ab5b4d28277fddf652f5eb145b1018167856f1712905a142a22f82a62",  # revision 54: before "Only a few left" skipped options that keep selling
+        "7a4285f2bfc1c2d58e810035ba181f766ccf81ef2c307c42dd4bbe86064d4926",  # revision 53: before the stock message came back
         "79ce976f68235686a58778b943748aaa6bf05949517e4204f58929ba0ddb3519",  # revision 52: before the option-button redesign
         "221ab289f74da87fb4c7860aa09813981eaa1f376a7951f6cfc14f3a334ad718",  # revision 52: before the option-button redesign (CRLF)
         "f2e87477d18719a79f68bff217b82ce6415d3fbbefed5ebfea20a3b6f6c65a31",  # revision 44: before options that keep selling stay orderable
