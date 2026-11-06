@@ -1720,14 +1720,16 @@ def _preview_target(request):
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
     if page == "collection":
-        # ?collection=<handle or id>: that collection; otherwise all products
+        # ?collection=<handle or id>: that collection (the owner sees a draft or unpublished one here too);
+        # otherwise all products
         value = (request.query_params.get("collection") or "").strip()
         chosen = None
         if value:
+            own = Collection.objects.filter(store=request.store)
             try:
-                chosen = published_collections(request.store).filter(pk=uuid.UUID(value)).first()
+                chosen = own.filter(pk=uuid.UUID(value)).first()
             except ValueError:
-                chosen = published_collections(request.store).filter(handle=value).first()
+                chosen = own.filter(handle=value).first()
         collection_data = {"name": chosen.name, "obj": chosen} if chosen is not None else {"name": "Search results" if request.query_params.get("q") else "All products", "obj": None}
         target = {
             "collection": collection_data,

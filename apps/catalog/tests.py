@@ -3154,3 +3154,90 @@ class IncludeCollectionsTests(APITestCase):
         self.assertEqual([c["id"] for c in self.client.get(self.COLLECTIONS).json()], [a["id"]])
         b = self.collection("B")
         self.assertEqual({c["id"] for c in self.client.get(self.COLLECTIONS).json()}, {a["id"], b["id"]})
+
+
+class CollectionChannelTests(APITestCase):
+    """The Online Store toggle on a collection shows, and keeps, what is saved on the collection itself."""
+
+    COLLECTIONS = "/api/v1/catalog/collections/"
+
+    def setUp(self):
+        from apps.tenancy.models import Store
+
+        token, self.store_id = signup(self.client, "channels@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+        self.store = Store.objects.get(pk=self.store_id)
+        self.channels = {c["type"]: c["id"] for c in self.client.get("/api/v1/catalog/sales-channels/").json()}
+        self.location = self.client.post("/api/v1/inventory/locations/", {"name": "Main"}, format="json").json()
+
+    def product(self, title):
+        r = self.client.post(URL, {"title": title, "status": "active", "price": "10", "sku": title.upper(),
+                                   "location": self.location["id"], "quantity": 5}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def collection(self, name, **extra):
+        r = self.client.post(self.COLLECTIONS, {"name": name, **extra}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()
+
+    def fetch(self, collection):
+        return self.client.get(f"{self.COLLECTIONS}{collection['id']}/").json()
+
+    def storefront(self, collection):
+        return self.client.get(f"/s/{self.store.store_slug}/collections/{collection['handle']}").status_code
+
+    def saved_types(self, collection):
+        return sorted(CollectionSalesChannel.objects.filter(collection_id=collection["id"]).values_list("sales_channel__type", flat=True))
+
+    def test_a_collection_with_no_saved_channel_shows_none_even_when_its_products_are_on_the_online_store(self):
+        product = self.product("Lager")
+        beer = self.collection("Beer & Cider", sales_channels=[], products=[product["id"]])
+        self.assertEqual(self.saved_types(beer), [])
+
+        shown = self.fetch(beer)
+
+        self.assertEqual((shown["sales_channels"], shown["sales_channels_count"]), ([], 0))
+        listed = next(c for c in self.client.get(self.COLLECTIONS).json() if c["id"] == beer["id"])
+        self.assertEqual(listed["sales_channels"], [])
+        self.assertEqual(self.storefront(beer), 404)  # what the page shows is what shoppers get
+
+    def test_turning_the_online_store_off_stays_off_after_a_reload(self):
+        beer = self.collection("Beer", products=[self.product("Lager")["id"]])
+        self.assertEqual(self.saved_types(beer), ["online"])  # a new collection goes on the Online Store
+
+        saved = self.client.patch(f"{self.COLLECTIONS}{beer['id']}/", {"sales_channels": []}, format="json").json()
+
+        self.assertEqual(saved["sales_channels"], [])
+        self.assertEqual(self.fetch(beer)["sales_channels"], [])  # not switched back on by its products
+        self.assertEqual(self.saved_types(beer), [])
+        self.assertEqual(self.storefront(beer), 404)
+
+    def test_turning_the_online_store_on_really_saves_the_channel(self):
+        beer = self.collection("Beer", sales_channels=[])
+        self.assertEqual(self.storefront(beer), 404)
+
+        saved = self.client.patch(
+            f"{self.COLLECTIONS}{beer['id']}/", {"sales_channels": [self.channels["online"]]}, format="json"
+        ).json()
+
+        self.assertEqual([c["type"] for c in saved["sales_channels"]], ["online"])
+        self.assertEqual(self.saved_types(beer), ["online"])
+        self.assertEqual([c["type"] for c in self.fetch(beer)["sales_channels"]], ["online"])
+        self.assertEqual(self.storefront(beer), 200)
+
+    def test_saving_without_the_channels_leaves_them_alone_and_other_collections_are_not_touched(self):
+        on = self.collection("On shelf")
+        off = self.collection("Off shelf", sales_channels=[])
+
+        self.client.patch(f"{self.COLLECTIONS}{on['id']}/", {"name": "Renamed"}, format="json")
+        self.client.patch(f"{self.COLLECTIONS}{off['id']}/", {"name": "Renamed off"}, format="json")
+
+        self.assertEqual(self.saved_types(on), ["online"])
+        self.assertEqual(self.saved_types(off), [])
+
+    def test_a_collection_can_be_on_several_channels_and_shows_them_in_order(self):
+        both = self.collection("Both", sales_channels=[self.channels["pos"], self.channels["online"]])
+
+        self.assertEqual(sorted(c["type"] for c in self.fetch(both)["sales_channels"]), ["online", "pos"])
+        self.assertEqual(self.fetch(both)["sales_channels_count"], 2)

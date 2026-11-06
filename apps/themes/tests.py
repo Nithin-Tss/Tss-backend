@@ -6244,6 +6244,87 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         html = self.client.get(f"{self.base}/").content.decode()
         self.assertEqual(html.count('data-mode="picks"'), 2)
 
+    # ------------------------------------------------------------------ Shop Now goes to the chosen collection
+    def renamed_unpublished_collection(self):
+        """"Beer" renamed to "Beer & Cider": its address stays /collections/beer, and it is off the Online Store."""
+        made = self.ok("post", "/api/v1/catalog/collections/", {"name": "Beer", "sales_channels": []}, expect=201)
+        self.assertEqual(made["handle"], "beer")
+        return self.ok("patch", f"/api/v1/catalog/collections/{made['id']}/", {"name": "Beer & Cider"})
+
+    def quiz_links(self, *values):
+        blocks = [{"type": "question", "settings": {
+            "question": "Q", **{f"answer_{n}_label": f"A{n}" for n in range(1, len(values) + 1)},
+            **{f"answer_{n}_link": value for n, value in enumerate(values, 1)}}}]
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}, "blocks": blocks}})
+        html = self.client.get(f"{self.base}/").content.decode()
+        return re.findall(r'data-rname="([^"]*)" data-rtext="[^"]*" data-rlink="([^"]*)"', html)
+
+    def test_match_quiz_answer_goes_to_the_chosen_collection_by_id_handle_name_or_old_slug(self):
+        beer = self.renamed_unpublished_collection()
+        target = f"{self.base}/collections/beer"
+
+        results = self.quiz_links(
+            beer["id"],                    # what the customizer saves
+            "beer",                        # its handle
+            "Beer & Cider",                # its current name
+            "beer-cider",                  # a link made from the new title before the handle was known
+        )
+
+        self.assertEqual(results, [("Beer &amp; Cider", target)] * 4)
+
+    def test_match_quiz_answer_accepts_a_collection_address_and_keeps_other_links(self):
+        self.renamed_unpublished_collection()
+        self.ok("post", "/api/v1/catalog/collections/", {"name": "Stout shelf"}, expect=201)
+
+        results = self.quiz_links("/collections/beer-cider", "Stout shelf", "/pages/about", "https://example.com/x")
+
+        self.assertEqual([url for _, url in results], [
+            f"{self.base}/collections/beer",            # the address of a renamed collection leads to it
+            f"{self.base}/collections/stout-shelf",
+            f"{self.base}/pages/about",                 # not a collection: kept as it is
+            "https://example.com/x",
+        ])
+
+    def test_match_quiz_a_real_handle_wins_over_another_collections_name_slug(self):
+        self.renamed_unpublished_collection()  # its name slugs to beer-cider
+        other = self.ok("post", "/api/v1/catalog/collections/", {"name": "Other", "handle": "beer-cider"}, expect=201)
+
+        results = self.quiz_links("beer-cider", other["id"])
+
+        self.assertEqual([url for _, url in results], [f"{self.base}/collections/beer-cider"] * 2)
+
+    def test_match_quiz_result_blocks_go_to_the_chosen_collection_too(self):
+        beer = self.renamed_unpublished_collection()
+        blocks = [
+            {"type": "question", "settings": {"question": "Q", "answer_1_label": "A", "answer_1_key": "beer"}},
+            {"type": "result", "settings": {"result_key": "beer", "name": "Beer", "link": f"/collections/{beer['id']}"}},
+            {"type": "result", "settings": {"result_key": "named", "name": "Named", "link": "/collections/beer-cider"}},
+            {"type": "result", "settings": {"result_key": "all", "name": "All"}},  # default: /collections/all
+            {"type": "result", "settings": {"result_key": "web", "name": "Web", "link": "https://example.com/x"}},
+        ]
+        self.add_sections("index", {"match": {"type": "match-quiz", "settings": {"result_logic": "picks"}, "blocks": blocks}})
+
+        html = self.client.get(f"{self.base}/").content.decode()
+
+        links = re.findall(r'data-mq-result data-key="([^"]*)" data-link="([^"]*)"', html)
+        self.assertEqual(links, [
+            ("beer", f"{self.base}/collections/beer"),
+            ("named", f"{self.base}/collections/beer"),
+            ("all", f"{self.base}/collections/all"),
+            ("web", "https://example.com/x"),
+        ])
+
+    def test_customizer_preview_opens_an_unpublished_chosen_collection_not_all_products(self):
+        beer = self.renamed_unpublished_collection()
+        settings = self.ok("get", "/api/v1/themes/settings/")
+
+        html = self.ok("post", f"/api/v1/themes/preview/?page=collection&collection={beer['id']}", settings)["html"]
+
+        self.assertIn("Beer &amp; Cider", html)
+        self.assertNotIn("All products", html)
+        # the live storefront still keeps it hidden until it is on the Online Store
+        self.assertEqual(self.client.get(f"{self.base}/collections/beer").status_code, 404)
+
     def test_match_quiz_limits_and_placeholders(self):
         self.add_sections("index", {"match": {"type": "match-quiz", "settings": {}}})
         page = self.client.get(f"{self.base}/").content.decode()

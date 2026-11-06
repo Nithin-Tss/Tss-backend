@@ -26,9 +26,9 @@ from django.utils import timezone
 from django.utils.html import strip_tags
 from django.utils.text import slugify
 
-from apps.catalog.models import EXTRA_FIELDS, ProductCollection
+from apps.catalog.models import EXTRA_FIELDS, Collection, CollectionSalesChannel, ProductCollection
 from apps.catalog.services import (
-    collection_product_ids, include_graph, published_collections, published_products, walk_included,
+    ONLINE, collection_product_ids, include_graph, published_collections, published_products, walk_included,
 )
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
@@ -3086,28 +3086,66 @@ def _with_customer_link(html, token, base_url):
     return html + script if index < 0 else html[:index] + script + html[index:]
 
 
+class _CollectionFinder:
+    """
+    Finds one of the store's collections from what a setting saved: its id, its handle, its name, or an address
+    like /collections/<handle>. Every collection counts, published or not, so the link always goes to the chosen one
+    (a draft or off-the-Online-Store collection shows once it is published). Also works after a rename: the id
+    never changes, and a handle or name written from an older title is matched through the title's slug
+    ("Beer & Cider" -> beer-cider). A real id, handle or name always wins over a slug.
+    """
+
+    def __init__(self, store):
+        on_online_store = CollectionSalesChannel.objects.filter(collection=OuterRef("pk"), sales_channel__type=ONLINE)
+        collections = list(Collection.objects.filter(store=store).annotate(on_online_store=Exists(on_online_store)))
+        # Published ones first, so two collections with the same name resolve to the one shoppers can see
+        collections.sort(key=lambda c: (not (c.status == Collection.ACTIVE and c.on_online_store), (c.name or "").casefold(), str(c.pk)))
+        self._exact, self._slugs = {}, {}
+        for c in collections:
+            for key in (str(c.id), c.handle, (c.name or "").casefold()):
+                if key:
+                    self._exact.setdefault(key, c)
+            slug = slugify(c.name or "")
+            if slug:
+                self._slugs.setdefault(slug, c)
+
+    def find(self, value):
+        value = str(value or "").strip()
+        path = _COLLECTION_PATH.match(value)
+        if path:
+            value = path.group(1)
+        return self._exact.get(value) or self._exact.get(value.casefold()) or self._slugs.get(slugify(value))
+
+
+_COLLECTION_PATH = re.compile(r"^/collections/([^/?#]+)/?$")
+
+
 def _match_quiz_links(store, base_url, blocks):
     """
-    "Find your match quiz" (priority order): each answer's collection setting becomes answer_N_link_url and
-    answer_N_link_title for the template. The setting is a collection's id, handle or name; a path (/collections/x)
-    or a web address is kept as it is, and a collection that is not (yet) published still links to its handle.
+    "Find your match quiz": each answer's collection setting becomes answer_N_link_url and answer_N_link_title for
+    the template, and a Result block's link is pointed at its collection too. The setting is a collection's id,
+    handle or name (see _CollectionFinder); a path (/collections/x) or a web address that is not one of the store's
+    collections is kept as it is, and anything else links to its slug.
     """
-    lookup = None
+    finder = None
     for block in blocks:
+        settings = block["settings"]
+        if block["type"] == "result":
+            value = str(settings.get("link") or "").strip()
+            if value:
+                finder = finder or _CollectionFinder(store)
+                found = finder.find(value)
+                if found:
+                    settings["link"] = collection_url("", found)  # store-relative: the `link` filter adds the store path
+            continue
         if block["type"] != "question":
             continue
-        settings = block["settings"]
         for n in range(1, 5):
             value = str(settings.get(f"answer_{n}_link") or "").strip()
             url = title = ""
             if value:
-                if lookup is None:
-                    lookup = {}
-                    for c in published_collections(store):
-                        for key in (str(c.id), c.handle, (c.name or "").casefold()):
-                            if key:
-                                lookup.setdefault(key, c)
-                found = lookup.get(value) or lookup.get(value.casefold())
+                finder = finder or _CollectionFinder(store)
+                found = finder.find(value)
                 if found:
                     url, title = collection_url(base_url, found), found.name
                 elif value.startswith(("http://", "https://")):

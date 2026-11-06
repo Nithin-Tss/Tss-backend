@@ -17,7 +17,7 @@ from .models import (
 )
 from .services import (
     RULE_FIELDS, RULE_OPERATORS, STATUSES, THEME_TEMPLATES, check_included_collections, check_skus, clean_options,
-    collection_product_ids, collection_source_ids, direct_included_ids, included_collection_ids, set_manual_products,
+    collection_product_ids, direct_included_ids, included_collection_ids, set_manual_products,
     sync_collection, variant_options,
 )
 
@@ -414,51 +414,13 @@ class CollectionSerializer(serializers.ModelSerializer):
         return len(channels)
 
     def get_sales_channels(self, obj):
-        from apps.catalog.models import SalesChannel
-
-        sources = collection_source_ids(obj)
-        if len(sources) == 1 and hasattr(obj, "_prefetched_objects_cache") and "product_collections" in obj._prefetched_objects_cache:
-            channels_dict = {}
-            for pc in obj.product_collections.all():
-                product = getattr(pc, "product", None)
-                if (
-                    product
-                    and hasattr(product, "_prefetched_objects_cache")
-                    and "product_sales_channels" in product._prefetched_objects_cache
-                ):
-                    for psc in product.product_sales_channels.all():
-                        ch = getattr(psc, "sales_channel", None)
-                        if ch:
-                            key = (ch.name, ch.type)
-                            if key not in channels_dict:
-                                channels_dict[key] = ch
-            if channels_dict:
-                return [
-                    {"id": str(c.id), "name": c.name, "type": c.type}
-                    for c in sorted(channels_dict.values(), key=lambda c: c.created_at)
-                ]
-            if hasattr(obj, "sales_channels_count_annotated") and obj.sales_channels_count_annotated == 0:
-                return []
-
-        channels = (
-            SalesChannel.objects.filter(
-                product_sales_channels__product__product_collections__collection__in=sources
-            )
-            .distinct()
-            .order_by("created_at")
+        # The channels saved on the collection itself (what decides where shoppers can open it), not the ones its
+        # products are on: the page must show, and keep, exactly what was saved
+        channels = sorted(
+            {link.sales_channel_id: link.sales_channel for link in obj.collection_sales_channels.all()}.values(),
+            key=lambda c: c.created_at,
         )
-        seen = set()
-        unique_channels = []
-        for c in channels:
-            key = (c.name, c.type)
-            if key not in seen:
-                seen.add(key)
-                unique_channels.append(c)
-
-        return [
-            {"id": str(c.id), "name": c.name, "type": c.type}
-            for c in unique_channels
-        ]
+        return [{"id": str(c.id), "name": c.name, "type": c.type} for c in channels]
 
     def to_representation(self, obj):
         data = super().to_representation(obj)
@@ -557,7 +519,7 @@ class CollectionSerializer(serializers.ModelSerializer):
             ])
         # Counts and prefetched rows read before this save are out of date now
         instance._prefetched_objects_cache = {}
-        for attr in ("products_count_annotated", "sales_channels_count_annotated", "_source_ids"):
+        for attr in ("products_count_annotated", "_source_ids"):
             instance.__dict__.pop(attr, None)
 
         if instance.type == Collection.AUTOMATED:
