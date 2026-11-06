@@ -28,7 +28,8 @@ from django.utils.text import slugify
 
 from apps.catalog.models import EXTRA_FIELDS, Collection, CollectionSalesChannel, ProductCollection
 from apps.catalog.services import (
-    ONLINE, collection_product_ids, include_graph, published_collections, published_products, walk_included,
+    ONLINE, collection_product_ids, include_graph, published_collections, published_products, variant_options,
+    walk_included,
 )
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
@@ -1858,6 +1859,7 @@ def product_drop(product, base_url):
         "is_new": is_new,
         "category_id": category_id,
         "category_name": category_name,
+        "options": product.options or [],
         # Stock for the templates: a number and a true/false. Quantity 0 (or no stock record) is sold out.
         "available_total": available_total,
         "is_sold_out": sold_out,
@@ -1873,6 +1875,8 @@ def product_drop(product, base_url):
                 "on_sale": v.compare_at_price is not None and v.compare_at_price > v.price,
                 "continue_selling": v.continue_selling,
                 "is_sold_out": stock[v.id] <= 0 and not v.continue_selling,
+                # Option values chosen for this variant, e.g. {"Size": "Pack of 6"}
+                "options": variant_options(v),
             }
             for v in variants
         ],

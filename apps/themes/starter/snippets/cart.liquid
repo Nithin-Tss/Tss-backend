@@ -47,6 +47,7 @@
           </a>
           <div class="cart-line__info">
             <a class="cart-line__title" href="{{ line.url }}">{{ line.title }}</a>
+            {%- if line.variant_title != blank -%}<span class="cart-line__variant">{{ line.variant_title }}</span>{%- endif -%}
             <span class="cart-line__price">{{ line.unit_price | money }}</span>
             {%- if line.warning != blank -%}<span class="cart-line__warning" role="status">{{ line.warning }}</span>{%- endif -%}
             <div class="cart-line__controls">

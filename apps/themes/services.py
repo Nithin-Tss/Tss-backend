@@ -91,8 +91,13 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 52
+STARTER_REVISION = 53
 STARTER_UPGRADES = {
+    # Revision 53: variant picker is option-value buttons (not a SKU dropdown), SKU removed from the page
+    "sections/main-product.liquid": {
+        "79ce976f68235686a58778b943748aaa6bf05949517e4204f58929ba0ddb3519",  # revision 52: before the option-button redesign
+        "221ab289f74da87fb4c7860aa09813981eaa1f376a7951f6cfc14f3a334ad718",  # revision 52: before the option-button redesign (CRLF)
+    },
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
         "a52c2767aa520c9043cabf866f7407878fff7e3935cc74c84e7e7063e664822d",  # revision 42: before the account blocks (814f062)
