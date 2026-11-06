@@ -3,8 +3,10 @@ JWT login tokens (djangorestframework-simplejwt), backed by Django sessions.
 
 After sign-in the client gets two tokens:
 - access  (15 min):  sent as "Authorization: Bearer <access>" on every request
-- refresh (7 days, 30 with "remember me"): only sent to /auth/refresh/ to get
-  a new access token when the old one expires
+- refresh (30 min, 30 days with "remember me"): only sent to /auth/refresh/ to get
+  a new access token when the old one expires.
+  The sign-in itself ends at a fixed time after it started (refreshing
+  does not extend it).
 
 Every sign-in also gets a row in the django_session table, and both tokens
 carry its key ("sid"). That row is what makes tokens revocable:
@@ -16,6 +18,8 @@ The row holds no Django login data, so its key is useless as a session cookie.
 Both tokens also carry a short fingerprint of the user's password hash
 ("pwd"), so changing the password signs the user out everywhere.
 """
+import time
+from datetime import timedelta
 from importlib import import_module
 
 from django.conf import settings
@@ -35,6 +39,7 @@ SESSION_CLAIM = "sid"
 # Keys inside the session row
 SESSION_USER = "jwt_user_id"
 SESSION_REFRESH_JTI = "jwt_refresh_jti"
+SESSION_STARTED = "jwt_started_at"  # unix time of sign-in: the fixed limit counts from here
 
 SessionStore = import_module(settings.SESSION_ENGINE).SessionStore
 
@@ -74,10 +79,20 @@ def issue_tokens(user, remember_me=False, session=None):
         else settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"]
     )
 
+    now = time.time()
+
     if session is None:
         session = SessionStore()
         session[SESSION_USER] = str(user.pk)
+        session[SESSION_STARTED] = now
         session.save()  # creates the row and its key
+
+    # Fixed limit: refreshing never extends the sign-in past its first lifetime.
+    remaining = session.get(SESSION_STARTED, now) + lifetime.total_seconds() - now
+    if remaining <= 0:
+        session.delete()
+        raise exceptions.AuthenticationFailed("Session expired. Please sign in again.")
+    lifetime = timedelta(seconds=remaining)
 
     refresh = RefreshToken.for_user(user)
     refresh[PASSWORD_CLAIM] = password_fingerprint(user)
@@ -89,7 +104,7 @@ def issue_tokens(user, remember_me=False, session=None):
 
     # Only this refresh token may be used next; the row lives as long as it.
     session[SESSION_REFRESH_JTI] = refresh["jti"]
-    session.set_expiry(int(lifetime.total_seconds()))
+    session.set_expiry(max(1, int(lifetime.total_seconds())))
     session.save()
 
     # The access token copies the custom claims of the refresh token.

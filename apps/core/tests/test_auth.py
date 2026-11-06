@@ -148,13 +148,16 @@ class AuthFlowTest(APITestCase):
     def test_remember_me_keeps_the_refresh_token_longer(self):
         self.signup()
 
-        def refresh_days(**extra):
+        def refresh_minutes(**extra):
             refresh = self.login(**extra).json()["refresh"]
             claims = jwt.decode(refresh, settings.SECRET_KEY, algorithms=["HS256"])
-            return round((claims["exp"] - claims["iat"]) / 86400)
+            return round((claims["exp"] - claims["iat"]) / 60)
 
-        self.assertEqual(refresh_days(), 7)
-        self.assertEqual(refresh_days(rememberMe=True), 30)
+        default = settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds() / 60
+        remembered = settings.JWT_REMEMBER_ME_REFRESH_LIFETIME.total_seconds() / 60
+        self.assertEqual(refresh_minutes(), default)
+        self.assertEqual(refresh_minutes(rememberMe=True), remembered)
+        self.assertGreater(remembered, default)
 
     def test_too_many_sign_in_attempts_are_slowed_down(self):
         self.signup()

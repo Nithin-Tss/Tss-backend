@@ -142,6 +142,7 @@ AUTH_USER_MODEL = "identity.User"
 MIDDLEWARE = [
     'apps.core.request_log.RequestLogMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'apps.core.middleware.ApiGZipMiddleware',
     'apps.core.middleware.SecurityHeadersMiddleware',
     'apps.core.middleware.RequestValidationMiddleware',
     'apps.audit.middleware.AuditMiddleware',
@@ -501,7 +502,7 @@ SPECTACULAR_SETTINGS = {
 # - refresh: only used to get a new access token; long-lived
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=30),
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -521,7 +522,13 @@ JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
 # makes sign-out and single-use refresh tokens work (see apps/core/tokens.py).
 # Without "remember me" the cookie ends when the browser closes.
 # Remove expired rows now and then with: python manage.py clearsessions
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+# Every API request reads its session row to check the sign-in is live. cached_db serves that from the cache
+# (still writing to the database). A per-process cache can't see a sign-out done by another worker, so
+# without Redis this is only used with a single worker; otherwise it stays on the database.
+if os.getenv('REDIS_URL') or os.getenv('WEB_CONCURRENCY', '1') == '1':
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+else:
+    SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 SESSION_COOKIE_AGE = int(JWT_REMEMBER_ME_REFRESH_LIFETIME.total_seconds())
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
@@ -533,6 +540,7 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 # Password hashing: Argon2 for new passwords. Older PBKDF2 hashes still work
 # and are upgraded to Argon2 automatically the next time that user signs in.
 PASSWORD_HASHERS = [
+    'apps.core.hashers.LightArgon2PasswordHasher',
     'django.contrib.auth.hashers.Argon2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
