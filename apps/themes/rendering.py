@@ -141,11 +141,28 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .site-header__search-block{position:relative;display:inline-flex;align-items:center;order:-1;overflow:visible}
 .site-header__search{padding:0;border:0;background:transparent;color:inherit;cursor:pointer}
 .site-header__search:focus-visible,.site-header__search-input:focus-visible,.site-header__search-submit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.site-header__search-panel{position:absolute;top:100%;right:0;left:auto;z-index:60;display:flex;gap:8px;width:min(92vw,360px);box-sizing:border-box;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.16)}
+.site-header__search-panel{position:absolute;top:100%;right:0;left:auto;z-index:60;display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:min(92vw,420px);box-sizing:border-box;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:18px;background:var(--bg);color:var(--text);box-shadow:0 16px 40px rgba(0,0,0,.18)}
 .site-header__search-panel[hidden]{display:none}
 .tss-wrap:has(.site-header__search-block){overflow:visible;transform:none!important}
-.site-header__search-input{flex:1;min-width:0;min-height:40px;padding:0 12px;border:0;border-radius:999px;background:transparent;color:inherit;font:inherit}
-.site-header__search-submit{min-height:40px;padding:0 16px;border:0;border-radius:999px;background:var(--accent);color:var(--bg);font:inherit;cursor:pointer}
+.site-header__search-input{flex:1;min-width:0;min-height:44px;padding:0 14px 0 40px;border:1px solid var(--line);border-radius:12px;background:var(--soft) url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23888'%20stroke-width='2'%20stroke-linecap='round'%3E%3Ccircle%20cx='11'%20cy='11'%20r='8'/%3E%3Cline%20x1='21'%20y1='21'%20x2='16.65'%20y2='16.65'/%3E%3C/svg%3E") no-repeat 12px center/18px;color:inherit;font:inherit;transition:border-color .15s,box-shadow .15s}
+.site-header__search-input:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+.site-header__search-input::-webkit-search-cancel-button{cursor:pointer}
+.site-header__search-submit{min-height:44px;padding:0 20px;border:0;border-radius:12px;background:var(--accent);color:var(--bg);font:inherit;font-weight:600;cursor:pointer;transition:opacity .15s}
+.site-header__search-submit:hover{opacity:.88}
+.tss-suggest{flex:0 0 100%;margin:2px 0 0;padding:6px 0 0;border-top:1px solid var(--line);max-height:min(60vh,380px);overflow-y:auto}
+.tss-suggest[hidden]{display:none}
+.tss-suggest__label{padding:4px 8px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.55}
+.tss-suggest__item{display:flex;align-items:center;gap:12px;padding:8px;border-radius:10px;color:inherit;text-decoration:none}
+.tss-suggest__item:hover,.tss-suggest__item.is-active{background:var(--soft)}
+.tss-suggest__img{flex:0 0 44px;width:44px;height:44px;border-radius:8px;object-fit:contain;background:var(--soft)}
+.tss-suggest__text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.tss-suggest__title{font-size:14px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tss-suggest__title mark{background:transparent;color:var(--accent);font-weight:700}
+.tss-suggest__meta{font-size:12px;opacity:.6}
+.tss-suggest__price{font-size:14px;font-weight:600;white-space:nowrap}
+.tss-suggest__all{display:block;margin-top:4px;padding:10px 8px;border-radius:10px;text-align:center;font-size:13px;font-weight:600;color:var(--accent);text-decoration:none}
+.tss-suggest__all:hover,.tss-suggest__all.is-active{background:var(--soft)}
+.tss-suggest__empty{padding:14px 8px;text-align:center;font-size:14px;opacity:.65}
 .site-header__cart-count{position:absolute;top:2px;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--bg);font-size:11px;font-weight:600;line-height:18px;text-align:center}
 .site-header__cart-count[hidden]{display:none}
 .site-header__actions+.site-header__actions{margin-left:0}
@@ -985,6 +1002,113 @@ SEARCH_JS = Markup(r"""<script>
       var panel = block.querySelector('.site-header__search-panel');
       var input = block.querySelector('.site-header__search-input, input[type="search"], input[name="q"]');
       var form = block.querySelector('form');
+
+      // Live suggestions: matching products appear under the box as the shopper types
+      if (input && form && panel) {
+        var box = document.createElement('div');
+        box.className = 'tss-suggest';
+        box.hidden = true;
+        box.setAttribute('role', 'listbox');
+        form.appendChild(box);
+        var action = (form.getAttribute('action') || '').replace(/\/collections\/all\/?$/, '').replace(/\/$/, '');
+        var timer = null, seq = 0, active = -1;
+        function items() { return box.querySelectorAll('a.tss-suggest__item, a.tss-suggest__all'); }
+        function setActive(n) {
+          var list = items();
+          if (!list.length) { active = -1; return; }
+          active = (n + list.length) % list.length;
+          list.forEach(function (el, i) { el.classList.toggle('is-active', i === active); });
+          list[active].scrollIntoView({ block: 'nearest' });
+        }
+        function hideBox() { box.hidden = true; box.textContent = ''; active = -1; }
+        function mark(parent, text, q) {
+          var low = text.toLowerCase(), at = low.indexOf(q.toLowerCase());
+          if (!q || at < 0) { parent.textContent = text; return; }
+          parent.appendChild(document.createTextNode(text.slice(0, at)));
+          var m = document.createElement('mark');
+          m.textContent = text.slice(at, at + q.length);
+          parent.appendChild(m);
+          parent.appendChild(document.createTextNode(text.slice(at + q.length)));
+        }
+        function render(q, data) {
+          box.textContent = '';
+          var list = (data && data.results) || [];
+          if (!list.length) {
+            var none = document.createElement('div');
+            none.className = 'tss-suggest__empty';
+            none.textContent = 'No products found for \u201c' + q + '\u201d';
+            box.appendChild(none);
+          } else {
+            var label = document.createElement('div');
+            label.className = 'tss-suggest__label';
+            label.textContent = 'Suggestions';
+            box.appendChild(label);
+            list.slice(0, 6).forEach(function (p) {
+              var a = document.createElement('a');
+              a.className = 'tss-suggest__item';
+              a.href = p.url;
+              a.setAttribute('role', 'option');
+              if (p.featured_image) {
+                var img = document.createElement('img');
+                img.className = 'tss-suggest__img';
+                img.src = p.featured_image;
+                img.alt = '';
+                img.loading = 'lazy';
+                a.appendChild(img);
+              }
+              var text = document.createElement('span');
+              text.className = 'tss-suggest__text';
+              var title = document.createElement('span');
+              title.className = 'tss-suggest__title';
+              mark(title, p.title || '', q);
+              text.appendChild(title);
+              if (p.vendor || p.available === false) {
+                var meta = document.createElement('span');
+                meta.className = 'tss-suggest__meta';
+                meta.textContent = p.available === false ? 'Sold out' : p.vendor;
+                text.appendChild(meta);
+              }
+              a.appendChild(text);
+              if (p.price_display) {
+                var price = document.createElement('span');
+                price.className = 'tss-suggest__price';
+                price.textContent = p.price_display;
+                a.appendChild(price);
+              }
+              box.appendChild(a);
+            });
+            var all = document.createElement('a');
+            all.className = 'tss-suggest__all';
+            all.href = action + '/collections/all?q=' + encodeURIComponent(q);
+            all.textContent = 'See all ' + (data.total || list.length) + ' results';
+            box.appendChild(all);
+          }
+          active = -1;
+          box.hidden = false;
+        }
+        function fetchSuggestions() {
+          var q = input.value.trim();
+          if (q.length < 2) { seq++; hideBox(); return; }
+          var mine = ++seq;
+          fetch(action + '/search?format=json&q=' + encodeURIComponent(q))
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) { if (mine === seq && data && input.value.trim() === q) render(q, data); })
+            .catch(function () {});
+        }
+        input.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(fetchSuggestions, 180); });
+        input.addEventListener('focus', function () { if (input.value.trim().length >= 2 && box.hidden) fetchSuggestions(); });
+        input.addEventListener('keydown', function (e) {
+          if (box.hidden) return;
+          if (e.key === 'ArrowDown') { e.preventDefault(); setActive(active + 1); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active < 0 ? -1 : active - 1); }
+          else if (e.key === 'Enter' && active >= 0) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            items()[active].click();
+          } else if (e.key === 'Escape') { hideBox(); }
+        });
+        document.addEventListener('click', function (e) { if (!block.contains(e.target)) hideBox(); });
+      }
 
       function executeSearch() {
         if (!input) return;

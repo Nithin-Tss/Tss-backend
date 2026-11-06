@@ -7,6 +7,7 @@ import uuid
 from functools import wraps
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
+from decimal import Decimal
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.core import signing
@@ -67,6 +68,7 @@ from apps.orders import services as orders_services
 from apps.orders.models import Order
 from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
+from .rendering import currency_symbol as _currency_symbol, DEFAULT_CURRENCY_SYMBOL as _DEFAULT_SYMBOL
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
     is_private,
@@ -2305,25 +2307,31 @@ def storefront_search(store, request, params):
         all_products = _products(store, shop_url(store))
         filters = _with_category_ids(store, parse_collection_filters(params))
         matched = [p for p in all_products if _matches_filters(p, filters)]
+        symbol = _currency_symbol(store, _DEFAULT_SYMBOL)
         results_list = [
             {
                 "id": str(p["id"]),
                 "title": p["title"],
                 "url": p["url"],
                 "price": p["price"],
+                "price_display": f"{symbol}{Decimal(str(p['price'])):,.2f}" if p["price"] is not None else "",
                 "featured_image": p["featured_image"],
                 "vendor": p["vendor"],
                 "available": not p["is_sold_out"],
             }
             for p in matched[:20]
         ]
-        return JsonResponse({
+        response = JsonResponse({
             "query": filters.get("q", ""),
             "q": filters.get("q", ""),
             "total": len(matched),
             "results": results_list,
             "products": results_list,
         })
+        # The storefront runs in a sandbox with no origin, so the suggestion box's fetch is cross-origin
+        response["Access-Control-Allow-Origin"] = "*"
+        response["Cache-Control"] = "no-store"
+        return response
     return render_page(
         store,
         "collection",
