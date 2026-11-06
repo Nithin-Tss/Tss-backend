@@ -196,8 +196,9 @@ def payment_session(checkout):
         raise ValidationError("This checkout is no longer open.")
     if not checkout.email or not checkout.shipping_address:
         raise ValidationError("Add your email and shipping address before paying.")
-    if checkout.total_amount <= 0:
-        raise ValidationError("There is nothing to pay for.")
+    due = commerce.amount_due(checkout)
+    if due <= 0:
+        raise ValidationError("There is nothing left to pay online; complete the checkout directly.")
 
     items = list(checkout.items.filter(is_deleted=False).select_related("product", "variant"))
     for item in items:
@@ -208,7 +209,7 @@ def payment_session(checkout):
 
     store = checkout.store
     options = {}
-    amount = to_minor_units(checkout.total_amount, checkout.currency)
+    amount = to_minor_units(due, checkout.currency)
     intents = client(store).v1.payment_intents
     intent_id = (checkout.metadata or {}).get("stripe_payment_intent")
 
@@ -243,7 +244,7 @@ def payment_session(checkout):
         "client_secret": intent.client_secret,
         "publishable_key": store.stripe_publishable_key,
         "stripe_account": None,  # the store's own keys: charges are made directly on its account
-        "amount": checkout.total_amount,
+        "amount": due,
         "currency": checkout.currency,
     }
 
@@ -272,7 +273,7 @@ def finalize(intent, account_id):
         with transaction.atomic():
             checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
             if checkout.status == commerce.CHECKOUT_OPEN and (
-                intent.amount != to_minor_units(checkout.total_amount, checkout.currency)
+                intent.amount != to_minor_units(commerce.amount_due(checkout), checkout.currency)
                 or intent.currency != checkout.currency.lower()
             ):
                 raise ValidationError("The amount paid doesn't match the order total.")

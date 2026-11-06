@@ -33,12 +33,15 @@ class CheckoutItemSerializer(serializers.ModelSerializer):
 
 class CheckoutSerializer(serializers.ModelSerializer):
     items = serializers.SerializerMethodField()
+    amount_due = serializers.SerializerMethodField()
+    gift_card_code = serializers.SerializerMethodField()
 
     class Meta:
         model = Checkout
         fields = [
             "id", "cart", "customer", "email", "currency", "subtotal", "discount_amount",
-            "tax_amount", "shipping_amount", "total_amount", "status", "shipping_address",
+            "tax_amount", "shipping_amount", "total_amount", "gift_card_amount", "amount_due",
+            "gift_card_code", "status", "shipping_address",
             "billing_address", "abandoned_at", "recovery_status", "recovered_at",
             "items", "created_at", "updated_at",
         ]
@@ -46,6 +49,14 @@ class CheckoutSerializer(serializers.ModelSerializer):
 
     def get_items(self, checkout):
         return CheckoutItemSerializer([i for i in checkout.items.all() if not i.is_deleted], many=True).data
+
+    def get_amount_due(self, checkout):
+        from . import services
+
+        return services.amount_due(checkout)
+
+    def get_gift_card_code(self, checkout):
+        return (checkout.metadata or {}).get("gift_card_code")
 
 
 class StaffCheckoutSerializer(CheckoutSerializer):

@@ -5,9 +5,9 @@ Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 /api/v1/storefront/<store_slug>/cart/                 GET the cart (prices refreshed), DELETE to empty it
 /api/v1/storefront/<store_slug>/cart/items/           POST {product, variant?, quantity}
 /api/v1/storefront/<store_slug>/cart/items/<id>/      PATCH {quantity} (0 removes), DELETE removes
-/api/v1/storefront/<store_slug>/checkout/             POST {email?, shipping_address?, billing_address?, discount_code?}
-/api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code": "" removes the code)
-/api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST {payment_method?: "cod"}: place the order (repeat-safe)
+/api/v1/storefront/<store_slug>/checkout/             POST {email?, shipping_address?, billing_address?, discount_code?, gift_card_code?}
+/api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code"/"gift_card_code": "" removes it)
+/api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST {payment_method?: "cod"|"gift_card"}: place the order (repeat-safe)
 /api/v1/storefront/<store_slug>/orders/               GET orders placed from this session's carts
 /api/v1/storefront/<store_slug>/orders/<id>/          GET
 /api/v1/storefront/<store_slug>/orders/<id>/cancel/   POST: cancel, stock goes back
@@ -118,6 +118,7 @@ class CheckoutInputSerializer(serializers.Serializer):
     shipping_address = AddressSerializer(required=False)
     billing_address = AddressSerializer(required=False)
     discount_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    gift_card_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
 
     def validate_email(self, value):
         # Customers are matched by email, so store it the way the rest of the app does

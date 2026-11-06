@@ -1,8 +1,11 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from apps.core.viewsets import StoreScopedSerializerMixin
 
-from .models import GiftCard, GiftCardTransaction
+from . import currencies
+from .models import GiftCard, GiftCardCurrencySetting, GiftCardTransaction
 from .services import ACTIVE, DISABLED
 
 
@@ -19,54 +22,100 @@ class GiftCardTransactionSerializer(serializers.ModelSerializer):
 
 
 class GiftCardSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer):
+    """
+    The code is never exposed here: `code_last4` is all list/retrieve/export ever show. The full
+    code is only returned once, by GiftCardViewSet.create(), straight after it is generated.
+    """
+
     status = serializers.ChoiceField(choices=(ACTIVE, DISABLED), default=ACTIVE)
     transactions = GiftCardTransactionSerializer(many=True, read_only=True)
 
     class Meta:
         model = GiftCard
         fields = [
-            "id", "code", "initial_balance", "current_balance", "currency_code", "status",
+            "id", "code_last4", "initial_balance", "current_balance", "currency_code", "status",
             "customer", "expires_at", "transactions", "created_at", "updated_at",
         ]
-        read_only_fields = ["current_balance"]
+        read_only_fields = ["code_last4", "current_balance"]
         extra_kwargs = {
-            "code": {"required": False, "allow_blank": True},
             "initial_balance": {"min_value": 1},
             "currency_code": {"required": False},
         }
 
-    def validate_code(self, value):
-        value = (value or "").strip().upper()
-        if not value:
-            return value
-
-        others = GiftCard.objects.filter(store=self.context["request"].store, code=value)
-        if self.instance:
-            others = others.exclude(pk=self.instance.pk)
-        if others.exists():
-            raise serializers.ValidationError("A gift card with this code already exists.")
-        return value
-
     def validate_currency_code(self, value):
-        store = self.context["request"].store
-        if value.upper() != store.currency:
-            raise serializers.ValidationError(f"This store sells in {store.currency}.")
-        return value.upper()
+        return currencies.validate_code(value)
 
     def validate(self, data):
         if not self.instance:
-            data.setdefault("currency_code", self.context["request"].store.currency)
+            data.setdefault("currency_code", currencies.DEFAULT_CURRENCY)
         # The value of an issued card can't be rewritten; use /adjust/ instead.
         if self.instance and "initial_balance" in data and data["initial_balance"] != self.instance.initial_balance:
             raise serializers.ValidationError({"initial_balance": "Can't be changed after the card is issued."})
         return data
 
 
+class GiftCardCurrencySettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GiftCardCurrencySetting
+        fields = ["id", "currency_code", "is_enabled", "amounts"]
+
+    def validate_currency_code(self, value):
+        return currencies.validate_code(value)
+
+    def validate_amounts(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError("Give at least one fixed amount.")
+        cleaned = []
+        for raw in value:
+            try:
+                amount = Decimal(str(raw))
+            except Exception:
+                raise serializers.ValidationError(f"{raw!r} is not a number.")
+            if amount <= 0:
+                raise serializers.ValidationError("Amounts must be greater than 0.")
+            cleaned.append(str(amount))
+        return cleaned
+
+
 class AdjustSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    amount = serializers.DecimalField(max_digits=14, decimal_places=3)
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate_amount(self, value):
         if value == 0:
             raise serializers.ValidationError("Must not be 0.")
         return value
+
+
+class CreateGiftCardSerializer(serializers.Serializer):
+    """A free gift card, issued by staff directly (not bought by a customer)."""
+
+    initial_balance = serializers.DecimalField(max_digits=14, decimal_places=3, min_value=Decimal("0.01"))
+    currency_code = serializers.CharField(required=False, max_length=3)
+    customer = serializers.UUIDField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+    def validate_currency_code(self, value):
+        return currencies.validate_code(value)
+
+
+class ResendSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=False)
+
+
+class PurchaseInputSerializer(serializers.Serializer):
+    currency_code = serializers.CharField(max_length=3)
+    amount = serializers.DecimalField(max_digits=14, decimal_places=3)
+    buyer_email = serializers.EmailField()
+    recipient_email = serializers.EmailField(required=False, allow_blank=True)
+    recipient_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    message = serializers.CharField(required=False, allow_blank=True, max_length=500)
+    send_on = serializers.DateField(required=False, allow_null=True)
+
+    def validate_currency_code(self, value):
+        return currencies.validate_code(value)
+
+
+class BalanceCheckSerializer(serializers.Serializer):
+    token = serializers.CharField()

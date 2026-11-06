@@ -1,6 +1,7 @@
 """Public shopper cart and checkout API."""
 from django.urls import path
 
+from apps.gift_cards.storefront_views import GiftCardBalanceView, GiftCardOptionsView, GiftCardPurchaseView
 from apps.payments.stripe_views import CheckoutStripeConfirmView, CheckoutStripeView
 
 from .storefront_views import (
@@ -20,4 +21,7 @@ urlpatterns = [
     path("<slug:store_slug>/orders/", OrderListView.as_view(), name="storefront-orders"),
     path("<slug:store_slug>/orders/<uuid:order_id>/", OrderDetailView.as_view(), name="storefront-order"),
     path("<slug:store_slug>/orders/<uuid:order_id>/cancel/", OrderCancelView.as_view(), name="storefront-order-cancel"),
+    path("<slug:store_slug>/gift-cards/options/", GiftCardOptionsView.as_view(), name="storefront-gift-card-options"),
+    path("<slug:store_slug>/gift-cards/purchase/", GiftCardPurchaseView.as_view(), name="storefront-gift-card-purchase"),
+    path("<slug:store_slug>/gift-cards/balance/", GiftCardBalanceView.as_view(), name="storefront-gift-card-balance"),
 ]

@@ -37,7 +37,12 @@ def _handle(data):
     account_id = event["account"] if "account" in event else None
     obj = event["data"]["object"]
     if event["type"] == "payment_intent.succeeded" and account_id:
-        stripe_service.finalize(obj, account_id)
+        if stripe_service.plain(obj.metadata).get("gift_card_purchase_id"):
+            from apps.gift_cards import purchases as gift_card_purchases
+
+            gift_card_purchases.finalize_purchase(obj, account_id)
+        else:
+            stripe_service.finalize(obj, account_id)
     elif event["type"] == "charge.refunded" and account_id:
         stripe_service.record_charge_refunds(obj, account_id)
     elif event["type"] in ("charge.dispute.created", "charge.dispute.closed") and account_id:

@@ -152,6 +152,10 @@ def refund(payment, amount, reason=None, settle_order=True):
         from . import stripe_service
 
         refund_id = stripe_service.refund_payment(payment, amount, refunded_total(payment))
+    elif payment.provider == "gift_card":
+        from apps.gift_cards import services as gift_cards
+
+        gift_cards.refund_payment_amount(payment, amount)
 
     PaymentTransaction.objects.create(
         payment=payment,

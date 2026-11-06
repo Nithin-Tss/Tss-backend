@@ -243,6 +243,14 @@ class Checkout(models.Model):
         decimal_places=2,
     )
 
+    # How much of total_amount is paid by a redeemed gift card; the rest (see services.amount_due)
+    # is what's actually charged online or taken cash-on-delivery. total_amount itself never changes.
+    gift_card_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+    )
+
     tax_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
