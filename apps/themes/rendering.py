@@ -20,7 +20,7 @@ from liquid import DictLoader, Environment
 from liquid.exceptions import LiquidError
 from markupsafe import Markup, escape
 
-from django.db.models import Avg, Count, Exists, IntegerField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Avg, Count, Exists, FloatField, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.html import strip_tags
@@ -1795,11 +1795,19 @@ def _environment(files, base_url, currency, overrides=None):
 
 
 def _catalog(store):
-    """Published products with what the product cards can show (tags, rating, category)."""
-    shown = Q(reviews__status__in=SHOWN_REVIEWS)
+    """Published products with what the product cards can show (tags, rating, category).
+
+    Rating and review count are correlated subqueries, not joins on reviews: a join multiplies every
+    product row by its reviews and makes the database aggregate over the whole catalog, which is slow
+    on pages that list every product (collection pages and their preview)."""
+    from apps.catalog.models import ProductReview
+
+    shown = ProductReview.objects.filter(product=OuterRef("pk"), status__in=SHOWN_REVIEWS).order_by().values("product")
     return published_products(store).select_related("category").prefetch_related("product_tags__tag").annotate(
-        avg_rating=Avg("reviews__rating", filter=shown),
-        review_count=Count("reviews", filter=shown, distinct=True),
+        avg_rating=Subquery(shown.annotate(a=Avg("rating")).values("a"), output_field=FloatField()),
+        review_count=Coalesce(
+            Subquery(shown.annotate(c=Count("pk")).values("c"), output_field=IntegerField()), Value(0)
+        ),
     )
 
 
