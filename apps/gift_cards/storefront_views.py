@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from apps.commerce.storefront_views import StorefrontView
 
 from . import purchases, services
-from .currencies import format_amount
+from .currencies import format_amount, quantize
 from .models import GiftCard, GiftCardCurrencySetting
 from .serializers import BalanceCheckSerializer, PurchaseInputSerializer
 
@@ -77,7 +77,7 @@ class GiftCardBalanceView(StorefrontView):
         return Response({
             "code_last4": card.code_last4,
             "currency_code": card.currency_code,
-            "current_balance": str(card.current_balance),
+            "current_balance": str(quantize(card.currency_code, card.current_balance)),
             "current_balance_display": format_amount(card.currency_code, card.current_balance),
             "status": card.status,
             "expires_at": card.expires_at,

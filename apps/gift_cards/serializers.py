@@ -9,8 +9,20 @@ from .models import GiftCard, GiftCardCurrencySetting, GiftCardTransaction
 from .services import ACTIVE, DISABLED
 
 
+def _money_in_currency(data, code, fields):
+    """Money is stored with 3 places (enough for any currency) but shown with the currency's own."""
+    for field in fields:
+        if data.get(field) is not None and code:
+            data[field] = str(currencies.quantize(code, data[field]))
+    return data
+
+
 class GiftCardTransactionSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by_user.email", default=None, read_only=True)
+
+    def to_representation(self, instance):
+        return _money_in_currency(super().to_representation(instance), instance.gift_card.currency_code,
+                                  ("amount", "balance_before", "balance_after"))
 
     class Meta:
         model = GiftCardTransaction
@@ -41,6 +53,10 @@ class GiftCardSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
             "initial_balance": {"min_value": 1},
             "currency_code": {"required": False},
         }
+
+    def to_representation(self, instance):
+        return _money_in_currency(super().to_representation(instance), instance.currency_code,
+                                  ("initial_balance", "current_balance"))
 
     def validate_currency_code(self, value):
         return currencies.validate_code(value)

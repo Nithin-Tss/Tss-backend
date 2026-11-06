@@ -10,6 +10,7 @@ from apps.catalog.models import Product, ProductVariant
 from apps.customers.models import Customer
 from apps.discounts.models import Discount, DiscountCode
 from apps.gift_cards.models import GiftCard, GiftCardTransaction
+from apps.gift_cards.services import generate_code
 from apps.identity.models import User
 from apps.inventory.models import InventoryHistory, InventoryItem, Location, Transfer, TransferItem
 from apps.orders.models import Order, OrderItem
@@ -98,7 +99,8 @@ class AdminStoreGuardTests(TestCase):
     def test_ledgers_can_be_viewed_but_not_added_edited_or_deleted(self):
         payment = Payment.objects.create(store=self.a, order=self.a.order, currency="INR", amount=5,
                                          status="captured", provider="manual", is_deleted=False)
-        card = GiftCard.objects.create(store=self.a, code="GC-1", initial_balance=5, current_balance=4,
+        code = {k: v for k, v in generate_code(self.a).items() if k != "raw"}
+        card = GiftCard.objects.create(store=self.a, **code, initial_balance=5, current_balance=4,
                                        currency_code="INR", status="active", is_deleted=False)
         rows = [
             PaymentTransaction.objects.create(payment=payment, transaction_type="capture", amount=5, status="success"),

@@ -40,7 +40,13 @@ from apps.customers.models import Customer, CustomerAddress
 from apps.delivery.models import DeliveryGateway, Shipment
 from apps.discounts.models import Discount
 from apps.fulfillment.models import Fulfillment
-from apps.gift_cards.models import GiftCard
+from apps.gift_cards.models import GiftCard, GiftCardCurrencySetting
+from apps.gift_cards.services import generate_code
+
+
+def stored_code(store):
+    """The code fields a gift card persists (hash, encrypted copy, last 4); the raw code is never stored."""
+    return {k: v for k, v in generate_code(store).items() if k != "raw"}
 from apps.identity.email_links import VERIFY_EMAIL_SALT
 from apps.identity.models import User
 from apps.inventory.models import InventoryItem, Location, StockReservation, Transfer
@@ -468,8 +474,9 @@ class CrossStoreRecordTest(StoreClientMixin, APITestCase):
                                    provider="manual", is_deleted=False),
             Discount.objects.create(store=store, name="Ten", discount_type="percentage", value=10,
                                     starts_at=timezone.now(), is_active=True, is_deleted=False),
-            GiftCard.objects.create(store=store, code=f"{store.store_slug}-GIFT", initial_balance=10,
+            GiftCard.objects.create(store=store, **stored_code(store), initial_balance=10,
                                     current_balance=10, currency_code="INR", status="active", is_deleted=False),
+            GiftCardCurrencySetting.objects.create(store=store, currency_code="INR", amounts=["25", "50"]),
             PurchaseOrder.objects.create(store=store, po_number=f"{store.store_slug}-PO1", supplier_name="Acme",
                                          status="draft"),
             Shipment.objects.create(store=store, fulfillment=fulfillment, delivery_gateway=gateway, status="pending"),
@@ -661,6 +668,9 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CartView", "CartItemsView", "CartItemView", "CheckoutStartView", "CheckoutDetailView",
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
+        # Gift cards for shoppers: the amounts on offer, a guest purchase (server-checked amount, card made only
+        # once Stripe confirms payment), and a balance reachable only through the signed link the email sends
+        "GiftCardOptionsView", "GiftCardPurchaseView", "GiftCardBalanceView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
         "CarrierWebhookView",  # couriers call it; the per-gateway webhook secret is the credential
         "StoreStripeWebhookView",  # same, per store: verified against that store's own webhook secret

@@ -71,7 +71,7 @@ class GiftCardViewSet(StoreScopedViewSet):
         if data.validated_data.get("customer"):
             from apps.customers.models import Customer
 
-            customer = Customer.objects.filter(store=store, pk=data.validated_data["customer"], is_deleted=False).first()
+            customer = Customer.objects.filter(store=store, pk=data.validated_data["customer"]).first()
             if customer is None:
                 raise ValidationError({"customer": "No such customer."})
 
