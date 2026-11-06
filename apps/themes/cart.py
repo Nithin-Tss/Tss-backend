@@ -20,7 +20,7 @@ from django.contrib.sessions.models import Session
 from django.db.models import Sum
 from django.utils import timezone
 
-from apps.catalog.services import published_products
+from apps.catalog.services import published_products, variant_options
 from apps.commerce import services
 from apps.commerce.models import Cart, CartItem
 from apps.inventory.models import InventoryItem
@@ -253,9 +253,15 @@ def _line(item, base_url, available=None, for_sale=True):
         elif item.quantity > available:
             warning = f"Only {available} left"
     images = sorted(item.product.images.all(), key=lambda i: i.position)
+    variant_title = ""
+    if variant is not None:
+        chosen = variant_options(variant)
+        order = [o.get("name") for o in (item.product.options or []) if isinstance(o, dict)]
+        variant_title = " / ".join(chosen[name] for name in order if chosen.get(name))
     return {
         "id": str(item.pk),
         "title": item.product.title,
+        "variant_title": variant_title,
         "url": f"{base_url}/products/{item.product_id}",
         "image": images[0].url if images else "",
         "unit_price": str(item.unit_price),

@@ -217,7 +217,10 @@ STARTER_UPGRADES = {
     },
     # Revision 4: "Sold out" / "In stock" / "Only a few left" on the product page
     # Revision 5: "Product information" accordion under the description
+    # Revision 53: variant picker is option-value buttons (not a SKU dropdown), SKU removed from the page
     "sections/main-product.liquid": {
+        "79ce976f68235686a58778b943748aaa6bf05949517e4204f58929ba0ddb3519",  # revision 52: before the option-button redesign
+        "221ab289f74da87fb4c7860aa09813981eaa1f376a7951f6cfc14f3a334ad718",  # revision 52: before the option-button redesign (CRLF)
         "f2e87477d18719a79f68bff217b82ce6415d3fbbefed5ebfea20a3b6f6c65a31",  # revision 44: before options that keep selling stay orderable
         "3c8b55dc638fb076f8c8e49a63c993ddeea59e6708c9c0eed86a63743cd8e1ae",  # revision 44: same, with CRLF line endings
         "a06239b4053ab69f9e0b19ca518ad3d1f6980250da33e609b95648dbb6317b19",  # revision 40: before tier cards, image zoom and badges
