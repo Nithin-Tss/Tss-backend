@@ -758,8 +758,9 @@ class AllProductsStorefrontTests(APITestCase):
             return sorted(("Cheap", "Dear", "Middle"), key=lambda t: html.index(f">{t}<"))
 
         self.assertIn('<h1 class="section-heading collection-heading">All products</h1>', self.page("collections/all"))
-        self.assertEqual(order(), ["Cheap", "Dear", "Middle"])  # the default order is A-Z
-        self.assertEqual(order("?sort=newest"), ["Middle", "Dear", "Cheap"])
+        self.assertEqual(order(), ["Cheap", "Dear", "Middle"])  # default: alphabetical, A-Z
+        self.assertEqual(order("?sort=title-desc"), ["Middle", "Dear", "Cheap"])
+        self.assertEqual(order("?sort=newest"), ["Middle", "Dear", "Cheap"])  # "Featured": the catalog's own order
         self.assertEqual(order("?sort=price-asc"), ["Cheap", "Middle", "Dear"])
         self.assertEqual(order("?sort=price-desc"), ["Dear", "Middle", "Cheap"])
 

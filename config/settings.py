@@ -439,6 +439,8 @@ REST_FRAMEWORK = {
         'api': os.getenv('API_DEFAULT_THROTTLE_RATE', '600/min'),
         # Slows down password guessing on sign-in / sign-up (see identity views)
         'auth': '10/min',
+        # Token refresh: automatic (every tab, about every 15 min), so it must not share the strict sign-in limit
+        'auth_refresh': '120/min',
         # Password reset / verification emails: stops mailbox flooding
         'email': '5/hour',
         # Public storefront: browsing/cart traffic, and the calls that create orders
