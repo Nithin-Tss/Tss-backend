@@ -543,6 +543,9 @@
       <div class="checkout-confirmation__details">
         <div><strong>Shipping address:</strong> {{ order.shipping_address.first_name }} {{ order.shipping_address.last_name }}, {{ order.shipping_address.address1 }}, {{ order.shipping_address.city }} {{ order.shipping_address.postal_code }}</div>
         <div><strong>Payment method:</strong> {{ order.payment_method | default: 'Cash on Delivery' | upcase }}</div>
+        {%- if order.gift_card_last4 -%}
+          <div><strong>Gift card &bull;&bull;&bull;&bull; {{ order.gift_card_last4 }}:</strong> -{{ cur }}{{ order.gift_card_amount }}</div>
+        {%- endif -%}
         <div><strong>Total paid:</strong> {{ cur }}{{ order.total }}</div>
       </div>
 
@@ -578,6 +581,7 @@
         <form id="checkout-form" method="post" novalidate action="{{ shop.url }}/checkout/">
           <input type="hidden" name="cart_session" value="{{ cart_session }}">
           <input type="hidden" name="discount_code" id="hidden_discount_code" value="">
+          <input type="hidden" name="gift_card_code" id="hidden_gift_card_code" value="">
 
           <div class="checkout-card">
             <h2 class="checkout-card__title">
@@ -773,12 +777,16 @@
 
             {%- if s.show_discount_box != false -%}
               <div class="checkout-discount-box" id="discount-input-container">
-                <input type="text" id="discount-code-input" placeholder="Discount code">
+                <input type="text" id="discount-code-input" placeholder="Discount code or gift card">
                 <button type="button" id="discount-apply-btn">Apply</button>
               </div>
               <div id="discount-badge" class="checkout-discount-applied" style="display: none;">
                 <span>Discount (<strong id="discount-badge-code"></strong>): -{{ cur }}<span id="discount-badge-amount">0.00</span></span>
                 <button type="button" class="checkout-discount-remove" id="discount-remove-btn">&times;</button>
+              </div>
+              <div id="gift-card-badge" class="checkout-discount-applied" style="display: none;">
+                <span>Gift card &bull;&bull;&bull;&bull; <strong id="gift-card-badge-last4"></strong>: -{{ cur }}<span id="gift-card-badge-amount">0.00</span></span>
+                <button type="button" class="checkout-discount-remove" id="gift-card-remove-btn">&times;</button>
               </div>
             {%- endif -%}
 
@@ -790,6 +798,11 @@
             <div class="checkout-totals-row" id="summary-discount-row" style="display: none; color: #065F46;">
               <span>Discount</span>
               <span>-{{ cur }}<span id="summary-discount-amount">0.00</span></span>
+            </div>
+
+            <div class="checkout-totals-row" id="summary-gift-card-row" style="display: none; color: #065F46;">
+              <span>Gift card</span>
+              <span>-{{ cur }}<span id="summary-gift-card-amount">0.00</span></span>
             </div>
 
             <div class="checkout-totals-row">
@@ -805,6 +818,11 @@
             <div class="checkout-totals-row checkout-totals-row--grand">
               <span>Total</span>
               <span id="summary-grand-total">{{ cur }}{{ cart.subtotal | default: '0.00' }}</span>
+            </div>
+
+            <div class="checkout-totals-row" id="summary-amount-due-row" style="display: none; font-weight: 600;">
+              <span>Amount due now</span>
+              <span id="summary-amount-due">{{ cur }}0.00</span>
             </div>
           </div>
         </div>
@@ -842,15 +860,54 @@
   var discountRemoveBtn = document.getElementById('discount-remove-btn');
   var hiddenDiscount = document.getElementById('hidden_discount_code');
 
+  var giftCardBadge = document.getElementById('gift-card-badge');
+  var giftCardBadgeLast4 = document.getElementById('gift-card-badge-last4');
+  var giftCardBadgeAmount = document.getElementById('gift-card-badge-amount');
+  var giftCardRemoveBtn = document.getElementById('gift-card-remove-btn');
+  var hiddenGiftCard = document.getElementById('hidden_gift_card_code');
+
   var subtotalEl = document.getElementById('summary-subtotal');
   var discountRow = document.getElementById('summary-discount-row');
   var discountAmtEl = document.getElementById('summary-discount-amount');
+  var giftCardRow = document.getElementById('summary-gift-card-row');
+  var giftCardAmtEl = document.getElementById('summary-gift-card-amount');
+  var amountDueRow = document.getElementById('summary-amount-due-row');
+  var amountDueEl = document.getElementById('summary-amount-due');
   var shippingEl = document.getElementById('summary-shipping');
   var taxEl = document.getElementById('summary-tax');
   var totalEl = document.getElementById('summary-grand-total');
 
   var currentDiscount = '';
+  var currentGiftCardCode = '';
   var currency = '{{ cur }}';
+
+  // Shared by apply and remove: paint whatever the server says is applied right now.
+  function renderCodeResult(data) {
+    if (hiddenDiscount) hiddenDiscount.value = data.discount_code || '';
+    currentDiscount = data.discount_code || '';
+    if (discountBadge) discountBadge.style.display = currentDiscount ? 'flex' : 'none';
+    if (currentDiscount && discountBadgeCode) discountBadgeCode.textContent = currentDiscount.toUpperCase();
+    if (currentDiscount && discountBadgeAmount) discountBadgeAmount.textContent = data.discount_amount || '0.00';
+    if (discountRow) discountRow.style.display = Number(data.discount_amount) > 0 ? 'flex' : 'none';
+    if (discountAmtEl) discountAmtEl.textContent = data.discount_amount || '0.00';
+
+    var hasGiftCard = !!data.gift_card_last4;
+    currentGiftCardCode = hasGiftCard ? (hiddenGiftCard ? hiddenGiftCard.value : currentGiftCardCode) : '';
+    if (giftCardBadge) giftCardBadge.style.display = hasGiftCard ? 'flex' : 'none';
+    if (hasGiftCard && giftCardBadgeLast4) giftCardBadgeLast4.textContent = data.gift_card_last4;
+    if (hasGiftCard && giftCardBadgeAmount) giftCardBadgeAmount.textContent = data.gift_card_amount || '0.00';
+    if (giftCardRow) giftCardRow.style.display = Number(data.gift_card_amount) > 0 ? 'flex' : 'none';
+    if (giftCardAmtEl) giftCardAmtEl.textContent = data.gift_card_amount || '0.00';
+    if (!hasGiftCard && hiddenGiftCard) hiddenGiftCard.value = '';
+
+    var dueNow = Number(data.amount_due != null ? data.amount_due : data.total_amount);
+    if (amountDueRow) amountDueRow.style.display = Number(data.gift_card_amount) > 0 ? 'flex' : 'none';
+    if (amountDueEl) amountDueEl.textContent = (isNaN(dueNow) ? 0 : dueNow).toFixed(2);
+
+    if (shippingEl && data.shipping_amount != null) shippingEl.textContent = currency + data.shipping_amount;
+    if (taxEl && data.tax_amount != null) taxEl.textContent = currency + data.tax_amount;
+    if (totalEl && data.total_amount != null) totalEl.textContent = currency + data.total_amount;
+  }
 
   function closePaymentModal() {
     if (paymentModal) {
@@ -963,92 +1020,62 @@
   });
   updatePaymentSelection();
 
-  // Apply discount code
+  function postCode(body) {
+    return fetch(shopUrl + '/checkout/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Cart-Session': session },
+      body: JSON.stringify(body)
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok) throw new Error(data.error || 'That code is not valid.');
+        return data;
+      });
+    });
+  }
+
+  // Apply a discount code or a gift card code: one field, the server works out which it is
   if (discountApplyBtn && discountInput) {
     discountApplyBtn.addEventListener('click', function(e) {
       e.preventDefault();
       var code = discountInput.value.trim();
       if (!code) return;
       hideAlert();
-
       discountApplyBtn.disabled = true;
 
-      fetch(shopUrl + '/checkout/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'X-Cart-Session': session
-        },
-        body: JSON.stringify({
-          action: 'apply_discount',
-          discount_code: code
+      postCode({ action: 'apply_discount', code: code })
+        .then(function(data) {
+          renderCodeResult(data);
+          // Which kind this particular code was: the discount code now matches it only when it
+          // was a discount; otherwise, if a gift card is now applied, this code was the gift card.
+          var wasDiscount = data.discount_code && data.discount_code.toUpperCase() === code.toUpperCase();
+          if (!wasDiscount && data.gift_card_last4) {
+            currentGiftCardCode = code;
+            if (hiddenGiftCard) hiddenGiftCard.value = code;
+          }
+          discountInput.value = '';
         })
-      })
-      .then(function(res) {
-        return res.json().then(function(data) {
-          if (!res.ok) throw new Error(data.error || 'Invalid discount code.');
-          return data;
-        });
-      })
-      .then(function(data) {
-        currentDiscount = code;
-        if (hiddenDiscount) hiddenDiscount.value = code;
-        if (discountBadge) {
-          discountBadge.style.display = 'flex';
-          discountBadgeCode.textContent = code.toUpperCase();
-          discountBadgeAmount.textContent = data.discount_amount || '0.00';
-        }
-        if (discountRow) {
-          discountRow.style.display = 'flex';
-          discountAmtEl.textContent = data.discount_amount || '0.00';
-        }
-        if (totalEl && data.total_amount) {
-          totalEl.textContent = currency + data.total_amount;
-        }
-        if (shippingEl && data.shipping_amount !== undefined) {
-          shippingEl.textContent = Number(data.shipping_amount) === 0 ? 'FREE' : currency + data.shipping_amount;
-        }
-        if (taxEl && data.tax_amount !== undefined) {
-          taxEl.textContent = currency + data.tax_amount;
-        }
-        discountInput.value = '';
-      })
-      .catch(function(err) {
-        showAlert(err.message || 'Could not apply discount code.');
-      })
-      .then(function() {
-        discountApplyBtn.disabled = false;
-      });
+        .catch(function(err) { showAlert(err.message || 'That code is not valid.'); })
+        .then(function() { discountApplyBtn.disabled = false; });
     });
   }
 
-  // Remove discount code
+  // Remove the applied discount code only; a gift card, if also applied, is left alone
   if (discountRemoveBtn) {
     discountRemoveBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      currentDiscount = '';
-      if (hiddenDiscount) hiddenDiscount.value = '';
-      if (discountBadge) discountBadge.style.display = 'none';
-      if (discountRow) discountRow.style.display = 'none';
+      postCode({ action: 'apply_discount', discount_code: '' })
+        .then(renderCodeResult)
+        .catch(function() {});
+    });
+  }
 
-      fetch(shopUrl + '/checkout/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'X-Cart-Session': session
-        },
-        body: JSON.stringify({
-          action: 'apply_discount',
-          discount_code: ''
-        })
-      })
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        if (totalEl && data.total_amount) totalEl.textContent = currency + data.total_amount;
-      })
-      .catch(function() {});
+  // Remove the applied gift card only; a discount, if also applied, is left alone
+  if (giftCardRemoveBtn) {
+    giftCardRemoveBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      postCode({ action: 'apply_discount', gift_card_code: '' })
+        .then(renderCodeResult)
+        .catch(function() {});
     });
   }
 
@@ -1091,7 +1118,8 @@
         phone: form.phone ? form.phone.value.trim() : '',
         payment_method: form.payment_method ? form.payment_method.value : 'cod',
         notes: form.notes ? form.notes.value.trim() : '',
-        discount_code: currentDiscount
+        discount_code: currentDiscount,
+        gift_card_code: currentGiftCardCode
       };
 
       if (submitBtn) {

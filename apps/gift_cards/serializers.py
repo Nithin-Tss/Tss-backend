@@ -120,18 +120,5 @@ class ResendSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
 
 
-class PurchaseInputSerializer(serializers.Serializer):
-    currency_code = serializers.CharField(max_length=3)
-    amount = serializers.DecimalField(max_digits=14, decimal_places=3)
-    buyer_email = serializers.EmailField()
-    recipient_email = serializers.EmailField(required=False, allow_blank=True)
-    recipient_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
-    message = serializers.CharField(required=False, allow_blank=True, max_length=500)
-    send_on = serializers.DateField(required=False, allow_null=True)
-
-    def validate_currency_code(self, value):
-        return currencies.validate_code(value)
-
-
 class BalanceCheckSerializer(serializers.Serializer):
     token = serializers.CharField()

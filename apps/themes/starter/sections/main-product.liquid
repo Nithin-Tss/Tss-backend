@@ -160,6 +160,30 @@
           <input type="hidden" name="variant" value="{{ product.variants.first.id }}">
         {%- endif -%}
 
+        {%- comment -%} A gift card has no size/color -- it has a recipient instead {%- endcomment -%}
+        {%- if product.product_type == 'gift_card' -%}
+          <div class="product__gift-card-recipient" data-gift-card-recipient>
+            <div class="product__gift-card-choice">
+              <label><input type="radio" name="gift_card_for" value="self" checked data-gift-card-for> For myself</label>
+              <label><input type="radio" name="gift_card_for" value="recipient" data-gift-card-for> For someone else</label>
+            </div>
+            <div class="product__gift-card-fields" data-gift-card-fields hidden>
+              <label>Recipient's email
+                <input type="email" data-meta="recipient_email" placeholder="their@email.com">
+              </label>
+              <label>Recipient's name (optional)
+                <input type="text" data-meta="recipient_name" maxlength="255">
+              </label>
+              <label>Message (optional)
+                <textarea data-meta="message" maxlength="500" rows="3"></textarea>
+              </label>
+              <label>Send on (optional, defaults to today)
+                <input type="date" data-meta="send_on">
+              </label>
+            </div>
+          </div>
+        {%- endif -%}
+
         <div class="product__buy-row">
           {%- if s.show_quantity -%}
             <div class="product__qty" data-qty-box>
@@ -208,6 +232,11 @@
   #section-{{ section.id }} .product__wishlist-add svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
   #section-{{ section.id }} .product__wishlist-add.is-wishlisted { background: var(--burgundy); color: #fff; }
   #section-{{ section.id }} .product__wishlist-add.is-wishlisted svg { fill: currentColor; }
+  #section-{{ section.id }} .product__gift-card-recipient { margin: 4px 0 16px; }
+  #section-{{ section.id }} .product__gift-card-choice { display: flex; gap: 18px; margin-bottom: 10px; font-size: 14px; }
+  #section-{{ section.id }} .product__gift-card-fields { display: flex; flex-direction: column; gap: 10px; }
+  #section-{{ section.id }} .product__gift-card-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  #section-{{ section.id }} .product__gift-card-fields input, #section-{{ section.id }} .product__gift-card-fields textarea { font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
   #section-{{ section.id }} .product__buy-row { display: flex; align-items: stretch; gap: 12px; margin-top: 4px; }
   #section-{{ section.id }} .product__qty { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex: 0 0 auto; }
   #section-{{ section.id }} .product__qty-btn { width: 44px; height: 56px; border: none; background: #fff; color: var(--text); font-size: 18px; line-height: 1; cursor: pointer; }
@@ -227,6 +256,21 @@
   (function () {
     var root = document.getElementById("section-{{ section.id }}");
     var main = root.querySelector("[data-main-image]");
+
+    // Gift card: "For myself" / "For someone else" shows or hides the recipient's details.
+    // "For myself" clears them, so a self-purchase never accidentally sends to a stale recipient.
+    var giftCardFields = root.querySelector("[data-gift-card-fields]");
+    if (giftCardFields) {
+      root.querySelectorAll("[data-gift-card-for]").forEach(function (radio) {
+        radio.addEventListener("change", function () {
+          var forRecipient = radio.value === "recipient" && radio.checked;
+          giftCardFields.hidden = !forRecipient;
+          if (!forRecipient) {
+            giftCardFields.querySelectorAll("input, textarea").forEach(function (field) { field.value = ""; });
+          }
+        });
+      });
+    }
 
     // Image zoom: "hover" magnifies under the pointer (mouse only), "lightbox" opens the picture full size
     var frame = root.querySelector(".product__main-image");

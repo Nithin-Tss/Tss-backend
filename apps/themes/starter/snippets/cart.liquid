@@ -294,10 +294,19 @@
     var quantity = form.querySelector('[name="quantity"]');
     if (!ctx || !ctx.session) { if (notice) notice.textContent = "The cart is not available on this page."; return; }
     if (button) button.disabled = true;
++      // A form may carry extra per-line details (e.g. a gift card's recipient) in inputs marked
+    // data-meta="key": those go to the server as metadata, alongside the usual product/variant/quantity.
+    var metaFields = form.querySelectorAll("[data-meta]");
+    var metadata = null;
+    if (metaFields.length) {
+      metadata = {};
+      metaFields.forEach(function (field) { if (field.value) metadata[field.getAttribute("data-meta")] = field.value; });
+    }
     call(ctx, "POST", "/add", {
       product: form.querySelector('[name="product"]').value,
       variant: variant ? variant.value : null,
-      quantity: quantity ? Number(quantity.value) || 1 : 1
+      quantity: quantity ? Number(quantity.value) || 1 : 1,
+      metadata: metadata
     }).then(function (data) {
       showLines(data);
       if (notice) notice.textContent = "Added to cart.";

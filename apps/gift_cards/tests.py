@@ -296,3 +296,155 @@ class GiftCardRedemptionTests(StoreClientMixin, APITestCase):
             gift_card_code=services.reveal_code(card),
         )
         return commerce._place_order(checkout, "gift_card")
+
+    def _discount_code(self, code="SAVE10", percentage="10"):
+        from apps.discounts.models import Discount, DiscountCode
+
+        discount = Discount.objects.create(
+            store=self.store, name="Ten off", discount_type="percentage", value=Decimal(percentage),
+            starts_at=timezone.now() - timedelta(days=1), is_active=True, is_deleted=False,
+        )
+        DiscountCode.objects.create(discount=discount, code=code, is_active=True, is_deleted=False)
+        return discount
+
+    def test_resolve_checkout_code_tells_discount_from_gift_card(self):
+        from apps.commerce import services as commerce
+
+        self._discount_code("SAVE10")
+        _, raw_code = self._card()
+        self.assertEqual(commerce.resolve_checkout_code(self.store, "SAVE10"), "discount")
+        self.assertEqual(commerce.resolve_checkout_code(self.store, raw_code), "gift_card")
+
+    def test_unknown_code_is_a_single_generic_error(self):
+        from apps.commerce import services as commerce
+
+        with self.assertRaises(DRFValidationError) as exc:
+            commerce.resolve_checkout_code(self.store, "NOT-A-REAL-CODE")
+        self.assertIn("code", exc.exception.detail)
+
+    def test_disabled_and_expired_gift_cards_give_a_general_invalid_code_error(self):
+        from apps.commerce import services as commerce
+
+        active_card, raw_active = self._card(balance="10.00")
+        services.deactivate(active_card)
+        checkout = self._checkout_with_item()
+        with self.assertRaises(DRFValidationError):
+            commerce.update_checkout(checkout, gift_card_code=raw_active)
+
+        expired_card, raw_expired = self._card(balance="10.00")
+        expired_card.expires_at = timezone.now() - timedelta(days=1)
+        expired_card.save(update_fields=["expires_at"])
+        checkout2 = self._checkout_with_item()
+        with self.assertRaises(DRFValidationError):
+            commerce.update_checkout(checkout2, gift_card_code=raw_expired)
+
+    def test_discount_and_gift_card_apply_together_discount_first(self):
+        """The discount reduces the total first; the gift card then pays toward what's left."""
+        from apps.commerce import services as commerce
+
+        self._discount_code("SAVE10", percentage="10")
+        card, raw_code = self._card(balance="5.00")
+        checkout = self._checkout_with_item()  # one $20.00 item
+        checkout = commerce.update_checkout(checkout, discount_code="SAVE10", gift_card_code=raw_code)
+
+        self.assertEqual(checkout.discount_amount, Decimal("2.00"))  # 10% of 20.00
+        self.assertEqual(checkout.gift_card_amount, Decimal("5.00"))  # the card's whole balance
+        self.assertEqual(commerce.amount_due(checkout), checkout.total_amount - Decimal("5.00"))
+
+    def test_gift_card_covering_the_full_total_needs_no_other_payment(self):
+        card, raw_code = self._card(balance="100.00")  # well over the $20.00 item
+        order = self._placed_order_paid_by_gift_card(card, Decimal("20.00"))
+        self.assertEqual(order.status, "open")
+        card.refresh_from_db()
+        self.assertEqual(card.current_balance, Decimal("100.00") - order.total)
+
+    def test_gift_card_cannot_pay_for_a_gift_card_product(self):
+        from apps.commerce import services as commerce
+        from apps.gift_cards.services import sync_storefront_product
+
+        paying_card, raw_code = self._card(balance="100.00")
+        gift_card_product = sync_storefront_product(self.store)
+        cart = commerce.get_or_create_cart(self.store, session_id="g" * 24)
+        commerce.add_item(cart, gift_card_product, 1)
+        checkout = commerce.start_checkout(cart, email="buyer@example.com")
+        checkout = commerce.update_checkout(
+            checkout,
+            shipping_address={
+                "first_name": "A", "last_name": "B", "address_line_1": "1 Test St", "city": "Sydney",
+                "state": "NSW", "postal_code": "2000", "country": "Australia",
+            },
+            gift_card_code=raw_code,
+        )
+        with self.assertRaises(DRFValidationError) as exc:
+            commerce._place_order(checkout, "stripe", payment_reference="pi_test")
+        self.assertIn("gift_card_code", exc.exception.detail)
+
+    def test_cash_on_delivery_is_refused_for_a_gift_card_purchase(self):
+        from apps.commerce import services as commerce
+        from apps.gift_cards.services import sync_storefront_product
+
+        gift_card_product = sync_storefront_product(self.store)
+        cart = commerce.get_or_create_cart(self.store, session_id="h" * 24)
+        commerce.add_item(cart, gift_card_product, 1)
+        checkout = commerce.start_checkout(cart, email="buyer@example.com")
+        checkout = commerce.update_checkout(checkout, shipping_address={
+            "first_name": "A", "last_name": "B", "address_line_1": "1 Test St", "city": "Sydney",
+            "state": "NSW", "postal_code": "2000", "country": "Australia",
+        })
+        with self.assertRaises(DRFValidationError):
+            commerce._place_order(checkout, "cod")
+
+
+class GiftCardPurchaseFlowTests(StoreClientMixin, APITestCase):
+    """Buying a gift card as a normal product, through the normal cart and checkout."""
+
+    def setUp(self):
+        token, store_data = self.sign_up("gift-card-buy@example.com", "Gift Card Buy Store")
+        self.store = Store.objects.get(pk=store_data["storeId"])
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}", HTTP_X_STORE_ID=str(self.store.pk))
+
+    def _checkout_for_gift_card(self, metadata=None, session="p" * 24):
+        from apps.commerce import services as commerce
+        from apps.gift_cards.services import sync_storefront_product
+
+        product = sync_storefront_product(self.store)
+        cart = commerce.get_or_create_cart(self.store, session_id=session)
+        commerce.add_item(cart, product, 1, metadata=metadata)
+        checkout = commerce.start_checkout(cart, email="buyer@example.com")
+        return commerce.update_checkout(checkout, shipping_address={
+            "first_name": "Buyer", "last_name": "B", "address_line_1": "1 Test St", "city": "Sydney",
+            "state": "NSW", "postal_code": "2000", "country": "Australia",
+        })
+
+    def test_buying_a_gift_card_issues_a_card_once_paid(self):
+        from apps.commerce import services as commerce
+
+        checkout = self._checkout_for_gift_card(metadata={"recipient_email": "giftee@example.com"})
+        order = commerce._place_order(checkout, "stripe", payment_reference="pi_buy_1")
+
+        card = GiftCard.objects.get(store=self.store)
+        self.assertEqual(card.current_balance, order.items.get().unit_price)
+        self.assertEqual(card.status, services.ACTIVE)
+        self.assertIsNone(card.expires_at)
+        self.assertEqual(order.items.get().metadata.get("gift_card_id"), str(card.pk))
+
+    def test_placing_the_same_order_twice_issues_only_one_card(self):
+        """Safe to repeat: a webhook retry (or the shopper's return racing it) must not double-issue."""
+        from apps.commerce import services as commerce
+
+        checkout = self._checkout_for_gift_card()
+        order1 = commerce._place_order(checkout, "stripe", payment_reference="pi_buy_2")
+        checkout.refresh_from_db()
+        order2 = commerce._place_order(checkout, "stripe", payment_reference="pi_buy_2")
+
+        self.assertEqual(order1.pk, order2.pk)
+        self.assertEqual(GiftCard.objects.filter(store=self.store).count(), 1)
+
+    def test_buying_for_yourself_emails_the_buyer(self):
+        from apps.commerce import services as commerce
+
+        checkout = self._checkout_for_gift_card()  # no recipient metadata: a self-purchase
+        commerce._place_order(checkout, "stripe", payment_reference="pi_buy_3")
+        card = GiftCard.objects.get(store=self.store)
+        # The buyer's own email was used (order.customer_email), since no recipient was given
+        self.assertIsNotNone(card.customer_id)

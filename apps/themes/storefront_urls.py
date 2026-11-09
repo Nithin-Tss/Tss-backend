@@ -6,7 +6,8 @@ from .privacy_views import storefront_cookie_consent, storefront_data_opt_out, s
 from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
     storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
-    storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
+    storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_gift_card,
+    storefront_gift_card_balance, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
     storefront_product, storefront_register, storefront_search, storefront_track,
     storefront_wishlist, storefront_wishlist_item, theme_image,
 )
@@ -38,6 +39,8 @@ urlpatterns = [
     path("<slug:store_slug>/privacy/consent", storefront_cookie_consent, name="storefront-cookie-consent"),
     path("<slug:store_slug>/privacy/opt-out", storefront_data_opt_out, name="storefront-data-opt-out"),
     path("<slug:store_slug>/privacy/confirm/<str:token>", storefront_marketing_confirm, name="storefront-marketing-confirm"),
+    path("<slug:store_slug>/gift-card", storefront_gift_card, name="storefront-gift-card"),
+    path("<slug:store_slug>/gift-card/balance", storefront_gift_card_balance, name="storefront-gift-card-balance"),
     path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
     path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),

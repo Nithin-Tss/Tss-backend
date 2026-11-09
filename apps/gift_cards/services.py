@@ -114,6 +114,69 @@ def amount_is_offered(store, currency_code, amount):
     return Decimal(str(amount)) in offered
 
 
+# -- The storefront "Gift Card" product -----------------------------------------------------
+#
+# The cart and checkout always run in the store's own currency (apps.commerce.services pins
+# checkout.currency to store.currency), so the product customers actually buy from only ever
+# offers amounts in that one currency, even if other currencies are enabled for admin-issued
+# cards. GIFT_CARD_PRODUCT_TYPE marks it so checkout/order code can special-case it (no cash on
+# delivery, no gift card may pay for it, its order items get a GiftCard issued once paid).
+
+GIFT_CARD_PRODUCT_TYPE = "gift_card"
+
+
+def sync_storefront_product(store):
+    """
+    Create or refresh the store's "Gift Card" product: one variant per fixed amount in the
+    store's own currency. Safe to call repeatedly (e.g. whenever the amounts change).
+    """
+    from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
+    from apps.catalog.services import online_channels
+
+    from .currencies import DEFAULT_AMOUNTS
+
+    setting = GiftCardCurrencySetting.objects.filter(
+        store=store, currency_code=store.currency, is_enabled=True
+    ).first()
+    if setting is None:
+        setting = GiftCardCurrencySetting.objects.create(
+            store=store, currency_code=store.currency, is_enabled=True,
+            amounts=[str(a) for a in DEFAULT_AMOUNTS],
+        )
+    amounts = sorted({Decimal(str(a)) for a in (setting.amounts or [])})
+    if not amounts:
+        return None
+
+    product, created = Product.objects.get_or_create(
+        store=store,
+        product_type=GIFT_CARD_PRODUCT_TYPE,
+        defaults={"title": "Gift Card", "status": "active", "is_taxable": False},
+    )
+    if created:
+        for channel in online_channels(store):
+            ProductSalesChannel.objects.get_or_create(product=product, sales_channel=channel)
+
+    existing = {v.sku: v for v in product.variants.all()}
+    for amount in amounts:
+        sku = f"GIFTCARD-{amount.normalize()}"
+        variant = existing.pop(sku, None)
+        if variant is None:
+            ProductVariant.objects.create(
+                product=product, sku=sku, price=amount, continue_selling=True,
+            )
+        elif variant.price != amount or not variant.continue_selling:
+            variant.price = amount
+            variant.continue_selling = True
+            variant.save(update_fields=["price", "continue_selling", "updated_at"])
+    # Amounts removed from the currency setting stop being sellable, but existing orders/variants
+    # referencing them are left alone (variants are never deleted once a product can reference them).
+    for stale in existing.values():
+        if stale.continue_selling:
+            stale.continue_selling = False
+            stale.save(update_fields=["continue_selling", "updated_at"])
+    return product
+
+
 # -- Balance changes -----------------------------------------------------------------------------
 
 @transaction.atomic

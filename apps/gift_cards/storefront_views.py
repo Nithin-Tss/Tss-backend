@@ -1,12 +1,10 @@
 """
-Public, unauthenticated gift card endpoints for shoppers:
+Public, unauthenticated gift card endpoint for shoppers:
 
-  GET  /api/v1/storefront/<store_slug>/gift-cards/options/   currencies and fixed amounts on offer
-  POST /api/v1/storefront/<store_slug>/gift-cards/purchase/  start paying for a gift card
-  GET  /api/v1/storefront/<store_slug>/gift-cards/balance/?token=...   check a balance (the link the email sends)
+  GET /api/v1/storefront/<store_slug>/gift-cards/balance/?token=...   check a balance (the link the email sends)
 
-Buying a gift card never touches Cart/Checkout: it is a standalone digital purchase, so it can't
-be used to buy another gift card, and nothing here needs a shipping address or stock.
+Buying a gift card is not here: it is a normal product, bought through the normal cart and
+checkout (see apps.commerce.services and apps.gift_cards.purchases).
 """
 from django.core.signing import BadSignature, Signer
 from rest_framework.exceptions import ValidationError
@@ -14,10 +12,9 @@ from rest_framework.response import Response
 
 from apps.commerce.storefront_views import StorefrontView
 
-from . import purchases, services
 from .currencies import format_amount, quantize
-from .models import GiftCard, GiftCardCurrencySetting
-from .serializers import BalanceCheckSerializer, PurchaseInputSerializer
+from .models import GiftCard
+from .serializers import BalanceCheckSerializer
 
 SIGNER_SALT = "gift-cards.balance-link"
 
@@ -32,33 +29,6 @@ def _card_from_token(store, token):
     except BadSignature:
         return None
     return GiftCard.objects.filter(store=store, pk=raw_id, is_deleted=False).first()
-
-
-class GiftCardOptionsView(StorefrontView):
-    def get(self, request, store_slug):
-        settings_qs = GiftCardCurrencySetting.objects.filter(store=self.store, is_enabled=True).order_by("currency_code")
-        if not settings_qs.exists():
-            services.seed_default_currency(self.store)
-            settings_qs = GiftCardCurrencySetting.objects.filter(store=self.store, is_enabled=True).order_by("currency_code")
-        return Response([
-            {
-                "currency_code": s.currency_code,
-                "amounts": [
-                    {"value": a, "display": format_amount(s.currency_code, a)} for a in s.amounts
-                ],
-            }
-            for s in settings_qs
-        ])
-
-
-class GiftCardPurchaseView(StorefrontView):
-    throttle_scope = "storefront_checkout"
-
-    def post(self, request, store_slug):
-        data = PurchaseInputSerializer(data=request.data)
-        data.is_valid(raise_exception=True)
-        result = purchases.create_purchase_intent(self.store, **data.validated_data)
-        return Response(result, status=201)
 
 
 class GiftCardBalanceView(StorefrontView):

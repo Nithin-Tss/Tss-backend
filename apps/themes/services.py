@@ -91,8 +91,13 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 54
+STARTER_REVISION = 55
 STARTER_UPGRADES = {
+    # Revision 55: the checkout's discount field is also a gift card field ("Discount code or gift card")
+    "sections/main-checkout.liquid": {
+        "5356cdde411cfc16dae67f8d314f29ba5407a9c3cdc028e083164889adaba80b",  # revision 55: before the gift card field
+        "6d7f6dbc44adfb06e5d3f35bf9b4ae58912003cb3b7ad0db74fc47af8cb75bb4",  # revision 55: same, with CRLF line endings
+    },
     # Revision 42: the account page is built from blocks
     "templates/account.liquid": {
         "a52c2767aa520c9043cabf866f7407878fff7e3935cc74c84e7e7063e664822d",  # revision 42: before the account blocks (814f062)
@@ -219,7 +224,10 @@ STARTER_UPGRADES = {
     # Revision 5: "Product information" accordion under the description
     # Revision 53: variant picker is option-value buttons (not a SKU dropdown), SKU removed from the page
     # Revision 54: the "In stock" / "Only a few left" message is back on the product page
+    # Revision 55: a gift card product shows "for myself / for someone else" recipient fields
     "sections/main-product.liquid": {
+        "4ffa9bb1baa12d274ae272fccccdd78d14d23a6373289a62f64f82874c616512",  # revision 55: before the gift card recipient fields
+        "beea8f1d6eb1610d57583cc18db5ad385c4cbdc4f49a8b0e2f702ac059b2583f",  # revision 55: same, with CRLF line endings
         "b7cc7c3ab5b4d28277fddf652f5eb145b1018167856f1712905a142a22f82a62",  # revision 54: before "Only a few left" skipped options that keep selling
         "7a4285f2bfc1c2d58e810035ba181f766ccf81ef2c307c42dd4bbe86064d4926",  # revision 53: before the stock message came back
         "79ce976f68235686a58778b943748aaa6bf05949517e4204f58929ba0ddb3519",  # revision 52: before the option-button redesign
@@ -263,7 +271,10 @@ STARTER_UPGRADES = {
         "5fb084f88335fd7971a07f17eb38a52fa5d81749e4ea625a1678b23f088b5a19",  # revision 19: same, with CRLF line endings
     },
     # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
+    # Revision 55: add-to-cart forwards data-meta fields (a gift card's recipient) as line metadata
     "snippets/cart.liquid": {
+        "020c3da88a33b73edd4e0a3efc5f14d9efbaab5907f0653d7b22c9a5a2753ecc",  # revision 55: before data-meta fields were forwarded
+        "156ccc2554e4ba3b9b35ab5d393db2ac38e5b483c097d9c0505c19bf1842a496",  # revision 55: same, with CRLF line endings
         "bf6180d6c1db029759afe489ea7f753f99897e16d0394f296736abe101704a31",  # revision 43: before "Check out" went to the checkout page
         "3bd8efbcc5e448be5369a998b85d83c64c02916442ada043303971153dda4e7c",  # revision 43: before "Check out" went to the checkout page (CRLF)
         "4c5704af71070bde93c5088802de1e571978e92fe093bd0a1dae721291dab8b0",  # revision 37: before "Clear cart"

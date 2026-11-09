@@ -207,3 +207,15 @@ class GiftCardCurrencySettingViewSet(StoreScopedViewSet):
             services.seed_default_currency(self.request.store)
             qs = super().get_queryset()
         return qs
+
+    def _resync_storefront_product(self, setting):
+        if setting.currency_code == self.request.store.currency:
+            services.sync_storefront_product(self.request.store)
+
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        self._resync_storefront_product(serializer.instance)
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        self._resync_storefront_product(serializer.instance)

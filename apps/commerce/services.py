@@ -13,7 +13,7 @@ from rest_framework.exceptions import ValidationError
 
 from apps.catalog.services import published_products
 from apps.discounts import services as discounts
-from apps.discounts.models import Discount, OrderDiscount
+from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.customers.models import Customer
 from apps.inventory.services import sellable, sellable_for, convert_reservations
 from apps.orders import services as orders
@@ -178,7 +178,7 @@ def _check_available(store, product):
 
 
 @transaction.atomic
-def add_item(cart, product, quantity, variant=None):
+def add_item(cart, product, quantity, variant=None, metadata=None):
     """Add a product to the cart; adding it again raises the quantity."""
     cart = _open_cart(cart)
 
@@ -192,7 +192,14 @@ def add_item(cart, product, quantity, variant=None):
     if variant is None:
         raise ValidationError({"product": "This product isn't available."})
 
-    item = CartItem.objects.filter(cart=cart, product=product, variant=variant, is_deleted=False).first()
+    # A gift card is bought one at a time: each has its own recipient, so adding it again is a
+    # second, separate card rather than raising a shared line's quantity.
+    is_gift_card = product.product_type == "gift_card"
+    if is_gift_card:
+        quantity = 1
+        item = None
+    else:
+        item = CartItem.objects.filter(cart=cart, product=product, variant=variant, is_deleted=False).first()
     wanted = quantity + (item.quantity if item else 0)
     _check_line_limit(product, wanted)
     _check_stock(product, variant, wanted)
@@ -207,6 +214,7 @@ def add_item(cart, product, quantity, variant=None):
             variant=variant,
             quantity=quantity,
             unit_price=_money(variant.price if variant else 0),
+            metadata=metadata or None,
             is_deleted=False,
         )
     return item
@@ -265,7 +273,7 @@ def cart_subtotal(cart):
 
 
 @transaction.atomic
-def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None):
+def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None, gift_card_code=None):
     """Freeze the cart's lines into a checkout. Reuses the cart's open checkout."""
     cart = _open_cart(cart)
     refresh_prices(cart)
@@ -313,6 +321,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
             quantity=item.quantity,
             unit_price=item.unit_price,
             total_price=line_total,
+            metadata=item.metadata,
             is_deleted=False,
         )
         subtotal += line_total
@@ -322,7 +331,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
     checkout.abandoned_at = None
     return update_checkout(
         checkout, email=email, shipping_address=shipping_address,
-        billing_address=billing_address, discount_code=discount_code,
+        billing_address=billing_address, discount_code=discount_code, gift_card_code=gift_card_code,
     )
 
 
@@ -401,6 +410,36 @@ def _price_gift_card(checkout, new_code):
 def amount_due(checkout):
     """What is actually charged online or taken cash-on-delivery, after a redeemed gift card."""
     return max(checkout.total_amount - (checkout.gift_card_amount or ZERO), ZERO)
+
+
+def gift_card_last4(checkout):
+    """The last 4 characters of the applied gift card, for "Gift card •••• 1234"; None if none applied."""
+    gift_card_id = (checkout.metadata or {}).get("gift_card_id")
+    if not gift_card_id:
+        return None
+    from apps.gift_cards.models import GiftCard
+
+    card = GiftCard.objects.filter(pk=gift_card_id, store=checkout.store).first()
+    return card.code_last4 if card else None
+
+
+def resolve_checkout_code(store, code):
+    """
+    The checkout's single "Discount code or gift card" field: which kind is this, so the caller
+    applies it the right way (discount_code= or gift_card_code= on start_checkout/update_checkout).
+    Returns "discount", "gift_card", or None for a blank code. A code matching neither raises one
+    generic error -- never says which kind was expected, same as Shopify.
+    """
+    from apps.gift_cards import services as gift_cards
+
+    code = (code or "").strip()
+    if not code:
+        return None
+    if DiscountCode.objects.filter(discount__store=store, code__iexact=code, is_deleted=False).exists():
+        return "discount"
+    if gift_cards.get_by_code(store, code) is not None:
+        return "gift_card"
+    raise ValidationError({"code": "This code isn't valid."})
 
 
 def _shipping_rate(store, country, weight, region=None):
@@ -628,6 +667,12 @@ def _place_order(checkout, payment_method, payment_reference=None):
         _check_available(checkout.store, item.product)
         _check_stock(item.product, item.variant, item.quantity, checkout.pk)
 
+    sells_gift_card = any(i.product.product_type == "gift_card" for i in items)
+    if checkout.gift_card_amount and sells_gift_card:
+        raise ValidationError({"gift_card_code": "A gift card can't be used to buy a gift card. Remove it to continue."})
+    if sells_gift_card and payment_method == "cod":
+        raise ValidationError({"payment_method": "A gift card can only be paid for online, not cash on delivery."})
+
     customer = checkout.customer or _guest_customer(checkout)
     if payment_method == "cod":
         _check_open_order_cap(customer)
@@ -644,7 +689,10 @@ def _place_order(checkout, payment_method, payment_reference=None):
     order = orders.create_order(
         checkout.store,
         [
-            {"product": i.product, "variant": i.variant, "quantity": i.quantity, "unit_price": i.unit_price}
+            {
+                "product": i.product, "variant": i.variant, "quantity": i.quantity,
+                "unit_price": i.unit_price, "metadata": i.metadata,
+            }
             for i in items
         ],
         customer=customer,
@@ -697,6 +745,12 @@ def _place_order(checkout, payment_method, payment_reference=None):
         payments.record_pending_payment(
             checkout.store, order, checkout, due, provider=payment_method, customer=customer
         )
+
+    if sells_gift_card:
+        from apps.gift_cards import purchases as gift_card_purchases
+
+        for order_item in order.items.filter(product__product_type="gift_card"):
+            gift_card_purchases.issue_from_order_item(order_item)
 
     checkout.customer = customer
     checkout.metadata = {**(checkout.metadata or {}), "order_id": str(order.pk), "payment_method": payment_method}

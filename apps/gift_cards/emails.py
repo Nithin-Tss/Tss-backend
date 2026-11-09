@@ -11,9 +11,15 @@ def _never_or_date(card):
 
 
 def _balance_link(card):
+    """
+    The storefront's own balance page (apps.themes: /gift-card/balance), not the admin app --
+    this is what the shopper, not the merchant, opens.
+    """
     from .storefront_views import balance_token
 
-    return f"{django_settings.FRONTEND_URL}/gift-card/balance?store={card.store.store_slug}&token={balance_token(card)}"
+    store = card.store
+    base = f"https://{store.domain}" if store.domain else f"{django_settings.PUBLIC_API_URL}/s/{store.store_slug}"
+    return f"{base}/gift-card/balance?token={balance_token(card)}"
 
 
 def gift_card_issued(card, raw_code, recipient_email, recipient_name=None, message=None, from_name=None):

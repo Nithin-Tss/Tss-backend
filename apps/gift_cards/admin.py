@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from apps.core.admin_guards import StoreGuardAdmin
-from .models import GiftCard, GiftCardCurrencySetting, GiftCardPurchase, GiftCardTransaction
+from .models import GiftCard, GiftCardCurrencySetting, GiftCardTransaction
 
 
 @admin.register(GiftCard)
@@ -14,12 +14,6 @@ class GiftCardAdmin(StoreGuardAdmin):
 @admin.register(GiftCardCurrencySetting)
 class GiftCardCurrencySettingAdmin(StoreGuardAdmin):
     pass
-
-
-@admin.register(GiftCardPurchase)
-class GiftCardPurchaseAdmin(StoreGuardAdmin):
-    store_links = {"buyer_customer": "store", "gift_card": "store", "payment": "store"}
-    list_display = ("__str__", "store_name", "amount", "currency_code", "status", "buyer_email", "recipient_email", "created_at")
 
 
 @admin.register(GiftCardTransaction)

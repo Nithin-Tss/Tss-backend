@@ -192,6 +192,7 @@ def create_order(
             discount_amount=discount,
             tax_amount=ZERO,
             total=max(gross - discount, ZERO),
+            metadata=line.get("metadata") or {},
             is_deleted=False,
         )
         inventory.commit(variant, quantity, user_id=getattr(user, "pk", None), reference_id=order.pk,

@@ -668,9 +668,9 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "CartView", "CartItemsView", "CartItemView", "CheckoutStartView", "CheckoutDetailView",
         "CheckoutCompleteView", "OrderListView", "OrderDetailView", "OrderCancelView",
         "CheckoutStripeView", "CheckoutStripeConfirmView",
-        # Gift cards for shoppers: the amounts on offer, a guest purchase (server-checked amount, card made only
-        # once Stripe confirms payment), and a balance reachable only through the signed link the email sends
-        "GiftCardOptionsView", "GiftCardPurchaseView", "GiftCardBalanceView",
+        # Gift cards for shoppers: buying one is the normal cart/checkout above (a card is made only once Stripe
+        # confirms payment); a balance is reachable only through the signed link the email sends
+        "GiftCardBalanceView",
         "StripeWebhookView",  # Stripe calls it; the signature is the credential
         "CarrierWebhookView",  # couriers call it; the per-gateway webhook secret is the credential
         "StoreStripeWebhookView",  # same, per store: verified against that store's own webhook secret
