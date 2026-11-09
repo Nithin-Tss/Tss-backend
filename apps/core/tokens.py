@@ -3,7 +3,7 @@ JWT login tokens (djangorestframework-simplejwt), backed by Django sessions.
 
 After sign-in the client gets two tokens:
 - access  (15 min):  sent as "Authorization: Bearer <access>" on every request
-- refresh (30 min, 30 days with "remember me"): only sent to /auth/refresh/ to get
+- refresh (JWT_REFRESH_DAYS, 7 by default; JWT_REMEMBER_ME_DAYS, 90, with "remember me"): only sent to /auth/refresh/ to get
   a new access token when the old one expires.
   The sign-in itself ends at a fixed time after it started (refreshing
   does not extend it).

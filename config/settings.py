@@ -501,8 +501,9 @@ SPECTACULAR_SETTINGS = {
 # - access:  sent with every API request; short-lived
 # - refresh: only used to get a new access token; long-lived
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=30),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
+    # Sign-in without "remember me": a fixed limit counted from sign-in (refreshing doesn't extend it)
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '7'))),
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -514,7 +515,7 @@ SIMPLE_JWT = {
 LOGIN_MAX_FAILURES = int(os.getenv('LOGIN_MAX_FAILURES', '10'))
 LOGIN_LOCKOUT_SECONDS = int(os.getenv('LOGIN_LOCKOUT_SECONDS', '900'))
 # "Remember me" keeps the refresh token for longer (see apps/core/tokens.py)
-JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=30)
+JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=int(os.getenv('JWT_REMEMBER_ME_DAYS', '90')))
 
 
 # Django sessions (django_session table): the cookie session for /admin/ and

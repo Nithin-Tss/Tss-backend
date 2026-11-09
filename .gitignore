@@ -14,3 +14,4 @@ deploy/.env
 deploy/certs/
 backups/
 *.out
+.DS_Store

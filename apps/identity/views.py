@@ -52,7 +52,7 @@ def start_session(request, user, remember_me=False):
     browser clients and /admin/. Also records last_login.
     """
     login(request._request, user, backend="django.contrib.auth.backends.ModelBackend")
-    # 0 = ends when the browser closes; None = SESSION_COOKIE_AGE (30 days)
+    # 0 = ends when the browser closes; None = SESSION_COOKIE_AGE (the remember-me lifetime, 90 days by default)
     request.session.set_expiry(None if remember_me else 0)
 
 
@@ -100,7 +100,7 @@ class SignupView(PublicAuthView):
         return Response(
             {
                 "message": "Account created.",
-                **session_payload(user, issue_tokens(user)),
+                **session_payload(user, issue_tokens(user, remember_me=True)),
             },
             status=status.HTTP_201_CREATED,
         )
