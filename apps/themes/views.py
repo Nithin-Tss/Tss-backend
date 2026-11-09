@@ -1825,12 +1825,13 @@ class ThemePreviewView(StoreThemeView):
         customer_page = request.query_params.get("customer")
         if customer_page in ("login", "register", "account"):
             page, target, message = "index", {"customer_page": customer_page}, None
-            if customer_page == "account" and request.query_params.get(CUSTOMER_LINK_PARAM):
-                # Just signed in or registered in the preview: show that customer's own details (the token
-                # is the same signed, store-bound one the live store puts in its links), else the sample
-                shopper, shopper_user = get_storefront_customer(request.store, request)
-                if shopper is not None:
-                    target["customer"], target["customer_user"] = shopper, shopper_user
+        if request.query_params.get(CUSTOMER_LINK_PARAM) and customer_page != "login" and customer_page != "register":
+            # Signed in or registered in the preview: the account page shows that customer's own details, and every
+            # other page knows them too (header shows Account, not Sign in), else the sample. The token is the same
+            # signed, store-bound one the live store puts in its links.
+            shopper, shopper_user = get_storefront_customer(request.store, request)
+            if shopper is not None:
+                target["customer"], target["customer_user"] = shopper, shopper_user
         if message:
             return Response({"html": f"<p style='padding:24px;font:15px system-ui;color:#53627E'>{escape(message)}</p>",
                              "fonts": ""})
