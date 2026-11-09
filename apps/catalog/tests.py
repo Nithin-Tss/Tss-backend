@@ -758,13 +758,14 @@ class AllProductsStorefrontTests(APITestCase):
             return sorted(("Cheap", "Dear", "Middle"), key=lambda t: html.index(f">{t}<"))
 
         self.assertIn('<h1 class="section-heading collection-heading">All products</h1>', self.page("collections/all"))
-        self.assertEqual(order(), ["Middle", "Dear", "Cheap"])  # newest first
+        self.assertEqual(order(), ["Cheap", "Dear", "Middle"])  # the default order is A-Z
+        self.assertEqual(order("?sort=newest"), ["Middle", "Dear", "Cheap"])
         self.assertEqual(order("?sort=price-asc"), ["Cheap", "Middle", "Dear"])
         self.assertEqual(order("?sort=price-desc"), ["Dear", "Middle", "Cheap"])
 
         for i in range(24):
             self.product(f"Bulk {i:02d}")
-        html = self.page("collections/all?page=2")
+        html = self.page("collections/all?sort=newest&page=2")
         self.assertIn('aria-current="page">2<', html)  # numbered pages, 20 to a page by default
         self.assertIn(">Cheap<", html)  # 27 products: the oldest 7 are on page 2
         self.assertNotIn("Bulk 23", html)  # the newest are on page 1
