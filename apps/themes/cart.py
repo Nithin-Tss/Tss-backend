@@ -24,7 +24,7 @@ from apps.catalog.services import published_products, variant_options
 from apps.commerce import services
 from apps.commerce.models import Cart, CartItem
 from apps.inventory.models import InventoryItem
-from apps.inventory.services import sellable
+from apps.inventory.services import is_tracked, sellable
 
 from . import section_sync as sync
 
@@ -239,11 +239,13 @@ def item_count(store, session_id):
     return total or 0
 
 
-def _line(item, base_url, available=None, for_sale=True):
+def _line(item, base_url, available=None, for_sale=True, tracked=True):
     variant = item.variant
-    selling_on = bool(variant and variant.continue_selling)
+    selling_on = bool(variant and (variant.continue_selling or not tracked))
     if available is None:
         available = sellable(variant) if variant is not None else 0
+        tracked = variant is not None and is_tracked(variant)
+        selling_on = bool(variant and (variant.continue_selling or not tracked))
     warning = ""
     if not for_sale:
         warning = "No longer available"  # drafted, archived or taken off the Online Store since it was added
@@ -311,7 +313,7 @@ def view_data(cart, base_url):
     return {
         "count": sum(i.quantity for i in items),
         "subtotal": str(subtotal),
-        "lines": [_line(i, base_url, stock_of(i), i.product_id in for_sale) for i in items],
+        "lines": [_line(i, base_url, stock_of(i), i.product_id in for_sale, i.variant_id in totals) for i in items],
     }
 
 

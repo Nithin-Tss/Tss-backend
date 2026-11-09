@@ -6972,7 +6972,11 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         ProductVariant.objects.create(product_id=self.mug["id"], sku="Gold tier", price="25.00")
         html = self.client.get(page).content.decode()
         self.assertIn("data-tiers", html)
-        self.assertIn('<span class="product__tier-name">Gold tier</span>', html)
+        # Customers never see the SKU or a price inside the buttons
+        self.assertIn(">Option 2</button>", html)
+        self.assertNotIn("Gold tier</button>", html)
+        self.assertNotIn("product__tier-price", html)
+        self.assertNotIn('<span class="product__tier-name">', html)
         self.assertIn("25.00", html)
         self.assertIn("<select name=\"variant\" data-variant>", html)  # the form still posts the select
 
@@ -6984,6 +6988,66 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         html = self.client.get(page).content.decode()
         self.assertNotIn("data-tiers", html)
         self.assertIn('data-zoom="lightbox"', html)
+
+
+    def test_product_page_picker_uses_option_name_and_values_only(self):
+        from apps.catalog.models import Product, ProductVariant
+
+        product = Product.objects.get(pk=self.mug["id"])
+        product.options = [{"name": "Pack size", "values": ["Single", "Pack of 4"]}]
+        product.save(update_fields=["options"])
+        first = ProductVariant.objects.filter(product=product).first()
+        first.sku = "ABC123"
+        first.metadata = {"options": {"Pack size": "Single"}}
+        first.save()
+        ProductVariant.objects.create(product=product, sku="ABC123-PACKOF4", price="55.00", metadata={"options": {"Pack size": "Pack of 4"}})
+
+        html = self.client.get(f"{self.base}/products/{self.mug['id']}").content.decode()
+        self.assertIn('<span class="product__option-name">Pack size</span>', html)
+        self.assertIn(">Single</button>", html)
+        self.assertIn(">Pack of 4</button>", html)
+        self.assertEqual(html.count("data-option-group "), 1)  # one picker
+        self.assertEqual(html.count('<select name="variant" data-variant hidden>'), 1)  # the dropdown is only the hidden form field
+        self.assertNotIn("product__tier-price", html)
+        picker = html.split("data-options>")[1].split("</form>")[0]
+        self.assertNotIn("ABC123-PACKOF4", picker.split("<select")[0])
+        self.assertNotIn("Option</span>", html)
+        # data-opt-0 is read with getAttribute: dataset["opt0"] would never match it and every click would pick the first variant
+        self.assertIn('getAttribute("data-opt-" + keys[k])', html)
+
+
+    def test_product_page_untracked_variants_are_buyable_and_first_available_is_shown(self):
+        from apps.catalog.models import Product, ProductVariant
+        from apps.inventory.services import default_location, set_available
+        from apps.tenancy.models import Store
+
+        product = Product.objects.get(pk=self.mug["id"])
+        product.options = [{"name": "Pack size", "values": ["Single", "Pack of 4"]}]
+        product.save(update_fields=["options"])
+        first = ProductVariant.objects.filter(product=product).order_by("created_at").first()
+        first.metadata = {"options": {"Pack size": "Single"}}
+        first.save()
+        store = Store.objects.get(store_slug=self.store["storeSlug"])
+        set_available(first, default_location(store), 0)  # tracked, sold out
+        untracked = ProductVariant.objects.create(product=product, sku="P4", price="55.00", metadata={"options": {"Pack size": "Pack of 4"}})
+
+        html = self.client.get(f"{self.base}/products/{self.mug['id']}").content.decode()
+        self.assertIn('data-option-value="Single"', html)
+        # the tracked, sold-out one is muted; the untracked one is not
+        single = html.split('data-option-value="Single"')[0].rsplit("<button", 1)[1]
+        pack = html.split('data-option-value="Pack of 4"')[0].rsplit("<button", 1)[1]
+        self.assertIn("is-muted", single)
+        self.assertNotIn("is-muted", pack)
+        # the page opens on the untracked pack, not the sold-out single
+        self.assertRegex(html, r'data-option-value="Pack of 4"\s+aria-checked="true"')
+        self.assertRegex(html, r'data-option-value="Single"\s+aria-checked="false"')
+        self.assertIn(f'<option value="{untracked.id}" selected', html)
+        self.assertIn('data-variant-continue="true"', html)  # the script never treats it as sold out
+        self.assertNotIn(" disabled>Sold out", html)
+        # the price at load is the selected variant's, not the product's cheapest ("From")
+        price = html.split("data-price>")[1].split("</div>")[0]
+        self.assertIn("55.00", price)
+        self.assertNotIn("From", price)
 
 
 class ThemeImageUrlTest(StoreClientMixin, APITestCase):

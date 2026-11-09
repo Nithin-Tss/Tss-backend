@@ -2027,8 +2027,10 @@ def product_drop(product, base_url):
         compare_at = None
     stock = {v.id: _available(v) for v in variants}
     available_total = sum(stock.values())
-    # A variant that keeps selling when out of stock is never "sold out"
-    selling_on = any(v.continue_selling for v in variants)
+    # No inventory rows = not tracked: stock never limits it, so it is never "sold out" (like Shopify)
+    tracked = {v.id: bool(v.inventory_items.all()) for v in variants}
+    # A variant that keeps selling when out of stock, or isn't tracked, is never "sold out"
+    selling_on = any(v.continue_selling or not tracked[v.id] for v in variants)
     sold_out = available_total <= 0 and not selling_on
 
     tags = [pt.tag.name for pt in product.product_tags.all()]
@@ -2073,7 +2075,8 @@ def product_drop(product, base_url):
                 "compare_at_price": v.compare_at_price if v.compare_at_price is not None and v.compare_at_price > v.price else None,
                 "on_sale": v.compare_at_price is not None and v.compare_at_price > v.price,
                 "continue_selling": v.continue_selling,
-                "is_sold_out": stock[v.id] <= 0 and not v.continue_selling,
+                "tracked": tracked[v.id],
+                "is_sold_out": tracked[v.id] and stock[v.id] <= 0 and not v.continue_selling,
                 # Option values chosen for this variant, e.g. {"Size": "Pack of 6"}
                 "options": variant_options(v),
             }

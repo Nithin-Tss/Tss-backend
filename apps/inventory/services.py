@@ -281,6 +281,11 @@ def is_tracked(variant):
     return InventoryItem.objects.filter(variant=variant).exists()
 
 
+def sells_without_stock(variant):
+    """True when stock never limits this variant: it keeps selling when out of stock, or it isn't tracked (no inventory rows)."""
+    return variant.continue_selling or not is_tracked(variant)
+
+
 def _store_id(variant):
     return variant.product.store_id
 

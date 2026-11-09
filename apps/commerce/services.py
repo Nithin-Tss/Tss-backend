@@ -15,7 +15,7 @@ from apps.catalog.services import published_products
 from apps.discounts import services as discounts
 from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.customers.models import Customer
-from apps.inventory.services import sellable, sellable_for, convert_reservations
+from apps.inventory.services import sellable, sellable_for, sells_without_stock, convert_reservations
 from apps.orders import services as orders
 from apps.orders.models import Order
 from apps.payments import services as payments
@@ -111,7 +111,7 @@ def merge_carts(source, target):
     )
     for item in lines:
         # A variant that keeps selling past its stock is not capped by it (only by the per-line limit)
-        sells_on = item.variant is not None and item.variant.continue_selling
+        sells_on = item.variant is not None and sells_without_stock(item.variant)
         in_stock = sellable(item.variant) if item.variant is not None else 0
         existing = CartItem.objects.filter(
             cart=target, product=item.product, variant=item.variant, is_deleted=False
@@ -154,11 +154,12 @@ def _open_cart(cart):
 
 def _check_stock(product, variant, quantity, checkout_id=None):
     """
-    Quantity 0 (or no stock record) is sold out; never sell more than is available. With a checkout id,
+    Tracked stock at 0 is sold out; never sell more than is available. With a checkout id,
     stock held for OTHER checkouts doesn't count as available (this checkout's own hold does).
+    A variant that isn't tracked (no inventory rows) or keeps selling is never limited by stock.
     """
-    if variant is not None and variant.continue_selling:
-        return  # the store keeps selling when out of stock
+    if variant is not None and sells_without_stock(variant):
+        return
     in_stock = sellable_for(variant, checkout_id) if variant is not None else 0
     if in_stock <= 0:
         raise ValidationError({"product": f"{product.title} is sold out."})

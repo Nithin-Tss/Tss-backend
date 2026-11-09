@@ -3,6 +3,7 @@ End-to-end commerce flows: the public storefront API and the staff API working
 against the same store, with real sign-up, store membership and permissions.
 """
 import threading
+import uuid
 import unittest
 from datetime import timedelta
 from io import StringIO
@@ -20,7 +21,7 @@ from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
 from apps.catalog.services import online_channels
 from apps.discounts.models import Discount, DiscountCode
 from apps.inventory.models import InventoryHistory, InventoryItem, Location
-from apps.inventory.services import sellable, set_available
+from apps.inventory.services import default_location, sellable, set_available
 from apps.orders import services as orders_services
 from apps.orders.models import Order
 from apps.payments.models import Payment
@@ -1304,7 +1305,7 @@ class AvailabilityAgreementTests(CommerceIntegrationBase):
         product = self.staff.get(f"/api/v1/catalog/products/{self.product.pk}/").json()
         self.assertEqual((product["quantity"], product["variants"][0]["quantity"]), (3, 3))
 
-    def test_the_untracked_variant_difference_is_kept(self):
+    def test_an_untracked_variant_is_in_stock_on_the_storefront_like_the_admin(self):
         from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
         from apps.catalog.services import online_channels, published_products
         from apps.themes.rendering import product_drop
@@ -1314,10 +1315,40 @@ class AvailabilityAgreementTests(CommerceIntegrationBase):
         for channel in online_channels(self.store):
             ProductSalesChannel.objects.create(product=product, sales_channel=channel)
 
-        self.assertEqual(sellable(variant), 0)  # the storefront: sold out unless it keeps selling
-        self.assertTrue(product_drop(published_products(self.store).get(pk=product.pk), "/s/shop")["is_sold_out"])
+        self.assertEqual(sellable(variant), 0)  # no stock number, but stock does not limit it
+        drop = product_drop(published_products(self.store).get(pk=product.pk), "/s/shop")
+        self.assertFalse(drop["is_sold_out"])
+        self.assertEqual((drop["variants"][0]["tracked"], drop["variants"][0]["is_sold_out"]), (False, False))
         api = self.staff.get(f"/api/v1/inventory/items/availability/?variant={variant.pk}").json()
         self.assertEqual((api["tracked"], api["inStock"], api["quantity"]), (False, True, None))  # the admin: in stock
+
+        # A tracked variant at 0 is still sold out, next to an untracked one
+        tracked = ProductVariant.objects.create(product=product, sku="GIFT-2", price=Decimal("60.00"))
+        set_available(tracked, default_location(self.store), 0)
+        drop = product_drop(published_products(self.store).get(pk=product.pk), "/s/shop")
+        by_sku = {v["sku"]: v for v in drop["variants"]}
+        self.assertEqual((by_sku["GIFT-1"]["is_sold_out"], by_sku["GIFT-2"]["is_sold_out"]), (False, True))
+        self.assertFalse(drop["is_sold_out"])
+
+    def test_an_untracked_variant_can_be_added_to_the_cart_and_checked_out(self):
+        from apps.catalog.models import Product, ProductSalesChannel, ProductVariant
+        from apps.catalog.services import online_channels
+        from apps.commerce import services as commerce
+        from apps.inventory.services import sells_without_stock
+
+        product = Product.objects.create(store=self.store, title="Gift card", status="active")
+        variant = ProductVariant.objects.create(product=product, sku="GIFT-1", price=Decimal("50.00"))
+        for channel in online_channels(self.store):
+            ProductSalesChannel.objects.create(product=product, sales_channel=channel)
+        self.assertTrue(sells_without_stock(variant))
+        commerce._check_stock(product, variant, 5)  # no "sold out" and no "only N left"
+        commerce._check_stock(product, variant, 5, checkout_id=uuid.uuid4())
+
+        tracked = ProductVariant.objects.create(product=product, sku="GIFT-2", price=Decimal("60.00"))
+        set_available(tracked, default_location(self.store), 0)
+        self.assertFalse(sells_without_stock(tracked))
+        with self.assertRaises(ValidationError):
+            commerce._check_stock(product, tracked, 1)
 
 
 class CartPanelTests(CommerceIntegrationBase):

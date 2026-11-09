@@ -1,13 +1,13 @@
 {{ product_json_ld }}
 {%- assign s = section.settings -%}
 {%- assign low_stock = s.low_stock_threshold | default: 5 -%}
-{%- comment -%} Start on the first option that is in stock, so a sold-out first option doesn't block the product {%- endcomment -%}
+{%- comment -%} Start on the first option that can be bought (untracked ones always can), so a sold-out first option doesn't block the product {%- endcomment -%}
 {%- assign shown_variant = product.variants.first -%}
 {%- for variant in product.variants -%}
-  {%- if variant.available_total > 0 -%}
+  {%- unless variant.is_sold_out -%}
     {%- assign shown_variant = variant -%}
     {%- break -%}
-  {%- endif -%}
+  {%- endunless -%}
 {%- endfor -%}
 {%- assign shown_out = false -%}
 {%- if product.is_sold_out or shown_variant.is_sold_out -%}{%- assign shown_out = true -%}{%- endif -%}
@@ -51,7 +51,7 @@
       <h1 class="product__title">{{ product.title }}</h1>
 
       {%- if s.show_price -%}
-        <div class="product__price" data-price>{% if product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.on_sale and product.price != nil %} <span class="price price--compare product__compare">{{ product.compare_at_price | money }}</span>{% endif %}</div>
+        <div class="product__price" data-price>{% if product.variants.size > 1 and shown_variant.price != nil %}<span class="price">{{ shown_variant.price | money }}</span>{% if shown_variant.on_sale %} <span class="price price--compare product__compare">{{ shown_variant.compare_at_price | money }}</span>{% endif %}{% elsif product.price == nil %}<span class="price price--muted">Price on request</span>{% elsif product.price_varies %}<span class="price">From {{ product.price | money }}</span>{% else %}<span class="price">{{ product.price | money }}</span>{% endif %}{% if product.on_sale and product.price != nil and product.variants.size < 2 %} <span class="price price--compare product__compare">{{ product.compare_at_price | money }}</span>{% endif %}</div>
       {%- endif -%}
       {%- if s.show_stock -%}
         <p class="product__stock{% if shown_out %} product__stock--out{% elsif shown_variant.available_total > 0 and shown_variant.available_total <= low_stock and shown_variant.continue_selling != true %} product__stock--few{% endif %}" data-stock data-low="{{ low_stock }}">
@@ -62,13 +62,6 @@
       <hr class="product__divider">
 
       {%- if show_options -%}
-        {%- assign shown_label = '' -%}
-        {%- for o in product.options -%}
-          {%- assign shown_value = shown_variant.options[o.name] -%}
-          {%- if forloop.first -%}{%- assign shown_label = shown_value -%}{%- else -%}{%- assign shown_label = shown_label | append: ' / ' | append: shown_value -%}{%- endif -%}
-        {%- endfor -%}
-        <p class="product__variant-label" data-variant-label>{{ shown_label }}</p>
-
         <div class="product__options" data-options>
           {%- for option in product.options -%}
             <div class="product__option-group" data-option-group data-option-index="{{ forloop.index0 }}">
@@ -106,14 +99,14 @@
       {%- comment -%} Variants that only differ by name (no options): tier cards, or a dropdown when chosen in the settings {%- endcomment -%}
       {%- if show_options == false and product.variants.size > 1 and s.variant_style != 'dropdown' -%}
         <div class="product__options" data-options>
-          <div class="product__tiers" data-tiers role="radiogroup" aria-label="Option">
-            {%- for variant in product.variants -%}
-              <button class="product__tier{% if variant.is_sold_out %} is-muted{% endif %}" type="button" role="radio" data-sku-tier="{{ variant.id }}"
-                aria-checked="{% if variant.id == shown_variant.id %}true{% else %}false{% endif %}">
-                <span class="product__tier-name">{{ variant.sku | default: 'Option' }}</span>
-                {%- if variant.price != nil %} <span class="product__tier-price">{{ variant.price | money }}</span>{% endif -%}
-              </button>
-            {%- endfor -%}
+          <div class="product__option-group">
+            <span class="product__option-name">Options</span>
+            <div class="product__tiers" data-tiers role="radiogroup" aria-label="Options">
+              {%- for variant in product.variants -%}
+                <button class="product__tier{% if variant.is_sold_out %} is-muted{% endif %}" type="button" role="radio" data-sku-tier="{{ variant.id }}"
+                  aria-checked="{% if variant.id == shown_variant.id %}true{% else %}false{% endif %}">Option {{ forloop.index }}</button>
+              {%- endfor -%}
+            </div>
           </div>
         </div>
       {%- endif -%}
@@ -140,7 +133,7 @@
               {%- endfor -%}
               <option value="{{ variant.id }}"{% if variant.id == shown_variant.id %} selected{% endif %}
                 data-variant-price="{{ variant.price | money }}"{% if variant.on_sale %} data-variant-compare="{{ variant.compare_at_price | money }}"{% endif %}
-                data-variant-available="{{ variant.available_total }}" data-variant-continue="{{ variant.continue_selling }}"
+                data-variant-available="{{ variant.available_total }}" data-variant-continue="{% if variant.continue_selling or variant.tracked == false %}true{% else %}false{% endif %}"
                 data-variant-label="{{ variant_label | escape }}"
                 {%- for o in product.options %} data-opt-{{ forloop.index0 }}="{{ variant.options[o.name] | escape }}"{%- endfor -%}></option>
             {%- endfor -%}
@@ -151,8 +144,8 @@
             {%- for variant in product.variants -%}
               <option value="{{ variant.id }}"{% if variant.id == shown_variant.id %} selected{% endif %}
                 data-variant-price="{{ variant.price | money }}"{% if variant.on_sale %} data-variant-compare="{{ variant.compare_at_price | money }}"{% endif %}
-                data-variant-available="{{ variant.available_total }}" data-variant-continue="{{ variant.continue_selling }}"
-                data-variant-label="{{ variant.sku | escape }}">{{ variant.sku | default: 'Option' }}{% if variant.price != nil %} — {{ variant.price | money }}{% endif %}</option>
+                data-variant-available="{{ variant.available_total }}" data-variant-continue="{% if variant.continue_selling or variant.tracked == false %}true{% else %}false{% endif %}"
+                data-variant-label="Option {{ forloop.index }}">Option {{ forloop.index }}</option>
             {%- endfor -%}
           </select>
           </div>
@@ -215,7 +208,6 @@
   #section-{{ section.id }} { --burgundy: #7b1e3a; }
   #section-{{ section.id }} .product__title { font-size: clamp(26px, 4vw, 38px); font-weight: 700; line-height: 1.15; margin: 4px 0 10px; }
   #section-{{ section.id }} .product__divider { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
-  #section-{{ section.id }} .product__variant-label { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
   #section-{{ section.id }} .product__options { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; }
   #section-{{ section.id }} .product__option-name { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   #section-{{ section.id }} .product__main-image { position: relative; overflow: hidden; }
@@ -224,9 +216,11 @@
   #section-{{ section.id }} .product__main-image--zoom-hover.is-zooming img { transform: scale(2); }
   #section-{{ section.id }} .product__main-image--zoom-lightbox { cursor: zoom-in; }
   #section-{{ section.id }} .product__tiers { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 0; }
-  #section-{{ section.id }} .product__tier { display: inline-flex; align-items: center; justify-content: center; min-height: 56px; padding: 0 20px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); font: inherit; font-weight: 600; text-align: center; cursor: pointer; }
+  #section-{{ section.id }} .product__tier { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; max-width: 100%; min-height: 48px; padding: 8px 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); font: inherit; font-weight: 600; line-height: 1.25; text-align: center; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+  #section-{{ section.id }} .product__tier:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
+  #section-{{ section.id }} .product__tier.is-muted { background: #f6f6f6; color: #9a9a9a; text-decoration: line-through; }
   #section-{{ section.id }} .product__tier[aria-checked="true"] { background: #111; border-color: #111; color: #fff; }
-  #section-{{ section.id }} .product__tier.is-muted { opacity: .45; }
+  #section-{{ section.id }} .product__tier.is-muted[aria-checked="true"] { color: #d0d0d0; }
   #section-{{ section.id }} .product__wishlist-form { display: block; width: 100%; margin: 4px 0 16px; }
   #section-{{ section.id }} .product__wishlist-add { display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px; min-height: 48px; border: 1px solid var(--burgundy); border-radius: 10px; background: transparent; color: var(--burgundy); font: inherit; font-weight: 600; cursor: pointer; }
   #section-{{ section.id }} .product__wishlist-add svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
@@ -313,7 +307,6 @@
 
     var add = root.querySelector("[data-add]");
     var qty = root.querySelector("[data-quantity]");
-    var label = root.querySelector("[data-variant-label]");
     var hiddenSelect = root.querySelector("[data-variant]");
     var optionEls = hiddenSelect ? Array.prototype.slice.call(hiddenSelect.options) : [];
 
@@ -334,7 +327,6 @@
           priceBox.appendChild(compare);
         }
       }
-      if (label && option.dataset.variantLabel) label.textContent = option.dataset.variantLabel;
 
       var left = Number(option.dataset.variantAvailable);
       var out = left <= 0 && option.dataset.variantContinue !== "true"; // an option that keeps selling is never sold out
@@ -373,7 +365,7 @@
       for (var i = 0; i < optionEls.length; i++) {
         var matches = true;
         for (var k = 0; k < keys.length; k++) {
-          if (optionEls[i].dataset["opt" + keys[k]] !== sel[keys[k]]) { matches = false; break; }
+          if (optionEls[i].getAttribute("data-opt-" + keys[k]) !== sel[keys[k]]) { matches = false; break; }
         }
         if (matches) return optionEls[i];
       }
