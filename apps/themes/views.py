@@ -3264,6 +3264,7 @@ def storefront_login(request, store_slug):
 
                 response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                 set_storefront_customer_cookie(response, store, user)
+                _drop_foreign_cart_cookie(response, request, store, customer)
                 return _auth_json(request, True, redirect=response["Location"]) or response
 
     if error and (reply := _auth_json(request, False, error=error)):
@@ -3343,6 +3344,7 @@ def storefront_register(request, store_slug):
 
                     response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
+                    _drop_foreign_cart_cookie(response, request, store, customer)
                     return _auth_json(request, True, redirect=response["Location"]) or response
                 else:
                     error = "An account with this email already exists."
@@ -3380,6 +3382,7 @@ def storefront_register(request, store_slug):
 
                     response = HttpResponseRedirect(signed_in_url(store, user, return_to))
                     set_storefront_customer_cookie(response, store, user)
+                    _drop_foreign_cart_cookie(response, request, store, customer)
                     return _auth_json(request, True, redirect=response["Location"]) or response
                 except Exception as e:
                     error = str(e) or "Unable to create account. Please try again."
@@ -3414,6 +3417,17 @@ def storefront_account(request, store_slug):
     return _storefront_response(html, request=request, store=store)
 
 
+def _drop_cart_cookie(response, store):
+    response.delete_cookie(cart_data.cookie_name(store), path=f"{shop_url(store)}/")
+
+
+def _drop_foreign_cart_cookie(response, request, store, customer):
+    """A cart that already belongs to another customer is never handed to the one who just signed in."""
+    cart = cart_data.open_cart(store, cart_data.clean_id(request.COOKIES.get(cart_data.cookie_name(store), "")))
+    if cart is not None and cart.customer_id and customer is not None and cart.customer_id != customer.pk:
+        _drop_cart_cookie(response, store)
+
+
 @xframe_options_exempt
 @csrf_exempt
 def storefront_logout(request, store_slug):
@@ -3422,6 +3436,10 @@ def storefront_logout(request, store_slug):
     base = shop_url(store)
     response = HttpResponseRedirect(f"{base}/account/login")
     clear_storefront_customer_cookie(response, store)
+    # The cart and wishlist follow the cart cookie: forget it, so the next visitor starts empty
+    cart_data.unbind_wishlist(store, request.COOKIES.get(cart_data.cookie_name(store), ""))
+    _drop_cart_cookie(response, store)
+    response["Cache-Control"] = "no-store"
     return response
 
 

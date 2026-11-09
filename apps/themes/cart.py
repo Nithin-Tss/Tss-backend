@@ -126,6 +126,16 @@ def _save_wishlist_row(key, data):
     })
 
 
+def unbind_wishlist(store, cart_id):
+    """Signing out: this cart id no longer points at a customer."""
+    cart_id = clean_id(cart_id)
+    row = Session.objects.filter(session_key=_wishlist_row_key(cart_id)).first() if cart_id else None
+    if row is not None:
+        data = SessionStore().decode(row.session_data)
+        if data.pop(_customer_key(store), None) is not None:
+            _save_wishlist_row(_wishlist_row_key(cart_id), data)
+
+
 def _db_wishlist(store, customer):
     """The wishlist table rows of this customer, as product ids (oldest first)."""
     from apps.wishlist.models import WishlistItem
