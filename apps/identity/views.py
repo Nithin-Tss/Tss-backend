@@ -234,6 +234,8 @@ class RefreshSerializer(serializers.Serializer):
 class RefreshView(PublicAuthView):
     """POST /api/v1/auth/refresh/  {refresh} -> {access, refresh}"""
 
+    throttle_scope = "auth_refresh"  # not the 10/min sign-in limit: a throttled refresh would end the session
+
     def post(self, request):
         serializer = RefreshSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
