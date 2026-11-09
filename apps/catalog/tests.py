@@ -913,8 +913,11 @@ class SoldOutBadgeTests(APITestCase):
         self.assertRegex(self.html(f"products/{few['id']}"), r"data-stock[^>]*>\s*Only a few left")
 
         untracked = self.product("Never stocked", "SO-NONE", None)  # no stock record at all
-        self.assertIn('product-card__badge">Sold out</span>', self.card(self.html("collections/all"), "Never stocked"))
-        self.assertRegex(self.html(f"products/{untracked['id']}"), r"data-add[^>]*\sdisabled>\s*Sold out")
+        # No stock record = not tracked: stock never limits it, so it is not sold out (like Shopify)
+        self.assertNotIn("Sold out", self.card(self.html("collections/all"), "Never stocked"))
+        page = self.html(f"products/{untracked['id']}")
+        self.assertNotRegex(page, r"data-add[^>]*\sdisabled")
+        self.assertRegex(page, r"data-add[^>]*>\s*Add to cart")
 
     def set_low_stock_setting(self, value):
         """The product page's "Only a few left at or below" setting, as the store owner sets it in the customizer."""
@@ -953,11 +956,14 @@ class SoldOutBadgeTests(APITestCase):
 
     def test_an_option_that_keeps_selling_stays_orderable_on_the_product_page(self):
         from apps.catalog.models import ProductVariant
+        from apps.inventory.models import Location
+        from apps.inventory.services import set_available
 
         sold = self.product("Made to order", "SO-MTO", 0)
         ProductVariant.objects.filter(product_id=sold["id"]).update(continue_selling=True)
         # A second option (one that stops at its stock) so the page has the option picker the script works on
-        ProductVariant.objects.create(product_id=sold["id"], sku="SO-MTO-2", price="10.00")
+        second = ProductVariant.objects.create(product_id=sold["id"], sku="SO-MTO-2", price="10.00")
+        set_available(second, Location.objects.get(pk=self.location["id"]), 0)  # tracked, so it does stop at its stock
         plain = self.product("Plain", "SO-PLAIN", 3)
 
         page = self.html(f"products/{sold['id']}")

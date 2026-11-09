@@ -7518,7 +7518,7 @@ class ProductPageStockUpgradeTest(StoreClientMixin, APITestCase):
                 self.store_copy(theme, self.previous_starter_file().replace("\n", newline))
                 services._upgrade_untouched_starter_files(theme)
                 self.assertEqual(self.stored(theme), services.starter_files()[self.PATH])
-                self.assertIn('data-variant-continue="{{ variant.continue_selling }}"', self.stored(theme))
+                self.assertIn('data-variant-continue="{% if variant.continue_selling or variant.tracked == false %}true{% else %}false{% endif %}"', self.stored(theme))
 
     def test_a_store_that_edited_its_copy_keeps_it(self):
         from . import services
@@ -7714,7 +7714,8 @@ class ProductSEOTest(StoreClientMixin, APITestCase):
         self.assertIsNotNone(json_match)
         data = json.loads(json_match.group(1))
         self.assertEqual(data["description"], "A sleek watch with a leather strap. Water resistant to 50m.")
-        self.assertEqual(data["offers"]["availability"], "https://schema.org/OutOfStock")
+        # No inventory rows = not tracked, so it is never sold out
+        self.assertEqual(data["offers"]["availability"], "https://schema.org/InStock")
 
     def test_product_title_not_duplicated_if_brand_already_included(self):
         product = self.ok("post", "/api/v1/catalog/products/", {
