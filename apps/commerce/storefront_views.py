@@ -6,7 +6,7 @@ Public cart and checkout API for shoppers. No sign-in: a cart belongs to the
 /api/v1/storefront/<store_slug>/cart/items/           POST {product, variant?, quantity}
 /api/v1/storefront/<store_slug>/cart/items/<id>/      PATCH {quantity} (0 removes), DELETE removes
 /api/v1/storefront/<store_slug>/checkout/             POST {email?, shipping_address?, billing_address?, discount_code?, gift_card_code?}
-/api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code"/"gift_card_code": "" removes it)
+/api/v1/storefront/<store_slug>/checkout/<id>/        GET, PATCH ("discount_code": "" removes it; "gift_card_code" adds a card, "" removes all; "remove_gift_card": <id> removes one)
 /api/v1/storefront/<store_slug>/checkout/<id>/complete/   POST {payment_method?: "cod"|"gift_card"}: place the order (repeat-safe)
 /api/v1/storefront/<store_slug>/orders/               GET orders placed from this session's carts
 /api/v1/storefront/<store_slug>/orders/<id>/          GET
@@ -20,7 +20,7 @@ from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import BaseThrottle, ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.catalog.models import Product, ProductVariant
@@ -28,6 +28,8 @@ from apps.orders import services as orders_services
 from apps.orders.models import Order
 from apps.orders.serializers import ShopperOrderSerializer
 from apps.tenancy.models import Store
+
+from apps.gift_cards.services import code_attempts
 
 from . import services
 from .models import Checkout
@@ -56,6 +58,10 @@ class StorefrontView(APIView):
         self.store = Store.objects.filter(store_slug=kwargs["store_slug"], status=STORE_ACTIVE).first()
         if self.store is None:
             raise Http404("Store not found.")
+
+    def get_ident(self, request):
+        """The client's address, as the throttles see it (honours the proxy settings)."""
+        return BaseThrottle().get_ident(request)
 
     def session_id(self, request):
         session_id = request.headers.get(SESSION_HEADER)
@@ -119,6 +125,7 @@ class CheckoutInputSerializer(serializers.Serializer):
     billing_address = AddressSerializer(required=False)
     discount_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
     gift_card_code = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    remove_gift_card = serializers.UUIDField(required=False)
 
     def validate_email(self, value):
         # Customers are matched by email, so store it the way the rest of the app does
@@ -176,7 +183,8 @@ class CheckoutStartView(StorefrontView):
     def post(self, request, store_slug):
         data = CheckoutInputSerializer(data=request.data)
         data.is_valid(raise_exception=True)
-        checkout = services.start_checkout(self.cart(request), **data.validated_data)
+        with code_attempts(self.store, self.get_ident(request)):
+            checkout = services.start_checkout(self.cart(request), **data.validated_data)
         return Response(CheckoutSerializer(checkout).data, status=status.HTTP_201_CREATED)
 
 
@@ -198,7 +206,9 @@ class CheckoutDetailView(StorefrontView):
         checkout = self._checkout(request, checkout_id)
         data = CheckoutInputSerializer(data=request.data, partial=True)
         data.is_valid(raise_exception=True)
-        return Response(CheckoutSerializer(services.update_checkout(checkout, **data.validated_data)).data)
+        with code_attempts(self.store, self.get_ident(request)):
+            checkout = services.update_checkout(checkout, **data.validated_data)
+        return Response(CheckoutSerializer(checkout).data)
 
 
 class CheckoutCompleteView(CheckoutDetailView):

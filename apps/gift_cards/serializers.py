@@ -1,12 +1,13 @@
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.core.viewsets import StoreScopedSerializerMixin
 
 from . import currencies
 from .models import GiftCard, GiftCardCurrencySetting, GiftCardTransaction
-from .services import ACTIVE, DISABLED
+from .services import ACTIVE
 
 
 def _money_in_currency(data, code, fields):
@@ -19,6 +20,10 @@ def _money_in_currency(data, code, fields):
 
 class GiftCardTransactionSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by_user.email", default=None, read_only=True)
+    order_number = serializers.SerializerMethodField()
+
+    def get_order_number(self, tx):
+        return tx.order.order_number if tx.order_id else None
 
     def to_representation(self, instance):
         return _money_in_currency(super().to_representation(instance), instance.gift_card.currency_code,
@@ -28,7 +33,7 @@ class GiftCardTransactionSerializer(serializers.ModelSerializer):
         model = GiftCardTransaction
         fields = [
             "id", "transaction_type", "amount", "balance_before", "balance_after",
-            "order", "checkout", "payment", "created_by", "reason", "created_at",
+            "order", "order_number", "checkout", "payment", "created_by", "reason", "created_at",
         ]
         read_only_fields = fields
 
@@ -37,36 +42,48 @@ class GiftCardSerializer(StoreScopedSerializerMixin, serializers.ModelSerializer
     """
     The code is never exposed here: `code_last4` is all list/retrieve/export ever show. The full
     code is only returned once, by GiftCardViewSet.create(), straight after it is generated.
+
+    Only the expiry date and the customer can be edited. The balance moves only through orders and
+    refunds, and a card is deactivated through /deactivate/ (permanent), never by writing `status`.
     """
 
-    status = serializers.ChoiceField(choices=(ACTIVE, DISABLED), default=ACTIVE)
     transactions = GiftCardTransactionSerializer(many=True, read_only=True)
+    note = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    customer_email = serializers.CharField(source="customer.email", default=None, read_only=True)
 
     class Meta:
         model = GiftCard
         fields = [
             "id", "code_last4", "initial_balance", "current_balance", "currency_code", "status",
-            "customer", "expires_at", "transactions", "created_at", "updated_at",
+            "customer", "customer_email", "expires_at", "note", "is_expired", "transactions",
+            "created_at", "updated_at",
         ]
-        read_only_fields = ["code_last4", "current_balance"]
-        extra_kwargs = {
-            "initial_balance": {"min_value": 1},
-            "currency_code": {"required": False},
-        }
+        read_only_fields = ["code_last4", "initial_balance", "current_balance", "currency_code", "status"]
+
+    def get_note(self, card):
+        """The note typed when staff issued the card (kept on its first history line)."""
+        first = min(card.transactions.all(), key=lambda t: t.created_at, default=None)
+        if first is None or first.order_id or first.created_by_user_id is None:
+            return None
+        return first.reason
+
+    def get_is_expired(self, card):
+        return bool(card.expires_at and card.expires_at <= timezone.now())
 
     def to_representation(self, instance):
-        return _money_in_currency(super().to_representation(instance), instance.currency_code,
-                                  ("initial_balance", "current_balance"))
+        data = super().to_representation(instance)
+        data["transactions"] = sorted(data["transactions"], key=lambda t: t["created_at"], reverse=True)
+        return _money_in_currency(data, instance.currency_code, ("initial_balance", "current_balance"))
 
-    def validate_currency_code(self, value):
-        return currencies.validate_code(value)
+    def validate_expires_at(self, value):
+        if value is not None and value <= timezone.now():
+            raise serializers.ValidationError("The expiry date must be in the future.")
+        return value
 
     def validate(self, data):
-        if not self.instance:
-            data.setdefault("currency_code", currencies.DEFAULT_CURRENCY)
-        # The value of an issued card can't be rewritten; use /adjust/ instead.
-        if self.instance and "initial_balance" in data and data["initial_balance"] != self.instance.initial_balance:
-            raise serializers.ValidationError({"initial_balance": "Can't be changed after the card is issued."})
+        if self.instance and self.instance.status != ACTIVE:
+            raise serializers.ValidationError("A deactivated gift card can't be edited.")
         return data
 
 
@@ -91,16 +108,6 @@ class GiftCardCurrencySettingSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Amounts must be greater than 0.")
             cleaned.append(str(amount))
         return cleaned
-
-
-class AdjustSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=14, decimal_places=3)
-    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
-
-    def validate_amount(self, value):
-        if value == 0:
-            raise serializers.ValidationError("Must not be 0.")
-        return value
 
 
 class CreateGiftCardSerializer(serializers.Serializer):

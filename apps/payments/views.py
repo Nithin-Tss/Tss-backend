@@ -76,5 +76,8 @@ class PaymentViewSet(
     def refund(self, request, pk=None):
         data = RefundSerializer(data=request.data)
         data.is_valid(raise_exception=True)
-        payment = services.refund(self.get_object(), data.validated_data["amount"], data.validated_data.get("reason"))
+        payment = services.refund(
+            self.get_object(), data.validated_data["amount"], data.validated_data.get("reason"),
+            destination=data.validated_data.get("destination"), user=request.user,
+        )
         return Response(PaymentSerializer(self.get_queryset().get(pk=payment.pk)).data)

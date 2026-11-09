@@ -274,7 +274,8 @@ def cart_subtotal(cart):
 
 
 @transaction.atomic
-def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None, gift_card_code=None):
+def start_checkout(cart, email=None, shipping_address=None, billing_address=None, discount_code=None, gift_card_code=None,
+                   remove_gift_card=None):
     """Freeze the cart's lines into a checkout. Reuses the cart's open checkout."""
     cart = _open_cart(cart)
     refresh_prices(cart)
@@ -333,6 +334,7 @@ def start_checkout(cart, email=None, shipping_address=None, billing_address=None
     return update_checkout(
         checkout, email=email, shipping_address=shipping_address,
         billing_address=billing_address, discount_code=discount_code, gift_card_code=gift_card_code,
+        remove_gift_card=remove_gift_card,
     )
 
 
@@ -360,68 +362,117 @@ def _price_discount(checkout, new_code):
     checkout.metadata = metadata
 
 
-def _price_gift_card(checkout, new_code):
+def _applied_card_ids(checkout):
+    """Ids of the gift cards applied to this checkout, in the order the shopper added them."""
+    metadata = checkout.metadata or {}
+    ids = [str(i) for i in (metadata.get("gift_cards") or [])]
+    legacy = metadata.get("gift_card_id")  # checkouts from before several cards were allowed
+    if legacy and str(legacy) not in ids:
+        ids.append(str(legacy))
+    return ids
+
+
+def _sells_gift_card(checkout):
+    return checkout.items.filter(is_deleted=False, product__product_type="gift_card").exists()
+
+
+def _price_gift_card(checkout, new_code, remove=None):
     """
-    Keep checkout.gift_card_amount in step with the applied card's live balance and the order
-    total (set just before this runs). Only one gift card may be applied at a time; applying a
-    new code replaces whichever one was there. "" removes it.
+    Keep checkout.gift_card_amount in step with the applied cards' live balances and the order
+    total (set just before this runs). Cards pay in the order they were added, each taking
+    min(its balance, what is still due), so several can be applied and a discount code, which is
+    already in the total, always comes first. Called on every change to the checkout, so a total
+    that moves (shipping, tax, a new discount) re-spreads the cards automatically.
+
+    new_code: a code to add; "" removes every card; None leaves the set alone (just re-prices).
+    remove: the id of one applied card to take off.
     """
     from apps.gift_cards import services as gift_cards
+    from apps.gift_cards.models import GiftCard
 
     metadata = dict(checkout.metadata or {})
-    code = metadata.get("gift_card_code") if new_code is None else (new_code or "").strip()
+    ids = _applied_card_ids(checkout)
+    for key in ("gift_card_code", "gift_card_id"):  # single-card keys of the old format
+        metadata.pop(key, None)
 
-    def clear():
-        metadata.pop("gift_card_code", None)
-        metadata.pop("gift_card_id", None)
-        checkout.gift_card_amount = ZERO
+    if new_code is not None and not new_code.strip():
+        ids = []
+    if remove:
+        ids = [i for i in ids if i != str(remove)]
 
-    if not code:
-        clear()
-        checkout.metadata = metadata
-        return
+    sells_gift_card = _sells_gift_card(checkout)
+    added_id = None
+    if new_code and new_code.strip():
+        if sells_gift_card:
+            raise ValidationError({"gift_card_code": "A gift card can't be used to buy a gift card."})
+        card = gift_cards.get_by_code(checkout.store, new_code)
+        if card is None:
+            raise ValidationError({"gift_card_code": "We couldn't find a gift card with that code."})
+        problem = gift_cards.problem_with_card(card, checkout.currency)
+        if problem:
+            raise ValidationError({"gift_card_code": problem})
+        if str(card.pk) in ids:
+            raise ValidationError({"gift_card_code": "This gift card is already applied."})
+        ids.append(str(card.pk))
+        added_id = str(card.pk)
 
-    card = gift_cards.get_by_code(checkout.store, code)
-    problem = None
-    if card is None:
-        problem = "We couldn't find a gift card with that code."
-    elif card.status != gift_cards.ACTIVE:
-        problem = "This gift card is disabled."
-    elif card.expires_at and card.expires_at <= timezone.now():
-        problem = "This gift card has expired."
-    elif card.currency_code != checkout.currency:
-        problem = f"This gift card is in {card.currency_code}; this order is in {checkout.currency}."
-    elif card.current_balance <= ZERO:
-        problem = "This gift card has no balance left."
+    cards = {str(c.pk): c for c in GiftCard.objects.filter(store=checkout.store, pk__in=ids, is_deleted=False)}
+    remaining, lines = checkout.total_amount, []
+    for card_id in ids:
+        card = cards.get(card_id)
+        # A card that no longer qualifies (expired meanwhile, spent elsewhere, a gift card now in the cart)
+        # is dropped when re-pricing; it was only refused outright above, when the shopper just typed it.
+        if card is None or sells_gift_card or gift_cards.problem_with_card(card, checkout.currency):
+            continue
+        use = min(_money(card.current_balance), remaining)
+        if use <= ZERO:
+            if card_id == added_id:
+                raise ValidationError({"gift_card_code": "Your order is already fully covered."})
+            continue
+        lines.append({"id": card_id, "amount": str(use)})
+        remaining -= use
 
-    if problem:
-        if new_code is None:
-            # Re-pricing an existing checkout: a code that no longer qualifies is dropped, not an error
-            clear()
-            checkout.metadata = metadata
-            return
-        raise ValidationError({"gift_card_code": problem})
-
-    checkout.gift_card_amount = min(_money(card.current_balance), checkout.total_amount)
-    metadata["gift_card_code"] = code.strip().upper()
-    metadata["gift_card_id"] = str(card.pk)
+    checkout.gift_card_amount = sum((Decimal(l["amount"]) for l in lines), ZERO)
+    if lines:
+        metadata["gift_cards"] = [l["id"] for l in lines]
+        metadata["gift_card_lines"] = lines
+    else:
+        metadata.pop("gift_cards", None)
+        metadata.pop("gift_card_lines", None)
     checkout.metadata = metadata
 
 
 def amount_due(checkout):
-    """What is actually charged online or taken cash-on-delivery, after a redeemed gift card."""
+    """What is actually charged online or taken cash-on-delivery, after redeemed gift cards."""
     return max(checkout.total_amount - (checkout.gift_card_amount or ZERO), ZERO)
 
 
-def gift_card_last4(checkout):
-    """The last 4 characters of the applied gift card, for "Gift card •••• 1234"; None if none applied."""
-    gift_card_id = (checkout.metadata or {}).get("gift_card_id")
-    if not gift_card_id:
-        return None
+def gift_card_lines(checkout):
+    """
+    The applied cards for display: [{"id", "last4", "amount", "remaining"}], "amount" being what
+    this order takes from the card and "remaining" what the card will have left afterwards.
+    """
     from apps.gift_cards.models import GiftCard
 
-    card = GiftCard.objects.filter(pk=gift_card_id, store=checkout.store).first()
-    return card.code_last4 if card else None
+    lines = (checkout.metadata or {}).get("gift_card_lines") or []
+    cards = {str(c.pk): c for c in GiftCard.objects.filter(pk__in=[l["id"] for l in lines], store=checkout.store)}
+    result = []
+    for line in lines:
+        card = cards.get(line["id"])
+        if card is None:
+            continue
+        amount = Decimal(line["amount"])
+        result.append({
+            "id": line["id"], "last4": card.code_last4, "amount": str(amount),
+            "remaining": str(max(_money(card.current_balance) - amount, ZERO)),
+        })
+    return result
+
+
+def gift_card_last4(checkout):
+    """The last 4 characters of the (first) applied gift card, or None; see gift_card_lines for all of them."""
+    lines = gift_card_lines(checkout)
+    return lines[0]["last4"] if lines else None
 
 
 def resolve_checkout_code(store, code):
@@ -510,10 +561,13 @@ def _cart_weight(items):
 @transaction.atomic
 def update_checkout(
     checkout, email=None, shipping_address=None, billing_address=None, discount_code=None, gift_card_code=None,
+    remove_gift_card=None,
 ):
     """Contact, addresses, discount code and gift card code; totals are recomputed from the lines.
 
-    discount_code / gift_card_code: a code to apply, or "" to remove the applied one.
+    discount_code: a code to apply, or "" to remove the applied one.
+    gift_card_code: a card's code to add (several may be applied), or "" to remove them all;
+    remove_gift_card: the id of one applied card to remove.
     """
     checkout = Checkout.objects.select_for_update().get(pk=checkout.pk)
 
@@ -542,7 +596,7 @@ def update_checkout(
     checkout.total_amount = tax_rules.grand_total(
         checkout.store, checkout.subtotal, checkout.discount_amount, checkout.tax_amount, checkout.shipping_amount
     )
-    _price_gift_card(checkout, gift_card_code)
+    _price_gift_card(checkout, gift_card_code, remove=remove_gift_card)
     checkout.save()
     return checkout
 
@@ -607,7 +661,7 @@ def reprice_checkout(checkout):
     if checkout.status != CHECKOUT_OPEN:
         return False
 
-    before = checkout.total_amount
+    before = (checkout.total_amount, checkout.gift_card_amount)
     for item in checkout.items.filter(is_deleted=False).select_related("variant"):
         if item.variant is None:
             continue
@@ -616,7 +670,8 @@ def reprice_checkout(checkout):
             item.unit_price = current
             item.total_price = current * item.quantity
             item.save(update_fields=["unit_price", "total_price", "updated_at"])
-    return update_checkout(checkout).total_amount != before
+    updated = update_checkout(checkout)
+    return (updated.total_amount, updated.gift_card_amount) != before
 
 
 def place_order(checkout, payment_method="cod"):
@@ -628,6 +683,53 @@ def place_order(checkout, payment_method="cod"):
     if reprice_checkout(checkout):
         raise ValidationError({"total": "Prices or charges changed. Please review your order and confirm again."})
     return _place_order(checkout, payment_method)
+
+
+def _redeem_gift_cards(checkout, order):
+    """
+    Take each applied card's share of the order. The cards are locked in a fixed (id) order, so two
+    checkouts using the same cards can't deadlock, and each balance is re-checked under its lock:
+    a card spent by another checkout since this one was priced makes this order fail whole (the
+    surrounding transaction rolls the order back) instead of letting the balance go negative.
+    """
+    from apps.gift_cards import services as gift_cards
+    from apps.gift_cards.models import GiftCard
+
+    lines = (checkout.metadata or {}).get("gift_card_lines") or []
+    locked = {
+        str(c.pk): c
+        for c in GiftCard.objects.select_for_update().filter(
+            pk__in=[l["id"] for l in lines], store=checkout.store
+        ).order_by("pk")
+    }
+    for line in lines:
+        card, amount = locked.get(line["id"]), Decimal(line["amount"])
+        if card is None:
+            raise ValidationError({"gift_card_code": "A gift card on this order no longer exists."})
+        problem = gift_cards.problem_with_card(card, checkout.currency)
+        if problem:
+            raise ValidationError({"gift_card_code": f"Gift card ••••{card.code_last4}: {problem}"})
+        # The Payment comes first so the debit can point back at it: a refund of this Payment
+        # looks up its gift card debit by this link (see apps.payments.services.refund).
+        payment = payments.record_payment(checkout.store, order, amount, provider="gift_card")
+        try:
+            gift_cards.change_balance(
+                card, -amount, kind="debit", order=order, payment=payment, reason="Redeemed at checkout"
+            )
+        except ValidationError as exc:
+            raise ValidationError({
+                "gift_card_code": f"Gift card ••••{card.code_last4} changed while you were checking out "
+                                  f"({_first_text(exc.detail)}). Please review your order."
+            })
+
+
+def _first_text(detail):
+    while isinstance(detail, (list, tuple)) and detail:
+        detail = detail[0]
+    if isinstance(detail, dict):
+        detail = next(iter(detail.values()), "")
+        return _first_text(detail)
+    return str(detail)
 
 
 @transaction.atomic
@@ -716,28 +818,16 @@ def _place_order(checkout, payment_method, payment_reference=None):
             is_deleted=False,
         )
 
-    # A redeemed gift card is debited here, once the order has committed to its final total, and
-    # pays for its share before anything else does.
+    # Redeemed gift cards are debited here, once the order has committed to its final total, and
+    # pay their share before anything else does. Each card gets its own Payment so a later refund
+    # can go back to exactly that card.
     gift_card_amount = checkout.gift_card_amount or ZERO
     due = max(order.total - gift_card_amount, ZERO)
     if payment_method == "gift_card" and due > ZERO:
-        raise ValidationError({"payment_method": f"The gift card doesn't cover the full total; {due} is still due."})
+        raise ValidationError({"payment_method": f"The gift cards don't cover the full total; {due} is still due."})
 
     if gift_card_amount > ZERO:
-        from apps.gift_cards import services as gift_cards
-        from apps.gift_cards.models import GiftCard
-
-        card = GiftCard.objects.select_for_update().get(
-            pk=(checkout.metadata or {}).get("gift_card_id"), store=checkout.store
-        )
-        if card.currency_code != checkout.currency:
-            raise ValidationError({"gift_card_code": "This gift card's currency no longer matches this order."})
-        # The Payment comes first so the debit can point back at it: a refund of this Payment
-        # looks up its gift card debits by this link (see apps.payments.services.refund).
-        gift_card_payment = payments.record_payment(checkout.store, order, gift_card_amount, provider="gift_card")
-        gift_cards.change_balance(
-            card, -gift_card_amount, kind="debit", order=order, payment=gift_card_payment, reason="Redeemed at checkout"
-        )
+        _redeem_gift_cards(checkout, order)
 
     if online:
         if due > ZERO:

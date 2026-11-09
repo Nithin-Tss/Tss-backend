@@ -98,7 +98,11 @@ class OrderViewSet(
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        order = services.cancel_order(self.get_object(), user=request.user)
+        """{refund_destinations?: {<payment id>: "gift_card" | "original" | "later"}}: where each payment's money goes."""
+        destinations = request.data.get("refund_destinations") or {}
+        if not isinstance(destinations, dict):
+            raise ValidationError({"refund_destinations": "Must be an object of payment id to destination."})
+        order = services.cancel_order(self.get_object(), user=request.user, refund_destinations=destinations)
         return Response(OrderSerializer(order).data)
 
     @action(detail=True, methods=["post"], url_path="return")

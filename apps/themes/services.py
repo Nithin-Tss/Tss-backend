@@ -108,6 +108,8 @@ STARTER_UPGRADES = {
     },
     # Revision 55: the checkout's discount field is also a gift card field ("Discount code or gift card")
     "sections/main-checkout.liquid": {
+        "c8540f4e04bfc2339c9bc8dc236c3d47977ef2afc3ef4303f2ca87b53734e88f",  # revision 56: before several gift cards could be applied (CRLF)
+        "038b297820da93deb8527d796939459fe5dbcc14c29b9ac4a713537353bbf84b",  # revision 56: before several gift cards could be applied
         "5356cdde411cfc16dae67f8d314f29ba5407a9c3cdc028e083164889adaba80b",  # revision 55: before the gift card field
         "6d7f6dbc44adfb06e5d3f35bf9b4ae58912003cb3b7ad0db74fc47af8cb75bb4",  # revision 55: same, with CRLF line endings
     },

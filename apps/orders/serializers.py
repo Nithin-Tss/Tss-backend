@@ -315,6 +315,11 @@ class OrderSerializer(serializers.ModelSerializer):
             for p in order.payments.all():
                 p_time = p.created_at.isoformat() if p.created_at else created_at_str
                 provider_name = (p.provider or "Shop Pay").title()
+                if p.provider == "gift_card":
+                    from apps.payments.serializers import gift_card_summary
+
+                    summary = gift_card_summary(p)
+                    provider_name = f"gift card ••••{summary['last4']}" if summary else "a gift card"
                 if p.status in ("captured", "paid"):
                     events.append({
                         "id": f"pay_{p.id}",
@@ -332,10 +337,12 @@ class OrderSerializer(serializers.ModelSerializer):
                 for t in p.transactions.all():
                     t_time = t.created_at.isoformat() if t.created_at else p_time
                     if t.transaction_type == "refund" and t.status == "success":
+                        t_meta = t.metadata or {}
+                        to_card = f" to gift card ••••{t_meta['gift_card_last4']}" if t_meta.get("gift_card_last4") else ""
                         events.append({
                             "id": f"ref_{t.id}",
                             "type": "refund_processed",
-                            "title": f"A {order.currency_code} {t.amount} refund was processed. {f'Reason: {t.reason}' if t.reason else ''}".strip(),
+                            "title": f"A {order.currency_code} {t.amount} refund was processed{to_card}. {f'Reason: {t.reason}' if t.reason else ''}".strip(),
                             "timestamp": t_time,
                         })
 

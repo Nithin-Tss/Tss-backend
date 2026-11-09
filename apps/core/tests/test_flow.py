@@ -155,10 +155,10 @@ class OrderJourneyTest(StoreClientMixin, APITestCase):
         # gift cards: issue, spend, can't overspend
         card = self.ok("post", "/api/v1/gift-cards/", {"initial_balance": "500"}, expect=201)
         self.assertRegex(card["code"], r"^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$")
-        card = self.ok("post", f"/api/v1/gift-cards/{card['id']}/adjust/", {"amount": "-200"})
-        self.assertEqual(card["current_balance"], "300.00")
-        self.ok("post", f"/api/v1/gift-cards/{card['id']}/adjust/", {"amount": "-301"}, expect=400)
-        self.ok("post", f"/api/v1/gift-cards/{card['id']}/adjust/", {"amount": "201"}, expect=400)
+        # staff can't type a balance: the old /adjust/ is gone and the value fields ignore writes
+        self.ok("post", f"/api/v1/gift-cards/{card['id']}/adjust/", {"amount": "-200"}, expect=404)
+        card = self.ok("patch", f"/api/v1/gift-cards/{card['id']}/", {"current_balance": "1"})
+        self.assertEqual(card["current_balance"], "500.00")
 
         # wishlist
         wishlist = self.ok("post", "/api/v1/wishlists/", {"customer": customer["id"], "name": "Birthday"}, expect=201)

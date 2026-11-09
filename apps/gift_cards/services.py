@@ -71,14 +71,90 @@ def generate_code(store):
             }
 
 
+def normalize_code(raw_code):
+    """Case-insensitive, spaces ignored; a 16-character code typed without its dashes still matches."""
+    code = "".join((raw_code or "").split()).upper()
+    if code and "-" not in code and len(code) == 16:
+        code = "-".join(code[i:i + 4] for i in range(0, 16, 4))
+    return code
+
+
 def get_by_code(store, raw_code):
-    """Look up an active gift card by the code a customer typed in, or None."""
-    raw_code = (raw_code or "").strip().upper()
+    """Look up a gift card of this store by the code a customer typed in, or None."""
+    raw_code = normalize_code(raw_code)
     if not raw_code:
         return None
     return GiftCard.objects.filter(
         store=store, code_hash=_lookup_hash(store.pk, raw_code), is_deleted=False
     ).first()
+
+
+def problem_with_card(card, currency):
+    """Why this card can't pay an order in `currency` right now (a message for the shopper), or None."""
+    if card.status != ACTIVE:
+        return "This gift card has been deactivated."
+    if card.expires_at and card.expires_at <= timezone.now():
+        return "This gift card has expired."
+    if card.currency_code != currency:
+        return f"This gift card is in {card.currency_code}; this order is in {currency}."
+    if card.current_balance <= 0:
+        return "This gift card has no balance left."
+    return None
+
+
+# -- Wrong-code rate limit -----------------------------------------------------------------------
+# Counted per store and client address in the shared cache (Redis in production), so guessing codes
+# is slow whichever endpoint the guesses come through. A correct code resets nothing on purpose:
+# only time does, so a guesser can't interleave one known good code to keep going.
+
+MAX_WRONG_CODES = 10
+WRONG_CODE_WINDOW = 15 * 60  # seconds
+
+
+def _attempts_key(store, ident):
+    return f"gift-card-wrong-codes:{store.pk}:{ident}"
+
+
+def check_code_attempts(store, ident):
+    from django.core.cache import cache
+    from rest_framework.exceptions import Throttled
+
+    if ident and (cache.get(_attempts_key(store, ident)) or 0) >= MAX_WRONG_CODES:
+        raise Throttled(detail="Too many incorrect codes. Please wait a few minutes and try again.")
+
+
+def record_wrong_code(store, ident):
+    from django.core.cache import cache
+
+    if not ident:
+        return
+    key = _attempts_key(store, ident)
+    cache.add(key, 0, WRONG_CODE_WINDOW)
+    try:
+        cache.incr(key)
+    except ValueError:  # expired between add and incr
+        cache.set(key, 1, WRONG_CODE_WINDOW)
+
+
+class code_attempts:
+    """
+    `with code_attempts(store, ident):` around applying a code. Refuses at once when this client
+    has already got too many wrong ones, and counts a new wrong one when the block raises a
+    validation error about the code (as opposed to, say, an empty cart).
+    """
+
+    def __init__(self, store, ident):
+        self.store, self.ident = store, ident
+
+    def __enter__(self):
+        check_code_attempts(self.store, self.ident)
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc is not None and isinstance(exc, ValidationError):
+            detail = exc.detail
+            if isinstance(detail, dict) and ({"code", "gift_card_code"} & set(detail)):
+                record_wrong_code(self.store, self.ident)
+        return False
 
 
 def reveal_code(card):
@@ -238,7 +314,7 @@ def deactivate(card, user=None, reason=None):
     return card
 
 
-def refund_payment_amount(payment, amount):
+def refund_payment_amount(payment, amount, user=None):
     """
     A gift-card-provider Payment was refunded by `amount`: credit that much back to the card(s)
     it paid, split across them in proportion to what each one covered (the common case is one
@@ -251,11 +327,40 @@ def refund_payment_amount(payment, amount):
     if total_debited <= 0:
         logger.warning("Gift card payment %s refunded but no debit is on record to credit back", payment.pk)
         return
+    # Checked before anything moves, so a card that can't take the money stops the whole refund
+    for debit in debits:
+        check_can_receive_refund(debit.gift_card)
     amount = Decimal(str(amount))
     remaining = amount
     for i, debit in enumerate(debits):
         share = amount if i == len(debits) - 1 else (-debit.amount / total_debited * amount).quantize(Decimal("0.001"))
         share = min(share, remaining, -debit.amount)
         if share > 0:
-            change_balance(debit.gift_card, share, kind="credit", payment=payment, reason="Refunded")
+            change_balance(
+                debit.gift_card, share, kind="credit", payment=payment,
+                order=debit.order, reason="Refunded", user=user,
+            )
             remaining -= share
+
+
+def check_can_receive_refund(card):
+    """A deactivated card never takes money back; an expired one needs a new expiry date first."""
+    if card.status != ACTIVE:
+        raise ValidationError(
+            {"gift_card": f"Gift card ••••{card.code_last4} is deactivated and can't receive a refund. "
+                          "Refund to another destination, or choose \"later\"."}
+        )
+    if card.expires_at and card.expires_at <= timezone.now():
+        raise ValidationError(
+            {"gift_card": f"Gift card ••••{card.code_last4} has expired. Set a new expiry date on the card "
+                          "before refunding to it."}
+        )
+
+
+def card_for_payment(payment):
+    """The gift card a gift-card Payment was spent from (one Payment per card), or None."""
+    debit = (
+        GiftCardTransaction.objects.filter(payment=payment, transaction_type="debit")
+        .select_related("gift_card").order_by("created_at").first()
+    )
+    return debit.gift_card if debit else None

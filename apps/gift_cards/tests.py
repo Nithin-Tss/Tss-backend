@@ -367,16 +367,9 @@ class GiftCardRedemptionTests(StoreClientMixin, APITestCase):
         cart = commerce.get_or_create_cart(self.store, session_id="g" * 24)
         commerce.add_item(cart, gift_card_product, 1)
         checkout = commerce.start_checkout(cart, email="buyer@example.com")
-        checkout = commerce.update_checkout(
-            checkout,
-            shipping_address={
-                "first_name": "A", "last_name": "B", "address_line_1": "1 Test St", "city": "Sydney",
-                "state": "NSW", "postal_code": "2000", "country": "Australia",
-            },
-            gift_card_code=raw_code,
-        )
+        # Refused as soon as the code is typed, not only when the order is placed
         with self.assertRaises(DRFValidationError) as exc:
-            commerce._place_order(checkout, "stripe", payment_reference="pi_test")
+            commerce.update_checkout(checkout, gift_card_code=raw_code)
         self.assertIn("gift_card_code", exc.exception.detail)
 
     def test_cash_on_delivery_is_refused_for_a_gift_card_purchase(self):

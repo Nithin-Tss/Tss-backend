@@ -543,9 +543,9 @@
       <div class="checkout-confirmation__details">
         <div><strong>Shipping address:</strong> {{ order.shipping_address.first_name }} {{ order.shipping_address.last_name }}, {{ order.shipping_address.address1 }}, {{ order.shipping_address.city }} {{ order.shipping_address.postal_code }}</div>
         <div><strong>Payment method:</strong> {{ order.payment_method | default: 'Cash on Delivery' | upcase }}</div>
-        {%- if order.gift_card_last4 -%}
-          <div><strong>Gift card &bull;&bull;&bull;&bull; {{ order.gift_card_last4 }}:</strong> -{{ cur }}{{ order.gift_card_amount }}</div>
-        {%- endif -%}
+        {%- for card in order.gift_cards -%}
+          <div><strong>Gift card &bull;&bull;&bull;&bull; {{ card.last4 }}:</strong> -{{ cur }}{{ card.amount }}</div>
+        {%- endfor -%}
         <div><strong>Total paid:</strong> {{ cur }}{{ order.total }}</div>
       </div>
 
@@ -784,10 +784,7 @@
                 <span>Discount (<strong id="discount-badge-code"></strong>): -{{ cur }}<span id="discount-badge-amount">0.00</span></span>
                 <button type="button" class="checkout-discount-remove" id="discount-remove-btn">&times;</button>
               </div>
-              <div id="gift-card-badge" class="checkout-discount-applied" style="display: none;">
-                <span>Gift card &bull;&bull;&bull;&bull; <strong id="gift-card-badge-last4"></strong>: -{{ cur }}<span id="gift-card-badge-amount">0.00</span></span>
-                <button type="button" class="checkout-discount-remove" id="gift-card-remove-btn">&times;</button>
-              </div>
+              <div id="gift-card-list"></div>
             {%- endif -%}
 
             <div class="checkout-totals-row">
@@ -860,11 +857,7 @@
   var discountRemoveBtn = document.getElementById('discount-remove-btn');
   var hiddenDiscount = document.getElementById('hidden_discount_code');
 
-  var giftCardBadge = document.getElementById('gift-card-badge');
-  var giftCardBadgeLast4 = document.getElementById('gift-card-badge-last4');
-  var giftCardBadgeAmount = document.getElementById('gift-card-badge-amount');
-  var giftCardRemoveBtn = document.getElementById('gift-card-remove-btn');
-  var hiddenGiftCard = document.getElementById('hidden_gift_card_code');
+  var giftCardList = document.getElementById('gift-card-list');
 
   var subtotalEl = document.getElementById('summary-subtotal');
   var discountRow = document.getElementById('summary-discount-row');
@@ -878,7 +871,6 @@
   var totalEl = document.getElementById('summary-grand-total');
 
   var currentDiscount = '';
-  var currentGiftCardCode = '';
   var currency = '{{ cur }}';
 
   // Shared by apply and remove: paint whatever the server says is applied right now.
@@ -891,14 +883,33 @@
     if (discountRow) discountRow.style.display = Number(data.discount_amount) > 0 ? 'flex' : 'none';
     if (discountAmtEl) discountAmtEl.textContent = data.discount_amount || '0.00';
 
-    var hasGiftCard = !!data.gift_card_last4;
-    currentGiftCardCode = hasGiftCard ? (hiddenGiftCard ? hiddenGiftCard.value : currentGiftCardCode) : '';
-    if (giftCardBadge) giftCardBadge.style.display = hasGiftCard ? 'flex' : 'none';
-    if (hasGiftCard && giftCardBadgeLast4) giftCardBadgeLast4.textContent = data.gift_card_last4;
-    if (hasGiftCard && giftCardBadgeAmount) giftCardBadgeAmount.textContent = data.gift_card_amount || '0.00';
+    // One line per applied gift card: "Gift card ••••1234  -X", a remove button, and what is left on it
+    if (giftCardList) {
+      giftCardList.textContent = '';
+      (data.gift_cards || []).forEach(function(card) {
+        var line = document.createElement('div');
+        line.className = 'checkout-discount-applied';
+        line.style.display = 'flex';
+        line.style.flexWrap = 'wrap';
+        var label = document.createElement('span');
+        label.textContent = 'Gift card ••••' + card.last4 + ':  -' + currency + card.amount;
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'checkout-discount-remove';
+        remove.setAttribute('data-gift-card-id', card.id);
+        remove.setAttribute('aria-label', 'Remove gift card ' + card.last4);
+        remove.innerHTML = '&times;';
+        var left = document.createElement('div');
+        left.style.cssText = 'flex-basis:100%;font-size:12px;opacity:.75';
+        left.textContent = 'Remaining balance on card: ' + currency + card.remaining;
+        line.appendChild(label);
+        line.appendChild(remove);
+        line.appendChild(left);
+        giftCardList.appendChild(line);
+      });
+    }
     if (giftCardRow) giftCardRow.style.display = Number(data.gift_card_amount) > 0 ? 'flex' : 'none';
     if (giftCardAmtEl) giftCardAmtEl.textContent = data.gift_card_amount || '0.00';
-    if (!hasGiftCard && hiddenGiftCard) hiddenGiftCard.value = '';
 
     var dueNow = Number(data.amount_due != null ? data.amount_due : data.total_amount);
     if (amountDueRow) amountDueRow.style.display = Number(data.gift_card_amount) > 0 ? 'flex' : 'none';
@@ -967,7 +978,7 @@
   });
 
   function showAlert(msg) {
-    if (!alertBox || !alertMsg) return;
+    if (!alertBox || !alertMsg) { window.alert(msg); return; }
     alertMsg.textContent = msg;
     alertBox.style.display = 'flex';
     alertBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1045,13 +1056,6 @@
       postCode({ action: 'apply_discount', code: code })
         .then(function(data) {
           renderCodeResult(data);
-          // Which kind this particular code was: the discount code now matches it only when it
-          // was a discount; otherwise, if a gift card is now applied, this code was the gift card.
-          var wasDiscount = data.discount_code && data.discount_code.toUpperCase() === code.toUpperCase();
-          if (!wasDiscount && data.gift_card_last4) {
-            currentGiftCardCode = code;
-            if (hiddenGiftCard) hiddenGiftCard.value = code;
-          }
           discountInput.value = '';
         })
         .catch(function(err) { showAlert(err.message || 'That code is not valid.'); })
@@ -1065,18 +1069,25 @@
       e.preventDefault();
       postCode({ action: 'apply_discount', discount_code: '' })
         .then(renderCodeResult)
-        .catch(function() {});
+        .catch(function(err) { showAlert(err.message || 'Could not remove that discount.'); });
     });
   }
 
-  // Remove the applied gift card only; a discount, if also applied, is left alone
-  if (giftCardRemoveBtn) {
-    giftCardRemoveBtn.addEventListener('click', function(e) {
+  // Remove one gift card (the others, and any discount, stay applied; the total is spread again)
+  if (giftCardList) {
+    giftCardList.addEventListener('click', function(e) {
+      var btn = e.target.closest ? e.target.closest('[data-gift-card-id]') : null;
+      if (!btn) return;
       e.preventDefault();
-      postCode({ action: 'apply_discount', gift_card_code: '' })
+      postCode({ action: 'apply_discount', remove_gift_card: btn.getAttribute('data-gift-card-id') })
         .then(renderCodeResult)
-        .catch(function() {});
+        .catch(function(err) { showAlert(err.message || 'Could not remove that gift card.'); });
     });
+  }
+
+  // Cards already on this checkout (a reload keeps them) are painted straight away, so what is shown is what is charged
+  if (giftCardList && session) {
+    postCode({ action: 'apply_discount' }).then(renderCodeResult).catch(function() {});
   }
 
   // Handle Order Placement
@@ -1118,8 +1129,7 @@
         phone: form.phone ? form.phone.value.trim() : '',
         payment_method: form.payment_method ? form.payment_method.value : 'cod',
         notes: form.notes ? form.notes.value.trim() : '',
-        discount_code: currentDiscount,
-        gift_card_code: currentGiftCardCode
+        discount_code: currentDiscount
       };
 
       if (submitBtn) {

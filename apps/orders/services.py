@@ -217,7 +217,7 @@ def create_order(
 
 
 @transaction.atomic
-def cancel_order(order, user=None, refuse_if_paid=False):
+def cancel_order(order, user=None, refuse_if_paid=False, refund_destinations=None):
     order = Order.objects.select_for_update().get(pk=order.pk)
 
     if order.status == CANCELLED:
@@ -236,7 +236,7 @@ def cancel_order(order, user=None, refuse_if_paid=False):
         from apps.payments import services as payments
 
         try:
-            payments.refund_unrefunded(order, "Order cancelled")
+            payments.refund_unrefunded(order, "Order cancelled", destinations=refund_destinations, user=user)
         except ValidationError as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"payment": exc.detail}
             raise ValidationError({**detail, "order": "The order was not cancelled because the refund failed."})

@@ -64,6 +64,7 @@ from .rendering import (
 )
 from apps.catalog.models import Product, ProductVariant
 from apps.commerce import services as commerce_services
+from apps.gift_cards import services as gift_card_services
 from apps.orders import services as orders_services
 from apps.orders.models import Order
 from . import cart as cart_data
@@ -2254,7 +2255,12 @@ def storefront_gift_card_balance(store, request, params):
         body = "<p>This balance link is invalid or has expired. Check your gift card email for the correct link.</p>"
     else:
         expiry = "Never expires" if not card.expires_at else f"Valid until {card.expires_at.date().isoformat()}"
-        status_line = "" if card.status == "active" else "<p><strong>This gift card has been deactivated.</strong></p>"
+        if card.status != "active":
+            status_line = "<p><strong>This gift card has been deactivated.</strong></p>"
+        elif card.expires_at and card.expires_at <= timezone.now():
+            status_line = "<p><strong>This gift card has expired.</strong> Contact the store if you need help.</p>"
+        else:
+            status_line = ""
         body = f"""
           <p class="gc-balance__amount">{escape(format_amount(card.currency_code, card.current_balance))}</p>
           <dl class="gc-balance__details">
@@ -2537,6 +2543,19 @@ class _TrackThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": "track-" + self.get_ident(request)}
 
 
+def _new_gift_card_code(store, cart, code):
+    """The gift card code to apply at place-order time, or None when it (or no code) is already on the checkout."""
+    from apps.commerce.models import Checkout
+
+    if not code:
+        return None
+    card = gift_card_services.get_by_code(store, code)
+    checkout = Checkout.objects.filter(cart=cart, status=commerce_services.CHECKOUT_OPEN, is_deleted=False).first()
+    if card is not None and checkout is not None and str(card.pk) in commerce_services._applied_card_ids(checkout):
+        return None
+    return code
+
+
 class _CodeApplyThrottle(SimpleRateThrottle):
     """Guards against brute-forcing discount/gift card codes: the stricter "storefront_checkout" rate, per client."""
     scope = "storefront_checkout"
@@ -2779,16 +2798,20 @@ def storefront_checkout(request, store_slug):
             combined_code = data.get("code")
             discount_code = data.get("discount_code")
             gift_card_code = data.get("gift_card_code")
+            remove_gift_card = (data.get("remove_gift_card") or "").strip()
             try:
-                kwargs = {}
-                if combined_code is not None and combined_code.strip():
-                    kind = commerce_services.resolve_checkout_code(store, combined_code.strip())
-                    kwargs["discount_code" if kind == "discount" else "gift_card_code"] = combined_code.strip()
-                if discount_code is not None:
-                    kwargs["discount_code"] = discount_code.strip()
-                if gift_card_code is not None:
-                    kwargs["gift_card_code"] = gift_card_code.strip()
-                checkout = commerce_services.start_checkout(cart, **kwargs)
+                with gift_card_services.code_attempts(store, _CodeApplyThrottle().get_ident(request)):
+                    kwargs = {}
+                    if combined_code is not None and combined_code.strip():
+                        kind = commerce_services.resolve_checkout_code(store, combined_code.strip())
+                        kwargs["discount_code" if kind == "discount" else "gift_card_code"] = combined_code.strip()
+                    if discount_code is not None:
+                        kwargs["discount_code"] = discount_code.strip()
+                    if gift_card_code is not None:
+                        kwargs["gift_card_code"] = gift_card_code.strip()
+                    if remove_gift_card:
+                        kwargs["remove_gift_card"] = remove_gift_card
+                    checkout = commerce_services.start_checkout(cart, **kwargs)
                 return JsonResponse({
                     "success": True,
                     "discount_amount": str(checkout.discount_amount),
@@ -2798,6 +2821,7 @@ def storefront_checkout(request, store_slug):
                     "total_amount": str(checkout.total_amount),
                     "gift_card_amount": str(checkout.gift_card_amount),
                     "amount_due": str(commerce_services.amount_due(checkout)),
+                    "gift_cards": commerce_services.gift_card_lines(checkout),
                     "gift_card_last4": commerce_services.gift_card_last4(checkout),
                     "discount_code": (checkout.metadata or {}).get("discount_code", ""),
                 })
@@ -2870,14 +2894,16 @@ def storefront_checkout(request, store_slug):
                 "country": country,
                 "phone": phone if store.checkout_phone != "hidden" else "",
             }
-            checkout = commerce_services.start_checkout(
-                cart,
-                email=email,
-                shipping_address=shipping_address,
-                billing_address=shipping_address,
-                discount_code=discount_code,
-                gift_card_code=gift_card_code,
-            )
+            with gift_card_services.code_attempts(store, _CodeApplyThrottle().get_ident(request)):
+                checkout = commerce_services.start_checkout(
+                    cart,
+                    email=email,
+                    shipping_address=shipping_address,
+                    billing_address=shipping_address,
+                    discount_code=discount_code,
+                    # Cards already applied stay applied; a code older theme copies resend is not added twice
+                    gift_card_code=_new_gift_card_code(store, cart, gift_card_code),
+                )
             if notes:
                 metadata = dict(checkout.metadata or {})
                 metadata["notes"] = notes
@@ -2928,7 +2954,7 @@ def storefront_checkout_order(request, store_slug, order_id):
         {"title": item.product.title, "quantity": item.quantity, "unit_price": str(item.unit_price), "total": str(item.total)}
         for item in order.items.select_related("product").all()
     ]
-    gift_card_payment = order.payments.filter(provider="gift_card", is_deleted=False).first()
+    gift_card_payments = list(order.payments.filter(provider="gift_card", is_deleted=False).order_by("created_at"))
     order_data = {
         "id": str(order.pk),
         "order_number": getattr(order, "order_number", str(order.pk)[:8]),
@@ -2937,8 +2963,13 @@ def storefront_checkout_order(request, store_slug, order_id):
         "shipping_address": shipping_addr,
         "payment_method": (checkout.metadata or {}).get("payment_method", "cod") if checkout and checkout.metadata else "cod",
         "items": order_items,
-        "gift_card_amount": str(gift_card_payment.amount) if gift_card_payment else "0.00",
+        "gift_card_amount": str(sum((p.amount for p in gift_card_payments), Decimal("0.00"))),
         "gift_card_last4": commerce_services.gift_card_last4(checkout) if checkout else None,
+        "gift_cards": [
+            {"last4": card.code_last4, "amount": str(p.amount)}
+            for p in gift_card_payments
+            for card in [gift_card_services.card_for_payment(p)] if card is not None
+        ],
     }
     html = render_page(
         store,

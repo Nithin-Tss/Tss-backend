@@ -13,7 +13,7 @@ from .currencies import format_amount
 from .models import GiftCard, GiftCardCurrencySetting
 from .services import ACTIVE
 from .serializers import (
-    AdjustSerializer, CreateGiftCardSerializer, GiftCardCurrencySettingSerializer, GiftCardSerializer,
+    CreateGiftCardSerializer, GiftCardCurrencySettingSerializer, GiftCardSerializer,
     ResendSerializer,
 )
 
@@ -21,8 +21,7 @@ from .serializers import (
 class GiftCardViewSet(StoreScopedViewSet):
     """
     /api/v1/gift-cards/                     list (?search=, ?status=, ?currency_code=, ?ordering=),
-                                             create a free gift card, retrieve, update (status, customer, expiry)
-    POST /api/v1/gift-cards/<id>/adjust/     {amount, reason}: negative spends, positive credits back
+                                             create a free gift card, retrieve, update (customer, expiry only)
     POST /api/v1/gift-cards/<id>/resend/     {email?}: re-email the code
     POST /api/v1/gift-cards/<id>/deactivate/ {reason?}: disable; cannot be undone
     GET  /api/v1/gift-cards/export/          CSV of the current filters, codes masked to the last 4
@@ -31,7 +30,7 @@ class GiftCardViewSet(StoreScopedViewSet):
 
     permission_resource = "gift_cards"
     queryset = GiftCard.objects.select_related("customer").prefetch_related(
-        "transactions__created_by_user"
+        "transactions__created_by_user", "transactions__order"
     ).order_by("-created_at")
     serializer_class = GiftCardSerializer
 
@@ -112,20 +111,6 @@ class GiftCardViewSet(StoreScopedViewSet):
             GiftCardCurrencySetting.objects.filter(store=store, is_enabled=True).values_list("currency_code", flat=True).first()
             or DEFAULT_CURRENCY
         )
-
-    @action(detail=True, methods=["post"])
-    def adjust(self, request, pk=None):
-        data = AdjustSerializer(data=request.data)
-        data.is_valid(raise_exception=True)
-        amount = data.validated_data["amount"]
-        card = services.change_balance(
-            self.get_object(),
-            amount,
-            kind="credit" if amount > 0 else "debit",
-            user=request.user,
-            reason=data.validated_data.get("reason") or "Manual adjustment",
-        )
-        return Response(self.get_serializer(self.get_queryset().get(pk=card.pk)).data)
 
     @action(detail=True, methods=["post"])
     def resend(self, request, pk=None):

@@ -126,13 +126,38 @@ def refunded_in_full(order):
     return refunded > 0 and refunded >= order.total
 
 
+GIFT_CARD, ORIGINAL, LATER = "gift_card", "original", "later"
+REFUND_DESTINATIONS = (GIFT_CARD, ORIGINAL, LATER)
+
+
+def default_destination(payment):
+    """Where a payment's refund goes unless staff choose otherwise: a gift card payment back to its card."""
+    return GIFT_CARD if payment.provider == "gift_card" else ORIGINAL
+
+
+def _check_destination(payment, destination):
+    if destination == LATER:
+        return
+    if payment.provider == "gift_card" and destination != GIFT_CARD:
+        raise ValidationError({"destination": "The part paid by gift card can only be refunded to the gift card (or later)."})
+    if payment.provider != "gift_card" and destination == GIFT_CARD:
+        raise ValidationError({"destination": "Only the part paid by gift card can be refunded to a gift card."})
+
+
 @transaction.atomic
-def refund(payment, amount, reason=None, settle_order=True):
+def refund(payment, amount, reason=None, settle_order=True, destination=None, user=None):
     """
     settle_order: after a refund that returns everything paid, the order is settled (see
     orders.services.settle_after_refund: cancelled and its stock back, if nothing shipped).
     cancel_order passes False because it does that itself.
+    destination: "gift_card" (a gift card payment's only real one: the balance goes back on the
+    card) or "original" (Stripe/manual/cash); None picks the right one for the payment. "Later"
+    means no refund is recorded now, so it is the caller's job not to call this at all.
     """
+    destination = destination or default_destination(payment)
+    if destination == LATER:
+        raise ValidationError({"destination": "\"Later\" records nothing; just don't refund yet."})
+    _check_destination(payment, destination)
     order = _lock_order_of(payment)
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
     if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
@@ -148,6 +173,7 @@ def refund(payment, amount, reason=None, settle_order=True):
         raise ValidationError({"amount": f"Only {left} can still be refunded."})
 
     refund_id = None
+    tx_metadata = {"destination": destination}
     if payment.provider == "stripe":
         from . import stripe_service
 
@@ -155,7 +181,10 @@ def refund(payment, amount, reason=None, settle_order=True):
     elif payment.provider == "gift_card":
         from apps.gift_cards import services as gift_cards
 
-        gift_cards.refund_payment_amount(payment, amount)
+        gift_cards.refund_payment_amount(payment, amount, user=user)
+        card = gift_cards.card_for_payment(payment)
+        if card is not None:
+            tx_metadata["gift_card_last4"] = card.code_last4
 
     PaymentTransaction.objects.create(
         payment=payment,
@@ -164,6 +193,7 @@ def refund(payment, amount, reason=None, settle_order=True):
         status=SUCCESS,
         reason=reason,
         provider_refund_id=refund_id,
+        metadata=tx_metadata,
     )
     payment.status = REFUNDED if amount == left else PARTIALLY_REFUNDED
     payment.save(update_fields=["status", "updated_at"])
@@ -176,24 +206,37 @@ def refund(payment, amount, reason=None, settle_order=True):
 
 
 @transaction.atomic
-def refund_unrefunded(order, reason="Order cancelled"):
+def refund_unrefunded(order, reason="Order cancelled", destinations=None, user=None):
     """
     Refund whatever is still unrefunded on the order's captured payments, one payment at a time
     (Stripe ones are refunded at Stripe first, see refund()). Manual and cash-on-delivery payments
     only get the refund recorded: staff hand the money back themselves. Nothing to refund does nothing.
     If any refund fails nothing is recorded for it and the error is raised. Returns the amount refunded now.
+
+    destinations: {payment id: "gift_card" | "original" | "later"}. A payment not in it goes to its
+    default (gift card payments back to their card first). "later" leaves that payment untouched:
+    no balance changes and no refund is recorded; staff refund it from the payment when ready.
     """
+    destinations = {str(k): v for k, v in (destinations or {}).items()}
+    for key, value in destinations.items():
+        if value not in REFUND_DESTINATIONS:
+            raise ValidationError({"refund_destinations": f"Unknown refund destination {value!r}."})
     total = Decimal("0.00")
-    ids = Payment.objects.filter(
-        order=order, is_deleted=False, status__in=(CAPTURED, PARTIALLY_REFUNDED)
-    ).order_by("created_at", "pk").values_list("pk", flat=True)
-    for pk in list(ids):
-        payment = Payment.objects.select_for_update().get(pk=pk)
+    # Gift card payments first: that money goes back on the card before the rest is refunded
+    payments = sorted(
+        Payment.objects.filter(order=order, is_deleted=False, status__in=(CAPTURED, PARTIALLY_REFUNDED)),
+        key=lambda p: (p.provider != "gift_card", p.created_at, str(p.pk)),
+    )
+    for p in payments:
+        payment = Payment.objects.select_for_update().get(pk=p.pk)
         if payment.status not in (CAPTURED, PARTIALLY_REFUNDED):
+            continue
+        destination = destinations.get(str(payment.pk)) or default_destination(payment)
+        if destination == LATER:
             continue
         left = payment.amount - refunded_total(payment)
         if left > 0:
-            refund(payment, left, reason, settle_order=False)
+            refund(payment, left, reason, settle_order=False, destination=destination, user=user)
             total += left
     return total
 
