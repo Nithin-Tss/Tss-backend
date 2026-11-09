@@ -1,0 +1,14 @@
+{%- comment -%}
+  Search box of the collection page: the header's magnifier opens the page, ?q= lists the products that match.
+  Usage: {% render 'collection-search', enabled: s.show_search %}   (shown unless enabled is false)
+{%- endcomment -%}
+{%- if enabled != false and collection.total_count > 0 -%}
+  <form class="collection-search" action="{{ collection.url }}" method="get" role="search">
+    <input type="search" name="q" value="{{ collection.filters.q | escape }}" placeholder="Search products" aria-label="Search products" autocomplete="off">
+    <button class="button" type="submit">Search</button>
+  </form>
+  <style>
+    .collection-search { display: flex; gap: 8px; max-width: 520px; margin: 0 auto 24px; }
+    .collection-search input { flex: 1; min-width: 0; min-height: 46px; padding: 0 18px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; }
+  </style>
+{%- endif -%}

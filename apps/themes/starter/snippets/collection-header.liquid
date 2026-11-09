@@ -1,0 +1,34 @@
+{%- comment -%}
+  Collection page heading: the "Back to Home" link, the collection image, the title (or the search
+  heading) and the description.
+  Usage: {% render 'collection-header', show_image: s.show_image, show_description: s.show_description %}
+{%- endcomment -%}
+<!-- Back to Home Link -->
+<a href="{{ shop.url }}/" class="collection-back-link">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><polyline points="15 18 9 12 15 6"></polyline></svg>Back to Home
+</a>
+
+{%- if show_image and collection.image != blank -%}
+  <div class="collection-hero">
+    <img src="{{ collection.image }}" alt="{{ collection.name }}">
+  </div>
+{%- endif -%}
+{%- if collection.filters.q != blank -%}
+  <h1 class="section-heading collection-heading">Search results for &ldquo;{{ collection.filters.q }}&rdquo;</h1>
+{%- else -%}
+  <h1 class="section-heading collection-heading">{{ collection.name }}</h1>
+{%- endif -%}
+{%- if show_description and collection.description != blank -%}
+  <div class="collection-description">{{ collection.description }}</div>
+{%- endif -%}
+<style>
+  .collection-back-link { display: inline-flex; align-items: center; margin-bottom: 20px; font-size: 14px; font-weight: 600; color: #881337; text-decoration: none; }
+  .collection-back-link:hover { text-decoration: underline; }
+  .collection-heading { text-align: center; margin-bottom: 24px; font-size: clamp(28px, 4vw, 42px); font-weight: 700; color: #881337; }
+  .collection-hero { margin-bottom: 24px; border-radius: var(--radius, 14px); overflow: hidden; aspect-ratio: 3 / 1; background: var(--line); }
+  .collection-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .collection-description { max-width: 720px; margin: -12px auto 28px; text-align: center; color: var(--muted); line-height: 1.6; }
+  .collection-description > :first-child { margin-top: 0; }
+  .collection-description > :last-child { margin-bottom: 0; }
+  @media (max-width: 749px) { .collection-hero { aspect-ratio: 2 / 1; } }
+</style>

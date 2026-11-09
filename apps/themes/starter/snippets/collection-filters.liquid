@@ -1,0 +1,101 @@
+{%- comment -%}
+  The filter dropdowns of the collection page: availability, price, category, rating, vendor, tag and "Clear all".
+  Render it inside the toolbar's <form>: every change submits the form.
+  Usage: {% render 'collection-filters', filters: collection.filters %}
+  {% render 'collection-filters', styles: true %}   only the CSS (the toolbar renders it once, after the form)
+{%- endcomment -%}
+{%- if styles -%}
+<style>
+  .collection-filters__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .collection-filters__group { position: relative; }
+  .collection-filters__group summary { cursor: pointer; padding: 7px 14px; border: 1px solid var(--line, #e2e8f0); border-radius: 999px; list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; background: var(--bg, #fff); user-select: none; }
+  .collection-filters__group summary::-webkit-details-marker { display: none; }
+  .collection-filters__group[open] summary { border-color: currentColor; }
+  .tss-chevron { transition: transform .15s ease; }
+  .collection-filters__group[open] .tss-chevron { transform: rotate(180deg); }
+  .collection-filters__panel { position: absolute; z-index: 50; top: calc(100% + 6px); left: 0; min-width: 210px; max-height: 280px; overflow: auto; display: grid; gap: 10px; padding: 14px; background: var(--bg, #fff); border: 1px solid var(--line, #e2e8f0); border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,.1); }
+  .collection-filters__panel input[type=number] { width: 100%; padding: 6px 8px; border: 1px solid var(--line, #cbd5e1); border-radius: 6px; font-size: 14px; }
+  .collection-filters__check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; }
+  .collection-filters__check input { accent-color: #2563eb; width: 15px; height: 15px; cursor: pointer; }
+  .collection-filters__clear { text-decoration: underline; color: var(--muted, #64748b); font-size: 13px; margin-left: 4px; }
+</style>
+{%- else -%}
+{%- assign f = filters -%}
+<div class="collection-filters__bar">
+  <!-- Availability Dropdown -->
+  <details class="collection-filters__group">
+    <summary>Availability <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+    <div class="collection-filters__panel">
+      <label class="collection-filters__check">
+        <input type="checkbox" name="stock_status" value="in_stock"{% if f.in_stock %} checked{% endif %} onchange="this.form.submit()"> In Stock ({{ f.in_stock_count }})
+      </label>
+      <label class="collection-filters__check">
+        <input type="checkbox" name="stock_status" value="out_of_stock"{% if f.out_of_stock %} checked{% endif %} onchange="this.form.submit()"> Out of Stock ({{ f.out_of_stock_count }})
+      </label>
+    </div>
+  </details>
+
+  <!-- Price Dropdown -->
+  <details class="collection-filters__group">
+    <summary>Price{% if f.min_price != blank or f.max_price != blank %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+    <div class="collection-filters__panel">
+      <label>From <input type="number" name="min_price" min="0" step="any" value="{{ f.min_price }}" placeholder="{{ f.price_floor }}"></label>
+      <label>To <input type="number" name="max_price" min="0" step="any" value="{{ f.max_price }}" placeholder="{{ f.price_ceiling }}"></label>
+      <button class="button button--outline" type="submit">Apply</button>
+    </div>
+  </details>
+
+  <!-- Category Dropdown -->
+  {%- if f.categories.size > 0 -%}
+    <details class="collection-filters__group">
+      <summary>Category{% if f.category.size > 0 %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+      <div class="collection-filters__panel">
+        {%- for cat in f.categories -%}
+          <label class="collection-filters__check">
+            <input type="checkbox" name="category" value="{{ cat.id }}"{% if cat.selected %} checked{% endif %} onchange="this.form.submit()"> {{ cat.name }} ({{ cat.count }})
+          </label>
+        {%- endfor -%}
+      </div>
+    </details>
+  {%- endif -%}
+
+  <!-- Rating Dropdown -->
+  <details class="collection-filters__group">
+    <summary>Rating{% if f.min_rating != blank %} &bull;{% endif %} <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+    <div class="collection-filters__panel">
+      {%- for r in f.ratings -%}
+        <label class="collection-filters__check">
+          <input type="radio" name="min_rating" value="{{ r.min_rating }}"{% if r.selected %} checked{% endif %} onchange="this.form.submit()">
+          <span>{{ r.label }} ({{ r.count }})</span>
+        </label>
+      {%- endfor -%}
+    </div>
+  </details>
+
+  {%- if f.vendors.size > 1 -%}
+    <details class="collection-filters__group">
+      <summary>Vendor <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+      <div class="collection-filters__panel">
+        {%- for v in f.vendors -%}
+          <label><input type="checkbox" name="vendor" value="{{ v.name }}"{% if v.selected %} checked{% endif %} onchange="this.form.submit()"> {{ v.name }} ({{ v.count }})</label>
+        {%- endfor -%}
+      </div>
+    </details>
+  {%- endif -%}
+
+  {%- if f.tags.size > 0 -%}
+    <details class="collection-filters__group">
+      <summary>Tag <svg class="tss-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+      <div class="collection-filters__panel">
+        {%- for t in f.tags -%}
+          <label><input type="checkbox" name="tag" value="{{ t.name }}"{% if t.selected %} checked{% endif %} onchange="this.form.submit()"> {{ t.name }} ({{ t.count }})</label>
+        {%- endfor -%}
+      </div>
+    </details>
+  {%- endif -%}
+
+  {%- if f.active -%}
+    <a class="collection-filters__clear" href="{{ collection.url }}?sort={{ collection.sort }}{% if f.q != blank %}&amp;q={{ f.q | escape }}{% endif %}">Clear all</a>
+  {%- endif -%}
+</div>
+{%- endif -%}

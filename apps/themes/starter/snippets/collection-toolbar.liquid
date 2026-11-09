@@ -1,0 +1,31 @@
+{%- comment -%}
+  Toolbar above the product grid: the filters (left) and the count / sort / column toggle (right), in one
+  GET form, so a filter or a sort change reloads the collection page.
+  Usage: {% render 'collection-toolbar', filters: collection.filters, show_filters: s.show_filters, show_sort: s.show_sort, show_count: s.show_count, section_id: section.id, columns: s.columns %}
+  The pieces: snippets/collection-filters.liquid and snippets/collection-sort.liquid.
+{%- endcomment -%}
+{%- assign f = filters -%}
+{%- assign can_sort = false -%}
+{%- if show_sort != false and collection.total_count > 0 -%}{%- assign can_sort = true -%}{%- endif -%}
+{%- assign can_filter = false -%}
+{%- if show_filters != false and collection.total_count > 0 -%}{%- assign can_filter = true -%}{%- endif -%}
+
+<form action="{{ collection.url }}" method="get" class="collection-filters">
+  {%- if f.q != blank -%}<input type="hidden" name="q" value="{{ f.q | escape }}">{%- endif -%}
+  <div class="collection-toolbar-row">
+    {%- if can_filter -%}
+      {% render 'collection-filters', filters: f %}
+    {%- endif -%}
+
+    {% render 'collection-sort', show_count: show_count, can_sort: can_sort, section_id: section_id, columns: columns %}
+  </div>
+</form>
+
+<style>
+  .collection-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--line, #e5e7eb); }
+  @media (max-width: 749px) {
+    .collection-toolbar-row { flex-direction: column; align-items: stretch; }
+  }
+</style>
+{% render 'collection-filters', styles: true %}
+{% render 'collection-sort', styles: true %}

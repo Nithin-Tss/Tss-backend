@@ -82,6 +82,14 @@ REQUIRED_FILES = {
     "sections/newsletter.liquid",
     "sections/static-text.liquid",
     "sections/match-quiz.liquid",
+    # Feature snippets: the collection page's heading, search, filters, toolbar and pagination, the blog's category links
+    "snippets/collection-header.liquid",
+    "snippets/collection-search.liquid",
+    "snippets/collection-filters.liquid",
+    "snippets/collection-sort.liquid",
+    "snippets/collection-toolbar.liquid",
+    "snippets/collection-pagination.liquid",
+    "snippets/blog-filters.liquid",
 }
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
@@ -91,8 +99,13 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 55
+STARTER_REVISION = 56
 STARTER_UPGRADES = {
+    # Revision 56: the filters, toolbar, search, heading and pagination are snippets (collection-*), the category links too (blog-filters)
+    "sections/main-blog.liquid": {
+        "30c262da103a06435fb43913dac7cc97b3060003098fc713452128b9f4965fb0",  # revision 56: before the feature snippets
+        "58722c432bf6c82c1e356e29ba6c051dce614700f48925ec3463fe32a375d706",  # revision 56: same, with CRLF line endings
+    },
     # Revision 55: the checkout's discount field is also a gift card field ("Discount code or gift card")
     "sections/main-checkout.liquid": {
         "5356cdde411cfc16dae67f8d314f29ba5407a9c3cdc028e083164889adaba80b",  # revision 55: before the gift card field
@@ -318,6 +331,8 @@ STARTER_UPGRADES = {
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
+        "ec44f24d9c12d55663679ef96219007819d220865768926f2ce855709158a7f2",  # revision 56: before the feature snippets
+        "dd1f5443cf1342ec1bf3158dbe8b692216e88d04c6f06e2ff93e1f4fbcaf4ddb",  # revision 56: same, with CRLF line endings
         "ccf3d4833be7820ed1c60e86ecc807f3ba8b4350e61ffed9eb29d1106ea33c00",  # revision 40: before search results
         "bb1b45933761020191e633f0e635976d989c272c95c23653bdbb8c2fae6501f0",  # revision 40: before search results (CRLF)
         "2e2ebeacc9f1e9d175ff16ba6ab53cf5b9633838bf3a4532988d300fa8f215d7",  # revision 31: before the wishlist heart became a block

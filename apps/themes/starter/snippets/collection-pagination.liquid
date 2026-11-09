@@ -1,0 +1,108 @@
+{%- comment -%}
+  Numbered pagination of the collection page: < 1 2 3 ... 99 >
+  Usage: {% render 'collection-pagination', filters: collection.filters, section_id: section.id %}
+  (nothing when the collection has one page; `filters.query` keeps the active filters in the links)
+{%- endcomment -%}
+{%- if collection.pages > 1 -%}
+<style>
+  /* Numbered pagination: < 1 2 3 ... 99 > */
+  #section-{{ section_id }} .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 40px;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+  }
+  #section-{{ section_id }} .pagination__num,
+  #section-{{ section_id }} .pagination__arrow,
+  #section-{{ section_id }} .pagination__dots {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 36px;
+    padding: 0 6px;
+    border-radius: 6px;
+    font-size: 15px;
+    line-height: 1;
+    color: #222222;
+    text-decoration: none;
+  }
+  #section-{{ section_id }} a.pagination__num:hover,
+  #section-{{ section_id }} a.pagination__arrow:hover {
+    background: #f1f1f1;
+  }
+  #section-{{ section_id }} .pagination__num.is-current {
+    background: #000000;
+    color: #ffffff;
+  }
+  #section-{{ section_id }} .pagination__arrow.is-disabled {
+    color: #bdbdbd;
+    pointer-events: none;
+  }
+  #section-{{ section_id }} .pagination__arrow svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+</style>
+  {%- assign cur = collection.page -%}
+  {%- assign last = collection.pages -%}
+  {%- assign last_before = last | minus: 1 -%}
+  {%- assign win_start = cur | minus: 1 -%}
+  {%- assign win_end = cur | plus: 1 -%}
+  {%- if cur == 1 -%}{%- assign win_end = 3 -%}{%- endif -%}
+  {%- if cur == last -%}{%- assign win_start = last | minus: 2 -%}{%- endif -%}
+  {%- if win_start < 1 -%}{%- assign win_start = 1 -%}{%- endif -%}
+  {%- if win_end > last -%}{%- assign win_end = last -%}{%- endif -%}
+  {%- capture page_base -%}{{ collection.url }}?{{ filters.query | escape }}&amp;page={%- endcapture -%}
+
+  <nav class="pagination" aria-label="Pages">
+    {%- if cur > 1 -%}
+      <a class="pagination__arrow" href="{{ page_base }}{{ cur | minus: 1 }}" aria-label="Previous page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+      </a>
+    {%- else -%}
+      <span class="pagination__arrow is-disabled" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+      </span>
+    {%- endif -%}
+
+    {%- if win_start > 1 -%}
+      <a class="pagination__num" href="{{ page_base }}1">1</a>
+    {%- endif -%}
+    {%- if win_start > 2 -%}
+      <span class="pagination__dots" aria-hidden="true">&hellip;</span>
+    {%- endif -%}
+
+    {%- for p in (win_start..win_end) -%}
+      {%- if p == cur -%}
+        <span class="pagination__num is-current" aria-current="page">{{ p }}</span>
+      {%- else -%}
+        <a class="pagination__num" href="{{ page_base }}{{ p }}">{{ p }}</a>
+      {%- endif -%}
+    {%- endfor -%}
+
+    {%- if win_end < last_before -%}
+      <span class="pagination__dots" aria-hidden="true">&hellip;</span>
+    {%- endif -%}
+    {%- if win_end < last -%}
+      <a class="pagination__num" href="{{ page_base }}{{ last }}">{{ last }}</a>
+    {%- endif -%}
+
+    {%- if cur < last -%}
+      <a class="pagination__arrow" href="{{ page_base }}{{ cur | plus: 1 }}" aria-label="Next page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </a>
+    {%- else -%}
+      <span class="pagination__arrow is-disabled" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+      </span>
+    {%- endif -%}
+  </nav>
+{%- endif -%}

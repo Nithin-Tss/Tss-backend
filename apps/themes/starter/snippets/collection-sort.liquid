@@ -1,0 +1,43 @@
+{%- comment -%}
+  The right side of the collection toolbar: item count, sort select and the 2-column / default-column toggle.
+  Render it inside the toolbar's <form>: choosing a sort submits the form.
+  Usage: {% render 'collection-sort', show_count: s.show_count, can_sort: true, section_id: section.id, columns: s.columns %}
+  {% render 'collection-sort', styles: true %}   only the CSS (the toolbar renders it once, after the form)
+{%- endcomment -%}
+{%- if styles -%}
+<style>
+  .collection-toolbar-right { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+  .collection-items-count { font-size: 14px; color: var(--muted, #64748b); font-weight: 500; white-space: nowrap; }
+  .collection-sort-select { padding: 6px 12px; border: 1px solid var(--line, #e2e8f0); border-radius: 8px; font-size: 14px; background: var(--bg, #fff); cursor: pointer; color: inherit; }
+  .collection-grid-toggle { display: inline-flex; align-items: center; border: 1px solid var(--line, #e2e8f0); border-radius: 6px; overflow: hidden; background: var(--bg, #fff); }
+  .collection-grid-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none; background: transparent; cursor: pointer; color: var(--muted, #64748b); transition: background .15s, color .15s; }
+  .collection-grid-btn:hover, .collection-grid-btn.is-active { background: var(--soft, #f1f5f9); color: var(--text, #0f172a); }
+  @media (max-width: 749px) {
+    .collection-toolbar-right { justify-content: space-between; width: 100%; }
+  }
+</style>
+{%- else -%}
+<div class="collection-toolbar-right">
+  {%- if show_count -%}
+    <span class="collection-items-count">{{ collection.products_count }} item{% if collection.products_count != 1 %}s{% endif %}</span>
+  {%- endif -%}
+  {%- if can_sort -%}
+    <div class="collection-sort-wrap">
+      <label for="sort-{{ section_id }}" style="font-size:14px;display:none">Sort</label>
+      <select id="sort-{{ section_id }}" name="sort" class="collection-sort-select" onchange="this.form.submit()">
+        {%- for opt in collection.sort_options -%}
+          <option value="{{ opt.value }}"{% if collection.sort == opt.value %} selected{% endif %}>{{ opt.label }}</option>
+        {%- endfor -%}
+      </select>
+    </div>
+  {%- endif -%}
+  <div class="collection-grid-toggle">
+    <button type="button" class="collection-grid-btn" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '2')" title="2 columns" aria-label="2 columns">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="18" rx="1.5"></rect><rect x="14" y="3" width="7" height="18" rx="1.5"></rect></svg>
+    </button>
+    <button type="button" class="collection-grid-btn is-active" onclick="document.querySelector('.product-list__grid').style.setProperty('--cols', '{{ columns | default: 5 }}')" title="Default columns" aria-label="Default columns">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="2" width="5" height="5" rx="1"></rect><rect x="9.5" y="2" width="5" height="5" rx="1"></rect><rect x="17" y="2" width="5" height="5" rx="1"></rect><rect x="2" y="9.5" width="5" height="5" rx="1"></rect><rect x="9.5" y="9.5" width="5" height="5" rx="1"></rect><rect x="17" y="9.5" width="5" height="5" rx="1"></rect><rect x="2" y="17" width="5" height="5" rx="1"></rect><rect x="9.5" y="17" width="5" height="5" rx="1"></rect><rect x="17" y="17" width="5" height="5" rx="1"></rect></svg>
+    </button>
+  </div>
+</div>
+{%- endif -%}
