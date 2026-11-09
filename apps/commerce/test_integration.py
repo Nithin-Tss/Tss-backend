@@ -592,7 +592,10 @@ class ConcurrentStockTests(TransactionTestCase):
 
     def setUp(self):
         cache.clear()
-        self.store = Store.objects.create(store_name="Race Shop", store_slug="race-shop", status="active")
+        # Unique slug per run: an interrupted earlier run can leave its store behind in a kept test database.
+        self.store = Store.objects.create(
+            store_name="Race Shop", store_slug=f"race-shop-{uuid.uuid4().hex[:8]}", status="active"
+        )
         self.location = Location.objects.create(store=self.store, name="Main warehouse")
 
     def race(self, jobs):
@@ -633,7 +636,7 @@ class ConcurrentStockTests(TransactionTestCase):
         self.assertTrue("left" in refused or "sold out" in refused, refused)  # the lock-time or the early message
         item = InventoryItem.objects.get(variant=variant)
         self.assertEqual((item.available, item.committed, item.on_hand), (0, 1, 1))
-        self.assertEqual(Order.objects.count(), 1)
+        self.assertEqual(Order.objects.filter(store=self.store).count(), 1)
 
     def test_two_orders_with_the_same_products_in_opposite_order_do_not_deadlock(self):
         tee, tee_variant = stock_product(self.store, "Tee", "TEE-1", "499.00", 50, self.location)

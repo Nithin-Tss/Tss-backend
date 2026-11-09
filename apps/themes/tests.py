@@ -7049,6 +7049,50 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertIn("55.00", price)
         self.assertNotIn("From", price)
 
+    def test_varying_variant_prices_show_the_cheapest_price_without_from(self):
+        import re
+
+        from apps.catalog.models import Product, ProductVariant
+
+        product = Product.objects.get(pk=self.mug["id"])
+        ProductVariant.objects.create(product=product, sku="MUG-BIG", price="40.00")
+        ProductVariant.objects.filter(product=product, sku="SKU-MUG").update(price="15.00")
+
+        for path in ("/collections/all", "/", f"/products/{product.id}"):
+            html = self.client.get(f"{self.base}{path}").content.decode()
+            prices = re.findall(r'<span class="price">([^<]*)</span>', html)
+            self.assertTrue(any("15.00" in p for p in prices), (path, prices))
+            self.assertFalse(any("From" in p for p in prices), (path, prices))
+            self.assertNotRegex(html, r">\s*From\s*[^<\s]*\d")
+
+    def test_sync_price_from_changes_only_the_named_theme_and_keeps_a_backup(self):
+        import json
+        import tempfile
+        from io import StringIO
+        from pathlib import Path
+
+        from django.core.management import call_command
+
+        from .models import StoreTheme, Theme
+
+        old = "From {{ product.price | money }}"
+        self.ok("get", "/api/v1/themes/settings/")  # the store gets its theme on first use
+        mine =StoreTheme.objects.get(store__store_id=self.store["storeId"], is_active=True).theme
+        other = Theme.objects.create(name="Another store's theme")
+        for theme in (mine, other):
+            theme.files.update_or_create(file_path="snippets/product-card.liquid", defaults={
+                "file_name": "product-card.liquid", "directory": "snippets", "file_type": "liquid", "content": f"<span>{old}</span>"})
+
+        with tempfile.TemporaryDirectory() as backups:
+            call_command("sync_price_from", theme=str(mine.pk), backup_dir=backups, stdout=StringIO())  # dry run
+            self.assertIn(old, mine.files.get(file_path="snippets/product-card.liquid").content)
+            call_command("sync_price_from", theme=str(mine.pk), apply=True, backup_dir=backups, stdout=StringIO())
+            saved = json.loads(next(Path(backups).glob("*.json")).read_text(encoding="utf-8"))
+
+        self.assertEqual(mine.files.get(file_path="snippets/product-card.liquid").content, "<span>{{ product.price | money }}</span>")
+        self.assertEqual(saved["files"]["snippets/product-card.liquid"], f"<span>{old}</span>")  # the old file is kept
+        self.assertIn(old, other.files.get(file_path="snippets/product-card.liquid").content)  # other themes untouched
+
 
 class ThemeImageUrlTest(StoreClientMixin, APITestCase):
     from apps.media.tests import PNG
