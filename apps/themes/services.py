@@ -83,6 +83,7 @@ REQUIRED_FILES = {
     "sections/static-text.liquid",
     "sections/match-quiz.liquid",
     # Feature snippets: the collection page's heading, search, filters, toolbar and pagination, the blog's category links
+    "snippets/theme-css.liquid",
     "snippets/collection-header.liquid",
     "snippets/collection-search.liquid",
     "snippets/collection-filters.liquid",

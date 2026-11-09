@@ -4737,6 +4737,7 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
 
 
 STYLES = "snippets/styles.liquid"
+THEME_CSS = "snippets/theme-css.liquid"  # the design tokens live here; styles.liquid renders it
 SETTINGS_JSON = "config/settings_data.json"
 
 
@@ -4766,17 +4767,17 @@ class StylesSyncTest(StoreClientMixin, APITestCase):
         return self.ok("post", "/api/v1/themes/preview/", data)["html"]
 
     def test_css_edit_reaches_preview_and_store_and_persists(self):
-        original = self.files()[STYLES]
+        original = self.files()[THEME_CSS]
         old_rule, new_rule = "--card-title-weight: 400;", "--card-title-weight: 700;"  # the editable card variable
         self.assertIn(old_rule, original)
-        self.save_file(STYLES, original.replace(old_rule, new_rule))  # the temporary change
-        self.assertIn(new_rule, self.files()[STYLES])  # what reopening the code editor shows
+        self.save_file(THEME_CSS, original.replace(old_rule, new_rule))  # the temporary change
+        self.assertIn(new_rule, self.files()[THEME_CSS])  # what reopening the code editor shows
         self.assertIn(new_rule, self.preview_html())
         for _ in range(2):  # the storefront, and again after a refresh
             html = self.store_html()
             self.assertIn(new_rule, html)
             self.assertIn('class="product-card__title"', html)
-        self.save_file(STYLES, original)  # restored
+        self.save_file(THEME_CSS, original)  # restored
         self.assertIn(old_rule, self.store_html())
         self.assertNotIn(new_rule, self.store_html())
 
@@ -4796,7 +4797,7 @@ class StylesSyncTest(StoreClientMixin, APITestCase):
             self.assertIn(line, html)
         code_settings = json.loads(self.files()[SETTINGS_JSON])  # what Edit code shows
         self.assertEqual(code_settings["accent_color"].upper(), "#AA2200")
-        self.assertIn("{{ settings.accent_color }}", self.files()[STYLES])  # the CSS file itself is not rewritten
+        self.assertIn("{{ settings.accent_color }}", self.files()[THEME_CSS])  # the CSS file itself is not rewritten
 
     def test_settings_json_from_code_reaches_customizer_and_store(self):
         code_settings = json.loads(self.files()[SETTINGS_JSON])
