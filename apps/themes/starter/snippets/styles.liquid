@@ -1,30 +1,5 @@
+{% render 'theme-css', settings: settings %}
 <style>
-  :root {
-    --accent: {{ settings.accent_color }};
-    --bg: {{ settings.background_color }};
-    --text: {{ settings.text_color }};
-    --muted: color-mix(in srgb, var(--text) 60%, var(--bg));
-    --line: color-mix(in srgb, var(--text) 12%, var(--bg));
-    --soft: color-mix(in srgb, var(--text) 5%, var(--bg));
-    --radius: 14px;
-    --page: 1200px;
-    /* Product card & grid: change these here (a theme preset may override them) */
-    --card-padding: 16px;
-    --card-border: 1px solid var(--line);
-    --card-radius: 6px;
-    --card-bg: var(--bg);
-    --card-media-padding: 8px;
-    --card-media-bg: var(--soft);
-    --card-media-fit: contain;
-    --card-gap: 4px;
-    --card-title-size: 14px;
-    --card-title-weight: 400;
-    --card-price-size: 22px;
-    --card-price-color: var(--text);
-    --card-compare-size: 15px;
-    --grid-gap-y: 24px;
-    --section-spacing: 48px;
-  }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body {
