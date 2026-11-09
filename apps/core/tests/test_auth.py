@@ -290,9 +290,12 @@ class SessionAuthTest(APITestCase):
         self.assertEqual(r.json()["user"]["email"], "ravi@example.com")
         self.assertIsNotNone(User.objects.get(email="ravi@example.com").last_login)
 
-    def test_remember_me_keeps_session_for_30_days(self):
+    def test_remember_me_keeps_session_for_remember_me_lifetime(self):
         cookie = self.login(rememberMe=True).cookies["sessionid"]
-        self.assertEqual(int(cookie["max-age"]), 30 * 24 * 3600)
+        self.assertEqual(
+            int(cookie["max-age"]),
+            int(settings.JWT_REMEMBER_ME_REFRESH_LIFETIME.total_seconds()),
+        )
 
     def test_session_writes_need_csrf_token(self):
         self.login()
