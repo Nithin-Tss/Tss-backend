@@ -191,9 +191,9 @@
               <div class="collection-sort-wrap">
                 <label for="sort-{{ section.id }}" style="font-size:14px;display:none">Sort</label>
                 <select id="sort-{{ section.id }}" name="sort" class="collection-sort-select" onchange="this.form.submit()">
-                  <option value="newest"{% if collection.sort == 'newest' %} selected{% endif %}>Sort: Featured</option>
-                  <option value="price-asc"{% if collection.sort == 'price-asc' %} selected{% endif %}>Price: Low to High</option>
-                  <option value="price-desc"{% if collection.sort == 'price-desc' %} selected{% endif %}>Price: High to Low</option>
+                  {%- for opt in collection.sort_options -%}
+                    <option value="{{ opt.value }}"{% if collection.sort == opt.value %} selected{% endif %}>{{ opt.label }}</option>
+                  {%- endfor -%}
                 </select>
               </div>
             {%- endif -%}

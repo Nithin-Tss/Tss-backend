@@ -1830,9 +1830,19 @@ LOAD_MORE_MAX = 96
 PAGE_SIZE = 20
 SORTS = {
     "newest": None,  # the catalog's own order
+    "title-asc": lambda d: (d["title"] or "").casefold(),
+    "title-desc": None,  # A-Z reversed, see the sort in render_page
     "price-asc": lambda d: (d["price"] is None, d["price"] or 0),
     "price-desc": lambda d: (d["price"] is None, -(d["price"] or 0)),
 }
+DEFAULT_SORT = "title-asc"
+SORT_OPTIONS = [
+    {"value": "title-asc", "label": "Alphabetically, A–Z"},
+    {"value": "title-desc", "label": "Alphabetically, Z–A"},
+    {"value": "price-asc", "label": "Price, low to high"},
+    {"value": "price-desc", "label": "Price, high to low"},
+    {"value": "newest", "label": "Featured"},
+]
 
 
 def _number(value):
@@ -3376,7 +3386,7 @@ def render_page(*args, **kwargs):
 
 
 def _render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
-                 sort="newest", page_number=1, article=None, blog_filter=None, request=None,
+                 sort=DEFAULT_SORT, page_number=1, article=None, blog_filter=None, request=None,
                  wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
                  filters=None, customer_page=None, customer=None, customer_user=None,
                  auth_error=None, auth_success=None, order_completed=False, order=None):
@@ -3459,11 +3469,13 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     cart_count = cart_data.item_count(store, cart_session)
 
     if page == "collection":
-        sort = sort if sort in SORTS else "newest"
+        sort = sort if sort in SORTS else DEFAULT_SORT
         all_products = _products(store, base_url, collection=collection["obj"])
         filters = _with_category_ids(store, filters or parse_collection_filters({}))
         products = [p for p in all_products if _matches_filters(p, filters)]
-        if SORTS[sort]:
+        if sort == "title-desc":
+            products.sort(key=SORTS["title-asc"], reverse=True)
+        elif SORTS[sort]:
             products.sort(key=SORTS[sort])
         # Facets list every value in the collection; counts follow the other active filters
         vendors, tags = {}, {}
@@ -3586,6 +3598,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 "q": filters["q"],
             },
             "sort": sort,
+            "sort_options": SORT_OPTIONS,
             "page": page_number,
             "pages": pages,
         }

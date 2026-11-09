@@ -59,7 +59,7 @@ from . import privacy
 import logging
 from . import section_sync as sync
 from .rendering import (
-    _catalog, _matches_filters, _products, _with_category_ids, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
+    DEFAULT_SORT, _catalog, _matches_filters, _products, _with_category_ids, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
     render_page, render_synced_section_fast, shop_url,
 )
 from apps.catalog.models import Product, ProductVariant
@@ -1767,7 +1767,7 @@ def _preview_target(request):
         target = {
             "collection": collection_data,
             "filters": parse_collection_filters(request.query_params),
-            "sort": request.query_params.get("sort", "newest"),
+            "sort": request.query_params.get("sort", DEFAULT_SORT),
             # "page" names the template here, so a storefront ?page=2 arrives as page_number
             "page_number": int(request.query_params.get("page_number") or request.query_params.get("page") or 1)
             if str(request.query_params.get("page_number") or request.query_params.get("page") or "1").isdigit() else 1,
@@ -2298,13 +2298,13 @@ def storefront_product(
 
 
 def _listing(params):
-    """?sort=newest|price-asc|price-desc&page=N, plus the filters (see parse_collection_filters)"""
+    """?sort=title-asc|title-desc|price-asc|price-desc|newest&page=N, plus the filters (see parse_collection_filters)"""
     try:
         page_number = int(params.get("page", 1))
     except ValueError:
         page_number = 1
     return {
-        "sort": params.get("sort", "newest"),
+        "sort": params.get("sort", DEFAULT_SORT),
         "page_number": page_number,
         "filters": parse_collection_filters(params),
     }
