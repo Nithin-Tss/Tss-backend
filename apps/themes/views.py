@@ -1785,7 +1785,13 @@ def _preview_target(request):
         return page, {"product": product}, None
     if base_page(page) == "page":
         # ?handle=<handle>: that page; otherwise the first visible one, or a sample
-        return page, {"page_handle": request.query_params.get("handle") or None}, None
+        handle = request.query_params.get("handle") or None
+        if page == "page" and handle:
+            # Like the storefront, show the page with its own template (page.about-us), not the plain "page" one
+            own = StorePage.objects.filter(store=request.store, handle=handle).values_list("template", flat=True).first()
+            if own and is_page_key(own) and base_page(own) == "page":
+                page = own
+        return page, {"page_handle": handle}, None
     if page == "article":
         # ?article=<handle>: that post; otherwise the newest
         return page, {"article": request.query_params.get("article") or None}, None
