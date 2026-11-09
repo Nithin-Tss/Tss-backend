@@ -73,6 +73,8 @@ from .rendering import currency_symbol as _currency_symbol, DEFAULT_CURRENCY_SYM
 from .schemas import PAGES, base_page, default_template, is_page_key, public_schema, resolve, validate_custom_data
 from .services import (
     is_private,
+    canonical_policy_handle,
+    reserved_policy_handles,
     MAX_THEMES,
     create_theme,
     delete_path,
@@ -1113,8 +1115,10 @@ def _unique_page_handle(store, title, exclude_pk=None):
     base = slugify(title or "")[:200].strip("-") or "page"
     used = set(StorePage.objects.filter(store=store, handle__startswith=base)
                .exclude(pk=exclude_pk).values_list("handle", flat=True))
+    own = StorePage.objects.filter(pk=exclude_pk).values_list("handle", flat=True).first() if exclude_pk else None
+    reserved = reserved_policy_handles() - {own}
     handle, n = base, 2
-    while handle in used:
+    while handle in used or handle in reserved:
         handle, n = f"{base}-{n}", n + 1
     return handle
 
@@ -1165,6 +1169,11 @@ class StorePageSerializer(serializers.ModelSerializer):
         store = self.context["request"].store
         current = self.instance
         if attrs.get("handle"):
+            # Policy addresses (and their other spellings) belong to Settings > Policies; the policy's own
+            # page keeps its handle
+            if attrs["handle"] in reserved_policy_handles() and not (current and current.handle == attrs["handle"]):
+                raise serializers.ValidationError(
+                    {"handle": "This URL handle is used by a store policy. Write the policy in Settings > Policies."})
             taken = StorePage.objects.filter(store=store, handle=attrs["handle"])
             if current is not None:
                 taken = taken.exclude(pk=current.pk)
@@ -3028,6 +3037,18 @@ def storefront_wishlist_item(request, store_slug):
 @_storefront
 def storefront_page(store, request, params, handle):
     """/pages/<handle>: one visible page; hidden ones and unknown handles are not found."""
+    # Settings > Policies owns its addresses: another spelling of one (terms-of-services, terms, ...) goes to
+    # the policy's stable address, and an old Page with such a handle never hides the policy text.
+    policy_handle = canonical_policy_handle(handle)
+    if policy_handle:
+        policy_page = published_pages(store).filter(handle=policy_handle).first()
+        if policy_page is not None:
+            if handle != policy_handle:
+                destination = f"{shop_url(store)}/pages/{policy_handle}"
+                if request.META.get("QUERY_STRING"):
+                    destination += "?" + request.META["QUERY_STRING"]
+                return HttpResponsePermanentRedirect(destination)
+            handle = policy_handle
     page = published_pages(store).filter(handle=handle).first()
     if page is None:
         raise Http404("Page not found.")

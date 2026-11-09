@@ -2383,6 +2383,41 @@ POLICY_PAGES = {
 }
 MAX_POLICY_LENGTH = 200000
 
+# Other spellings of a policy's address that shoppers, old menus or old Pages use. The policy always owns
+# them: a visible policy text is served from its one canonical address (/pages/<handle>), never from an
+# old Page that happens to have a similar handle.
+POLICY_ALIASES = {
+    "privacyPolicy": ("privacy", "privacy-policies", "privacy-notice"),
+    "refundPolicy": ("refund", "refunds", "refund-policies", "returns", "return-policy", "returns-policy",
+                     "return-and-refund-policy", "returns-and-refunds"),
+    "termsOfService": ("terms", "terms-of-services", "terms-and-conditions", "terms-conditions", "terms-of-use",
+                       "tos"),
+    "shippingPolicy": ("shipping", "shipping-policies", "delivery-policy", "shipping-and-delivery"),
+    "contactInformation": ("contact-info",),
+    "legalNotice": ("legal",),
+}
+POLICY_ALIAS_TO_KEY = {alias: key for key, aliases in POLICY_ALIASES.items() for alias in aliases}
+
+
+def policy_key_for_handle(handle):
+    """The policy key a /pages/<handle> address belongs to (canonical handle or alias), else None."""
+    handle = (handle or "").strip().lower()
+    for key, (_, canonical) in POLICY_PAGES.items():
+        if handle == canonical:
+            return key
+    return POLICY_ALIAS_TO_KEY.get(handle)
+
+
+def canonical_policy_handle(handle):
+    """The one stable handle for a policy address, or None when `handle` is not a policy address."""
+    key = policy_key_for_handle(handle)
+    return POLICY_PAGES[key][1] if key else None
+
+
+def reserved_policy_handles():
+    """Every handle a policy owns: canonical ones and their aliases."""
+    return {h for _, h in POLICY_PAGES.values()} | set(POLICY_ALIAS_TO_KEY)
+
 
 def policy_pages(store):
     """{key: StorePage or None} for the store's designated policy pages."""
