@@ -280,7 +280,24 @@
     }
   });
 
-  document.addEventListener("keydown", function (event) { if (event.key === "Escape") closeDrawer(); });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") closeDrawer();
+    if (event.key === "Tab") {
+      var drawer = document.querySelector("[data-cart-drawer]");
+      if (!drawer || drawer.hidden) return;
+      var focusables = drawer.querySelectorAll("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      if (!focusables.length) return;
+      var first = focusables[0];
+      var last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  });
 
   // Add to cart (the product page): the count goes up at once, no reload
   document.addEventListener("submit", function (event) {
@@ -294,7 +311,7 @@
     var quantity = form.querySelector('[name="quantity"]');
     if (!ctx || !ctx.session) { if (notice) notice.textContent = "The cart is not available on this page."; return; }
     if (button) button.disabled = true;
-+      // A form may carry extra per-line details (e.g. a gift card's recipient) in inputs marked
+    // A form may carry extra per-line details (e.g. a gift card's recipient) in inputs marked
     // data-meta="key": those go to the server as metadata, alongside the usual product/variant/quantity.
     var metaFields = form.querySelectorAll("[data-meta]");
     var metadata = null;
