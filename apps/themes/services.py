@@ -2394,7 +2394,7 @@ POLICY_ALIASES = {
     "termsOfService": ("terms", "terms-of-services", "terms-and-conditions", "terms-conditions", "terms-of-use",
                        "tos"),
     "shippingPolicy": ("shipping", "shipping-policies", "delivery-policy", "shipping-and-delivery"),
-    "contactInformation": ("contact-info",),
+    "contactInformation": ("contact-info", "contact-us", "contact", "contactus", "contact-details"),
     "legalNotice": ("legal",),
 }
 POLICY_ALIAS_TO_KEY = {alias: key for key, aliases in POLICY_ALIASES.items() for alias in aliases}
