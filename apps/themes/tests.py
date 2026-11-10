@@ -5082,7 +5082,8 @@ class PageTemplatesTest(StoreClientMixin, APITestCase):
     def test_page_uses_the_template_it_picked(self):
         page = self.ok("post", "/api/v1/themes/pages/", {"title": "Contact", "body": "<p>Hi</p>", "template": "page.contact"}, expect=201)
         self.assertEqual(page["template"], "page.contact")
-        self.assertIn("contact-details", self.page("pages/contact"))
+        # "contact" is reserved for the contact-information policy, so the page gets another handle
+        self.assertIn("contact-details", self.page(f"pages/{page['handle']}"))
         other = self.ok("post", "/api/v1/themes/pages/", {"title": "Plain", "body": "<p>x</p>"}, expect=201)
         self.assertEqual(other["template"], "page.plain")
         self.assertNotIn("contact-details", self.page("pages/plain"))
