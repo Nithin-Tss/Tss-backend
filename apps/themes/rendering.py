@@ -3720,7 +3720,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             "shipping_flat_rate": str(store.shipping_flat_rate or "0.00"),
             "free_shipping_threshold": str(store.free_shipping_threshold or "") if store.free_shipping_threshold is not None else "",
         },
-        "customer": _customer_drop(customer, customer_user, store, base_url) if customer else (_sample_customer_drop(base_url) if editor else None),
+        "customer": _customer_drop(customer, customer_user, store, base_url) if customer else (_sample_customer_drop(base_url) if editor and customer_page == "account" else None),
         "customer_logged_in": customer is not None,
         # Settings > Customer accounts
         "show_sign_in_links": bool(getattr(store, "show_sign_in_links", True)),
