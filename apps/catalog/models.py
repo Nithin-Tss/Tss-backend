@@ -358,12 +358,15 @@ def handle_base(title):
 
 
 def unique_handle(store, title, exclude_pk=None, taken=()):
-    """handle_base(title), with -2, -3, ... added while the store already uses it."""
+    """
+    handle_base(title), with -1, -2, ... added while the store already uses it. Titles may repeat
+    ("Whisky" twice), handles may not: whisky, whisky-1, whisky-2.
+    """
     base = handle_base(title)
     used = set(Collection.objects.filter(store=store, handle__startswith=base)
                .exclude(pk=exclude_pk).values_list("handle", flat=True)) | set(taken)
     used.update(RESERVED_HANDLES)
-    handle, n = base, 2
+    handle, n = base, 1
     while handle in used:
         handle, n = f"{base}-{n}", n + 1
     return handle

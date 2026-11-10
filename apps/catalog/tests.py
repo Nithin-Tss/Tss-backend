@@ -3249,3 +3249,105 @@ class CollectionChannelTests(APITestCase):
 
         self.assertEqual(sorted(c["type"] for c in self.fetch(both)["sales_channels"]), ["online", "pos"])
         self.assertEqual(self.fetch(both)["sales_channels_count"], 2)
+
+
+class DuplicateCollectionTitleTests(APITestCase):
+    """Several collections may share a title ("Whisky"); only the handle (the address) is unique per store."""
+
+    COLLECTIONS = "/api/v1/catalog/collections/"
+
+    def setUp(self):
+        token, self.store_id = signup(self.client, "dupes@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=self.store_id)
+
+    def create(self, name, expect=201, **extra):
+        r = self.client.post(self.COLLECTIONS, {"name": name, **extra}, format="json")
+        self.assertEqual(r.status_code, expect, r.content)
+        return r.json()
+
+    def patch(self, collection, expect=200, **body):
+        r = self.client.patch(f"{self.COLLECTIONS}{collection['id']}/", body, format="json")
+        self.assertEqual(r.status_code, expect, r.content)
+        return r.json()
+
+    def test_the_same_title_can_be_used_again_and_gets_the_next_free_handle(self):
+        made = [self.create("Whisky") for _ in range(3)]
+
+        self.assertEqual([c["name"] for c in made], ["Whisky"] * 3)
+        self.assertEqual([c["handle"] for c in made], ["whisky", "whisky-1", "whisky-2"])
+        self.assertEqual(len({c["id"] for c in made}), 3)
+
+    def test_titles_match_regardless_of_case_and_spacing(self):
+        self.create("Whisky")
+
+        self.assertEqual(self.create("  WHISKY ")["handle"], "whisky-1")
+
+    def test_a_blank_handle_is_generated_like_a_missing_one(self):
+        self.create("Whisky")
+
+        self.assertEqual(self.create("Whisky", handle="")["handle"], "whisky-1")
+
+    def test_a_freed_handle_is_used_again(self):
+        first, second = self.create("Whisky"), self.create("Whisky")
+        self.client.delete(f"{self.COLLECTIONS}{first['id']}/")
+
+        self.assertEqual(self.create("Whisky")["handle"], "whisky")
+        self.assertEqual(second["handle"], "whisky-1")
+
+    def test_generated_handles_skip_ones_taken_by_hand(self):
+        self.create("Gin", handle="whisky-1")
+        self.create("Whisky")
+
+        self.assertEqual(self.create("Whisky")["handle"], "whisky-2")
+
+    def test_a_handle_typed_by_hand_must_still_be_unique(self):
+        self.create("Whisky")
+
+        r = self.create("Whisky", expect=400, handle="whisky")
+
+        self.assertEqual(r["handle"], ["Another collection already uses this URL handle."])
+        self.assertEqual(self.create("Whisky", handle="single-malt")["handle"], "single-malt")
+
+    def test_the_handle_can_be_edited_but_not_onto_another_collections(self):
+        first, second = self.create("Whisky"), self.create("Whisky")
+
+        self.assertEqual(self.patch(second, handle="scotch")["handle"], "scotch")
+        self.patch(second, expect=400, handle=first["handle"])
+        self.assertEqual(self.patch(first, name="Whisky")["handle"], "whisky")  # saving it again keeps its own
+
+    def test_renaming_to_a_title_in_use_keeps_the_handle(self):
+        self.create("Whisky")
+        gin = self.create("Gin")
+
+        renamed = self.patch(gin, name="Whisky")
+
+        self.assertEqual((renamed["name"], renamed["handle"]), ("Whisky", "gin"))
+
+    def test_another_store_may_use_the_same_title_and_handle(self):
+        self.create("Whisky")
+        token, other_id = signup(self.client, "dupes-b@example.com")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer " + token, HTTP_X_STORE_ID=other_id)
+
+        self.assertEqual(self.create("Whisky")["handle"], "whisky")
+
+    def test_each_same_titled_collection_opens_by_its_own_handle_and_id(self):
+        from apps.tenancy.models import Store
+
+        first, second = self.create("Whisky"), self.create("Whisky")
+        slug = Store.objects.get(pk=self.store_id).store_slug
+
+        for collection in (first, second):
+            r = self.client.get(f"{self.COLLECTIONS}{collection['id']}/")
+            self.assertEqual(r.json()["handle"], collection["handle"])
+            page = self.client.get(f"/s/{slug}/collections/{collection['handle']}")
+            self.assertEqual(page.status_code, 200)
+        self.assertEqual(Collection.objects.filter(store_id=self.store_id, name="Whisky").count(), 2)
+
+    def test_the_list_gives_every_collection_its_handle(self):
+        for _ in range(2):
+            self.create("Whisky")
+
+        rows = self.client.get(self.COLLECTIONS).json()
+        rows = rows["results"] if isinstance(rows, dict) else rows
+
+        self.assertEqual(sorted(r["handle"] for r in rows), ["whisky", "whisky-1"])
