@@ -92,6 +92,26 @@ SECTION_CSS = Markup("""<script>document.documentElement.classList.add("tss-js")
 .slideshow--fade .slideshow__slide{grid-area:1/1;opacity:0;visibility:hidden;transition:opacity .6s ease,visibility .6s}
 .slideshow--fade .slideshow__slide.is-active{opacity:1;visibility:visible}
 
+/* Mobile responsiveness */
+html,body{overflow-x:clip}
+img,video,iframe,svg{max-width:100%}
+.hero :is(h1,h2,p,a){overflow-wrap:anywhere}
+@media (max-width:749px){
+.hero--small{min-height:240px}.hero--medium{min-height:340px}.hero--large{min-height:440px}.hero--full{min-height:70vh}
+.hero--parallax{background-attachment:scroll}
+.hero .hero__content{padding:28px 52px 44px!important}
+.hero .hero__content>div{max-width:100%}
+.hero .hero__content .tss-fs{font-size:min(var(--t-fsm,var(--t-fsd)),7vw);line-height:1.2}
+.hero .hero__content .tss-fs :is(h1,h2.hero__title){font-size:min(var(--t-fsm,var(--t-fsd),32px),7.5vw);line-height:1.15;margin:0}
+.hero .hero__content .tss-fs p,.hero .hero__content p{font-size:clamp(14px,4vw,17px);line-height:1.45;margin:0}
+.hero .button{min-height:42px;padding-left:20px;padding-right:20px;font-size:14px}
+.slideshow__arrow{width:34px;height:34px;font-size:16px}
+.slideshow__arrow--prev{left:8px}.slideshow__arrow--next{right:8px}
+.slideshow__dots{bottom:10px}
+.tss-wrap .page-width{padding-left:var(--tss-px,16px);padding-right:var(--tss-px,16px)}
+.section-heading{font-size:clamp(20px,6vw,28px)}
+}
+
 /* Product lists */
 .product-list__sub{color:var(--muted);margin:-12px 0 24px}
 .product-list__actions{display:flex;align-items:center;gap:16px;margin-bottom:24px}
