@@ -1,4 +1,8 @@
-"""A small client for a local Ollama server (urllib only, no new dependency)."""
+"""
+The assistant's model client. chat() uses OpenRouter when OPENROUTER_API_KEY is set (the same key and model as the
+AI page builder), otherwise a local Ollama server (urllib only). ASSISTANT_PROVIDER=ollama forces Ollama.
+Both return the Ollama message shape the agent uses: {"content", "tool_calls": [{"function": {"name", "arguments"}}]}.
+"""
 import json
 import socket
 import urllib.error
@@ -17,7 +21,66 @@ _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _NOT_RUNNING = "Ollama isn't running on this computer. Start it (ollama serve) and try again."
 
 
+def provider():
+    chosen = str(getattr(settings, "ASSISTANT_PROVIDER", "") or "").lower()
+    if chosen in ("ollama", "openrouter"):
+        return chosen
+    return "openrouter" if getattr(settings, "OPENROUTER_API_KEY", "") else "ollama"
+
+
 def chat(messages, tools=None):
+    """One model call through the chosen provider; returns the model's message dict."""
+    if provider() == "openrouter":
+        return _openrouter_chat(messages, tools)
+    return _ollama_chat(messages, tools)
+
+
+def _to_openai(messages):
+    """Ollama-shaped messages -> OpenAI-shaped: tool calls get ids, arguments become JSON text, results name the call."""
+    out, pending, counter = [], [], 0
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            calls = []
+            for call in m["tool_calls"]:
+                fn = (call or {}).get("function") or {}
+                args = fn.get("arguments")
+                counter += 1
+                call_id = (call or {}).get("id") or f"call_{counter}"
+                pending.append(call_id)
+                calls.append({"id": call_id, "type": "function", "function": {
+                    "name": fn.get("name") or "",
+                    "arguments": args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False),
+                }})
+            out.append({"role": "assistant", "content": m.get("content") or "", "tool_calls": calls})
+        elif m.get("role") == "tool":
+            out.append({"role": "tool", "tool_call_id": pending.pop(0) if pending else "call_0", "content": m.get("content") or ""})
+        else:
+            out.append({"role": m["role"], "content": m.get("content") or ""})
+    return out
+
+
+def _openrouter_chat(messages, tools=None):
+    from apps.ai_assistant import llm
+
+    try:
+        reply = llm.chat(_to_openai(messages), tools=tools)
+    except llm.LLMError as error:
+        raise OllamaError(str(error)) from error
+    calls = []
+    for call in getattr(reply, "tool_calls", None) or []:
+        raw = call.function.arguments
+        try:
+            args = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        except ValueError:
+            args = {}
+        calls.append({"id": call.id, "function": {"name": call.function.name, "arguments": args if isinstance(args, dict) else {}}})
+    message = {"role": "assistant", "content": getattr(reply, "content", None) or ""}
+    if calls:
+        message["tool_calls"] = calls
+    return message
+
+
+def _ollama_chat(messages, tools=None):
     """POST /api/chat (no streaming) and return the model's message dict."""
     model = settings.ASSISTANT_OLLAMA_MODEL
     timeout = settings.ASSISTANT_OLLAMA_TIMEOUT

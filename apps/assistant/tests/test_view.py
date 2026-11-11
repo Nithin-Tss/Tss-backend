@@ -257,7 +257,7 @@ class FakeResponse(io.BytesIO):
 
 
 @override_settings(ASSISTANT_OLLAMA_URL="http://localhost:11434", ASSISTANT_OLLAMA_MODEL="qwen2.5:7b",
-                   ASSISTANT_OLLAMA_TIMEOUT=300)
+                   ASSISTANT_OLLAMA_TIMEOUT=300, ASSISTANT_PROVIDER="ollama")
 class OllamaTests(SimpleTestCase):
     def call(self, side_effect=None, body=None):
         opener = mock.Mock()
