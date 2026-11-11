@@ -9,6 +9,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 from apps.core.health import JobsHealthView
 from apps.core.report_views import ReportDetailView, ReportListView
 from apps.core.reports import AnalyticsView, DailyMetricsView, LiveView, OverviewView
+from apps.core.support import SupportContactView
 from apps.tenancy.team_urls import members_urlpatterns, roles_urlpatterns
 
 urlpatterns = [
@@ -17,6 +18,8 @@ urlpatterns = [
     path("docs/", SpectacularSwaggerView.as_view(url_name="schema", template_name="docs/swagger.html"), name="swagger-ui"),
     path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path("health/jobs/", JobsHealthView.as_view(), name="health-jobs"),
+    # Help Center "Contact support": emails SUPPORT_EMAIL, stores nothing
+    path("support/contact/", SupportContactView.as_view(), name="support-contact"),
     path("auth/", include("apps.identity.urls")),
     path("stores/", include("apps.tenancy.urls")),
     path("members/", include(members_urlpatterns)),
@@ -27,6 +30,8 @@ urlpatterns = [
     # AI page builder (drafts only): off unless the ai_page_builder feature flag is on for the store
     path("ai-assistant/", include("apps.ai_assistant.urls")),
     path("", include("apps.platform_admin.urls")),
+    # Help Center tickets: /support/tickets/ (owners) and /platform/support/ (staff)
+    path("", include("apps.helpdesk.urls")),
     path("catalog/", include("apps.catalog.urls")),
     path("metafields/", include("apps.metafields.urls")),
     path("customers/", include("apps.customers.urls")),

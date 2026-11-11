@@ -52,6 +52,7 @@ from apps.identity.models import User
 from apps.inventory.models import InventoryItem, Location, StockReservation, Transfer
 from apps.orders.models import DraftOrder, Order, OrderItem
 from apps.payments.models import Payment
+from apps.helpdesk import staff_views as helpdesk_staff_views
 from apps.platform_admin import platform_views
 from apps.platform_admin.models import ApiKey
 from apps.platform_admin.permissions import IsPlatformAdmin
@@ -734,6 +735,12 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
             c.__name__ for c in vars(platform_views).values()
             if isinstance(c, type) and issubclass(c, platform_views.PlatformView) and c is not platform_views.PlatformView
         }
+        # The staff side of the Help Center tickets lives in apps/helpdesk but is a PlatformView too
+        platform |= {
+            c.__name__ for c in vars(helpdesk_staff_views).values()
+            if isinstance(c, type) and issubclass(c, platform_views.PlatformView)
+            and c.__module__ == helpdesk_staff_views.__name__
+        }
         self.assertEqual({cls.__name__ for cls, _ in account_only.values()}, self.ACCOUNT_ONLY | platform)
         self.assertEqual(set(other.values()), self.FUNCTION_VIEWS)
 
@@ -1092,7 +1099,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload", "ai_assistant"})
+        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload", "ai_assistant", "support_contact", "support_ticket", "support_reply", "support_attach"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.

@@ -134,6 +134,7 @@ INSTALLED_APPS = [
     'apps.audit',
     'apps.webhooks',
     'apps.notifications',
+    'apps.helpdesk',
     'apps.platform_admin',
     'apps.ai_assistant',
 ]
@@ -334,6 +335,11 @@ ORDER_CUSTOMER_CANCEL_MINUTES = int(os.getenv('ORDER_CUSTOMER_CANCEL_MINUTES', 6
 # Sender of account emails (password reset, email verification)
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@localhost')
 
+# Optional. Where support is emailed: the older /support/contact/ form (apps/core/support.py) and a note about each new
+# ticket or owner reply (apps/helpdesk). Empty: tickets are still saved and staff see them in the platform inbox, but
+# no email is sent, and /support/contact/ answers 503 "Support email is not configured".
+SUPPORT_EMAIL = ""
+
 # Links in those emails open the frontend (see apps/identity/email_links.py)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 
@@ -461,6 +467,12 @@ REST_FRAMEWORK = {
         'auth_refresh': '120/min',
         # Password reset / verification emails: stops mailbox flooding
         'email': '5/hour',
+        # Help Center "Contact support" messages, per signed-in user (apps/core/support.py)
+        'support_contact': '5/hour',
+        # Help Center tickets (apps/helpdesk), per signed-in user: new tickets, replies, screenshots
+        'support_ticket': '5/hour',
+        'support_reply': '60/hour',
+        'support_attach': '30/hour',
         # Public storefront: browsing/cart traffic, and the calls that create orders
         'storefront': '120/min',
         'storefront_checkout': '20/hour',
