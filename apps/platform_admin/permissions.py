@@ -14,6 +14,18 @@ class IsPlatformAdmin(BasePermission):
         return bool(user and user.is_authenticated and user.is_owner and not isinstance(request.auth, ApiKey))
 
 
+class IsSupportAgent(BasePermission):
+    """Platform administrators and support agents (User.is_owner or User.is_support_agent), signed in as themselves."""
+
+    message = "Only platform support staff can do this."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated) or isinstance(request.auth, ApiKey):
+            return False
+        return bool(user.is_owner or user.is_support_agent)
+
+
 def feature_required(key):
     """
     A permission that refuses the request while feature flag `key` is off for the

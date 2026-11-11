@@ -80,6 +80,11 @@ class User(AbstractBaseUser):
         default=False,
     )
 
+    # Support agent: may work the platform's Support Tickets inbox, without being a full platform admin.
+    is_support_agent = models.BooleanField(
+        default=False,
+    )
+
     password = models.TextField(db_column="password_hash")
 
     # Django's built-in last_login field is physically stored as last_login_at.

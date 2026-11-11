@@ -35,6 +35,7 @@ def session_payload(user, tokens=None):
             "mobileNumber": user.phone,
             "emailVerified": user.email_verified_at is not None,
             "isPlatformAdmin": user.is_owner,
+            "isSupportAgent": user.is_owner or user.is_support_agent,
             "mfaEnabled": mfa.is_enabled(user),
         },
         "stores": stores_for_user(user),

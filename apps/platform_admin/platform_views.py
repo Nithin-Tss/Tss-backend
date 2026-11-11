@@ -6,6 +6,7 @@ Platform administration: /api/v1/platform/... Only platform administrators (User
     POST stores/<id>/suspend/ unsuspend/    block / restore a store without touching its data
     GET  users/   users/<id>/               find and inspect accounts (?q, ?admin=true)
     POST users/<id>/platform-admin/         {"isPlatformAdmin": true|false}
+    POST users/<id>/support-agent/          {"isSupportAgent": true|false}
     GET  api-keys/                          every store's keys (?store, ?status, ?q)
     POST api-keys/<id>/revoke/
     GET/POST feature-flags/   GET/PATCH/DELETE feature-flags/<key>/
@@ -155,6 +156,7 @@ def user_json(user, detail=False):
         "firstName": user.first_name,
         "lastName": user.last_name,
         "isPlatformAdmin": user.is_owner,
+        "isSupportAgent": user.is_support_agent,
         "emailVerified": user.email_verified_at is not None,
         "lastLogin": user.last_login,
         "createdAt": user.created_at,
@@ -220,6 +222,24 @@ class UserPlatformAdminView(PlatformView):
             User.objects.filter(pk=user.pk).update(is_owner=make_admin)
             note(
                 request, "admin_granted" if make_admin else "admin_revoked",
+                object_id=user.pk, object_repr=user.email,
+            )
+        return Response(user_json(get_user(user_id)))
+
+
+class UserSupportAgentView(PlatformView):
+    """POST /api/v1/platform/users/<id>/support-agent/  {"isSupportAgent": true|false}"""
+
+    @transaction.atomic
+    def post(self, request, user_id):
+        make_agent = request.data.get("isSupportAgent")
+        if not isinstance(make_agent, bool):
+            raise ValidationError({"isSupportAgent": "Send true or false."})
+        user = get_user(user_id)
+        if user.is_support_agent != make_agent:
+            User.objects.filter(pk=user.pk).update(is_support_agent=make_agent)
+            note(
+                request, "support_agent_granted" if make_agent else "support_agent_revoked",
                 object_id=user.pk, object_repr=user.email,
             )
         return Response(user_json(get_user(user_id)))

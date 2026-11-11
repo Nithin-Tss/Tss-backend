@@ -15,6 +15,12 @@ class Conversation(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_column="user_id", related_name="ai_conversations",
     )
+    # Which assistant owns this chat. The page builder and the help assistant never see each other's chats.
+    PAGE_BUILDER, HELP = "page_builder", "help"
+    ASSISTANT_TYPES = [(PAGE_BUILDER, "Page builder"), (HELP, "Help assistant")]
+    assistant_type = models.CharField(max_length=20, choices=ASSISTANT_TYPES, default=PAGE_BUILDER)
+    # Help assistant: a support ticket was raised from this chat, so the AI stops answering in it
+    escalated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

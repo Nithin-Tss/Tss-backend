@@ -83,7 +83,9 @@ class ChatView(AiView):
             except ValueError:
                 raise exceptions.ValidationError({"conversation_id": "Not a valid conversation id."})
             # Both store and user: another merchant's (or colleague's) conversation looks like it doesn't exist
-            conversation = Conversation.objects.filter(pk=wanted, store=request.store, user=request.user).first()
+            conversation = Conversation.objects.filter(
+                pk=wanted, store=request.store, user=request.user, assistant_type=Conversation.PAGE_BUILDER,
+            ).first()
             if conversation is None:
                 raise exceptions.NotFound("That conversation doesn't exist.")
         else:

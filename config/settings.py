@@ -137,6 +137,7 @@ INSTALLED_APPS = [
     'apps.helpdesk',
     'apps.platform_admin',
     'apps.ai_assistant',
+    'django.contrib.postgres',  # full-text search for help articles (apps/helpdesk/search.py)
 ]
 
 AUTH_USER_MODEL = "identity.User"

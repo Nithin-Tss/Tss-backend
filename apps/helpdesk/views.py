@@ -74,7 +74,7 @@ class TicketListCreateView(OwnerView):
     def get(self, request):
         tickets = services.with_list_fields(self.my_tickets())
         wanted = request.query_params.get("status")
-        if wanted in (Ticket.OPEN, Ticket.PENDING, Ticket.CLOSED):
+        if wanted in services.ALL_STATUSES:
             tickets = tickets.filter(status=wanted)
         return paged(request, tickets, services.ticket_json)
 

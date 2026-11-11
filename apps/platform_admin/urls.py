@@ -17,6 +17,7 @@ urlpatterns = [
     path("platform/stores/<uuid:store_id>/unsuspend/", p.StoreUnsuspendView.as_view(), name="platform_store_unsuspend"),
     path("platform/users/", p.UserListView.as_view(), name="platform_users"),
     path("platform/users/<uuid:user_id>/", p.UserDetailView.as_view(), name="platform_user"),
+    path("platform/users/<uuid:user_id>/support-agent/", p.UserSupportAgentView.as_view(), name="platform_user_support_agent"),
     path("platform/users/<uuid:user_id>/platform-admin/", p.UserPlatformAdminView.as_view(), name="platform_user_admin"),
     path("platform/api-keys/", p.ApiKeyListView.as_view(), name="platform_api_keys"),
     path("platform/api-keys/<uuid:key_id>/revoke/", p.ApiKeyRevokeView.as_view(), name="platform_api_key_revoke"),

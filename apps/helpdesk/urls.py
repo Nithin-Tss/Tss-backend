@@ -9,6 +9,8 @@ urlpatterns = [
     path("support/tickets/<uuid:ticket_id>/", v.TicketDetailView.as_view(), name="support_ticket"),
     path("support/tickets/<uuid:ticket_id>/messages/", v.TicketReplyView.as_view(), name="support_ticket_reply"),
     path("support/attachments/", v.AttachmentView.as_view(), name="support_attachment"),
+    path("platform/support/summary/", s.StaffSummaryView.as_view(), name="platform_support_summary"),
+    path("platform/support/agents/", s.StaffAgentsView.as_view(), name="platform_support_agents"),
     path("platform/support/tickets/", s.StaffTicketListView.as_view(), name="platform_support_tickets"),
     path(
         "platform/support/tickets/<uuid:ticket_id>/", s.StaffTicketDetailView.as_view(),

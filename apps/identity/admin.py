@@ -66,7 +66,7 @@ class UserAdmin(BaseUserAdmin):
     add_form = UserCreationForm
 
     list_display = ("email", "first_name", "last_name", "is_owner", "last_login", "created_at")
-    list_filter = ("is_owner",)
+    list_filter = ("is_owner", "is_support_agent")
     search_fields = ("email", "first_name", "last_name", "phone")
     ordering = ("-created_at",)
     filter_horizontal = ()
@@ -75,7 +75,7 @@ class UserAdmin(BaseUserAdmin):
     fieldsets = (
         (None, {"fields": ("email", "password")}),
         ("Profile", {"fields": ("first_name", "last_name", "phone", "email_verified_at")}),
-        ("Access", {"fields": ("is_owner",)}),
+        ("Access", {"fields": ("is_owner", "is_support_agent")}),
         ("Dates", {"fields": ("last_login", "created_at", "updated_at")}),
     )
     add_fieldsets = (

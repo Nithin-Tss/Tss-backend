@@ -235,11 +235,11 @@ class StaffTests(Base):
         detail = self.ok("get", f"{STAFF}{ticket['id']}/")
         self.assertEqual(detail["messages"][0]["senderName"], "Test User")
 
-    def test_reply_sets_pending_is_audited_and_the_owner_sees_a_support_team_message(self):
+    def test_reply_sets_waiting_on_customer_is_audited_and_the_owner_sees_a_support_team_message(self):
         ticket = self.new_ticket()
         self.as_admin()
         detail = self.ok("post", f"{STAFF}{ticket['id']}/messages/", {"message": "We fixed it, please check."}, expect=201)
-        self.assertEqual(detail["status"], "pending")
+        self.assertEqual(detail["status"], "waiting_on_customer")
         self.assertEqual(detail["messages"][1]["senderType"], "staff")
         entry = AuditLog.objects.get(action="platform.support_reply")
         self.assertEqual(entry.object_id, ticket["id"])
@@ -247,7 +247,7 @@ class StaffTests(Base):
 
         self.as_owner()
         seen = self.ok("get", f"{TICKETS}{ticket['id']}/")
-        self.assertEqual(seen["status"], "pending")
+        self.assertEqual(seen["status"], "waiting_on_customer")
         self.assertEqual(seen["messages"][1]["senderName"], "Support team")
         reopened = self.ok("post", f"{TICKETS}{ticket['id']}/messages/", {"message": "Still broken."}, expect=201)
         self.assertEqual(reopened["status"], "open")
