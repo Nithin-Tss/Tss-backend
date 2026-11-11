@@ -3162,8 +3162,8 @@ def _customer_drop(customer, user, store, base_url):
                 "id": str(itm.pk),
                 "title": itm.product.title if itm.product else "Product",
                 "quantity": itm.quantity,
-                "price": itm.price_per_unit,
-                "total_price": itm.total_price,
+                "price": itm.unit_price,
+                "total_price": itm.total,
                 "product_url": f"{base_url}/products/{itm.product.pk}" if itm.product else "#",
             })
         return {
