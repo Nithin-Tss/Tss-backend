@@ -631,7 +631,7 @@ PREVIEW_EDITOR = """
     var m = url.pathname.match(/^\\/s\\/[^/]+(\\/.*)?$/);
     var path = m ? (m[1] || "/") : url.pathname;
     path = path.replace(/\\/+$/, "") || "/";
-    if (/^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|search|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?|checkout(\\/.*)?|cart(\\/.*)?)?$/i.test(path)) {
+    if (/^\\/(products\\/[0-9a-f-]{36}|collections(\\/[^/]+)?|search|blog(\\/[^/]+){0,2}|pages\\/[^/]+|account(\\/(login|register))?|checkout(\\/.*)?|cart(\\/.*)?|wishlist(\\/)?)?$/i.test(path)) {
       return path + (url.search || "");
     }
     return null;
@@ -654,7 +654,7 @@ PREVIEW_EDITOR = """
       return;
     }
     var page = storePage(e);
-    if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart)/.test(page))) {
+    if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart|wishlist)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
       send({ type: "navigate", path: page });
@@ -689,7 +689,7 @@ PREVIEW_EDITOR = """
     e.preventDefault();
     e.stopPropagation();
     var section = sectionAt(e.target);
-    if (!section) { send({ type: "select", id: "", block: null }); return; }
+    if (!section) { send({ type: "context", id: "", block: null, x: e.clientX, y: e.clientY }); return; }
     var blockEl = e.target.closest("[data-tss-block]");
     var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
     send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
@@ -1760,6 +1760,13 @@ def _preview_target(request):
     page = request.query_params.get("page") or "index"
     if page == "cart":
         return "index", {"cart_page": True}, None
+    if page == "wishlist":
+        # Drawn by the wishlist snippet: previewed with the newest products standing in for saved ones
+        sample = list(published_products(request.store).order_by("-created_at")[:4])
+        return "index", {
+            "wishlist_page_ids": [str(p.pk) for p in sample],
+            "wishlist_products": {str(p.pk): p for p in sample},
+        }, None
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
     if page == "collection":
@@ -1825,9 +1832,10 @@ class ThemePreviewView(StoreThemeView):
             # Cart markup is a shared snippet, not an editable/saved template, so omit that entry
             # before validating the theme data.
             templates = request.data.get("templates")
-            if isinstance(templates, dict) and "cart" in templates:
+            if isinstance(templates, dict) and ("cart" in templates or "wishlist" in templates):
                 preview_data = {**request.data, "templates": {**templates}}
-                preview_data["templates"].pop("cart")
+                preview_data["templates"].pop("cart", None)
+                preview_data["templates"].pop("wishlist", None)
         clean = validate_custom_data(preview_data)
         page, target, message = _preview_target(request)
         # ?customer=login|register|account: the customer page (templates/login.liquid) with the theme's header and

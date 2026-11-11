@@ -3972,7 +3972,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             str(SECTION_CSS),
             str(TYPE_CSS),
             str(CUSTOM_CSS),
-            cart_content,
+            (f'<div data-tss-section="page-snippet" data-tss-fixed data-tss-label="Cart">{cart_content}</div>'
+             if editor else str(cart_content)),
         )))
 
     if wishlist_page_ids is not None:
@@ -3988,7 +3989,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             str(SECTION_CSS),
             str(TYPE_CSS),
             str(CUSTOM_CSS),
-            wishlist_content,
+            (f'<div data-tss-section="page-snippet" data-tss-fixed data-tss-label="Wishlist">{wishlist_content}</div>'
+             if editor else str(wishlist_content)),
         )))
 
     if customer_page:
