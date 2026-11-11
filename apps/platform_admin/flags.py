@@ -25,7 +25,7 @@ REGISTRY = {
     "help_assistant": (
         "Help assistant",
         "Show merchants the Help chat widget (answers from help articles, can raise support tickets).",
-        False,
+        True,
     ),
 }
 
