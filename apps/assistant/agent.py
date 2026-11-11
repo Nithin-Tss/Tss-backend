@@ -9,7 +9,7 @@ import json
 import logging
 import re
 
-from . import ollama, resolver, steps, tools
+from . import model, resolver, steps, tools
 from .periods import store_zone
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ class Superseded(Exception):
     """A newer question from the same person replaced this one: stop before the next model call."""
 
 
-def run(question, ctx, chat=ollama.chat, history=(), open_theme=tools.open_theme, still_current=None):
+def run(question, ctx, chat=model.chat, history=(), open_theme=tools.open_theme, still_current=None):
     """
     Returns (answer, [{"name", "arguments"}, ...]) for the tools that actually ran.
 
@@ -179,7 +179,7 @@ def run(question, ctx, chat=ollama.chat, history=(), open_theme=tools.open_theme
 
     `still_current()` says whether this question is still the person's latest one. It is asked before every model
     call and tool call; when it says no, Superseded is raised. A model call already running cannot be interrupted
-    (urllib blocks until Ollama answers), so it is the only thing that still finishes.
+    (urllib blocks until the model answers), so it is the only thing that still finishes.
     """
     def check():
         if still_current is not None and not still_current():
