@@ -19,7 +19,10 @@ PUBLIC_PREFIXES = (
     "/api/v1/assistant/",  # answers 404 unless ASSISTANT_REAL_MODE is set
 )
 # Answers 503 on purpose when the third-party service isn't configured
-UNCONFIGURED_503 = {"/api/v1/payments/stripe/webhook/"}
+UNCONFIGURED_503 = {
+    "/api/v1/payments/stripe/webhook/",
+    "/api/v1/support/contact/",  # 503 "Support email is not configured." while settings.SUPPORT_EMAIL is empty
+}
 # Streaming or file endpoints that don't take a JSON body
 SKIP_JUNK = ("export", "download", "stream")
 METHODS = ("get", "post", "put", "patch", "delete")
