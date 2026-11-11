@@ -206,9 +206,11 @@ DATABASES = {
 }
 
 
-# AI assistant (apps/assistant): read-only, local machine only. It is off here and can only be turned on
-# by config/assistant_local_settings.py, never from the environment. While False the endpoint answers 404.
-ASSISTANT_REAL_MODE = False
+# AI assistant (apps/assistant): read-only. Off unless ASSISTANT_ENABLED=True is set in the environment
+# (or config/assistant_local_settings.py is used locally). While off the endpoint answers 404.
+# When on it installs apps.assistant and a second database alias, "assistant_ro": the same database and
+# credentials as "default", but every session is read-only and statements stop after 15 seconds.
+ASSISTANT_REAL_MODE = env_bool('ASSISTANT_ENABLED', default=False)
 # Model for the admin assistant when OpenRouter is used (empty: OPENROUTER_MODEL). Pick one that handles tool calls well.
 ASSISTANT_OPENROUTER_MODEL = os.getenv('ASSISTANT_OPENROUTER_MODEL', '')
 ASSISTANT_OLLAMA_URL = "http://localhost:11434"
@@ -218,7 +220,20 @@ ASSISTANT_OLLAMA_TIMEOUT = 300  # seconds to wait for one model reply (a CPU-onl
 ASSISTANT_OLLAMA_NUM_CTX = 8192
 # Ask PostgreSQL for a read-only session when connecting. Turn off if a connection pooler rejects startup
 # options; the connection_created hook in apps/assistant still sets the same thing after connecting.
-ASSISTANT_RO_STARTUP_OPTIONS = True
+ASSISTANT_RO_STARTUP_OPTIONS = os.getenv('ASSISTANT_RO_STARTUP_OPTIONS', '1') != '0'
+
+if ASSISTANT_REAL_MODE:
+    import copy
+
+    INSTALLED_APPS = [*INSTALLED_APPS, 'apps.assistant']
+    _ro = copy.deepcopy(DATABASES['default'])
+    _ro['CONN_MAX_AGE'] = 0  # a fresh session per request, so the read-only settings always apply
+    _ro['OPTIONS'] = dict(_ro.get('OPTIONS', {}))
+    if ASSISTANT_RO_STARTUP_OPTIONS:
+        _ro['OPTIONS']['options'] = '-c default_transaction_read_only=on -c statement_timeout=15000'
+    _ro['TEST'] = {'MIRROR': 'default'}
+    DATABASES = {**DATABASES, 'assistant_ro': _ro}
+    DATABASE_ROUTERS = [*globals().get('DATABASE_ROUTERS', []), 'apps.assistant.router.AssistantRouter']
 
 
 # Cache (Redis)
