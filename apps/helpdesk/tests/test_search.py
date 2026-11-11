@@ -90,3 +90,29 @@ class KeywordSearchTests(Content, TestCase):
 
         with override_settings(HELP_SEARCH_BACKEND="apps.helpdesk.search.KeywordSearch"):
             self.assertIsInstance(search.get_backend(), search.KeywordSearch)
+
+
+class SeedCommandTests(TestCase):
+    def run_seed(self):
+        from django.core.management import call_command
+
+        call_command("seed_help_articles", stdout=__import__("io").StringIO())
+
+    def test_seeds_published_guide_articles_and_unpublished_todo_placeholders(self):
+        self.run_seed()
+        published = HelpArticle.objects.filter(is_published=True)
+        self.assertGreaterEqual(published.count(), 10)
+        self.assertTrue(published.filter(slug="create-discount", category="discounts").exists())
+        placeholders = HelpArticle.objects.filter(is_published=False)
+        self.assertEqual({a.category for a in placeholders}, {"store_settings", "payments", "shipping", "domains"})
+        for placeholder in placeholders:
+            self.assertIn("TODO", placeholder.body)  # clearly marked, and never shown to the assistant
+        self.assertEqual(search.KeywordSearch().search("TODO write the help article"), [])
+
+    def test_running_it_again_keeps_admin_edits_and_adds_nothing(self):
+        self.run_seed()
+        count = HelpArticle.objects.count()
+        HelpArticle.objects.filter(slug="create-discount").update(body="Edited in the admin")
+        self.run_seed()
+        self.assertEqual(HelpArticle.objects.count(), count)
+        self.assertEqual(HelpArticle.objects.get(slug="create-discount").body, "Edited in the admin")
