@@ -338,6 +338,9 @@ def propose_theme_edit(ctx, path=None, start_line=None, end_line=None, new_text=
     if not isinstance(path, str) or path.strip() not in theme.names:
         return {"error": "That is not a file of this theme. Use a path from theme_files."}
     path = path.strip()
+    if path not in ctx.opened_files:
+        return {"error": "Read this file first with theme_files (path, and find to jump to the place), then use its "
+                         "line numbers. Do not guess line numbers."}
     try:
         start, end = int(start_line), int(end_line)
     except (TypeError, ValueError):
@@ -470,6 +473,9 @@ def clean_arguments(tool, arguments):
             return {}
     if not isinstance(arguments, dict):
         return {}
+    aliases = {"file_path": "path", "file": "path", "filename": "path", "start": "start_line", "end": "end_line",
+               "text": "new_text", "replacement": "new_text"}
+    arguments = {aliases.get(k, k): v for k, v in arguments.items()}  # models often name a parameter differently
     return {k: v for k, v in arguments.items() if k in tool.properties}
 
 

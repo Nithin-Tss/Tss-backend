@@ -323,3 +323,32 @@ class QueriesStaticTests(SimpleTestCase):
                      "_own_themes", "theme_for", "theme_file_list", "theme_file_text"):
             function = next(n for n in ast.parse(self.source).body if isinstance(n, ast.FunctionDef) and n.name == name)
             self.assertIn("store_id", [a.arg for a in function.args.args], name)
+
+
+class TextToolCallTests(SimpleTestCase):
+    def test_a_tool_call_written_as_text_becomes_a_real_one(self):
+        from apps.assistant import ollama
+        calls, rest = ollama.text_tool_calls(
+            "<tool_call>\n<function=theme_files>\n<parameter=path>\nsnippets/styles.liquid\n</parameter>\n"
+            "<parameter=find>\n--cols\n</parameter>\n</function>\n</tool_call>")
+        self.assertEqual(calls, [{"function": {"name": "theme_files", "arguments": {"path": "snippets/styles.liquid", "find": "--cols"}}}])
+        self.assertEqual(rest, "")
+
+    def test_plain_text_is_untouched(self):
+        from apps.assistant import ollama
+        self.assertEqual(ollama.text_tool_calls("Hello"), ([], "Hello"))
+
+
+class PythonicToolCallTests(SimpleTestCase):
+    def test_python_style_call_is_parsed(self):
+        from apps.assistant import ollama
+        calls, rest = ollama.text_tool_calls(
+            "<|tool_call_start|>[propose_theme_edit(file_path='a/b.liquid', start_line=5, new_text='x\\ny')]<|tool_call_end|>")
+        self.assertEqual(calls[0]["function"]["name"], "propose_theme_edit")
+        self.assertEqual(calls[0]["function"]["arguments"]["start_line"], 5)
+        self.assertEqual(rest, "")
+
+    def test_aliases_and_unread_file(self):
+        from apps.assistant import tools
+        tool = tools.TOOLS["propose_theme_edit"]
+        self.assertEqual(tools.clean_arguments(tool, {"file_path": "a.liquid", "start": 1}), {"path": "a.liquid", "start_line": 1})

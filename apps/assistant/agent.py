@@ -87,8 +87,13 @@ def _result_message(name, result):
     return {"role": "tool", "tool_name": name, "content": json.dumps(result, ensure_ascii=False, default=str)}
 
 
+TRY_AGAIN = "I could not finish that. Please ask again in a few words."
+
+
 def _answer(message):
     text = _INR.sub("₹", (message.get("content") or "").strip())
+    if "<tool_call" in text or "<function=" in text or "<|tool_call" in text:  # a tool call the model wrote as text: never show it
+        return TRY_AGAIN
     return text or NO_DATA
 
 

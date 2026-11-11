@@ -25,10 +25,10 @@ def _client():
     )
 
 
-def chat(messages, tools=None):
-    """One model call. Returns the reply message (has .content and .tool_calls)."""
+def chat(messages, tools=None, model=None):
+    """One model call. Returns the reply message (has .content and .tool_calls). `model` overrides OPENROUTER_MODEL."""
     client = _client()
-    kwargs = {"model": model_name(), "messages": messages}
+    kwargs = {"model": model or model_name(), "messages": messages}
     if tools:
         kwargs["tools"] = tools
     try:

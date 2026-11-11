@@ -209,6 +209,8 @@ DATABASES = {
 # AI assistant (apps/assistant): read-only, local machine only. It is off here and can only be turned on
 # by config/assistant_local_settings.py, never from the environment. While False the endpoint answers 404.
 ASSISTANT_REAL_MODE = False
+# Model for the admin assistant when OpenRouter is used (empty: OPENROUTER_MODEL). Pick one that handles tool calls well.
+ASSISTANT_OPENROUTER_MODEL = os.getenv('ASSISTANT_OPENROUTER_MODEL', '')
 ASSISTANT_OLLAMA_URL = "http://localhost:11434"
 ASSISTANT_OLLAMA_MODEL = "qwen2.5:7b"
 ASSISTANT_OLLAMA_TIMEOUT = 300  # seconds to wait for one model reply (a CPU-only laptop needs 30-120)
