@@ -301,10 +301,27 @@ class ReadOnlyHookTests(SimpleTestCase):
         self.assertIsNone(router.allow_migrate("default", "orders"))
 
     def test_local_settings_add_the_alias_and_the_flag(self):
+        import importlib
+        import os
+        import sys
         from django.conf import settings
-        from config import assistant_local_settings as local
 
         self.assertIs(settings.ASSISTANT_REAL_MODE, False)  # production setting stays off
+        # config.settings is already imported (flag read from the environment at that time), so re-import both
+        # modules with the environment patched; restore the original modules afterwards.
+        saved = {name: sys.modules.get(name) for name in ("config.settings", "config.assistant_local_settings")}
+        try:
+            with mock.patch.dict(os.environ):
+                os.environ.pop("ASSISTANT_ENABLED", None)
+                sys.modules.pop("config.settings", None)  # the local module sets the env var, then loads fresh
+                sys.modules.pop("config.assistant_local_settings", None)
+                local = importlib.import_module("config.assistant_local_settings")
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
         self.assertTrue(local.ASSISTANT_REAL_MODE)
         ro = local.DATABASES["assistant_ro"]
         default = local.DATABASES["default"]
