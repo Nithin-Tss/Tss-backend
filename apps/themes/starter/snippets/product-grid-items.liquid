@@ -1,0 +1,26 @@
+{%- comment -%}
+  The product cards of a product list: the cart / wishlist scripts, then one product card per product.
+  This is the loop that sections/main-collection.liquid, sections/product-grid.liquid and
+  sections/product-carousel.liquid each write out; render it inside the section's grid or track element.
+
+  Usage:
+    {% render 'product-grid-items',
+         products: collection.products,
+         s: s,
+         cart_icon: section.cart_icon,
+         wishlist_heart: section.wishlist_heart,
+         wishlist_ids: wishlist_ids,
+         return_url: return_url %}
+
+  products        the products to list
+  s               the section's settings (show_vendor, show_price, show_rating, show_tags, show_add_to_cart, image_ratio)
+  cart_icon       the section's "Cart icon" block settings, or nothing (see snippets/cart.liquid)
+  wishlist_heart  the section's "Wishlist heart" block settings, or nothing (see snippets/wishlist.liquid)
+  wishlist_ids    the shopper's wishlisted product ids
+  return_url      where the wishlist heart sends the shopper back to
+{%- endcomment -%}
+{%- if cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+{%- if wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+{%- for product in products -%}
+  {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: wishlist_heart, show_cart_icon: cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+{%- endfor -%}
