@@ -40,6 +40,8 @@ class Context:
     theme_id: Optional[str] = None
     read_theme_id: Optional[str] = None
     opened_files: list = field(default_factory=list)
+    # The change the model proposed in this request (at most one). Nothing is saved: the owner clicks Apply.
+    proposals: list = field(default_factory=list)
 
     def current_time(self):
         return self.now or timezone.now()
@@ -328,6 +330,38 @@ def open_theme(ctx):
     )
 
 
+def propose_theme_edit(ctx, path=None, start_line=None, end_line=None, new_text=""):
+    """Prepare (never save) a change to lines start_line..end_line of a theme file. The owner must click Apply."""
+    theme = open_theme(ctx)
+    if theme is None:
+        return {"error": "This store has no theme of its own yet."}
+    if not isinstance(path, str) or path.strip() not in theme.names:
+        return {"error": "That is not a file of this theme. Use a path from theme_files."}
+    path = path.strip()
+    try:
+        start, end = int(start_line), int(end_line)
+    except (TypeError, ValueError):
+        return {"error": "start_line and end_line must be whole numbers."}
+    if not isinstance(new_text, str) or len(new_text) > themecode.MAX_EDIT_CHARS:
+        return {"error": f"new_text must be text of at most {themecode.MAX_EDIT_CHARS} characters."}
+    if end - start + 1 > themecode.MAX_EDIT_LINES:
+        return {"error": f"Change at most {themecode.MAX_EDIT_LINES} lines at once."}
+    text = theme.read(path)
+    edit = themecode.line_edit(text, start, end, new_text)
+    if edit is None:
+        return {"error": "Those line numbers do not fit the file. Read the file again with theme_files."}
+    old, _ = edit
+    ctx.proposals[:] = [{
+        "path": path, "start_line": start, "end_line": end,
+        "old_text": old, "new_text": new_text.rstrip("\n"), "theme_id": theme.theme_id,
+    }]
+    return {
+        "proposed": True,
+        "note": "The change is shown to the owner with Apply and Discard buttons. It is NOT saved yet. Say in one or "
+                "two very short sentences what it changes, and ask the owner to check it and click Apply.",
+    }
+
+
 # ---------------------------------------------------------------- registry
 
 @dataclass(frozen=True)
@@ -337,6 +371,7 @@ class Tool:
     description: str
     properties: dict
     run: Callable
+    edit: bool = False  # offered only when the owner asks for a change (see agent.is_edit_request)
 
     def schema(self):
         return {
@@ -395,17 +430,35 @@ TOOLS = {
             {"topic": {"type": "string", "description": "What the person wants to do, in a few words"}},
             admin_help,
         ),
+        Tool(
+            "propose_theme_edit", "themes.manage",
+            "Propose a change to the store's theme code. It does NOT save anything: the owner sees the change and "
+            "clicks Apply. Replaces lines start_line to end_line of the file with new_text. Read the file with "
+            "theme_files first and use its line numbers. new_text is the new code for those lines, WITHOUT line "
+            "numbers or the | marker. Change as few lines as possible. Call it once.",
+            {
+                "path": {"type": "string", "description": "A file from theme_files, for example sections/product-grid.liquid"},
+                "start_line": {"type": "integer", "description": "First line to replace"},
+                "end_line": {"type": "integer", "description": "Last line to replace (same as start_line for one line)"},
+                "new_text": {"type": "string", "description": "The new code for those lines"},
+            },
+            propose_theme_edit,
+            edit=True,
+        ),
     )
 }
 
 
-def available_tools(permissions):
-    """The tools this member may use."""
-    return [t for t in TOOLS.values() if t.permission is None or t.permission in permissions]
+def available_tools(permissions, edit=False):
+    """The tools this member may use. The change tool only in edit mode, and then only it and theme_files."""
+    chosen = [t for t in TOOLS.values() if t.permission is None or t.permission in permissions]
+    if edit:
+        return [t for t in chosen if t.edit or t.name == "theme_files"]
+    return [t for t in chosen if not t.edit]
 
 
-def tool_schemas(permissions):
-    return [t.schema() for t in available_tools(permissions)]
+def tool_schemas(permissions, edit=False):
+    return [t.schema() for t in available_tools(permissions, edit)]
 
 
 def clean_arguments(tool, arguments):

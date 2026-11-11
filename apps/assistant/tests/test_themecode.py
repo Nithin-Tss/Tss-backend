@@ -394,3 +394,15 @@ class ViewTests(SimpleTestCase):
         code = "\n".join(line for line in section.splitlines() if not line.lstrip().startswith("#"))
         for word in ("_prepare", "get_store_theme", "services", ".save(", ".update(", ".delete(", ".create("):
             self.assertNotIn(word, code, word)
+
+
+class LineEditTests(SimpleTestCase):
+    def test_replaces_the_lines_and_keeps_the_final_newline(self):
+        self.assertEqual(themecode.line_edit("a\nb\nc\n", 2, 2, "X\nY"), ("b", "a\nX\nY\nc\n"))
+
+    def test_a_range_outside_the_file_is_refused(self):
+        self.assertIsNone(themecode.line_edit("a\nb\n", 3, 3, "x"))
+        self.assertIsNone(themecode.line_edit("a\nb\n", 2, 1, "x"))
+
+    def test_windows_line_endings_are_refused(self):
+        self.assertIsNone(themecode.line_edit("a\r\nb\r\n", 1, 1, "x"))

@@ -232,3 +232,27 @@ def schema_outline(text):
         "settings": settings,
         "blocks": blocks,
     }
+
+
+MAX_EDIT_LINES = 40
+MAX_EDIT_CHARS = 4_000
+
+
+def line_edit(text, start, end, new_text):
+    """
+    Replace lines start..end (1-based, inclusive) of `text` with `new_text`.
+    Returns (old_text, new_file_text), or None when the range does not fit the file. Pure: nothing is saved.
+    """
+    if not isinstance(text, str) or "\r" in text:
+        return None
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the file's final newline is not a line
+        trailing = "\n"
+    else:
+        trailing = ""
+    if not (isinstance(start, int) and isinstance(end, int)) or not 1 <= start <= end <= len(lines):
+        return None
+    new_lines = new_text.rstrip("\n").split("\n") if new_text.strip("\n") else []
+    old = "\n".join(lines[start - 1:end])
+    return old, "\n".join(lines[:start - 1] + new_lines + lines[end:]) + trailing
