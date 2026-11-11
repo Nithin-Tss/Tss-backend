@@ -461,7 +461,7 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'openrouter/free')
 OPENROUTER_BASE_URL = os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')
 OPENROUTER_TIMEOUT = float(os.getenv('OPENROUTER_TIMEOUT', '60'))  # seconds for one model reply
-REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['ai_assistant'] = os.getenv('AI_ASSISTANT_THROTTLE_RATE', '20/hour')
+REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['ai_assistant'] = os.getenv('AI_ASSISTANT_THROTTLE_RATE', '60/hour')
 
 
 # Requests one API key may make per minute (apps/platform_admin/authentication.py); 0 = unlimited

@@ -24,6 +24,8 @@ urlpatterns = [
     path("audit/", include("apps.audit.urls")),
     # AI assistant: answers 404 unless config/assistant_local_settings.py is the settings module
     path("assistant/", include("apps.assistant.urls")),
+    # AI page builder (drafts only): off unless the ai_page_builder feature flag is on for the store
+    path("ai-assistant/", include("apps.ai_assistant.urls")),
     path("", include("apps.platform_admin.urls")),
     path("catalog/", include("apps.catalog.urls")),
     path("metafields/", include("apps.metafields.urls")),

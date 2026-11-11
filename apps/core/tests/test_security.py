@@ -691,6 +691,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     PLATFORM_PERMISSIONS = ["IsAuthenticated", "IsPlatformAdmin"]
     # The AI assistant: any member of the store may ask, but no API key may (it reads store data)
     ASSISTANT_PERMISSIONS = ["IsAuthenticated", "NoApiKeys", "IsStoreMember"]
+    # The AI page builder: store staff with the theme permission, never an API key, and only where its flag is on
+    AI_PAGE_BUILDER_PERMISSIONS = ["IsAuthenticated", "NoApiKeys", "IsStoreMember", "HasStorePermission"]
 
     def classified(self):
         public, account_only, store_scoped, other = {}, {}, {}, {}
@@ -706,6 +708,8 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
             elif perms[:3] == self.STORE_PERMISSIONS and all(p.startswith("FeatureEnabled_") for p in perms[3:]):
                 store_scoped[route] = (cls, url)  # a feature flag may gate a store route further
             elif perms == self.ASSISTANT_PERMISSIONS:
+                store_scoped[route] = (cls, url)
+            elif perms[:4] == self.AI_PAGE_BUILDER_PERMISSIONS and perms[4:] == ["FeatureEnabled_ai_page_builder"]:
                 store_scoped[route] = (cls, url)
             elif perms == self.PLATFORM_PERMISSIONS:
                 account_only[route] = (cls, url)  # sign-in only as far as the store checks go; admins only (own test)
@@ -1088,7 +1092,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload"})
+        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload", "ai_assistant"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.
