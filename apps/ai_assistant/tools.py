@@ -378,13 +378,19 @@ TOOLS = {
 
 
 def run_tool(ctx, name, raw_arguments):
+    """Run one page-builder tool call. See dispatch()."""
+    return dispatch(TOOLS, ctx, name, raw_arguments)
+
+
+def dispatch(registry, ctx, name, raw_arguments):
     """
-    Run one tool call from the model. Returns (result, error_kind): error_kind is None on success, else
-    "malformed" | "unknown" | "validation" | "refused", and result is {"error": message} for the model.
+    Run one tool call from the model against `registry` ({name: func(ctx, args)}). Returns (result, error_kind):
+    error_kind is None on success, else "malformed" | "unknown" | "validation" | "refused", and result is
+    {"error": message} for the model. Shared by every assistant.
     """
-    func = TOOLS.get(name)
+    func = registry.get(name)
     if func is None:
-        return {"error": f"Unknown tool '{name}'. Available: {', '.join(TOOLS)}."}, "unknown"
+        return {"error": f"Unknown tool '{name}'. Available: {', '.join(registry)}."}, "unknown"
     try:
         args = json.loads(raw_arguments) if isinstance(raw_arguments, str) and raw_arguments.strip() else (raw_arguments or {})
     except ValueError:

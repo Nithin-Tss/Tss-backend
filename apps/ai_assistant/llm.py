@@ -15,6 +15,11 @@ def model_name():
     return settings.OPENROUTER_MODEL
 
 
+def help_model_name():
+    """The help assistant's model: HELP_ASSISTANT_MODEL, else OPENROUTER_MODEL."""
+    return getattr(settings, "HELP_ASSISTANT_MODEL", "") or settings.OPENROUTER_MODEL
+
+
 def _client():
     key = settings.OPENROUTER_API_KEY
     if not key:

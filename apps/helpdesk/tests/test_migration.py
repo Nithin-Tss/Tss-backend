@@ -30,6 +30,9 @@ class BackfillTests(TransactionTestCase):
 
         Store.objects.filter(store_slug="old-shop").delete()  # its tickets go with it
         User.objects.filter(email="old@example.com").delete()
+        from apps.helpdesk.models import TicketCounter
+
+        TicketCounter.objects.all().delete()
 
     def test_numbers_statuses_and_counter(self):
         old = self.migrate(BEFORE)

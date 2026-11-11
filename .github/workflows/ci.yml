@@ -93,5 +93,10 @@ jobs:
       - name: Apply migrations
         run: python manage.py migrate --noinput
 
+      # Full-text search, the GIN index and the ticket data migration need PostgreSQL (the SQLite run skips them).
+      # Runs the helpdesk and assistant tests with the real migrations; Postgres here is a superuser, so it can create the test DB.
+      - name: PostgreSQL-only tests (help article search, ticket migration)
+        run: python manage.py test apps.helpdesk apps.ai_assistant --settings=config.test_settings_pg --noinput
+
       - name: Collect static files
         run: python manage.py collectstatic --noinput

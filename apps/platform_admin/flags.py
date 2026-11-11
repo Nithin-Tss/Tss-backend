@@ -22,6 +22,11 @@ REGISTRY = {
         "Let the store's staff ask the AI assistant to build draft pages (About, FAQ, Contact...).",
         False,
     ),
+    "help_assistant": (
+        "Help assistant",
+        "Show merchants the Help chat widget (answers from help articles, can raise support tickets).",
+        False,
+    ),
 }
 
 

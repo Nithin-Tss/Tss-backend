@@ -55,7 +55,6 @@ from apps.payments.models import Payment
 from apps.helpdesk import staff_views as helpdesk_staff_views
 from apps.platform_admin import platform_views
 from apps.platform_admin.models import ApiKey
-from apps.platform_admin.permissions import IsPlatformAdmin
 from apps.purchasing.models import PurchaseOrder
 from apps.tenancy.models import ShippingRate, ShippingZone, Store, TaxRate
 from apps.webhooks.models import WebhookDelivery, WebhookEndpoint
@@ -690,6 +689,10 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
     METHODS = ("get", "post", "put", "patch", "delete")
     STORE_PERMISSIONS = ["IsAuthenticated", "IsStoreMember", "HasStorePermission"]
     PLATFORM_PERMISSIONS = ["IsAuthenticated", "IsPlatformAdmin"]
+    # Support tickets, staff side: platform admins and support agents (apps/helpdesk/staff_views.py)
+    SUPPORT_PERMISSIONS = ["IsAuthenticated", "IsSupportAgent"]
+    # The help assistant: any member of the store, never an API key, and only where its flag is on
+    HELP_ASSISTANT_PERMISSIONS = ["IsAuthenticated", "NoApiKeys", "IsStoreMember"]
     # The AI assistant: any member of the store may ask, but no API key may (it reads store data)
     ASSISTANT_PERMISSIONS = ["IsAuthenticated", "NoApiKeys", "IsStoreMember"]
     # The AI page builder: store staff with the theme permission, never an API key, and only where its flag is on
@@ -712,7 +715,9 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
                 store_scoped[route] = (cls, url)
             elif perms[:4] == self.AI_PAGE_BUILDER_PERMISSIONS and perms[4:] == ["FeatureEnabled_ai_page_builder"]:
                 store_scoped[route] = (cls, url)
-            elif perms == self.PLATFORM_PERMISSIONS:
+            elif perms[:3] == self.HELP_ASSISTANT_PERMISSIONS and perms[3:] == ["FeatureEnabled_help_assistant"]:
+                store_scoped[route] = (cls, url)
+            elif perms == self.PLATFORM_PERMISSIONS or perms == self.SUPPORT_PERMISSIONS:
                 account_only[route] = (cls, url)  # sign-in only as far as the store checks go; admins only (own test)
             else:
                 self.fail(f"{route}: unexpected permission classes {perms}")
@@ -741,6 +746,7 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
             if isinstance(c, type) and issubclass(c, platform_views.PlatformView)
             and c.__module__ == helpdesk_staff_views.__name__
         }
+        platform -= {"SupportView"}  # the shared base of the staff ticket views: not a route itself
         self.assertEqual({cls.__name__ for cls, _ in account_only.values()}, self.ACCOUNT_ONLY | platform)
         self.assertEqual(set(other.values()), self.FUNCTION_VIEWS)
 
@@ -756,7 +762,10 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         token, _ = self.sign_up("plain@example.com", "Plain")
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
         _, account_only, _, _ = self.classified()
-        platform = {r: v for r, v in account_only.items() if v[0].permission_classes[-1] is IsPlatformAdmin}
+        platform = {
+            r: v for r, v in account_only.items()
+            if v[0].permission_classes[-1].__name__ in ("IsPlatformAdmin", "IsSupportAgent")
+        }
         self.assertGreaterEqual(len(platform), 15)
         for route, (cls, url) in platform.items():
             for method in self.METHODS:
@@ -906,7 +915,7 @@ class HardeningTest(AccountTestBase):
         text = r.content.decode()
         for needle in (PASSWORD, "pbkdf2", "argon2", "md5$", "password_hash", "\"password\""):
             self.assertNotIn(needle, text)
-        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified", "isPlatformAdmin", "mfaEnabled"})
+        self.assertEqual(set(r.json()["user"]), {"id", "email", "firstName", "lastName", "mobileNumber", "emailVerified", "isPlatformAdmin", "isSupportAgent", "mfaEnabled"})
 
         me = self.client.get("/api/v1/auth/me/", HTTP_AUTHORIZATION=f"Bearer {r.json()['access']}")
         self.assertNotIn("password", me.content.decode().lower())
@@ -1099,7 +1108,7 @@ print(json.dumps({{
         self.assertEqual(conf["alg"], "HS256")
         self.assertTrue(conf["keys_match"])
         self.assertEqual(conf["default_permissions"], ["rest_framework.permissions.IsAuthenticated"])
-        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload", "ai_assistant", "support_contact", "support_ticket", "support_reply", "support_attach"})
+        self.assertEqual(set(conf["throttles"]), {"api", "auth", "auth_refresh", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload", "ai_assistant", "help_assistant", "support_contact", "support_ticket", "support_reply", "support_attach"})
 
     def test_django_deployment_check_finds_no_security_problems(self):
         # W005/W021 (HSTS for sub-domains / preload) are deliberate opt-ins, off by default here.

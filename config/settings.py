@@ -334,7 +334,7 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@localhost')
 # Optional. Where support is emailed: the older /support/contact/ form (apps/core/support.py) and a note about each new
 # ticket or owner reply (apps/helpdesk). Empty: tickets are still saved and staff see them in the platform inbox, but
 # no email is sent, and /support/contact/ answers 503 "Support email is not configured".
-SUPPORT_EMAIL = ""
+SUPPORT_EMAIL = os.getenv('SUPPORT_EMAIL', '')
 
 # Links in those emails open the frontend (see apps/identity/email_links.py)
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
@@ -605,3 +605,8 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = int(os.getenv('DJANGO_HSTS_SECONDS', '31536000'))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('DJANGO_HSTS_INCLUDE_SUBDOMAINS', default=False)
     SECURE_HSTS_PRELOAD = False
+
+# Help assistant (apps/helpdesk): the merchant-facing support chat. Same OpenRouter key as the page builder; the model
+# can differ (empty: OPENROUTER_MODEL). The feature flag help_assistant is off unless the platform enables it.
+HELP_ASSISTANT_MODEL = os.getenv('HELP_ASSISTANT_MODEL', '')
+REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['help_assistant'] = os.getenv('HELP_ASSISTANT_THROTTLE_RATE', '60/hour')
