@@ -1,0 +1,33 @@
+{%- comment -%} Site header: logo or shop name, main menu, search and cart links. {%- endcomment -%}
+<header class="site-header">
+  <div class="page-width site-header__inner">
+    <a class="site-header__brand" href="{{ routes.root_url }}">
+      {%- if section.settings.logo -%}
+        {{ section.settings.logo | image_url: width: 320 | image_tag: alt: shop.name, class: 'site-header__logo' }}
+      {%- else -%}
+        {{ shop.name }}
+      {%- endif -%}
+    </a>
+    {%- if section.settings.menu.links.size > 0 -%}
+      <nav class="site-header__nav" aria-label="{{ 'general.menu' | t }}">
+        <ul class="inline-list">
+          {%- for link in section.settings.menu.links -%}
+            <li><a href="{{ link.url }}"{% if link.active %} aria-current="page"{% endif %}>{{ link.title }}</a></li>
+          {%- endfor -%}
+        </ul>
+      </nav>
+    {%- endif -%}
+    <a href="{{ routes.search_url }}">{{ 'general.search' | t }}</a>
+    <a href="{{ routes.cart_url }}">{{ 'general.cart_count' | t: count: cart.item_count }}</a>
+  </div>
+</header>
+
+{% schema %}
+{
+  "name": "t:sections.header.name",
+  "settings": [
+    { "type": "image_picker", "id": "logo", "label": "t:sections.header.settings.logo" },
+    { "type": "link_list", "id": "menu", "label": "t:sections.header.settings.menu", "default": "main-menu" }
+  ]
+}
+{% endschema %}

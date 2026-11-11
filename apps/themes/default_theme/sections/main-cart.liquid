@@ -1,0 +1,36 @@
+{%- comment -%} Cart page: line items with quantities, subtotal and checkout. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ 'cart.title' | t }}</h1>
+  {%- if cart.item_count > 0 -%}
+    <form class="stack" action="{{ routes.cart_url }}" method="post">
+      <ul class="cart-items">
+        {%- for item in cart.items -%}
+          <li class="cart-items__row">
+            <a href="{{ item.url }}">{{ item.product.title }}</a>
+            {%- unless item.product.has_only_default_variant -%}
+              <span>{{ item.variant.title }}</span>
+            {%- endunless -%}
+            <label class="visually-hidden" for="Quantity-{{ forloop.index }}">{{ 'products.product.quantity' | t }}</label>
+            <input id="Quantity-{{ forloop.index }}" type="number" name="updates[]" value="{{ item.quantity }}" min="0" data-auto-submit>
+            <span>{{ item.final_line_price | money }}</span>
+          </li>
+        {%- endfor -%}
+      </ul>
+      {%- assign subtotal = cart.total_price | money -%}
+      <p>{{ 'cart.subtotal' | t: amount: subtotal }}</p>
+      <div class="inline-list">
+        <button class="button button--secondary" type="submit" name="update">{{ 'cart.update' | t }}</button>
+        <button class="button" type="submit" name="checkout">{{ 'cart.checkout' | t }}</button>
+      </div>
+    </form>
+  {%- else -%}
+    <p>{{ 'cart.empty' | t }}</p>
+    <a class="button" href="{{ routes.all_products_collection_url }}">{{ 'general.continue_shopping' | t }}</a>
+  {%- endif -%}
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_cart.name"
+}
+{% endschema %}

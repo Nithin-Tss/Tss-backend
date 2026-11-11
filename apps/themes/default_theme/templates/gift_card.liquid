@@ -1,0 +1,13 @@
+{%- comment -%} Gift card page sent to the customer: code, balance and a link to the shop. {%- endcomment -%}
+{%- assign initial = gift_card.initial_value | money -%}
+{%- assign balance = gift_card.balance | money -%}
+<section class="section page-width stack narrow">
+  <h1>{{ 'gift_card.title' | t: value: initial }}</h1>
+  {%- if gift_card.enabled == false or gift_card.expired -%}
+    <p role="alert">{{ 'gift_card.unavailable' | t }}</p>
+  {%- endif -%}
+  <p>{{ 'gift_card.code' | t }}</p>
+  <code class="gift-card-code">{{ gift_card.code | format_code }}</code>
+  <p>{{ 'gift_card.balance' | t: balance: balance }}</p>
+  <a class="button" href="{{ routes.root_url }}">{{ 'general.continue_shopping' | t }}</a>
+</section>

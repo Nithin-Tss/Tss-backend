@@ -1,0 +1,9 @@
+{%- comment -%} Page title, description and social sharing tags. {%- endcomment -%}
+<title>{{ page_title | default: shop.name | escape }}</title>
+{%- if page_description -%}
+  <meta name="description" content="{{ page_description | escape }}">
+{%- endif -%}
+<link rel="canonical" href="{{ canonical_url }}">
+<meta property="og:site_name" content="{{ shop.name | escape }}">
+<meta property="og:title" content="{{ page_title | default: shop.name | escape }}">
+<meta property="og:url" content="{{ canonical_url }}">

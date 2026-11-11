@@ -1,0 +1,96 @@
+{
+  "settings_schema": {
+    "colors": {
+      "name": "Colors",
+      "settings": {
+        "background": "Background",
+        "text": "Text",
+        "accent": "Buttons and links",
+        "accent_text": "Button text",
+        "border": "Borders"
+      }
+    },
+    "typography": {
+      "name": "Typography",
+      "settings": {
+        "font_body": "Body font",
+        "font_heading": "Heading font",
+        "font_scale": "Text size"
+      },
+      "options": {
+        "sans": "Sans-serif",
+        "serif": "Serif",
+        "mono": "Monospace"
+      }
+    },
+    "layout": {
+      "name": "Layout",
+      "settings": {
+        "page_width": "Page width",
+        "section_spacing": "Space between sections",
+        "radius": "Corner radius"
+      }
+    }
+  },
+  "blocks": {
+    "text": {
+      "name": "Text",
+      "settings": { "text": "Text", "style": "Style" },
+      "options": { "heading": "Heading", "body": "Body" }
+    },
+    "button": {
+      "name": "Button",
+      "settings": { "label": "Label", "link": "Link", "style": "Style" },
+      "options": { "primary": "Primary", "secondary": "Secondary" }
+    },
+    "card": {
+      "name": "Card",
+      "settings": { "image": "Image" }
+    }
+  },
+  "sections": {
+    "header_group": { "name": "Header group" },
+    "footer_group": { "name": "Footer group" },
+    "header": {
+      "name": "Header",
+      "settings": { "logo": "Logo", "menu": "Menu" }
+    },
+    "footer": {
+      "name": "Footer",
+      "settings": { "menu": "Menu" }
+    },
+    "announcement_bar": {
+      "name": "Announcement bar",
+      "settings": { "text": "Text", "link": "Link" }
+    },
+    "image_banner": {
+      "name": "Image banner",
+      "settings": { "image": "Image" }
+    },
+    "featured_collection": {
+      "name": "Featured collection",
+      "settings": { "heading": "Heading", "collection": "Collection", "limit": "Products to show" }
+    },
+    "rich_text": { "name": "Rich text" },
+    "main_product": { "name": "Product" },
+    "main_collection": {
+      "name": "Collection",
+      "settings": { "per_page": "Products per page" }
+    },
+    "main_list_collections": { "name": "Collections list" },
+    "main_cart": { "name": "Cart" },
+    "main_page": { "name": "Page" },
+    "main_contact": { "name": "Contact form" },
+    "main_blog": {
+      "name": "Blog",
+      "settings": { "per_page": "Articles per page" }
+    },
+    "main_article": { "name": "Article" },
+    "main_search": {
+      "name": "Search results",
+      "settings": { "per_page": "Results per page" }
+    },
+    "main_404": { "name": "Page not found" },
+    "main_password": { "name": "Password" }
+  }
+}

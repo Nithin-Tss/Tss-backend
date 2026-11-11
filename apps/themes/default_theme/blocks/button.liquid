@@ -1,0 +1,24 @@
+{%- comment -%} A link styled as a button. {%- endcomment -%}
+{%- if block.settings.label != blank -%}
+  <a class="button button--{{ block.settings.style }}" href="{{ block.settings.link }}" {{ block.shopify_attributes }}>
+    {{- block.settings.label | escape -}}
+  </a>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "t:blocks.button.name",
+  "settings": [
+    { "type": "text", "id": "label", "label": "t:blocks.button.settings.label" },
+    { "type": "url", "id": "link", "label": "t:blocks.button.settings.link" },
+    {
+      "type": "select", "id": "style", "label": "t:blocks.button.settings.style", "default": "primary",
+      "options": [
+        { "value": "primary", "label": "t:blocks.button.options.primary" },
+        { "value": "secondary", "label": "t:blocks.button.options.secondary" }
+      ]
+    }
+  ],
+  "presets": [{ "name": "t:blocks.button.name" }]
+}
+{% endschema %}

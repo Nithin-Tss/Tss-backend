@@ -1,0 +1,12 @@
+{%- comment -%} Page not found: a short message and a way back to the products. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ 'not_found.title' | t }}</h1>
+  <p>{{ 'not_found.text' | t }}</p>
+  <a class="button" href="{{ routes.all_products_collection_url }}">{{ 'general.continue_shopping' | t }}</a>
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_404.name"
+}
+{% endschema %}

@@ -1,0 +1,39 @@
+{%- comment -%} Collection page: title, description, sorting, product grid and pages. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ collection.title }}</h1>
+  {%- if collection.description != blank -%}
+    <div class="rte">{{ collection.description }}</div>
+  {%- endif -%}
+  {%- paginate collection.products by section.settings.per_page -%}
+    <form method="get">
+      <label for="SortBy-{{ section.id }}">{{ 'collections.sort_by' | t }}</label>
+      <select id="SortBy-{{ section.id }}" name="sort_by" data-auto-submit>
+        {%- for option in collection.sort_options -%}
+          <option value="{{ option.value }}"{% if option.value == collection.sort_by %} selected{% endif %}>{{ option.name }}</option>
+        {%- endfor -%}
+      </select>
+    </form>
+    {%- if collection.products.size > 0 -%}
+      <ul class="grid">
+        {%- for product in collection.products -%}
+          <li>{% render 'product-card', product: product %}</li>
+        {%- endfor -%}
+      </ul>
+    {%- else -%}
+      <p>{{ 'collections.empty' | t }}</p>
+    {%- endif -%}
+    {% render 'pagination', paginate: paginate %}
+  {%- endpaginate -%}
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_collection.name",
+  "settings": [
+    {
+      "type": "range", "id": "per_page", "label": "t:sections.main_collection.settings.per_page",
+      "min": 8, "max": 48, "step": 4, "default": 16
+    }
+  ]
+}
+{% endschema %}

@@ -58,6 +58,7 @@ from . import presets
 from . import privacy
 import logging
 from . import section_sync as sync
+from .default_provisioning import reset_file
 from .rendering import (
     DEFAULT_SORT, _catalog, _matches_filters, _products, _with_category_ids, dead_menu_urls, parse_collection_filters, published_pages, published_posts, redirect_forms, render_cart_html,
     render_page, render_synced_section_fast, shop_url,
@@ -157,14 +158,17 @@ class ThemeFilesView(StoreThemeView):
         })
 
     def post(self, request):
-        saved = save_file(
-            self.store_theme(),
-            request.data.get("path"),
-            request.data.get("content", ""),
-            base_version=_int_or_none(request.data.get("base_version")),
-            client=str(request.data.get("client") or "")[:64],
-            started_at=_float_or_none(request.data.get("started_at")),
-        )
+        if request.data.get("reset") in (True, "true"):  # {path, reset: true}: put the file back to its default
+            saved = reset_file(self.store_theme(), request.data.get("path"))
+        else:
+            saved = save_file(
+                self.store_theme(),
+                request.data.get("path"),
+                request.data.get("content", ""),
+                base_version=_int_or_none(request.data.get("base_version")),
+                client=str(request.data.get("client") or "")[:64],
+                started_at=_float_or_none(request.data.get("started_at")),
+            )
 
         body = {
             "path": saved.file_path,

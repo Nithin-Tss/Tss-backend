@@ -1,0 +1,18 @@
+{
+  "current": "Default",
+  "presets": {
+    "Default": {
+      "color_background": "#ffffff",
+      "color_text": "#1f1f1f",
+      "color_accent": "#2f5d50",
+      "color_accent_text": "#ffffff",
+      "color_border": "#e3e3e3",
+      "font_body": "system-ui, sans-serif",
+      "font_heading": "system-ui, sans-serif",
+      "font_scale": 100,
+      "page_width": 1200,
+      "section_spacing": 48,
+      "radius": 6
+    }
+  }
+}

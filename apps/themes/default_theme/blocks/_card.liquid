@@ -1,0 +1,21 @@
+{%- comment -%}
+  Private block (the leading "_" keeps it out of the general block list):
+  an optional image above text and buttons. Used by the Rich text section.
+{%- endcomment -%}
+<div class="card" {{ block.shopify_attributes }}>
+  {%- if block.settings.image -%}
+    {{ block.settings.image | image_url: width: 800 | image_tag: class: 'card__media', loading: 'lazy' }}
+  {%- endif -%}
+  <div class="card__body">{% content_for 'blocks' %}</div>
+</div>
+
+{% schema %}
+{
+  "name": "t:blocks.card.name",
+  "settings": [
+    { "type": "image_picker", "id": "image", "label": "t:blocks.card.settings.image" }
+  ],
+  "blocks": [{ "type": "text" }, { "type": "button" }],
+  "presets": [{ "name": "t:blocks.card.name" }]
+}
+{% endschema %}

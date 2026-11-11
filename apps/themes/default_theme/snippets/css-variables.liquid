@@ -1,0 +1,19 @@
+{%- comment -%}
+  The theme settings as CSS custom properties. Only variables live here;
+  every rule is in assets/base.css and reads these values.
+{%- endcomment -%}
+<style>
+  :root {
+    --color-background: {{ settings.color_background }};
+    --color-text: {{ settings.color_text }};
+    --color-accent: {{ settings.color_accent }};
+    --color-accent-text: {{ settings.color_accent_text }};
+    --color-border: {{ settings.color_border }};
+    --font-body: {{ settings.font_body }};
+    --font-heading: {{ settings.font_heading }};
+    --font-scale: {{ settings.font_scale | divided_by: 100.0 }};
+    --page-width: {{ settings.page_width }}px;
+    --section-spacing: {{ settings.section_spacing }}px;
+    --radius: {{ settings.radius }}px;
+  }
+</style>

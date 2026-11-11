@@ -1,0 +1,10 @@
+{%- comment -%} Free-form text, buttons and cards, centred on the page. {%- endcomment -%}
+<section class="section page-width rich-text">{% content_for 'blocks' %}</section>
+
+{% schema %}
+{
+  "name": "t:sections.rich_text.name",
+  "blocks": [{ "type": "text" }, { "type": "button" }, { "type": "_card" }],
+  "presets": [{ "name": "t:sections.rich_text.name" }]
+}
+{% endschema %}

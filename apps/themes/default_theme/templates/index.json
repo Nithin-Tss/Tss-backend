@@ -1,0 +1,16 @@
+{
+  "sections": {
+    "banner": {
+      "type": "image-banner",
+      "blocks": {
+        "heading": { "type": "text", "settings": { "style": "heading" } },
+        "button": { "type": "button", "settings": {} }
+      },
+      "block_order": ["heading", "button"],
+      "settings": {}
+    },
+    "featured": { "type": "featured-collection", "settings": {} },
+    "story": { "type": "rich-text", "settings": {} }
+  },
+  "order": ["banner", "featured", "story"]
+}

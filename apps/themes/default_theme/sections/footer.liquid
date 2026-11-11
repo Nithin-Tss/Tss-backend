@@ -1,0 +1,23 @@
+{%- comment -%} Site footer: a menu and the copyright line. {%- endcomment -%}
+{%- assign year = 'now' | date: '%Y' -%}
+<footer class="site-footer">
+  <div class="page-width">
+    {%- if section.settings.menu.links.size > 0 -%}
+      <ul class="inline-list">
+        {%- for link in section.settings.menu.links -%}
+          <li><a href="{{ link.url }}">{{ link.title }}</a></li>
+        {%- endfor -%}
+      </ul>
+    {%- endif -%}
+    <p class="site-footer__copyright">{{ 'sections.footer.copyright' | t: year: year, shop: shop.name }}</p>
+  </div>
+</footer>
+
+{% schema %}
+{
+  "name": "t:sections.footer.name",
+  "settings": [
+    { "type": "link_list", "id": "menu", "label": "t:sections.footer.settings.menu", "default": "footer" }
+  ]
+}
+{% endschema %}

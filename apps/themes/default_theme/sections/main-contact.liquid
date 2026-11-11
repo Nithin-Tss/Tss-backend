@@ -1,0 +1,24 @@
+{%- comment -%} Contact form: name, email and message. {%- endcomment -%}
+<section class="section page-width">
+  {%- form 'contact', class: 'stack narrow' -%}
+    {%- if form.posted_successfully? -%}
+      <p role="status">{{ 'contact.success' | t }}</p>
+    {%- endif -%}
+    {%- if form.errors -%}
+      <p role="alert">{{ 'contact.error' | t }}</p>
+    {%- endif -%}
+    <label for="ContactName">{{ 'contact.name' | t }}</label>
+    <input id="ContactName" type="text" name="contact[name]" autocomplete="name">
+    <label for="ContactEmail">{{ 'contact.email' | t }}</label>
+    <input id="ContactEmail" type="email" name="contact[email]" autocomplete="email" required>
+    <label for="ContactBody">{{ 'contact.message' | t }}</label>
+    <textarea id="ContactBody" name="contact[body]" required></textarea>
+    <button class="button" type="submit">{{ 'contact.send' | t }}</button>
+  {%- endform -%}
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_contact.name"
+}
+{% endschema %}

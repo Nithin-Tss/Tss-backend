@@ -1,0 +1,12 @@
+{%- comment -%} Previous and next links inside a paginate tag. Pass `paginate`. {%- endcomment -%}
+{%- if paginate.pages > 1 -%}
+  <nav class="pagination" aria-label="{{ 'general.pagination.label' | t }}">
+    {%- if paginate.previous -%}
+      <a href="{{ paginate.previous.url }}">{{ 'general.pagination.previous' | t }}</a>
+    {%- endif -%}
+    <span>{{ 'general.pagination.page' | t: current: paginate.current_page, total: paginate.pages }}</span>
+    {%- if paginate.next -%}
+      <a href="{{ paginate.next.url }}">{{ 'general.pagination.next' | t }}</a>
+    {%- endif -%}
+  </nav>
+{%- endif -%}

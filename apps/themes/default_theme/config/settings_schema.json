@@ -1,0 +1,64 @@
+[
+  {
+    "name": "theme_info",
+    "theme_name": "Default",
+    "theme_version": "1.0.0",
+    "theme_author": "Store theme",
+    "theme_documentation_url": "",
+    "theme_support_url": ""
+  },
+  {
+    "name": "t:settings_schema.colors.name",
+    "settings": [
+      { "type": "color", "id": "color_background", "label": "t:settings_schema.colors.settings.background", "default": "#ffffff" },
+      { "type": "color", "id": "color_text", "label": "t:settings_schema.colors.settings.text", "default": "#1f1f1f" },
+      { "type": "color", "id": "color_accent", "label": "t:settings_schema.colors.settings.accent", "default": "#2f5d50" },
+      { "type": "color", "id": "color_accent_text", "label": "t:settings_schema.colors.settings.accent_text", "default": "#ffffff" },
+      { "type": "color", "id": "color_border", "label": "t:settings_schema.colors.settings.border", "default": "#e3e3e3" }
+    ]
+  },
+  {
+    "name": "t:settings_schema.typography.name",
+    "settings": [
+      {
+        "type": "select", "id": "font_body", "label": "t:settings_schema.typography.settings.font_body",
+        "default": "system-ui, sans-serif",
+        "options": [
+          { "value": "system-ui, sans-serif", "label": "t:settings_schema.typography.options.sans" },
+          { "value": "Georgia, serif", "label": "t:settings_schema.typography.options.serif" },
+          { "value": "ui-monospace, monospace", "label": "t:settings_schema.typography.options.mono" }
+        ]
+      },
+      {
+        "type": "select", "id": "font_heading", "label": "t:settings_schema.typography.settings.font_heading",
+        "default": "system-ui, sans-serif",
+        "options": [
+          { "value": "system-ui, sans-serif", "label": "t:settings_schema.typography.options.sans" },
+          { "value": "Georgia, serif", "label": "t:settings_schema.typography.options.serif" },
+          { "value": "ui-monospace, monospace", "label": "t:settings_schema.typography.options.mono" }
+        ]
+      },
+      {
+        "type": "range", "id": "font_scale", "label": "t:settings_schema.typography.settings.font_scale",
+        "min": 90, "max": 120, "step": 5, "unit": "%", "default": 100
+      }
+    ]
+  },
+  {
+    "name": "t:settings_schema.layout.name",
+    "settings": [
+      {
+        "type": "range", "id": "page_width", "label": "t:settings_schema.layout.settings.page_width",
+        "min": 960, "max": 1600, "step": 40, "unit": "px", "default": 1200
+      },
+      {
+        "type": "range", "id": "section_spacing", "label": "t:settings_schema.layout.settings.section_spacing",
+        "min": 16, "max": 96, "step": 8, "unit": "px", "default": 48
+      },
+      {
+        "type": "range", "id": "radius", "label": "t:settings_schema.layout.settings.radius",
+        "min": 0, "max": 24, "step": 2, "unit": "px", "default": 6
+      }
+    ]
+  }
+]

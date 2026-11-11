@@ -1,0 +1,9 @@
+{
+  "type": "header",
+  "name": "t:sections.header_group.name",
+  "sections": {
+    "announcement": { "type": "announcement-bar", "settings": {} },
+    "header": { "type": "header", "settings": {} }
+  },
+  "order": ["announcement", "header"]
+}

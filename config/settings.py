@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -231,6 +231,11 @@ if ASSISTANT_REAL_MODE:
     _ro['TEST'] = {'MIRROR': 'default'}
     DATABASES = {**DATABASES, 'assistant_ro': _ro}
     DATABASE_ROUTERS = [*globals().get('DATABASE_ROUTERS', []), 'apps.assistant.router.AssistantRouter']
+
+# Default theme file tree (apps/themes/default_provisioning.py). The switch is off by default, and the cutoff is
+# 2026-11-11 00:00 IST (UTC+05:30), so only stores created at or after it can get the default theme tree.
+DEFAULT_TREE_ENABLED = os.environ.get("DEFAULT_TREE_ENABLED", "false").lower() == "true"
+DEFAULT_TREE_CUTOFF = datetime(2026, 11, 11, tzinfo=dt_timezone(timedelta(hours=5, minutes=30)))
 
 
 # Cache (Redis)

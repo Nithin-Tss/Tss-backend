@@ -1,0 +1,22 @@
+{%- comment -%} All collections page: one card per collection. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ 'collections.all_title' | t }}</h1>
+  <ul class="grid">
+    {%- for item in collections -%}
+      <li>
+        <a class="product-card" href="{{ item.url }}">
+          {%- if item.featured_image -%}
+            {{ item.featured_image | image_url: width: 600 | image_tag: class: 'product-card__media', loading: 'lazy' }}
+          {%- endif -%}
+          <span class="product-card__title">{{ item.title }}</span>
+        </a>
+      </li>
+    {%- endfor -%}
+  </ul>
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_list_collections.name"
+}
+{% endschema %}

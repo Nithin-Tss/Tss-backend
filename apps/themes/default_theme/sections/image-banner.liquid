@@ -1,0 +1,18 @@
+{%- comment -%} A wide image with text and buttons over it. {%- endcomment -%}
+<section class="image-banner">
+  {%- if section.settings.image -%}
+    {{ section.settings.image | image_url: width: 2000 | image_tag: class: 'image-banner__media', sizes: '100vw' }}
+  {%- endif -%}
+  <div class="image-banner__content page-width">{% content_for 'blocks' %}</div>
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.image_banner.name",
+  "settings": [
+    { "type": "image_picker", "id": "image", "label": "t:sections.image_banner.settings.image" }
+  ],
+  "blocks": [{ "type": "text" }, { "type": "button" }],
+  "presets": [{ "name": "t:sections.image_banner.name" }]
+}
+{% endschema %}

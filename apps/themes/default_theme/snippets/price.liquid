@@ -1,0 +1,13 @@
+{%- comment -%}
+  A price, with the compare-at price when the item is on sale.
+  Pass `product`, or `variant` to show one variant's price.
+{%- endcomment -%}
+{%- assign target = variant | default: product.selected_or_first_available_variant -%}
+<span class="price">
+  {%- if target.compare_at_price > target.price -%}
+    <span class="visually-hidden">{{ 'products.price.regular' | t }}</span>
+    <s class="price__compare">{{ target.compare_at_price | money }}</s>
+    <span class="visually-hidden">{{ 'products.price.sale' | t }}</span>
+  {%- endif -%}
+  <span class="price__current">{{ target.price | money }}</span>
+</span>

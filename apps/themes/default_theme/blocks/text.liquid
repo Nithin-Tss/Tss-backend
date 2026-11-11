@@ -1,0 +1,23 @@
+{%- comment -%} A heading or a paragraph of text. {%- endcomment -%}
+{%- if block.settings.text != blank -%}
+  <div class="block-text block-text--{{ block.settings.style }}" {{ block.shopify_attributes }}>
+    {{ block.settings.text }}
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "t:blocks.text.name",
+  "settings": [
+    { "type": "richtext", "id": "text", "label": "t:blocks.text.settings.text" },
+    {
+      "type": "select", "id": "style", "label": "t:blocks.text.settings.style", "default": "body",
+      "options": [
+        { "value": "heading", "label": "t:blocks.text.options.heading" },
+        { "value": "body", "label": "t:blocks.text.options.body" }
+      ]
+    }
+  ],
+  "presets": [{ "name": "t:blocks.text.name" }]
+}
+{% endschema %}

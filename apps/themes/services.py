@@ -32,6 +32,7 @@ from . import section_sync as sync
 from django.utils.text import slugify
 
 from .models import StorePage, StoreTheme, Theme, ThemeFile
+from .theme_paths import check_new_path, is_private_block
 from .schemas import (
     MAX_PAGE_TEMPLATES, PAGE_TEMPLATE, PAGES, SECTIONS as SECTION_SCHEMAS, STARTER_PAGE_TEMPLATES,
     default_template, resolve, validate_custom_data,
@@ -91,7 +92,11 @@ REQUIRED_FILES = {
     "snippets/collection-toolbar.liquid",
     "snippets/collection-pagination.liquid",
     "snippets/blog-filters.liquid",
+    # Default theme tree (default_provisioning): required once a theme has it
+    "config/settings_schema.json",
 }
+# Required files the starter doesn't ship: a theme without them must not trigger the starter refill below
+NOT_IN_STARTER = {"config/settings_schema.json"}
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 500
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
@@ -437,7 +442,7 @@ def _add_missing_starter_files(theme):
     """
     have = set(theme.files.values_list("file_path", flat=True))
 
-    if REQUIRED_FILES <= have:
+    if REQUIRED_FILES - NOT_IN_STARTER <= have:
         return
 
     ThemeFile.objects.bulk_create(
@@ -555,6 +560,9 @@ def get_store_theme(store):
         installed = StoreTheme.objects.select_related("theme").get(store=store, is_active=True)
 
     _prepare(installed, new_store=current is None)
+    if current is None:  # a brand-new theme from the starter: new stores also get the default tree
+        from .default_provisioning import provision_default_files
+        provision_default_files(installed)
     return installed
 
 
@@ -1361,7 +1369,7 @@ def clean_path(path):
     path = path.strip().strip("/")
     parts = path.split("/")
     names_ok = all(_SEGMENT.match(p) for p in parts[:-1]) and (
-        parts[-1] == KEEP or _SEGMENT.match(parts[-1])
+        parts[-1] == KEEP or _SEGMENT.match(parts[-1]) or is_private_block(path)
     )
 
     if not path or len(path) > 500 or not names_ok:
@@ -1427,6 +1435,8 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
         raise exceptions.ValidationError({"content": "Content must be text."})
     if len(content.encode("utf-8")) > MAX_FILE_BYTES:
         raise exceptions.ValidationError({"content": "File is larger than 256 KB."})
+    if path.lower().endswith(".json"):  # plain JSON (locales, settings_schema, section groups)
+        _parse_json(path, content)
 
     synced_name = sync.PATH_TO_SECTION.get(path)
     if synced_name and not (sync.SYNCED_FILES[synced_name]["kind"] == "template" and sync.is_legacy_template(content)):
@@ -1448,6 +1458,7 @@ def save_file(store_theme, path, content, base_version=None, client="", started_
             _blocks_from_card_code(store_theme, content)
         return existing
 
+    check_new_path(path)
     if theme.files.count() >= MAX_FILES:
         raise exceptions.ValidationError({"path": f"A theme can have at most {MAX_FILES} files."})
 
@@ -1504,7 +1515,7 @@ def rename_path(store_theme, source, target):
     is_folder = files[0].file_path != source
     target = target.strip().strip("/") if isinstance(target, str) else target
     # A folder target is checked through a file name inside it.
-    clean_path(f"{target}/{KEEP}" if is_folder else target)
+    check_new_path(clean_path(f"{target}/{KEEP}" if is_folder else target))
 
     moves = {
         f.file_path: target + f.file_path[len(source):] if is_folder else target

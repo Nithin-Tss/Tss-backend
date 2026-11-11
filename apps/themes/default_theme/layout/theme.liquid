@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="{{ request.locale.iso_code | default: 'en' }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% render 'meta-tags' %}
+    {% render 'css-variables' %}
+    {{ 'base.css' | asset_url | stylesheet_tag }}
+    <script src="{{ 'theme.js' | asset_url }}" defer></script>
+    {{ content_for_header }}
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{{ 'general.skip_to_content' | t }}</a>
+    {% sections 'header-group' %}
+    <main id="main" tabindex="-1">{{ content_for_layout }}</main>
+    {% sections 'footer-group' %}
+  </body>
+</html>

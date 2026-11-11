@@ -1,0 +1,20 @@
+{%- comment -%} A one-line message above the header. Hidden while its text is empty. {%- endcomment -%}
+{%- if section.settings.text != blank -%}
+  <div class="announcement-bar">
+    {%- if section.settings.link != blank -%}
+      <a href="{{ section.settings.link }}">{{ section.settings.text | escape }}</a>
+    {%- else -%}
+      {{ section.settings.text | escape }}
+    {%- endif -%}
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "t:sections.announcement_bar.name",
+  "settings": [
+    { "type": "text", "id": "text", "label": "t:sections.announcement_bar.settings.text" },
+    { "type": "url", "id": "link", "label": "t:sections.announcement_bar.settings.link" }
+  ]
+}
+{% endschema %}

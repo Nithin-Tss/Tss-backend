@@ -1,0 +1,31 @@
+{%- comment -%} Blog page: a list of articles with excerpts, in pages. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ blog.title }}</h1>
+  {%- paginate blog.articles by section.settings.per_page -%}
+    <ul class="stack">
+      {%- for article in blog.articles -%}
+        <li class="stack">
+          <h2><a href="{{ article.url }}">{{ article.title }}</a></h2>
+          {{ article.published_at | time_tag: format: 'date' }}
+          <div class="rte">{{ article.excerpt_or_content | strip_html | truncatewords: 40 }}</div>
+          <a href="{{ article.url }}">{{ 'blogs.read_more' | t }}</a>
+        </li>
+      {%- else -%}
+        <li>{{ 'blogs.empty' | t }}</li>
+      {%- endfor -%}
+    </ul>
+    {% render 'pagination', paginate: paginate %}
+  {%- endpaginate -%}
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_blog.name",
+  "settings": [
+    {
+      "type": "range", "id": "per_page", "label": "t:sections.main_blog.settings.per_page",
+      "min": 4, "max": 24, "step": 2, "default": 8
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,41 @@
+{%- comment -%} Search page: the search box and the results, in pages. {%- endcomment -%}
+<section class="section page-width stack">
+  <h1>{{ 'search.title' | t }}</h1>
+  <form class="inline-list" action="{{ routes.search_url }}" method="get" role="search">
+    <label class="visually-hidden" for="SearchQuery">{{ 'search.label' | t }}</label>
+    <input id="SearchQuery" type="search" name="q" value="{{ search.terms | escape }}">
+    <button class="button" type="submit">{{ 'general.search' | t }}</button>
+  </form>
+  {%- if search.performed -%}
+    {%- paginate search.results by section.settings.per_page -%}
+      {%- if search.results_count > 0 -%}
+        <ul class="grid">
+          {%- for item in search.results -%}
+            <li>
+              {%- if item.object_type == 'product' -%}
+                {% render 'product-card', product: item %}
+              {%- else -%}
+                <a href="{{ item.url }}">{{ item.title }}</a>
+              {%- endif -%}
+            </li>
+          {%- endfor -%}
+        </ul>
+      {%- else -%}
+        <p>{{ 'search.no_results' | t: terms: search.terms }}</p>
+      {%- endif -%}
+      {% render 'pagination', paginate: paginate %}
+    {%- endpaginate -%}
+  {%- endif -%}
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_search.name",
+  "settings": [
+    {
+      "type": "range", "id": "per_page", "label": "t:sections.main_search.settings.per_page",
+      "min": 8, "max": 48, "step": 4, "default": 16
+    }
+  ]
+}
+{% endschema %}

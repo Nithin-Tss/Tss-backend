@@ -1,0 +1,16 @@
+{%- comment -%} One blog article: title, date, image and body. {%- endcomment -%}
+<article class="section page-width stack narrow">
+  <h1>{{ article.title }}</h1>
+  {{ article.published_at | time_tag: format: 'date' }}
+  {%- if article.image -%}
+    {{ article.image | image_url: width: 1200 | image_tag: class: 'media' }}
+  {%- endif -%}
+  <div class="rte">{{ article.content }}</div>
+  <a href="{{ blog.url }}">{{ 'blogs.back' | t }}</a>
+</article>
+
+{% schema %}
+{
+  "name": "t:sections.main_article.name"
+}
+{% endschema %}

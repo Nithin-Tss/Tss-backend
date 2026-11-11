@@ -1,0 +1,43 @@
+{%- comment -%} Product page: image, title, price, variant picker and add to cart. {%- endcomment -%}
+{%- assign current = product.selected_or_first_available_variant -%}
+<section class="section page-width split">
+  <div>
+    {%- if product.featured_image -%}
+      {{ product.featured_image | image_url: width: 1200 | image_tag: class: 'media' }}
+    {%- endif -%}
+  </div>
+  <div class="stack">
+    <h1>{{ product.title }}</h1>
+    {% render 'price', product: product %}
+    {%- form 'product', product, class: 'stack' -%}
+      {%- if product.has_only_default_variant -%}
+        <input type="hidden" name="id" value="{{ current.id }}">
+      {%- else -%}
+        <label for="Variant-{{ section.id }}">{{ 'products.product.variant' | t }}</label>
+        <select id="Variant-{{ section.id }}" name="id">
+          {%- for variant in product.variants -%}
+            <option value="{{ variant.id }}"{% if variant.id == current.id %} selected{% endif %}{% unless variant.available %} disabled{% endunless %}>
+              {{- variant.title -}}
+            </option>
+          {%- endfor -%}
+        </select>
+      {%- endif -%}
+      <label for="Quantity-{{ section.id }}">{{ 'products.product.quantity' | t }}</label>
+      <input id="Quantity-{{ section.id }}" type="number" name="quantity" value="1" min="1">
+      <button class="button" type="submit"{% unless current.available %} disabled{% endunless %}>
+        {%- if current.available -%}
+          {{ 'products.product.add_to_cart' | t }}
+        {%- else -%}
+          {{ 'products.product.sold_out' | t }}
+        {%- endif -%}
+      </button>
+    {%- endform -%}
+    <div class="rte">{{ product.description }}</div>
+  </div>
+</section>
+
+{% schema %}
+{
+  "name": "t:sections.main_product.name"
+}
+{% endschema %}

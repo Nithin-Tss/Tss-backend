@@ -1,0 +1,11 @@
+{%- comment -%} One product in a grid: image, title and price. Pass `product`. {%- endcomment -%}
+<a class="product-card" href="{{ product.url }}">
+  {%- if product.featured_image -%}
+    {{ product.featured_image | image_url: width: 600 | image_tag: class: 'product-card__media', loading: 'lazy' }}
+  {%- endif -%}
+  <span class="product-card__title">{{ product.title }}</span>
+  {% render 'price', product: product %}
+  {%- unless product.available -%}
+    <span class="product-card__badge">{{ 'products.product.sold_out' | t }}</span>
+  {%- endunless -%}
+</a>

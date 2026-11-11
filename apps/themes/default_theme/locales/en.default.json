@@ -1,0 +1,81 @@
+{
+  "general": {
+    "skip_to_content": "Skip to content",
+    "menu": "Main menu",
+    "search": "Search",
+    "cart_count": "Cart ({{ count }})",
+    "view_all": "View all",
+    "continue_shopping": "Continue shopping",
+    "pagination": {
+      "label": "Pages",
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {{ current }} of {{ total }}"
+    }
+  },
+  "products": {
+    "price": {
+      "regular": "Regular price",
+      "sale": "Sale price"
+    },
+    "product": {
+      "add_to_cart": "Add to cart",
+      "sold_out": "Sold out",
+      "variant": "Option",
+      "quantity": "Quantity"
+    }
+  },
+  "collections": {
+    "all_title": "Collections",
+    "sort_by": "Sort by",
+    "empty": "No products here yet."
+  },
+  "cart": {
+    "title": "Your cart",
+    "subtotal": "Subtotal: {{ amount }}",
+    "update": "Update",
+    "checkout": "Check out",
+    "empty": "Your cart is empty."
+  },
+  "contact": {
+    "name": "Name",
+    "email": "Email",
+    "message": "Message",
+    "send": "Send",
+    "success": "Thanks! We'll get back to you soon.",
+    "error": "Please check the form and try again."
+  },
+  "blogs": {
+    "read_more": "Read more",
+    "back": "Back to the blog",
+    "empty": "No articles yet."
+  },
+  "search": {
+    "title": "Search",
+    "label": "Search the store",
+    "no_results": "No results for \"{{ terms }}\"."
+  },
+  "not_found": {
+    "title": "Page not found",
+    "text": "The page you were looking for doesn't exist."
+  },
+  "password": {
+    "label": "Password",
+    "enter": "Enter",
+    "error": "That password isn't right."
+  },
+  "gift_card": {
+    "title": "Your {{ value }} gift card",
+    "code": "Gift card code",
+    "balance": "Balance: {{ balance }}",
+    "unavailable": "This gift card can no longer be used."
+  },
+  "sections": {
+    "footer": {
+      "copyright": "© {{ year }} {{ shop }}"
+    },
+    "featured_collection": {
+      "empty": "Choose a collection to show its products here."
+    }
+  }
+}
