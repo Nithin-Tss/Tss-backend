@@ -107,7 +107,8 @@ class SeedCommandTests(TestCase):
         self.assertEqual({a.category for a in placeholders}, {"store_settings", "payments", "shipping", "domains"})
         for placeholder in placeholders:
             self.assertIn("TODO", placeholder.body)  # clearly marked, and never shown to the assistant
-        self.assertEqual(search.KeywordSearch().search("TODO write the help article"), [])
+        hits = search.KeywordSearch().search("TODO payments shipping domains store settings", limit=50)
+        self.assertTrue(all(a.is_published for a in hits))  # the assistant can never answer from placeholder text
 
     def test_running_it_again_keeps_admin_edits_and_adds_nothing(self):
         self.run_seed()
