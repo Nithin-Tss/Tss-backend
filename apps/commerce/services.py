@@ -31,7 +31,6 @@ CHECKOUT_OPEN, CHECKOUT_COMPLETED, CHECKOUT_ABANDONED = "open", "completed", "ab
 ZERO = Decimal("0.00")
 PAYMENT_METHODS = ("cod", "gift_card")  # what a shopper may pick at /complete/
 ONLINE_METHODS = ("stripe",)  # placed only by the payment provider once money is confirmed
-MAX_OPEN_COD_ORDERS = 5
 MAX_LINE_QUANTITY = 999  # per cart line: stops absurd orders, even where the store sells past stock
 
 
@@ -619,19 +618,6 @@ def complete_checkout(checkout):
     return checkout
 
 
-def _check_open_order_cap(customer):
-    """Cash on delivery commits stock before any money moves: cap what one customer can hold open."""
-    open_cod = Order.objects.filter(
-        customer=customer, status="open", fulfillment_status="unfulfilled",
-        payments__status="pending", payments__is_deleted=False,
-    ).distinct().count()
-    if open_cod >= MAX_OPEN_COD_ORDERS:
-        raise ValidationError(
-            f"You already have {open_cod} unpaid cash-on-delivery orders waiting. "
-            "Please wait for them to be delivered or cancel one."
-        )
-
-
 def _guest_customer(checkout):
     """
     Guest checkout still leaves the store a customer record, matched by email.
@@ -777,9 +763,6 @@ def _place_order(checkout, payment_method, payment_reference=None):
         raise ValidationError({"payment_method": "A gift card can only be paid for online, not cash on delivery."})
 
     customer = checkout.customer or _guest_customer(checkout)
-    if payment_method == "cod":
-        _check_open_order_cap(customer)
-
     # Lock the discount so concurrent orders can't both take its last use
     code = (checkout.metadata or {}).get("discount_code")
     match = None

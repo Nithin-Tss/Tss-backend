@@ -485,13 +485,11 @@ class OrderCreationGapTests(CommerceTestBase):
         self.assertEqual(self.client.post(f"{self.base}/checkout/{cid_a}/complete/", **self.h).status_code, 400)
 
     # --- abuse
-    def test_open_cod_orders_are_capped_per_customer(self):
+    def test_open_cod_orders_are_not_capped_per_customer(self):
         set_available(self.variant, self.location, 100)
-        for n in range(services.MAX_OPEN_COD_ORDERS):
+        for n in range(7):
             self.h = {"HTTP_X_CART_SESSION": f"cap-session-{n}-aaaaaaaa"}
             self.assertEqual(self._place()[1].status_code, 201)
-        self.h = {"HTTP_X_CART_SESSION": "cap-session-last-aaaaaa"}
-        self.assertEqual(self._place()[1].status_code, 400)
 
     def test_address_must_be_complete(self):
         self.client.post(f"{self.base}/cart/items/", {"product": str(self.product.pk), "quantity": 1}, format="json", **self.h)

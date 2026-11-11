@@ -27,7 +27,7 @@ from apps.themes.services import save_file
 from apps.themes.views import StoreThemeView
 
 from . import actions, agent, queries, themecode, tools
-from .ollama import OllamaError
+from .model import ModelError
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ LOCK_GRACE = 15  # seconds a lock outlives one model reply: short, and refreshed
 
 
 def _lock_ttl():
-    return settings.ASSISTANT_OLLAMA_TIMEOUT + LOCK_GRACE
+    return int(settings.OPENROUTER_TIMEOUT) + LOCK_GRACE
 
 
 def take_lock(lock, token):
@@ -173,7 +173,7 @@ class AssistantChatView(APIView):
                 raise agent.Superseded()
         except agent.Superseded:
             return Response({"detail": "A newer question replaced this one."}, status=409)
-        except OllamaError as error:
+        except ModelError as error:
             return Response({"detail": str(error)}, status=503)
         except queries.ReadOnlyNotEnforced:
             logger.error("Assistant refused: the read-only session is not read-only")

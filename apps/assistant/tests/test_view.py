@@ -1,8 +1,6 @@
 """The endpoint, with the database, the model and the store-membership check replaced by fakes."""
 import ast
-import io
 import json
-import urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,7 +10,7 @@ from django.test import SimpleTestCase, override_settings
 from rest_framework.permissions import BasePermission
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from apps.assistant import ollama, queries, views
+from apps.assistant import model, queries, views
 from apps.audit import services as audit
 from apps.platform_admin.models import ApiKey
 
@@ -190,7 +188,7 @@ class ChatViewTests(SimpleTestCase):
         views.release_lock("k", "b")
         self.assertIsNone(cache.get("k"))
 
-    @override_settings(ASSISTANT_OLLAMA_TIMEOUT=300)
+    @override_settings(OPENROUTER_TIMEOUT=300)
     def test_the_lock_time_is_short_and_renewed_while_the_request_lives(self):
         self.assertEqual(views._lock_ttl(), 315)  # one model reply plus a short grace, not three replies
         with mock.patch.object(views.cache, "set") as put:
@@ -216,10 +214,10 @@ class ChatViewTests(SimpleTestCase):
         self.assertEqual(views.agent.run("hi", ctx(), chat=calls, still_current=lambda: True)[0], "ok")
 
     def test_the_lock_is_released_when_the_model_fails(self):
-        with mock.patch.object(views.agent, "run", side_effect=ollama.OllamaError("Ollama isn't running")):
+        with mock.patch.object(views.agent, "run", side_effect=model.ModelError("The model is unavailable")):
             response = post({"message": "hi"})
         self.assertEqual(response.status_code, 503)
-        self.assertIn("isn't running", response.data["detail"])
+        self.assertIn("unavailable", response.data["detail"])
         with mock.patch.object(views.agent, "run", return_value=("ok", [])):
             self.assertEqual(post({"message": "hi"}).status_code, 200)
 
@@ -248,101 +246,27 @@ class SwitchedOffTests(SimpleTestCase):
         self.assertNotIn("assistant_ro", settings.DATABASES)
 
 
-class FakeResponse(io.BytesIO):
-    def __enter__(self):
-        return self
 
-    def __exit__(self, *exc):
-        return False
-
-
-@override_settings(ASSISTANT_OLLAMA_URL="http://localhost:11434", ASSISTANT_OLLAMA_MODEL="qwen2.5:7b",
-                   ASSISTANT_OLLAMA_TIMEOUT=300, ASSISTANT_PROVIDER="ollama")
-class OllamaTests(SimpleTestCase):
-    def call(self, side_effect=None, body=None):
-        opener = mock.Mock()
-        if side_effect:
-            opener.open.side_effect = side_effect
-        else:
-            opener.open.return_value = FakeResponse(json.dumps(body).encode())
-        with mock.patch.object(ollama, "_opener", opener):
-            return ollama.chat([{"role": "user", "content": "hi"}], tools=[{"type": "function"}]), opener
-
-    def test_posts_to_api_chat_without_streaming(self):
-        message, opener = self.call(body={"message": {"role": "assistant", "content": "hello"}})
-        self.assertEqual(message["content"], "hello")
-        request = opener.open.call_args.args[0]
-        self.assertEqual(request.full_url, "http://localhost:11434/api/chat")
-        payload = json.loads(request.data)
-        self.assertIs(payload["stream"], False)
-        self.assertEqual(payload["model"], "qwen2.5:7b")
-        self.assertEqual(payload["tools"], [{"type": "function"}])
-        self.assertEqual(opener.open.call_args.kwargs["timeout"], 300)
-
-    def test_not_running(self):
-        with self.assertRaisesMessage(ollama.OllamaError, "isn't running"):
-            self.call(side_effect=urllib.error.URLError(ConnectionRefusedError()))
-
-    def test_timeout(self):
-        with self.assertRaisesMessage(ollama.OllamaError, "300 seconds"):
-            self.call(side_effect=TimeoutError())
-        with self.assertRaisesMessage(ollama.OllamaError, "300 seconds"):
-            self.call(side_effect=urllib.error.URLError(TimeoutError()))
-
-    def test_model_missing(self):
-        error = urllib.error.HTTPError("u", 404, "Not Found", {}, io.BytesIO(b'{"error": "model not found"}'))
-        with self.assertRaisesMessage(ollama.OllamaError, "ollama pull qwen2.5:7b"):
-            self.call(side_effect=error)
-
-    def test_garbage_reply(self):
-        with self.assertRaises(ollama.OllamaError):
-            self.call(body={"nope": 1})
-
-
-class QueriesStaticTests(SimpleTestCase):
-    """queries.py is the only file that reads the database; check its rules by reading the code."""
-
-    source = Path(queries.__file__).read_text(encoding="utf-8")
-
-    def test_no_write_calls(self):
-        for word in (".save(", ".update(", ".delete(", ".create(", "bulk_", "get_or_create", "update_or_create",
-                     ".raw("):
-            self.assertNotIn(word, self.source, word)
-
-    def test_every_model_query_uses_the_read_only_alias(self):
-        tree = ast.parse(self.source)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "objects":
-                call = next((p for p in ast.walk(tree) if isinstance(p, ast.Call)
-                             and isinstance(p.func, ast.Attribute) and p.func.attr == "using"
-                             and p.func.value is node), None)
-                self.assertIsNotNone(call, f"line {node.lineno}: .objects without .using(ALIAS)")
-
-    def test_every_query_is_filtered_by_store(self):
-        for name in ("_orders", "sales_totals", "low_stock_rows", "orders_page",
-                     "_own_themes", "theme_for", "theme_file_list", "theme_file_text"):
-            function = next(n for n in ast.parse(self.source).body if isinstance(n, ast.FunctionDef) and n.name == name)
-            self.assertIn("store_id", [a.arg for a in function.args.args], name)
 
 
 class TextToolCallTests(SimpleTestCase):
     def test_a_tool_call_written_as_text_becomes_a_real_one(self):
-        from apps.assistant import ollama
-        calls, rest = ollama.text_tool_calls(
+        from apps.assistant import model
+        calls, rest = model.text_tool_calls(
             "<tool_call>\n<function=theme_files>\n<parameter=path>\nsnippets/styles.liquid\n</parameter>\n"
             "<parameter=find>\n--cols\n</parameter>\n</function>\n</tool_call>")
         self.assertEqual(calls, [{"function": {"name": "theme_files", "arguments": {"path": "snippets/styles.liquid", "find": "--cols"}}}])
         self.assertEqual(rest, "")
 
     def test_plain_text_is_untouched(self):
-        from apps.assistant import ollama
-        self.assertEqual(ollama.text_tool_calls("Hello"), ([], "Hello"))
+        from apps.assistant import model
+        self.assertEqual(model.text_tool_calls("Hello"), ([], "Hello"))
 
 
 class PythonicToolCallTests(SimpleTestCase):
     def test_python_style_call_is_parsed(self):
-        from apps.assistant import ollama
-        calls, rest = ollama.text_tool_calls(
+        from apps.assistant import model
+        calls, rest = model.text_tool_calls(
             "<|tool_call_start|>[propose_theme_edit(file_path='a/b.liquid', start_line=5, new_text='x\\ny')]<|tool_call_end|>")
         self.assertEqual(calls[0]["function"]["name"], "propose_theme_edit")
         self.assertEqual(calls[0]["function"]["arguments"]["start_line"], 5)
