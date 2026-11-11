@@ -17,6 +17,11 @@ from .models import FeatureFlag, FeatureFlagOverride
 # key -> (name, description, on by default)
 REGISTRY = {
     "api_keys": ("API keys", "Let the store create API keys for its own integrations.", True),
+    "ai_page_builder": (
+        "AI page builder",
+        "Let the store's staff ask the AI assistant to build draft pages (About, FAQ, Contact...).",
+        False,
+    ),
 }
 
 
