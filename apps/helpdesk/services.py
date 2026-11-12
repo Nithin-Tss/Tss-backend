@@ -327,6 +327,7 @@ def ticket_json(ticket, *, staff=False):
         "messageCount": getattr(ticket, "message_count", None),
         "lastSender": getattr(ticket, "last_sender", None),
         "lastMessageAt": getattr(ticket, "last_message_at", None),
+        "executiveJoined": ticket.assigned_to_id is not None,  # the merchant is told once someone has taken over
     }
     if staff:
         user = ticket.user
