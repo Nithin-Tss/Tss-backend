@@ -1765,11 +1765,14 @@ def _preview_target(request):
     if page == "cart":
         return "index", {"cart_page": True}, None
     if page == "wishlist":
-        # Drawn by the wishlist snippet: previewed with the newest products standing in for saved ones
-        sample = list(published_products(request.store).order_by("-created_at")[:4])
+        preview_cart = cart_data.preview_id(request.store, request.user)
+        ids = cart_data.get_wishlist(request.store, request, preview_cart)
+        products = _catalog(request.store).filter(pk__in=ids)
+        ordered_products = {str(product.pk): product for product in products}
+        visible_ids = [str(pid) for pid in ids if str(pid) in ordered_products]
         return "index", {
-            "wishlist_page_ids": [str(p.pk) for p in sample],
-            "wishlist_products": {str(p.pk): p for p in sample},
+            "wishlist_page_ids": visible_ids,
+            "wishlist_products": ordered_products,
         }, None
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})

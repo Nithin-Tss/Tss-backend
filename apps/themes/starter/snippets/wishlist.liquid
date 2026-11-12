@@ -87,8 +87,10 @@
   // address: Back then asks the server for this same page with the same shopper, not for a new one.
   var shopPath = "{{ shop.url }}/";
   function cartId() {
+    var fromUrl = (window.location.search.match(/[?&]cart=([0-9a-fA-F-]+)/) || [])[1];
+    if (fromUrl) return fromUrl;
     var holder = document.querySelector("[data-cart-session]");
-    return holder ? holder.getAttribute("data-cart-session") : "";
+    return holder ? (holder.getAttribute("data-cart-session") || "") : "";
   }
   function tag(link) {
     var id = cartId();
@@ -126,19 +128,27 @@
     if (!button) return;
     var form = button.closest("form[data-wishlist-form]");
     if (!form) return;
+    event.preventDefault();
+    event.stopPropagation();
     var productId = form.querySelector('[name="product_id"]').value;
     var action = form.querySelector("[data-wishlist-action]");
     var toggles = document.querySelectorAll('[data-wishlist-toggle][data-product-id="' + productId + '"]');
-    var wasSaved = toggles.length > 0 && toggles[0].getAttribute("aria-pressed") === "true";
+    var wasSaved = button.getAttribute("aria-pressed") === "true";
     var saved = !wasSaved;
     // on the wishlist page the filled heart removes the card
     var removing = !saved && !!form.closest(".wishlist-page__grid");
     action.value = saved ? "add" : "remove";
-    if (!window.fetch || !window.FormData || !window.URLSearchParams) return; // plain form post
-    event.preventDefault();
+    var cartInput = form.querySelector('[name="cart"]');
+    if (cartInput && !cartInput.value) {
+      cartInput.value = cartId();
+    }
     paint(toggles, saved);
     var current = document.querySelector("[data-wishlist-count]");
     if (current && saved !== wasSaved) setCount(Number(current.textContent || 0) + (saved ? 1 : -1));
+    if (!window.fetch || !window.FormData || !window.URLSearchParams) {
+      form.submit();
+      return;
+    }
     // getAttribute: the form has an input named "action", which hides form.action
     fetch(form.getAttribute("action"), {
       method: "POST",
@@ -149,7 +159,7 @@
       if (!response.ok) throw new Error("wishlist");
       return response.json();
     }).then(function (data) {
-      setCount(Number(data.count) || 0);
+      if (data && typeof data.count !== "undefined") setCount(Number(data.count) || 0);
       if (removing && form.closest(".wishlist-page__grid")) {
         var card = form.closest(".product-card-shell");
         if (card) card.remove();
@@ -158,7 +168,8 @@
     }).catch(function () {
       paint(toggles, wasSaved);
       action.value = wasSaved ? "remove" : "add";
-      form.submit();
+      var currentRevert = document.querySelector("[data-wishlist-count]");
+      if (currentRevert && saved !== wasSaved) setCount(Number(currentRevert.textContent || 0) + (wasSaved ? 1 : -1));
     });
   });
 })();
