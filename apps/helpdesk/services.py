@@ -24,6 +24,7 @@ from apps.media.images import public_image_url
 from apps.media.models import MediaAsset
 from apps.media.services import upload_image
 
+from . import live
 from .models import MAX_BODY, Ticket, TicketMessage
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ def touch(ticket, status=None, *, extra_fields=()):
         ticket.resolved_at = None
         fields.append("resolved_at")
     ticket.save(update_fields=fields)  # updated_at is auto_now: listing it moves it forward
+    live.publish(ticket)  # every new message and every change goes through here
 
 
 def create_ticket(*, store, user, fields, attachments):

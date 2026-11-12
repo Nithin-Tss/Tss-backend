@@ -5,6 +5,7 @@ Help Center tickets, owner side (a store member). Mounted at /api/v1/ (see urls.
     GET  support/tickets/                      my tickets (?status=, ?limit=, ?offset=)
     GET  support/tickets/<id>/                 one ticket with its messages
     POST support/tickets/<id>/messages/        {message, attachments?}   a reply (reopens the ticket)
+    GET  support/tickets/<id>/events/          live stream: an event whenever the ticket changes
     POST support/attachments/                  multipart, field "image": one screenshot -> {id, name, url}
 
 Same permissions as apps/core/support.py: any active member of the store, no API key. A member sees only the tickets
@@ -23,7 +24,7 @@ from apps.core.permissions import IsStoreMember
 from apps.core.support import NoApiKeys
 from apps.platform_admin.platform_views import paged
 
-from . import services
+from . import live, services
 from .models import Ticket
 
 
@@ -105,6 +106,16 @@ class TicketReplyView(OwnerView):
         )
         services.owner_reply(ticket, user=request.user, fields=fields, attachments=attachments)
         return Response(services.ticket_detail_json(ticket), status=status.HTTP_201_CREATED)
+
+
+class TicketEventsView(OwnerView):
+    """GET support/tickets/<id>/events/?after=<id>: Server-Sent Events, one "ticket" event whenever it changes."""
+
+    renderer_classes = live.RENDERERS
+
+    def get(self, request, ticket_id):
+        ticket = self.my_ticket(ticket_id)
+        return live.stream_response(ticket.pk, live.after_param(request))
 
 
 class AttachmentView(OwnerView):

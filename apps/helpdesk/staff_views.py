@@ -29,7 +29,7 @@ from rest_framework.response import Response
 from apps.platform_admin.permissions import IsSupportAgent
 from apps.platform_admin.platform_views import PlatformView, note, paged
 
-from . import services
+from . import live, services
 from .models import Ticket
 
 User = get_user_model()
@@ -115,6 +115,16 @@ class StaffAgentsView(SupportView):
         return Response([
             {"id": str(u.pk), "name": u.get_full_name() or u.email, "email": u.email} for u in agents
         ])
+
+
+class StaffTicketEventsView(SupportView):
+    """GET platform/support/tickets/<id>/events/?after=<id>: Server-Sent Events, one "ticket" event per change."""
+
+    renderer_classes = live.RENDERERS
+
+    def get(self, request, ticket_id):
+        ticket = get_ticket(ticket_id)
+        return live.stream_response(ticket.pk, live.after_param(request))
 
 
 class StaffTicketDetailView(SupportView):

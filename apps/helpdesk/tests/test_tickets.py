@@ -14,7 +14,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from apps.audit.models import AuditLog
 from apps.core.tests.test_flow import StoreClientMixin
-from apps.helpdesk import services, views
+from apps.helpdesk import live, services, views
 from apps.helpdesk.models import Ticket, TicketMessage
 from apps.identity.models import User
 from apps.media.models import MediaAsset
@@ -279,6 +279,43 @@ class StaffTests(Base):
         detail = self.ok("post", f"{STAFF}{ticket['id']}/messages/",
                          {"message": "See this.", "attachments": [shot.json()["id"]]}, expect=201)
         self.assertEqual(len(detail["messages"][1]["attachments"]), 1)
+
+
+class LiveUpdateTests(Base):
+    def test_a_staff_reply_is_published_for_that_ticket_after_commit(self):
+        ticket = self.new_ticket()
+        self.as_admin()
+        last = live.TICKET_EVENTS.last_seq
+        with self.captureOnCommitCallbacks(execute=True):
+            self.ok("post", f"{STAFF}{ticket['id']}/messages/", {"message": "On it."}, expect=201)
+        events, _ = live.TICKET_EVENTS.wait(ticket["id"], last, 0.1)
+        self.assertEqual(events[-1][1], {"type": "ticket", "ticketId": ticket["id"]})
+
+    def test_an_owner_reply_is_published_too(self):
+        ticket = self.new_ticket()
+        last = live.TICKET_EVENTS.last_seq
+        with self.captureOnCommitCallbacks(execute=True):
+            self.ok("post", f"{TICKETS}{ticket['id']}/messages/", {"message": "Still broken."}, expect=201)
+        events, _ = live.TICKET_EVENTS.wait(ticket["id"], last, 0.1)
+        self.assertTrue(events)
+
+    def test_the_stream_is_open_to_the_owner_of_the_ticket_and_to_staff_only(self):
+        ticket = self.new_ticket()
+        with mock.patch.object(live, "STREAM_SECONDS", 0.2):
+            res = self.client.get(f"{TICKETS}{ticket['id']}/events/")
+            self.assertEqual((res.status_code, res["Content-Type"]), (200, "text/event-stream"))
+            self.assertIn(b"event: hello", b"".join(res.streaming_content))
+        other, _ = self.sign_up("other@example.com", "Other shop")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {other}")
+        self.assertEqual(self.client.get(f"{STAFF}{ticket['id']}/events/").status_code, 403)
+
+    def test_staff_stream_opens_for_an_agent(self):
+        ticket = self.new_ticket()
+        self.as_admin()
+        with mock.patch.object(live, "STREAM_SECONDS", 0.2):
+            res = self.client.get(f"{STAFF}{ticket['id']}/events/")
+            self.assertEqual(res.status_code, 200)
+            self.assertIn(b"event: hello", b"".join(res.streaming_content))
 
 
 class TableRuleTests(Base):

@@ -15,6 +15,7 @@ urlpatterns = [
     path("support/tickets/", v.TicketListCreateView.as_view(), name="support_tickets"),
     path("support/tickets/<uuid:ticket_id>/", v.TicketDetailView.as_view(), name="support_ticket"),
     path("support/tickets/<uuid:ticket_id>/messages/", v.TicketReplyView.as_view(), name="support_ticket_reply"),
+    path("support/tickets/<uuid:ticket_id>/events/", v.TicketEventsView.as_view(), name="support_ticket_events"),
     path("support/attachments/", v.AttachmentView.as_view(), name="support_attachment"),
     path("platform/support/summary/", s.StaffSummaryView.as_view(), name="platform_support_summary"),
     path("platform/support/agents/", s.StaffAgentsView.as_view(), name="platform_support_agents"),
@@ -22,6 +23,10 @@ urlpatterns = [
     path(
         "platform/support/tickets/<uuid:ticket_id>/", s.StaffTicketDetailView.as_view(),
         name="platform_support_ticket",
+    ),
+    path(
+        "platform/support/tickets/<uuid:ticket_id>/events/", s.StaffTicketEventsView.as_view(),
+        name="platform_support_events",
     ),
     path(
         "platform/support/tickets/<uuid:ticket_id>/messages/", s.StaffTicketReplyView.as_view(),
