@@ -8,8 +8,8 @@ from .help_prompts import SYSTEM_PROMPT
 def _fallback(changes):
     for change in changes:
         if change.get("ticket_number"):
-            return f"I've raised ticket {change['ticket_number']}. A support agent will reply here and by email."
-    return "I couldn't answer that. Could you tell me a bit more, or would you like me to raise a support ticket?"
+            return "I've passed this chat to our team. One of our executives will contact you."
+    return "I couldn't answer that. Could you tell me a bit more, or I can pass this chat to one of our executives."
 
 
 HELP = agent.Profile(

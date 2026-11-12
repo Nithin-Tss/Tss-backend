@@ -4,7 +4,6 @@ and never from the model's arguments, so no prompt can point a tool at another m
 
   search_help_articles(query)   read-only, published articles only
   get_store_settings()          read-only, a WHITELIST of safe fields (see store_settings_summary)
-  get_my_tickets()              read-only, this member's own tickets in this store
   raise_support_ticket(...)     the only tool that writes, and all it can do is create (or return) a ticket
 """
 from dataclasses import dataclass, field
@@ -17,7 +16,6 @@ from .models import Ticket
 
 ARTICLES_SHOWN = 3
 ARTICLE_CHARS = 3500   # of each article's text sent to the model
-TICKETS_SHOWN = 10
 
 
 @dataclass
@@ -120,20 +118,6 @@ def get_store_settings(ctx, args):
     return store_settings_summary(ctx.store)
 
 
-# ------------------------------------------------------------------ get_my_tickets
-
-def get_my_tickets(ctx, args):
-    tickets = Ticket.objects.filter(store=ctx.store, user=ctx.user).order_by("-updated_at")[:TICKETS_SHOWN]
-    return {"tickets": [
-        {
-            "ticket_number": t.ticket_number, "subject": t.subject, "status": t.get_status_display(),
-            "priority": t.priority, "category": t.category, "created": t.created_at.date().isoformat(),
-            "last_update": t.updated_at.date().isoformat(),
-        }
-        for t in tickets
-    ]}
-
-
 # ------------------------------------------------------------------ raise_support_ticket
 
 def raise_support_ticket(ctx, args):
@@ -158,15 +142,14 @@ def raise_support_ticket(ctx, args):
     })
     return {
         "ticket_number": ticket.ticket_number, "status": ticket.get_status_display(), "already_existed": not created,
-        "tell_the_merchant": f"Ticket {ticket.ticket_number} {'was raised' if created else 'is already open'}; "
-                             "a support agent will reply in this chat and by email.",
+        "tell_the_merchant": "Say that you have passed this chat to our team and that one of our executives will "
+                             "contact them. Do not mention ticket numbers.",
     }
 
 
 TOOLS = {
     "search_help_articles": search_help_articles,
     "get_store_settings": get_store_settings,
-    "get_my_tickets": get_my_tickets,
     "raise_support_ticket": raise_support_ticket,
 }
 
@@ -187,9 +170,8 @@ def tool_definitions():
            {"query": {"type": "string", "description": "What the merchant wants to know, in a few words."}}, ["query"]),
         fn("get_store_settings", "The merchant's own store settings (currency, tax, shipping, domains, checkout, "
            "whether payments are connected). Read-only; contains no secrets."),
-        fn("get_my_tickets", "The merchant's own support tickets and their statuses."),
         fn("raise_support_ticket",
-           "Raise a support ticket for a human agent. Use when the answer is not in the help articles, the issue needs "
+           "Hand this chat to a human executive, who will contact the merchant. Use when the answer is not in the help articles, the issue needs "
            "a human (billing, account access, bugs, data problems), or the merchant is frustrated.",
            {
                "subject": {"type": "string", "description": "Short title of the problem."},

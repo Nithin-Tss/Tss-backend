@@ -32,7 +32,7 @@ from .views import NewTicketThrottle
 FLAG = "help_assistant"
 MAX_MESSAGE_CHARS = 2000
 HISTORY_MESSAGES = 12
-ESCALATED_NOTICE = "A support agent will reply here."
+ESCALATED_NOTICE = "One of our executives will contact you."
 
 
 class StoreThrottle(SimpleRateThrottle):
@@ -118,9 +118,9 @@ class ChatView(HelpView):
         except llm.LLMError as error:
             return Response({"detail": str(error)}, status=503)
 
-        if ctx.ticket and ctx.ticket.ticket_number not in reply:
-            # The merchant must always be told the number, whatever the model wrote
-            reply = f"{reply}\n\nYour ticket number is {ctx.ticket.ticket_number}. {ESCALATED_NOTICE}".strip()
+        if ctx.ticket and ESCALATED_NOTICE not in reply and "executive" not in reply.lower():
+            # The merchant must always be told someone will contact them, whatever the model wrote
+            reply = f"{reply}\n\n{ESCALATED_NOTICE}".strip()
 
         Message.objects.create(conversation=conversation, role=Message.USER, content=message)
         Message.objects.create(conversation=conversation, role=Message.ASSISTANT, content=reply, changes=ctx.changes)
@@ -156,6 +156,25 @@ class EscalateView(HelpView):
             },
             status=201 if created else 200,
         )
+
+
+class ConversationListView(HelpView):
+    """The member's earlier chats in this store, newest first: [{id, title, updatedAt, escalated}]."""
+
+    def get(self, request):
+        rows = Conversation.objects.filter(
+            store=request.store, user=request.user, assistant_type=Conversation.HELP,
+        ).order_by("-updated_at")[:50]
+        items = []
+        for c in rows:
+            first = c.messages.filter(role=Message.USER).order_by("created_at").first()
+            if first is None:
+                continue  # an empty chat has nothing to show
+            items.append({
+                "id": str(c.pk), "title": " ".join(first.content.split())[:80],
+                "updatedAt": c.updated_at, "escalated": c.escalated,
+            })
+        return Response({"conversations": items})
 
 
 class ConversationView(HelpView):

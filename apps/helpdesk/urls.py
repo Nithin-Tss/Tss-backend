@@ -8,6 +8,7 @@ from . import views as v
 
 urlpatterns = [
     path("help-assistant/chat/", h.ChatView.as_view(), name="help_assistant_chat"),
+    path("help-assistant/conversations/", h.ConversationListView.as_view(), name="help_assistant_conversations"),
     path("help-assistant/conversations/<str:conversation_id>/escalate/", h.EscalateView.as_view(), name="help_assistant_escalate"),
     path("help-assistant/conversations/<uuid:conversation_id>/", h.ConversationView.as_view(), name="help_assistant_conversation"),
     path("help-assistant/articles/<slug:slug>/", h.ArticleView.as_view(), name="help_assistant_article"),

@@ -135,7 +135,7 @@ class RaiseTicketToolTests(Base):
         self.assertEqual(ticket.conversation_id.hex, body["conversation_id"].replace("-", ""))
         self.assertTrue(Conversation.objects.get().escalated)
         # the model forgot the number: the server adds it
-        self.assertIn("TSS-000001", body["reply"])
+        self.assertIn("executive", body["reply"])
         self.assertEqual(body["ticket"]["ticketNumber"], "TSS-000001")
         self.assertTrue(body["escalated"])
 
@@ -144,7 +144,7 @@ class RaiseTicketToolTests(Base):
         cid = r.json()["conversation_id"]
         r2, chat = self.chat([reply("should never be used")], message="hello again?", conversation_id=cid)
         chat.assert_not_called()
-        self.assertEqual(r2.json()["reply"], "A support agent will reply here.")
+        self.assertEqual(r2.json()["reply"], "One of our executives will contact you.")
         self.assertTrue(r2.json()["escalated"])
         self.assertEqual(Message.objects.count(), 2)  # nothing added to the AI chat
 
@@ -294,6 +294,16 @@ class AccessTests(Base):
         self.assertEqual(self.client.post(CHAT, {"message": "  "}, format="json").status_code, 400)
         self.assertEqual(self.client.post(CHAT, {"message": "x" * 2001}, format="json").status_code, 400)
 
+    def test_history_lists_only_my_chats_newest_first(self):
+        mine_old, mine_new = self.conversation(), self.conversation()
+        self.say(mine_old, "How do I add a domain?")
+        self.say(mine_new, "Shipping rates?")
+        self.say(self.conversation(user=self.user_b, store=self.store_b), "Not mine")
+        self.conversation()  # empty chats are left out
+        r = self.client.get("/api/v1/help-assistant/conversations/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([c["title"] for c in r.json()["conversations"]], ["Shipping rates?", "How do I add a domain?"])
+
     def test_chats_are_separate_from_the_page_builder(self):
         r, _ = self.chat([reply("hi")], message="hello")
         cid = r.json()["conversation_id"]
@@ -380,14 +390,6 @@ class ToolSafetyTests(Base):
             {"store_id": str(self.store_b.pk), "store": "b"}))
         self.assertEqual(result["general"]["store_name"], "Store A")
 
-    def test_my_tickets_are_only_mine(self):
-        mine = Ticket.objects.create(store=self.store_a, user=self.user_a, subject="Mine")
-        Ticket.objects.create(store=self.store_b, user=self.user_b, subject="Theirs")
-        Ticket.objects.create(store=self.store_a, user=None, subject="Orphan")
-        result = self.run_tool("get_my_tickets")
-        self.assertEqual([t["subject"] for t in result["tickets"]], ["Mine"])
-        self.assertEqual(result["tickets"][0]["ticket_number"], mine.ticket_number)
-
     def test_search_only_returns_published_articles(self):
         HelpArticle.objects.create(slug="d", title="Domain draft", body="domain secrets", keywords="domain", is_published=False)
         result = self.run_tool("search_help_articles", query="domain")
@@ -399,11 +401,11 @@ class ToolSafetyTests(Base):
         from django.test.utils import CaptureQueriesContext
 
         with CaptureQueriesContext(connection) as queries:
-            for name in ("search_help_articles", "get_store_settings", "get_my_tickets"):
+            for name in ("search_help_articles", "get_store_settings"):
                 help_tools.run_tool(self.ctx, name, json.dumps({"query": "domain"}))
         writes = [q["sql"] for q in queries if q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
         self.assertEqual(writes, [])
-        self.assertEqual(set(help_tools.TOOLS), {"search_help_articles", "get_store_settings", "get_my_tickets", "raise_support_ticket"})
+        self.assertEqual(set(help_tools.TOOLS), {"search_help_articles", "get_store_settings", "raise_support_ticket"})
 
 
 class MerchantTicketTests(Base):
@@ -625,5 +627,5 @@ class EscalationHelpersTests(Base):
         self.assertEqual(escalation.clean_fields("", "", "", "")["subject"], "Help needed")
 
     def test_profile_fallback_reports_the_ticket_number(self):
-        self.assertIn("TSS-000009", help_agent._fallback([{"ticket_number": "TSS-000009"}]))
-        self.assertIn("raise a support ticket", help_agent._fallback([]))
+        self.assertIn("executive", help_agent._fallback([{"ticket_number": "TSS-000009"}]))
+        self.assertIn("executive", help_agent._fallback([]))
