@@ -328,6 +328,8 @@ def ticket_json(ticket, *, staff=False):
         "lastSender": getattr(ticket, "last_sender", None),
         "lastMessageAt": getattr(ticket, "last_message_at", None),
         "executiveJoined": ticket.assigned_to_id is not None,  # the merchant is told once someone has taken over
+        # Shown to the merchant in "<name> has joined the chat": the name only, never the email address
+        "executiveName": (ticket.assigned_to.get_full_name() or "").strip() or None if ticket.assigned_to_id else None,
     }
     if staff:
         user = ticket.user
