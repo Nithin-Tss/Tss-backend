@@ -4356,7 +4356,19 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
         data = self.ok("get", "/api/v1/themes/settings/")
         self.assertIn("data-pcb=", self.ok("post", "/api/v1/themes/preview/", data)["html"])
 
-    def test_settings_change_the_card_and_keep_custom_code(self):
+    def card_parts(self, **changes):
+        """Patch the featured section's "Product card" block parts: {kind: {"hidden": bool, "settings": {...}}}."""
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["featured"]
+        for kind, values in changes.items():
+            part = card_part(section, kind)
+            part["hidden"] = values.get("hidden", part.get("hidden", False))
+            part.setdefault("settings", {}).update(values.get("settings", {}))
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"featured": section},
+        }}})
+
+    def test_card_parts_change_the_card_and_keep_custom_code(self):
         edited = self.files()[CARD].replace(
             '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
         )
@@ -4364,20 +4376,24 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
 
         before = self.page()
         self.assertNotIn('class="product-card__vendor"', before)
-        self.grid_settings(show_vendor=True, show_rating=True, show_tags=True,
-                           show_add_to_cart=True, image_ratio="portrait", gap=10)
+        self.card_parts(
+            card_vendor={"hidden": False}, card_rating={"hidden": False}, card_tags={"hidden": False},
+            card_button={"hidden": False}, card_image={"settings": {"ratio": "portrait"}},
+        )
         html = self.page()
-        for marker in ('class="product-card__vendor"', 'class="product-card__tags"', "product-card__cta\"",
-                       "product-card__media product-card__media--portrait", 'class="card-mark"'):
+        for marker in ('class="product-card__vendor"', 'class="product-card__tags"', 'product-card__cta"',
+                       "product-card__media product-card__media--portrait"):
             self.assertIn(marker, html)
+        # Sections draw from the Product card block; the edited card file is kept but not used by them
+        self.assertNotIn("card-mark", html)
         # Price off: the grid's cards have no price (the carousel still shows its own)
         prices = html.count('<span class="price">')
-        self.grid_settings(show_price=False)
+        self.card_parts(card_price={"hidden": True})
         self.assertLess(self.page().count('<span class="price">'), prices)
-        # Persisted on both sides: settings saved, code untouched
+        # Persisted on both sides: card parts saved, code untouched
         featured = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["featured"]
-        self.assertTrue(featured["settings"]["show_vendor"])
-        self.assertEqual(featured["settings"]["image_ratio"], "portrait")
+        self.assertFalse(card_part(featured, "card_vendor")["hidden"])
+        self.assertEqual(card_part(featured, "card_image")["settings"]["ratio"], "portrait")
         self.assertEqual(self.files()[CARD], edited)
 
     def test_product_page_preview_shows_the_clicked_product(self):
