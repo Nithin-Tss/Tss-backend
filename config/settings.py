@@ -116,6 +116,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'apps.core',
     'apps.tenancy',
+    'apps.currency',
     'apps.customers',
     'apps.catalog',
     'apps.metafields',
@@ -351,6 +352,13 @@ PUBLIC_API_URL = os.getenv('PUBLIC_API_URL', '').strip().rstrip('/')
 # How long the links work
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', 60 * 60))  # 1 hour
 EMAIL_VERIFICATION_TIMEOUT = int(os.getenv('EMAIL_VERIFICATION_TIMEOUT', 60 * 60 * 24 * 3))  # 3 days
+
+# Exchange rates (apps/currency). FX_PROVIDER: frankfurter (default, keyless, ~30 currencies) | oxr | static.
+# With frankfurter, setting OXR_APP_ID (Open Exchange Rates) also fills in the other ISO currencies.
+FX_PROVIDER = os.getenv('FX_PROVIDER', 'frankfurter')
+OXR_APP_ID = os.getenv('OXR_APP_ID', '')
+FX_RATE_MAX_AGE_HOURS = int(os.getenv('FX_RATE_MAX_AGE_HOURS', '168'))  # older rates count as "unavailable"
+FX_REFRESH_HOURS = int(os.getenv('FX_REFRESH_HOURS', '6'))
 
 # Background jobs (Celery, see config/celery.py)
 # Broker defaults to REDIS_URL. With no broker, tasks run inline in the calling process.

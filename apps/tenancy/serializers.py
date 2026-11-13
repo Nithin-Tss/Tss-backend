@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from apps.catalog.models import EXTRA_FIELDS
 from apps.core.rbac import TAX_VIEW
+from apps.currency import money, services as fx
 
 from .access import member_roles, membership_permissions
 from .models import Store
@@ -38,6 +39,15 @@ class StoreSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(required=False, allow_blank=True, max_length=30)
     address = serializers.CharField(required=False, allow_blank=True, max_length=500)
     currency = serializers.CharField(required=False, max_length=3)
+    baseCurrency = serializers.CharField(source="base_currency", read_only=True)
+    enabledCurrencies = serializers.ListField(
+        source="enabled_currencies", child=serializers.CharField(max_length=3), required=False, max_length=200
+    )
+    multiCurrencyEnabled = serializers.BooleanField(source="multi_currency_enabled", required=False)
+    rateCurrencies = serializers.SerializerMethodField()  # currencies with a live exchange rate
+    fxMarkupPercent = serializers.DecimalField(
+        source="fx_markup_percent", max_digits=5, decimal_places=2, min_value=0, max_value=50, required=False
+    )
     backupRegion = serializers.CharField(source="backup_region", required=False, allow_blank=True, max_length=60)
     unitSystem = serializers.ChoiceField(source="unit_system", choices=UNIT_SYSTEMS, required=False)
     weightUnit = serializers.ChoiceField(source="weight_unit", choices=WEIGHT_UNITS, required=False)
@@ -95,7 +105,8 @@ class StoreSerializer(serializers.ModelSerializer):
         model = Store
         fields = [
             "storeId", "storeName", "storeSlug", "domain", "status", "createdAt", "fieldLabels",
-            "contactEmail", "phone", "address", "currency", "backupRegion", "unitSystem",
+            "contactEmail", "phone", "address", "currency", "baseCurrency", "enabledCurrencies",
+            "multiCurrencyEnabled", "rateCurrencies", "fxMarkupPercent", "backupRegion", "unitSystem",
             "weightUnit", "timezone", "orderPrefix", "orderSuffix", "autoFulfill", "autoArchive",
             "cancellationsEnabled", "cancellationWindowMinutes", "returnsEnabled", "returnWindowDays",
             "returnWindowStartsFrom", "returnWindowExtendWeekends", "returnShipping", "restockingFeePercent",
@@ -115,11 +126,32 @@ class StoreSerializer(serializers.ModelSerializer):
                 del data["taxRate"]
         return data
 
+    def get_rateCurrencies(self, store):
+        return sorted(fx.load_rates())
+
     def validate_currency(self, value):
         value = value.strip().upper()
         if not re.fullmatch(r"[A-Z]{3}", value):
             raise serializers.ValidationError("Use a 3-letter currency code, e.g. INR.")
         return value
+
+    def validate_enabledCurrencies(self, value):
+        codes = []
+        for code in value:
+            code = code.strip().upper()
+            if not money.is_valid(code):
+                raise serializers.ValidationError(f"{code or '(blank)'} is not an ISO 4217 currency code.")
+            if code not in codes:
+                codes.append(code)
+        return codes
+
+    def update(self, store, validated_data):
+        old_currency = store.currency
+        store = super().update(store, validated_data)
+        if store.currency != old_currency:
+            # A new base currency can have a different number of decimals (INR 2, JPY 0): redo the minor units
+            fx.resync_store_prices(store)
+        return store
 
     def validate_timezone(self, value):
         try:

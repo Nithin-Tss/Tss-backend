@@ -16,6 +16,7 @@ from apps.discounts import services as discounts
 from apps.discounts.models import Discount, DiscountCode, OrderDiscount
 from apps.customers.models import Customer
 from apps.inventory.services import sellable, sellable_for, sells_without_stock, convert_reservations
+from apps.currency import services as fx
 from apps.orders import services as orders
 from apps.orders.models import Order
 from apps.payments import services as payments
@@ -581,6 +582,7 @@ def update_checkout(
         checkout.billing_address = billing_address
 
     checkout.currency = checkout.store.currency  # what the order and the card payment are made in
+    fx.snapshot_checkout(checkout)  # the currency the shopper browsed in, and the rate they were shown
     checkout.subtotal = sum((i.total_price for i in checkout.items.filter(is_deleted=False)), ZERO)
     _price_discount(checkout, discount_code)
     lines = list(checkout.items.filter(is_deleted=False).select_related("variant", "product"))
@@ -788,6 +790,7 @@ def _place_order(checkout, payment_method, payment_reference=None):
         shipping_amount=checkout.shipping_amount,
         checkout=checkout,
     )
+    fx.record_order(order, checkout)
     if order.total != checkout.total_amount:
         # What was shown, and what a card was charged, is the checkout's total: never place an order for another one
         raise ValidationError({"total": "Prices or charges changed. Please review your order and confirm again."})

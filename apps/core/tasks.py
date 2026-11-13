@@ -94,6 +94,13 @@ def expire_reservations():
 
 
 @shared_task
+def refresh_exchange_rates():
+    from apps.currency import services
+
+    return services.refresh_rates()
+
+
+@shared_task
 def sweep_carts(abandon_hours=1, expire_days=30):
     from apps.commerce import services
     from apps.tenancy.models import Store

@@ -3106,7 +3106,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
     def test_a_new_store_has_one_cart_file_and_it_is_in_the_file_tree(self):
         files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
         self.assertEqual([p for p in files if "cart" in p and p.startswith("snippets/")], [self.SNIPPET])
-        self.assertEqual([p for p in files if p.startswith("templates/") and "cart" in p], [])  # the page needs no template
+        self.assertEqual([p for p in files if p.startswith("templates/") and "cart" in p], ["templates/cart.json"])  # the default theme ships the cart page template
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
 

@@ -68,6 +68,7 @@ from apps.commerce import services as commerce_services
 from apps.gift_cards import services as gift_card_services
 from apps.orders import services as orders_services
 from apps.orders.models import Order
+from apps.currency import storefront as fx_storefront
 from . import cart as cart_data
 from .rendering import _collect_fonts, google_fonts_link
 from .rendering import currency_symbol as _currency_symbol, DEFAULT_CURRENCY_SYMBOL as _DEFAULT_SYMBOL
@@ -2305,7 +2306,8 @@ def _storefront(render):
         editing = set_editing_theme(draft) if draft else None
 
         try:
-            html = render(store, request, request.GET, **kwargs)
+            with fx_storefront.for_request(store, request):
+                html = render(store, request, request.GET, **kwargs)
 
             status_code = 200
 
@@ -2348,6 +2350,7 @@ def _storefront(render):
         if visit is not None and not visit.get("h") and request.headers.get("Sec-Fetch-Dest") != "iframe":
             html = _with_admin_bar(html, store, visit)
         html = privacy.inject(html, store, request)
+        html = fx_storefront.inject(html, store, request)
 
         response = HttpResponse(
             html,
@@ -2361,6 +2364,7 @@ def _storefront(render):
 
         response["Cache-Control"] = "no-store"
         _restore_customer_cookie(response, request, store)
+        fx_storefront.remember(response, request, store)
 
         # A page with the cart on it gives the shopper's browser their cart id (see cart.py)
         _give_cart_cookie(response, request, store, html)
@@ -2536,13 +2540,14 @@ def storefront_search(store, request, params):
         filters = _with_category_ids(store, parse_collection_filters(params))
         matched = [p for p in all_products if _matches_filters(p, filters)]
         symbol = _currency_symbol(store, _DEFAULT_SYMBOL)
+        display = fx_storefront.current()
         results_list = [
             {
                 "id": str(p["id"]),
                 "title": p["title"],
                 "url": p["url"],
                 "price": p["price"],
-                "price_display": f"{symbol}{Decimal(str(p['price'])):,.2f}" if p["price"] is not None else "",
+                "price_display": (display.format_major(p["price"]) if display is not None else f"{symbol}{Decimal(str(p['price'])):,.2f}") if p["price"] is not None else "",
                 "featured_image": p["featured_image"],
                 "vendor": p["vendor"],
                 "available": not p["is_sold_out"],
@@ -2799,7 +2804,8 @@ def _cart_reply(store, cart):
     """The count, the total and the cart's lines as HTML: what the page's script puts back on the page."""
     data = cart_data.view_data(cart, shop_url(store))
     opts = cart_data.options(get_store_theme(store))
-    return JsonResponse({"count": data["count"], "subtotal": data["subtotal"], "html": render_cart_html(store, data, opts)})
+    with fx_storefront.for_cart(store, cart):  # the drawer shows the currency this cart's shopper picked
+        return JsonResponse({"count": data["count"], "subtotal": data["subtotal"], "html": render_cart_html(store, data, opts)})
 
 
 @_cart_api
@@ -3388,6 +3394,7 @@ def _storefront_response(html, status=200, request=None, store=None):
             html = _with_admin_bar(html, store, visit)
     if request is not None and store is not None:
         html = privacy.inject(html, store, request)
+        html = fx_storefront.inject(html, store, request)
     response = HttpResponse(html, status=status)
     response["Content-Security-Policy"] = (
         "sandbox allow-scripts allow-forms "
@@ -3396,6 +3403,7 @@ def _storefront_response(html, status=200, request=None, store=None):
     response["Cache-Control"] = "no-store"
     if request is not None and store is not None:
         _restore_customer_cookie(response, request, store)
+        fx_storefront.remember(response, request, store)
         _give_cart_cookie(response, request, store, html, markers=("data-cart-session=", "cart_session"))
     return response
 
