@@ -12,6 +12,9 @@ import time
 import uuid
 from urllib.parse import unquote
 
+from datetime import datetime, timedelta, timezone as dt_timezone
+
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -3069,6 +3072,10 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertRegex(gone, r"data-add[^>]*\sdisabled>\s*Sold out")
 
 
+@override_settings(  # the default tree (templates/cart.json, ...) is off unless DEFAULT_TREE_ENABLED is set in the environment
+    DEFAULT_TREE_ENABLED=True,
+    DEFAULT_TREE_CUTOFF=datetime(2026, 11, 11, tzinfo=dt_timezone(timedelta(hours=5, minutes=30))),
+)
 class CartUpgradeTest(StoreClientMixin, APITestCase):
     """Existing stores get the cart snippet and the header block safely, and keep what they have."""
 
