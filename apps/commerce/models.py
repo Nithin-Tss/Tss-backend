@@ -40,6 +40,8 @@ class Cart(models.Model):
     currency = models.CharField(
         max_length=3,
     )
+    # The currency this shopper browses in (apps/currency); blank = the store's own
+    display_currency = models.CharField(max_length=3, blank=True, default="")
 
     status = models.CharField(
         max_length=30,
@@ -232,6 +234,9 @@ class Checkout(models.Model):
     currency = models.CharField(
         max_length=3,
     )
+    # The currency the shopper browsed in and the rate they were shown (see apps/currency)
+    display_currency = models.CharField(max_length=3, blank=True, default="")
+    fx_rate = models.DecimalField(max_digits=24, decimal_places=12, null=True, blank=True)
 
     subtotal = models.DecimalField(
         max_digits=12,

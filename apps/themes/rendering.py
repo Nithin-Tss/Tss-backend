@@ -31,6 +31,7 @@ from apps.catalog.services import (
     ONLINE, collection_product_ids, include_graph, published_collections, published_products, variant_options,
     walk_included,
 )
+from apps.currency import storefront as fx_storefront
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
@@ -1944,6 +1945,9 @@ def _environment(files, base_url, currency, overrides=None):
     def money(value):
         if value is None or value == "":
             return ""
+        display = fx_storefront.current()  # set per request when the store has multi-currency on
+        if display is not None:
+            return display.format_major(value)
         return f"{currency}{Decimal(str(value)):,.2f}"
 
     def link(value):

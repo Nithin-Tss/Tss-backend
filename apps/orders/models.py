@@ -46,6 +46,12 @@ class Order(models.Model):
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2)
     shipping_amount = models.DecimalField(max_digits=12, decimal_places=2)
     total = models.DecimalField(max_digits=12, decimal_places=2)
+    # Multi-currency: what the shopper was shown. Charged amounts are in currency_code (the base currency);
+    # fx_rate is display units per 1 base unit at checkout, base_amount_minor the total in base minor units.
+    display_currency = models.CharField(max_length=3, blank=True, default="")
+    fx_rate = models.DecimalField(max_digits=24, decimal_places=12, null=True, blank=True)
+    base_currency = models.CharField(max_length=3, blank=True, default="")
+    base_amount_minor = models.BigIntegerField(null=True, blank=True)
     status = models.CharField(max_length=30)
     fulfillment_status = models.CharField(max_length=30)
     delivery_status = models.CharField(

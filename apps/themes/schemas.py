@@ -51,7 +51,10 @@ THEME_SETTINGS = {
     "accent_color": {"type": "color", "label": "Accent color", "default": "#1A1916"},
     "background_color": {"type": "color", "label": "Background color", "default": "#FAF9F6"},
     "text_color": {"type": "color", "label": "Text color", "default": "#1A1916"},
-    "currency_symbol": {"type": "text", "label": "Currency symbol", "default": "₹", "max": 4},
+    "currency_symbol": {
+        "type": "text", "label": "Currency symbol", "default": "₹", "max": 4, "readonly": True,
+        "help": "Preview only. Prices follow your store currency (Settings > General).",
+    },
     "announcement": {"type": "text", "label": "Announcement text", "default": ""},
 }
 

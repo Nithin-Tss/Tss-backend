@@ -12,6 +12,9 @@ import time
 import uuid
 from urllib.parse import unquote
 
+from datetime import datetime, timedelta, timezone as dt_timezone
+
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -3069,6 +3072,10 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertRegex(gone, r"data-add[^>]*\sdisabled>\s*Sold out")
 
 
+@override_settings(  # the default tree (templates/cart.json, ...) is off unless DEFAULT_TREE_ENABLED is set in the environment
+    DEFAULT_TREE_ENABLED=True,
+    DEFAULT_TREE_CUTOFF=datetime(2026, 11, 11, tzinfo=dt_timezone(timedelta(hours=5, minutes=30))),
+)
 class CartUpgradeTest(StoreClientMixin, APITestCase):
     """Existing stores get the cart snippet and the header block safely, and keep what they have."""
 
@@ -3106,7 +3113,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
     def test_a_new_store_has_one_cart_file_and_it_is_in_the_file_tree(self):
         files = [f["path"] for f in self.ok("get", "/api/v1/themes/files/")["files"]]
         self.assertEqual([p for p in files if "cart" in p and p.startswith("snippets/")], [self.SNIPPET])
-        self.assertEqual([p for p in files if p.startswith("templates/") and "cart" in p], [])  # the page needs no template
+        self.assertEqual([p for p in files if p.startswith("templates/") and "cart" in p], ["templates/cart.json"])  # the default theme ships the cart page template
         self.assertIn("{% render 'cart', mode: 'icon'", self.stored("sections/header.liquid"))
         self.assertIn("{% render 'cart', mode: 'script' %}", self.stored("sections/main-product.liquid"))
 

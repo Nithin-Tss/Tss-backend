@@ -501,7 +501,8 @@ class StoreAdminOwnerTest(TestCase):
                 "cookie_banner": "automated", "data_sharing_opt_out": "automated",
                 "checkout_email_marketing": "unchecked", "checkout_sms_marketing": "hidden",
                 "checkout_full_name": "first_last", "checkout_company": "hidden",
-                "checkout_address2": "optional", "checkout_phone": "optional", **fields}
+                "checkout_address2": "optional", "checkout_phone": "optional",
+                "base_currency": "INR", "fx_markup_percent": "0", **fields}
         return self.client.post(self.URL + "add/", data)
 
     def test_admin_add_store_makes_the_owner(self):

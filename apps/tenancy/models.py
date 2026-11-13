@@ -29,6 +29,13 @@ class Store(models.Model):
     phone = models.CharField(max_length=30, blank=True, default="")
     address = models.CharField(max_length=500, blank=True, default="")
     currency = models.CharField(max_length=3, default="INR")
+    # Multi-currency storefront (apps/currency). `currency` stays the column everything reads; base_currency
+    # mirrors it (Store.save). Off by default: until multi_currency_enabled, shoppers only ever see the base.
+    base_currency = models.CharField(max_length=3, default="INR")
+    enabled_currencies = models.JSONField(default=list, blank=True)
+    multi_currency_enabled = models.BooleanField(default=False)
+    # Percentage added to converted prices (covers the spread and rounding), 0 = none
+    fx_markup_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     backup_region = models.CharField(max_length=60, blank=True, default="")
     unit_system = models.CharField(max_length=10, default="metric")
     weight_unit = models.CharField(max_length=5, default="kg")
@@ -119,6 +126,13 @@ class Store(models.Model):
                 name="ck_store_free_shipping_threshold_nonneg",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        self.base_currency = (self.currency or "INR").strip().upper()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "currency" in update_fields and "base_currency" not in update_fields:
+            kwargs["update_fields"] = [*update_fields, "base_currency"]
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.store_name

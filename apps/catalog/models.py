@@ -284,6 +284,11 @@ class ProductVariant(models.Model):
     # The "was" price shown struck through; the product is on sale when it is above price
     compare_at_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
+    # The same prices as integer minor units of the store's base currency (paise, cents; JPY has none).
+    # Written together with the decimals by save(); the decimal columns stay until removal is approved.
+    price_minor = models.BigIntegerField(null=True, blank=True)
+    compare_at_price_minor = models.BigIntegerField(null=True, blank=True)
+
     # Per unit, in the store's weight_unit; used for weight-based shipping rates
     weight = models.DecimalField(max_digits=10, decimal_places=3, default=0)
 
@@ -318,6 +323,15 @@ class ProductVariant(models.Model):
 
     def __str__(self):
         return self.sku or str(self.id)
+
+    def save(self, *args, **kwargs):
+        from apps.currency import services
+
+        services.fill_variant_minor(self)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and {"price", "compare_at_price"} & set(update_fields):
+            kwargs["update_fields"] = [*update_fields, "price_minor", "compare_at_price_minor"]
+        super().save(*args, **kwargs)
 
 
 class ProductImage(models.Model):
