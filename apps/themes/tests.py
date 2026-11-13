@@ -4343,16 +4343,18 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
             "order": data["templates"]["index"]["order"], "sections": {"featured": section},
         }}})
 
-    def test_code_save_shows_on_store_preview_and_after_reload(self):
+    def test_an_edited_card_file_does_not_stop_sections_using_the_card_block(self):
         edited = self.files()[CARD].replace(
             '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
         )
         self.save_card(edited)
-        self.assertEqual(self.files()[CARD], edited)  # persisted: what a reload of the editor shows
-        self.assertIn("card-mark", self.page())  # home: grid + carousel
-        self.assertIn("card-mark", self.page("collections/all"))  # collection page
+        self.assertEqual(self.files()[CARD], edited)  # persisted and never overwritten
+        # Sections draw from the "Product card" block now; the edited file is only for the places that still use it
+        for html in (self.page(), self.page("collections/all")):
+            self.assertIn("data-pcb=", html)
+            self.assertNotIn("card-mark", html)
         data = self.ok("get", "/api/v1/themes/settings/")
-        self.assertIn("card-mark", self.ok("post", "/api/v1/themes/preview/", data)["html"])  # customizer preview
+        self.assertIn("data-pcb=", self.ok("post", "/api/v1/themes/preview/", data)["html"])
 
     def test_settings_change_the_card_and_keep_custom_code(self):
         edited = self.files()[CARD].replace(
@@ -6833,6 +6835,31 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertEqual(product_badges(["badge:Best seller", "badge:Organic"], False, True, True), ["Few left", "Best seller"])
         self.assertEqual(product_badges(["x"], True, False, True), ["Sold out", "New"])
         self.assertEqual(product_badges(["badge:"], False, False, False), [])
+
+    def test_a_badge_tag_hides_the_automatic_new_badge(self):
+        from .rendering import product_badges
+
+        self.assertEqual(product_badges(["badge:Best seller"], False, False, True), ["Best seller"])
+        self.assertEqual(product_badges(["badge:Best seller"], True, False, True), ["Sold out", "Best seller"])
+        self.assertEqual(product_badges(["summer", "badge:"], False, False, True), ["New"])  # no label, still "New"
+
+    def test_card_block_is_hooked_into_edited_sections_in_memory(self):
+        from .rendering import _with_card_blocks
+
+        mine = ("<div>{% for product in section.products %}"
+                "{% render 'product-card', product: product, wishlist_ids: wishlist_ids, return_url: return_url %}"
+                "{% endfor %}</div>")
+        own_markup = "<div>{% for product in section.products %}<b>{{ product.title }}</b>{% endfor %}</div>"
+        files = {"sections/product-grid.liquid": mine, "sections/product-carousel.liquid": own_markup,
+                 "snippets/product-card.liquid": "<span>edited</span>"}
+        shown = _with_card_blocks(files)
+        grid = shown["sections/product-grid.liquid"]
+        self.assertIn("product-card-blocks", grid)
+        self.assertIn("section.card.css", grid)
+        self.assertIn("render 'product-card', product: product", grid)  # their own tag stays as the fallback
+        self.assertIn("snippets/product-card-blocks.liquid", shown)  # a missing snippet comes from the starter
+        self.assertEqual(shown["sections/product-carousel.liquid"], own_markup)  # nowhere to hook in: untouched
+        self.assertEqual(files["sections/product-grid.liquid"], mine)  # the owner's file itself is not changed
 
     def test_product_page_has_zoom_and_tier_cards(self):
         from apps.catalog.models import ProductVariant
