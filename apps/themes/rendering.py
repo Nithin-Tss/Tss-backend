@@ -39,7 +39,7 @@ from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, Menu, StorePage, ThemeFile, UrlRedirect
-from .services import _editing_theme, get_store_theme, synced_section, theme_files
+from .services import _editing_theme, card_code_is_starter, get_store_theme, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
@@ -470,11 +470,11 @@ CARD_MAX_WIDTHS = {"narrow": "12em", "normal": "20em"}
 def _card_css(uid, children):
     """
     The CSS of a section's "Product card" block: one rule per part the owner changed, scoped to that section's
-    cards (".pcb-<uid>"), so a setting changes that part on every card of the section. A part left at its
+    cards ([data-pcb="<uid>"]), so a setting changes that part on every card of the section. A part left at its
     defaults adds nothing, so an untouched card looks exactly like the plain card. The selectors start with
     "body" and the section's class so they beat the theme's own card rules (_panel_css).
     """
-    scope = f"body .pcb-{uid} .product-card.product-card"
+    scope = f'body [data-pcb="{uid}"] .product-card.product-card'
     rules = []
 
     def num(settings, key):
@@ -4021,13 +4021,15 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 # The built-in "Product card" block: every card of the section is drawn from it
                 # (snippets/product-card-blocks.liquid), with the cart icon and heart inside it.
                 card_at = next(((i, b) for i, b in enumerate(all_blocks) if b["type"] == "card_layout"), None)
-                if card_at and "section.card" in (files.get(path) or ""):
+                if (card_at and "section.card" in (files.get(path) or "")
+                        and "snippets/product-card-blocks.liquid" in files
+                        and card_code_is_starter(files.get("snippets/product-card.liquid"))):
                     section["card"] = _build_card(section_id, card_at[0], card_at[1], editor)
                     section["cart_icon"] = None
                     section["wishlist_heart"] = None
                 else:
-                    # The section's code was edited and never calls the block's snippet: it keeps drawing the old card
-                    # (the owner's files are not touched), with the cart icon and heart the block's parts say
+                    # The section's code, or the card's (snippets/product-card.liquid), was edited by the owner: their code
+                    # keeps drawing the card (their files are not touched), with the cart icon and heart the block's parts say
                     section["card"] = None
                     if card_at:
                         shown = {c["type"]: c["settings"] for c in card_at[1].get("children") or [] if not c.get("hidden")}

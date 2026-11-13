@@ -2042,7 +2042,7 @@ class PromotionsSyncTest(StoreClientMixin, APITestCase):
         return self.ok("post", "/api/v1/themes/preview/?section=offers", data)["html"]
 
     def card_headings(self, section):
-        return [b["settings"]["heading"] for b in section["blocks"]]
+        return [b["settings"]["heading"] for b in section["blocks"] if b["type"] == "promotion"]
 
     def test_1_code_setting_reaches_customizer_preview_and_store(self):
         self.save_code_index(lambda s: s["settings"].update(heading="From code", columns="2"))
@@ -3511,14 +3511,13 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.base = f"/s/{self.store['storeSlug']}"
 
     def show_hearts(self):
-        """What an owner does to get hearts: the "Wishlist heart" block on every card section, and on the product page."""
+        """What an owner does to get hearts: the card's Wishlist heart part on every card section, and the block on the product page."""
         data = self.ok("get", "/api/v1/themes/settings/")
         for page in ("index", "collection", "product"):
             sections = data["templates"][page]["sections"]
             for section in sections.values():
-                if section["type"] in ("product-grid", "product-carousel", "main-collection") \
-                        and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
-                    section["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}})
+                if section["type"] in ("product-grid", "product-carousel", "main-collection"):
+                    card_part(section, "card_wishlist")["hidden"] = False  # the heart is a part of the built-in card
                 if section["type"] == "main-product" and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
                     section["blocks"].append({"type": "wishlist_heart", "settings": {}})
             self.ok("patch", "/api/v1/themes/settings/", {"templates": {page: {
@@ -3822,15 +3821,16 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn('class="product-card__wishlist-add is-wishlisted"', page)  # the filled heart removes it
         self.assertIn('aria-label="Wishlist"', page[page.index("<header"):page.index("</header>")])
 
-    def test_adding_the_heart_block_shows_the_hearts_and_writes_the_block_into_the_code(self):
+    def test_showing_the_hearts_part_of_the_card_shows_the_hearts_and_writes_it_into_the_code(self):
         data = self.ok("get", "/api/v1/themes/settings/")
         main = data["templates"]["collection"]["sections"]["main"]
-        self.assertNotIn("wishlist_heart", [b["type"] for b in main["blocks"]])  # nothing adds it
-        main["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}})
+        self.assertTrue(card_part(main, "card_wishlist")["hidden"])  # nothing shows it
+        card_part(main, "card_wishlist")["hidden"] = False
         self.ok("patch", "/api/v1/themes/settings/", {"templates": {"collection": {
             "order": data["templates"]["collection"]["order"], "sections": {"main": main}}}})
         files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
-        self.assertIn("wishlist_heart", [b["type"] for b in json.loads(files["templates/collection.json"])["sections"]["main"]["blocks"]])
+        code_main = json.loads(files["templates/collection.json"])["sections"]["main"]
+        self.assertFalse(card_part(code_main, "card_wishlist").get("hidden"))
         html = self.client.get(f"{self.base}/collections/all").content.decode()
         self.assertIn('class="product-card__wishlist-form"', html)
 
@@ -4205,17 +4205,18 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         })  # the collection page was customized without the setting; the home and product pages never were
         self.assertEqual(self.theme().theme.theme_data["wishlist_hearts"], 1)
         settings = self.ok("get", "/api/v1/themes/settings/")["templates"]
-        types = lambda section: [b["type"] for b in section["blocks"]]
-        self.assertIn("wishlist_heart", types(settings["collection"]["sections"]["main"]))  # the heart is a block now
+        heart_shown = lambda section: not card_part(section, "card_wishlist")["hidden"]
+        self.assertTrue(heart_shown(settings["collection"]["sections"]["main"]))  # the heart is a part of the built-in card now
         self.assertEqual(settings["collection"]["sections"]["main"]["settings"]["columns"], 3)  # the owner's choice is kept
         for section in settings["index"]["sections"].values():
             if section["type"] in ("product-grid", "product-carousel"):
-                self.assertIn("wishlist_heart", types(section), section["type"])
+                self.assertTrue(heart_shown(section), section["type"])
         self.assertGreater(self.hearts("collections/all"), 0)
         self.assertGreater(self.hearts(""), 0)
         # what was saved is in the code (templates/*.json), so the owner can see and change it
         files = {f["path"]: f["content"] for f in self.ok("get", "/api/v1/themes/files/")["files"]}
-        self.assertIn("wishlist_heart", [b["type"] for b in json.loads(files["templates/collection.json"])["sections"]["main"]["blocks"]])
+        code_main = json.loads(files["templates/collection.json"])["sections"]["main"]
+        self.assertFalse(card_part(code_main, "card_wishlist").get("hidden"))
         # the product page keeps its heart too: its default block is saved
         product = settings["product"]["sections"]["main"]
         self.assertIn("wishlist_heart", [b["type"] for b in product["blocks"]])
@@ -4227,8 +4228,8 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
             "index": {"order": ["grid"], "sections": {"grid": {"type": "product-grid", "settings": {"show_wishlist": True}}}},
         })
         settings = self.ok("get", "/api/v1/themes/settings/")["templates"]
-        self.assertNotIn("wishlist_heart", [b["type"] for b in settings["collection"]["sections"]["main"]["blocks"]])  # off by the owner
-        self.assertIn("wishlist_heart", [b["type"] for b in settings["index"]["sections"]["grid"]["blocks"]])
+        self.assertTrue(card_part(settings["collection"]["sections"]["main"], "card_wishlist")["hidden"])  # off by the owner
+        self.assertFalse(card_part(settings["index"]["sections"]["grid"], "card_wishlist")["hidden"])
         self.assertEqual(self.hearts("collections/all"), 0)
 
     def test_the_upgrade_runs_once_and_a_new_store_is_left_off(self):
@@ -4237,7 +4238,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         # the owner turns the hearts off after the upgrade: later visits do not turn them back on
         data = self.ok("get", "/api/v1/themes/settings/")
         main = data["templates"]["collection"]["sections"]["main"]
-        main["blocks"] = [b for b in main["blocks"] if b["type"] != "wishlist_heart"]  # the owner deletes the block
+        card_part(main, "card_wishlist")["hidden"] = True  # the owner hides the heart part
         self.ok("patch", "/api/v1/themes/settings/", {"templates": {"collection": {
             "order": data["templates"]["collection"]["order"], "sections": {"main": main}}}})
         self.theme()
@@ -4254,8 +4255,8 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         saved = fresh.custom_data.get("templates") or {}
         self.assertFalse({"index", "collection", "product"} & set(saved))  # the card pages were not saved
         self.assertNotIn("show_wishlist", json.dumps(saved))  # nothing was written into any section
-        self.assertNotIn("wishlist_heart", [b["type"] for b in self.ok("get", "/api/v1/themes/settings/")["templates"]
-                                            ["collection"]["sections"]["main"]["blocks"]])
+        self.assertTrue(card_part(self.ok("get", "/api/v1/themes/settings/")["templates"]
+                                  ["collection"]["sections"]["main"], "card_wishlist")["hidden"])
 
     def test_an_owner_edited_card_snippet_keeps_working_and_the_wishlist_page_can_remove(self):
         mine = ("<!-- my card -->\n<div class=\"product-card-shell\"><a href=\"{{ product.url }}\">{{ product.title }}</a>"
@@ -4292,6 +4293,13 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
 
 
 CARD = "snippets/product-card.liquid"
+
+
+def card_part(section, kind):
+    """One part (e.g. "card_wishlist", "card_price") of a section's built-in "Product card" block, as the customizer
+    and the code (templates/<page>.json) show it."""
+    card = next(b for b in section["blocks"] if b["type"] == "card_layout")
+    return next(c for c in card["children"] if c["type"] == kind)
 
 
 class ProductCardSyncTest(StoreClientMixin, APITestCase):
@@ -4393,7 +4401,7 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
 
     def test_unsaved_settings_show_in_preview_only(self):
         data = self.ok("get", "/api/v1/themes/settings/")
-        data["templates"]["index"]["sections"]["featured"]["settings"]["show_vendor"] = True
+        card_part(data["templates"]["index"]["sections"]["featured"], "card_vendor")["hidden"] = False  # the card's Vendor part
         html = self.ok("post", "/api/v1/themes/preview/?section=featured", data)["html"]
         self.assertIn('class="product-card__vendor"', html)
         self.assertNotIn('class="product-card__vendor"', self.page())
@@ -4467,69 +4475,49 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         """The texts of the heading blocks (a product section also always has its "Cart icon" block)."""
         return [b["settings"]["text"] for b in blocks if b["type"] == "heading"]
 
-    def test_the_wishlist_heart_is_a_block_the_owner_adds_hides_and_deletes_in_either_editor(self):
-        """The heart starts absent. "Add block" adds it; the eye hides it; delete removes it. Both editors follow."""
+    def test_the_card_is_built_in_and_its_heart_and_cart_icon_are_parts_the_owner_shows_and_hides_in_either_editor(self):
         hearts = lambda html: html.count('class="product-card__wishlist-form"')
-        heart_blocks = lambda blocks: [b for b in blocks if b["type"] == "wishlist_heart"]
+        carts = lambda html: html.count('class="product-card__cart"')
         spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["product-grid"]
-        self.assertIn("wishlist_heart", spec["blocks"])  # it is in "Add block"
-        self.assertNotIn("wishlist_heart", spec.get("required_blocks", []))  # and can be deleted
-        self.assertEqual(heart_blocks(self.customizer_grid()["blocks"]), [])  # a new store: no hearts on cards
-        self.assertEqual(hearts(self.preview_html()), 0)
-        self.assertEqual(hearts(self.store_html()), 0)
+        self.assertIn("card_layout", spec["required_blocks"])  # every product section has it, it is not deleted
+        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.ok("post", "/api/v1/catalog/products/", {  # in stock: a sold-out product never shows the cart icon
+            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
+        }, expect=201)
 
-        # Add block (customizer) -> code, preview and store; the heart is always visible
-        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}}))
-        self.assertEqual(len(heart_blocks(self.code_index()["sections"]["featured"]["blocks"])), 1)  # written to the code
+        # a new store: the card is there with both parts hidden, nothing shows
+        grid = self.customizer_grid()
+        self.assertEqual([b["type"] for b in grid["blocks"]], ["card_layout"])
+        self.assertTrue(card_part(grid, "card_wishlist")["hidden"])
+        self.assertTrue(card_part(grid, "card_cart_icon")["hidden"])
+        self.assertEqual((hearts(self.store_html()), carts(self.store_html())), (0, 0))
+        self.assertEqual(hearts(self.preview_html()), 0)
+
+        # the heart shown in the customizer -> code, preview, store (always visible, not only on hover)
+        self.save_customizer_grid(lambda s: card_part(s, "card_wishlist").update(hidden=False))
+        self.assertFalse(card_part(self.code_index()["sections"]["featured"], "card_wishlist").get("hidden"))
         shown = hearts(self.store_html())
         self.assertGreater(shown, 0)
         self.assertEqual(hearts(self.preview_html()), shown)
-        html = self.store_html()
-        self.assertNotIn("data-wishlist-hover", html)  # the heart is always visible, not only on hover
+        self.assertNotIn("data-wishlist-hover", self.store_html())
 
-        # Hidden in the customizer -> code, store; shown again in the code
-        self.save_customizer_grid(lambda s: heart_blocks(s["blocks"])[0].update(hidden=True))
-        self.assertTrue(heart_blocks(self.code_index()["sections"]["featured"]["blocks"])[0]["hidden"])
-        self.assertEqual(hearts(self.store_html()), 0)
-        self.save_code_index(lambda s: heart_blocks(s["blocks"])[0].update(hidden=False))
-        self.assertFalse(heart_blocks(self.customizer_grid()["blocks"])[0].get("hidden"))
-        self.assertEqual(hearts(self.store_html()), shown)
+        # the cart icon shown in the code, with its own size -> customizer, preview, store
+        self.save_code_index(lambda s: card_part(s, "card_cart_icon").update(hidden=False, settings={"size": 52}))
+        self.assertEqual(card_part(self.customizer_grid(), "card_cart_icon")["settings"]["size"], 52)
+        icons = carts(self.store_html())
+        self.assertGreater(icons, 0)
+        self.assertIn("width:52px", self.store_html())
+        self.assertEqual(carts(self.preview_html()), icons)
 
-        # Deleted in the code -> customizer, store; added in the code -> customizer, store
-        self.save_code_index(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "wishlist_heart"]))
-        self.assertEqual(heart_blocks(self.customizer_grid()["blocks"]), [])
-        self.assertEqual(hearts(self.store_html()), 0)
-        self.save_code_index(lambda s: s.setdefault("blocks", []).append({"type": "wishlist_heart", "settings": {"size": 28}}))
-        self.assertEqual(heart_blocks(self.customizer_grid()["blocks"])[0]["settings"]["size"], 28)
-        self.assertIn("width:28px", self.store_html())
+        # each one is hidden on its own
+        self.save_customizer_grid(lambda s: card_part(s, "card_wishlist").update(hidden=True))
+        self.assertEqual((hearts(self.store_html()), carts(self.store_html())), (0, icons))
+        self.save_customizer_grid(lambda s: card_part(s, "card_wishlist").update(hidden=False))
+        self.save_customizer_grid(lambda s: card_part(s, "card_cart_icon").update(hidden=True))
+        self.assertEqual((hearts(self.store_html()), carts(self.store_html())), (shown, 0))
 
-        # the old "Show wishlist heart" setting is still understood: true is the block, false takes it away
-        self.save_code_index(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "wishlist_heart"]))
-        self.save_code_index(lambda s: s["settings"].update(show_wishlist=True))
-        self.assertEqual(len(heart_blocks(self.customizer_grid()["blocks"])), 1)
-        self.save_code_index(lambda s: s["settings"].update(show_wishlist=False))
-        self.assertEqual(heart_blocks(self.customizer_grid()["blocks"]), [])
-
-    def test_the_wishlist_heart_and_the_cart_icon_blocks_work_independently(self):
-        icons = lambda html: (html.count('class="product-card__wishlist-form"'), html.count('class="product-card__cart"'))
-        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
-        self.ok("post", "/api/v1/catalog/products/", {
-            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
-        }, expect=201)
-        self.save_customizer_grid(lambda s: s["blocks"].extend([
-            {"type": "wishlist_heart", "hidden": False, "settings": {}}, {"type": "cart_icon", "hidden": False, "settings": {}}]))
-        hearts, carts = icons(self.store_html())
-        self.assertGreater(hearts, 0)
-        self.assertGreater(carts, 0)
-        # hiding the heart leaves the cart icon, and the other way round
-        self.save_customizer_grid(lambda s: [b.update(hidden=True) for b in s["blocks"] if b["type"] == "wishlist_heart"])
-        self.assertEqual(icons(self.store_html()), (0, carts))
-        self.save_customizer_grid(lambda s: [b.update(hidden=False) for b in s["blocks"] if b["type"] == "wishlist_heart"])
-        self.save_customizer_grid(lambda s: [b.update(hidden=True) for b in s["blocks"] if b["type"] == "cart_icon"])
-        self.assertEqual(icons(self.store_html()), (hearts, 0))
-        # deleting the cart icon block does not touch the heart
-        self.save_customizer_grid(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart_icon"]))
-        self.assertEqual(icons(self.store_html())[0], hearts)
+        # the old "Show wishlist heart" setting only decides what a card starts with: a saved card is the owner's
+        self.assertEqual([b["type"] for b in self.customizer_grid()["blocks"]], ["card_layout"])
 
     def test_the_heart_markup_comes_from_the_wishlist_snippet(self):
         """Cards render the heart through {% render 'wishlist' %}: no wishlist markup of their own."""
@@ -4542,9 +4530,10 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
             self.assertIn("show_wishlist: section.wishlist_heart", starter_files()[f"sections/{section}.liquid"])
 
     def test_1_code_setting_reaches_customizer_preview_and_store(self):
-        self.save_code_index(lambda s: s["settings"].update(heading="From code", show_vendor=True))
+        self.save_code_index(lambda s: (s["settings"].update(heading="From code"),
+                                        card_part(s, "card_vendor").update(hidden=False)))  # the card's Vendor part
         self.assertEqual(self.customizer_grid()["settings"]["heading"], "From code")
-        self.assertTrue(self.customizer_grid()["settings"]["show_vendor"])
+        self.assertFalse(card_part(self.customizer_grid(), "card_vendor")["hidden"])
         for html in (self.preview_html(), self.store_html()):
             self.assertIn("From code", html)
             self.assertIn('class="product-card__vendor"', html)
@@ -4568,14 +4557,15 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         html = self.store_html()
         self.assertLess(html.index("Block B"), html.index("Block A"))
         # Hidden in the customizer, shown again in the code
-        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=True))
-        self.assertTrue(self.code_index()["sections"]["featured"]["blocks"][0]["hidden"])
+        first_heading = lambda blocks: next(b for b in blocks if b["type"] == "heading")
+        self.save_customizer_grid(lambda s: first_heading(s["blocks"]).update(hidden=True))
+        self.assertTrue(first_heading(self.code_index()["sections"]["featured"]["blocks"])["hidden"])
         self.assertNotIn("Block B", self.store_html())
-        self.save_code_index(lambda s: s["blocks"][0].update(hidden=False))
-        self.assertFalse(self.customizer_grid()["blocks"][0].get("hidden"))
+        self.save_code_index(lambda s: first_heading(s["blocks"]).update(hidden=False))
+        self.assertFalse(first_heading(self.customizer_grid()["blocks"]).get("hidden"))
         self.assertIn("Block B", self.preview_html())
         # Removed in the code
-        self.save_code_index(lambda s: s["blocks"].pop(0))
+        self.save_code_index(lambda s: s["blocks"].remove(first_heading(s["blocks"])))
         self.assertEqual(self.heading_texts(self.customizer_grid()["blocks"]), ["Block A"])
         self.assertNotIn("Block B", self.store_html())
 
@@ -4603,138 +4593,12 @@ class ProductGridSyncTest(StoreClientMixin, APITestCase):
         self.assertIn("Clay mug", html)
         prices = html.count('<span class="price">')
         self.assertGreater(prices, 0)
-        self.save_code_index(lambda s: s["settings"].update(show_price=False))
+        self.save_code_index(lambda s: card_part(s, "card_price").update(hidden=True))  # the card's Price part
         self.assertLess(self.store_html().count('<span class="price">'), prices)  # the carousel keeps its own
-        self.save_customizer_grid(lambda s: s["settings"].update(show_price=True))
+        self.save_customizer_grid(lambda s: card_part(s, "card_price").update(hidden=False))
         self.assertEqual(self.store_html().count('<span class="price">'), prices)
-        self.assertTrue(self.code_index()["sections"]["featured"]["settings"]["show_price"])
+        self.assertFalse(card_part(self.code_index()["sections"]["featured"], "card_price").get("hidden"))
 
-    def test_8_cart_icon_block_stays_in_step_between_the_customizer_and_the_code(self):
-        icons = lambda html: html.count('class="product-card__cart"')
-        cart_blocks = lambda blocks: [b for b in blocks if b["type"] == "cart_icon"]
-        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
-        self.ok("post", "/api/v1/catalog/products/", {
-            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
-        }, expect=201)
-
-        # Added in the code -> customizer, preview, store
-        self.save_code_index(lambda s: s.setdefault("blocks", []).append({"type": "cart_icon", "settings": {"size": 52}}))
-        block = cart_blocks(self.customizer_grid()["blocks"])
-        self.assertEqual(len(block), 1)
-        self.assertEqual(block[0]["settings"]["size"], 52)
-        shown = icons(self.store_html())
-        self.assertGreater(shown, 0)
-        self.assertIn("width:52px", self.store_html())
-        self.assertEqual(icons(self.preview_html()), shown)
-
-        # Changed in the customizer -> code, store
-        self.save_customizer_grid(lambda s: cart_blocks(s["blocks"])[0]["settings"].update(size=40, label="Quick add"))
-        saved = cart_blocks(self.code_index()["sections"]["featured"]["blocks"])[0]["settings"]
-        self.assertEqual((saved["size"], saved["label"]), (40, "Quick add"))
-        html = self.store_html()
-        self.assertIn("width:40px", html)
-        self.assertIn("Quick add", html)
-
-        # Hidden in the customizer -> code, store; shown again in the code
-        self.save_customizer_grid(lambda s: cart_blocks(s["blocks"])[0].update(hidden=True))
-        self.assertTrue(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])[0]["hidden"])
-        self.assertEqual(icons(self.store_html()), 0)
-        self.save_code_index(lambda s: cart_blocks(s["blocks"])[0].update(hidden=False))
-        self.assertFalse(cart_blocks(self.customizer_grid()["blocks"])[0].get("hidden"))
-        self.assertEqual(icons(self.store_html()), shown)
-
-        # Deleted in the code -> customizer, store
-        self.save_code_index(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart_icon"]))
-        self.assertEqual(cart_blocks(self.customizer_grid()["blocks"]), [])
-        self.assertEqual(icons(self.store_html()), 0)
-
-        # Added in the customizer -> code
-        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
-        self.assertEqual(len(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])), 1)
-        self.assertEqual(icons(self.store_html()), shown)
-
-    def test_9_cart_icon_block_and_the_cards_code_follow_each_other(self):
-        CARD = "snippets/product-card.liquid"
-        has_icon = lambda: "if show_cart_icon" in self.files()[CARD]
-        cart_blocks = lambda blocks: [b for b in blocks if b["type"] == "cart_icon"]
-        icons = lambda: self.store_html().count('class="product-card__cart"')
-        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
-        self.ok("post", "/api/v1/catalog/products/", {
-            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
-        }, expect=201)
-        original = self.files()[CARD]
-
-        # a new store: no block and no icon in the card's code
-        self.assertFalse(has_icon())
-        self.assertEqual(icons(), 0)
-
-        # Block added in the customizer -> the card's code gets the icon, the store shows it
-        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
-        self.assertTrue(has_icon())
-        self.assertIn("data-card-add", self.files()[CARD])
-        self.assertGreater(icons(), 0)
-
-        # Last block removed in the customizer -> the icon is taken out of the card's code (and nothing else)
-        self.save_customizer_grid(lambda s: s["blocks"].clear())
-        self.assertFalse(has_icon())
-        self.assertEqual(self.files()[CARD], original)
-        self.assertEqual(icons(), 0)
-
-        # Icon written in the card's code -> a block appears in the product sections (customizer and templates/index.json), and in the store
-        from .section_sync import add_card_cart_icon
-        self.save_file(CARD, add_card_cart_icon(original))
-        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
-        self.assertEqual(len(cart_blocks(self.code_index()["sections"]["featured"]["blocks"])), 1)
-        self.assertGreater(icons(), 0)
-
-        # Saving the card again with the icon where it was does not add another block
-        self.save_file(CARD, self.files()[CARD] + "<!-- note -->")
-        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
-
-        # A section that lost its block gets it back when the card (which has the icon) is saved again
-        self.save_customizer_grid(lambda s: s.update(blocks=[b for b in s["blocks"] if b["type"] != "cart_icon"]))
-        self.assertTrue(has_icon())  # the carousel still has its block, so the card keeps the icon
-        self.save_file(CARD, self.files()[CARD] + "<!-- again -->")
-        self.assertEqual(len(cart_blocks(self.customizer_grid()["blocks"])), 1)
-
-        # Icon taken out of the card's code -> the blocks go, the store shows no icon
-        self.save_file(CARD, original)
-        self.assertEqual(cart_blocks(self.customizer_grid()["blocks"]), [])
-        self.assertEqual(cart_blocks(self.code_index()["sections"]["featured"]["blocks"]), [])
-        self.assertEqual(icons(), 0)
-
-        # Block added in templates/index.json (Edit code) -> the card's code gets the icon
-        self.save_code_index(lambda s: s.setdefault("blocks", []).append({"type": "cart_icon", "settings": {}}))
-        self.assertTrue(has_icon())
-        self.assertGreater(icons(), 0)
-
-    def test_7_cart_icon_is_a_block_the_owner_adds_hides_and_deletes(self):
-        icons = lambda html: html.count('class="product-card__cart"')
-        spec = self.ok("get", "/api/v1/themes/schema/")["sections"]["product-grid"]
-        self.assertIn("cart_icon", spec["blocks"])  # offered in "Add block"
-        self.assertNotIn("cart_icon", spec.get("required_blocks", []))
-        # a product in stock (a sold-out one never shows the icon)
-        location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
-        self.ok("post", "/api/v1/catalog/products/", {
-            "title": "Stocked mug", "sku": "SKU-STOCK", "status": "active", "price": "12", "location": location, "quantity": 5,
-        }, expect=201)
-        # nothing adds it
-        self.assertEqual([b["type"] for b in self.customizer_grid()["blocks"]], [])
-        self.assertEqual(icons(self.store_html()), 0)
-        # "Add block"
-        self.save_customizer_grid(lambda s: s["blocks"].append({"type": "cart_icon", "hidden": False, "settings": {}}))
-        shown = icons(self.store_html())
-        self.assertGreater(shown, 0)
-        self.assertEqual(icons(self.preview_html()), shown)
-        # the eye
-        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=True))
-        self.assertEqual(icons(self.store_html()), 0)
-        self.save_customizer_grid(lambda s: s["blocks"][0].update(hidden=False))
-        self.assertEqual(icons(self.store_html()), shown)
-        # delete
-        self.save_customizer_grid(lambda s: s["blocks"].clear())
-        self.assertEqual([b["type"] for b in self.customizer_grid()["blocks"]], [])
-        self.assertEqual(icons(self.store_html()), 0)
 
 
 STYLES = "snippets/styles.liquid"
@@ -9256,7 +9120,7 @@ class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
     def test_product_card_out_of_stock_badge_in_collection(self):
         data = self.ok("get", "/api/v1/themes/settings/")
         col_template = data["templates"]["collection"]
-        col_template["sections"]["main"]["settings"]["show_add_to_cart"] = True
+        card_part(col_template["sections"]["main"], "card_button")["hidden"] = False  # the card's Add to cart button part
         self.ok("patch", "/api/v1/themes/settings/", {
             "templates": {"collection": col_template}
         })

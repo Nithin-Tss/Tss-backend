@@ -17,6 +17,7 @@ import re
 import secrets
 import time
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,12 +108,15 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 60
+STARTER_REVISION = 61
 STARTER_UPGRADES = {
     # Revision 59: every card part carries its place and name in the customizer preview (data-tss-block markers), so hovering
     # and clicking a part works. Stores that got the first version of the snippet (revision 58) are upgraded if they never edited it.
+    # Revision 61: the card's shell keeps its plain class (product-card-shell); the section's card CSS finds it by data-pcb.
     # Revision 60: the price part can show the compare-at price first and "Taxes included" under the price.
     "snippets/product-card-blocks.liquid": {
+        "e909cdf4c37cb3b00dafc3f871ae37c69164d37ce95f450e0926317120e7f7ff",  # revision 61: before the shell's data-pcb attribute
+        "4109e553a6656bed33125bae3911e2b77427373108962be2940f122874716235",  # revision 61: before the shell's data-pcb attribute (CRLF)
         "1128993c55a2e35ded97df7397faed4545d72ae71939eb02f832f2e6c688a9ad",  # revision 60: before sale-price order and tax information
         "3d7c6eb33f7e9355d30f6db3a028b788dd2db6229bc1c12202d71467cb6eaeee",  # revision 60: before sale-price order and tax information (CRLF)
         "3b1d406562c47dad4d89933f4234aee4d2f2f36017adb5bf47190210be9a8801",  # revision 59: before the preview markers
@@ -393,6 +397,31 @@ STARTER_UPGRADES = {
         "8f3610dfd87295c6e39f5342acc7cf7e8044e3e72cbb3bda15b7a12e759f3e16",  # revision 48: same, with CRLF line endings
     },
 }
+
+
+_CARD_PATH = "snippets/product-card.liquid"
+
+
+@lru_cache(maxsize=1)
+def _starter_card_digests():
+    """Every version of snippets/product-card.liquid that is the starter's own: the current one (with the cart
+    icon the "Cart icon" block used to add to it, too) and the older ones registered in STARTER_UPGRADES."""
+    current = starter_files()[_CARD_PATH]
+    digests = set(STARTER_UPGRADES.get(_CARD_PATH, ()))
+    for content in (current, sync.add_card_cart_icon(current)):
+        if content is not None:
+            digests.add(hashlib.sha256(content.encode("utf-8")).hexdigest())
+    return frozenset(digests)
+
+
+def card_code_is_starter(content):
+    """True while the store's snippets/product-card.liquid was never edited. A section draws its cards from its
+    "Product card" block only then; an edited card keeps being drawn by the owner's own code."""
+    if not isinstance(content, str):
+        return False
+    digests = _starter_card_digests()
+    lf = content.replace("\r\n", "\n")
+    return any(hashlib.sha256(text.encode("utf-8")).hexdigest() in digests for text in (content, lf))
 
 
 def starter_files():

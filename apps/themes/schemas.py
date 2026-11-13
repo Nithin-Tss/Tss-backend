@@ -633,9 +633,11 @@ def resolve(custom_data):
                     section["blocks"].append({"type": "wishlist_heart", "hidden": False,
                                               "settings": _with_defaults(schema["blocks"]["wishlist_heart"]["settings"], {})})
                 # Blocks the section always has, e.g. "Product information" on layouts saved before it existed
+                # (the product card goes last, so the places of the section's own blocks don't change)
                 for type_ in reversed(schema.get("required_blocks", [])):
                     if not any(b["type"] == type_ for b in section["blocks"]):
-                        section["blocks"].insert(0, {
+                        at = len(section["blocks"]) if schema["blocks"][type_].get("child_blocks") is not None else 0
+                        section["blocks"].insert(at, {
                             "type": type_,
                             "hidden": False,
                             "settings": _with_defaults(schema["blocks"][type_]["settings"], {}),

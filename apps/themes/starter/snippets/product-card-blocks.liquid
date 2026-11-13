@@ -11,7 +11,7 @@
   The wishlist page does not use this snippet: it keeps snippets/product-card.liquid.
 {%- endcomment -%}
 {%- assign ratio = card.image.ratio -%}
-<div class="product-card-shell pcb-{{ card.uid }}"{{ card.mark }}>
+<div class="product-card-shell" data-pcb="{{ card.uid }}"{{ card.mark }}>
 <a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
   {%- if card.image -%}
     {%- assign second_image = nil -%}

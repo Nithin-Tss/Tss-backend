@@ -789,8 +789,9 @@ html:not(.tss-edit) #tss-card-overlay{display:none}
       send({ type: "back", fallback: backLink.getAttribute("data-back") || backLink.getAttribute("href") || "" });
       return;
     }
+    var page = storePage(e);
     // Edit mode: a click on a product card selects it (or its part) instead of opening the product
-    var page = editing && e.target.closest && e.target.closest("[data-tss-card]") ? null : storePage(e);
+    if (editing && e.target.closest && e.target.closest("[data-tss-card]")) page = null;
     if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart|wishlist)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
