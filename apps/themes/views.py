@@ -554,9 +554,21 @@ PREVIEW_EDITOR = """
   content:attr(data-tss-label);position:absolute;top:0;left:0;z-index:51;max-width:60%;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;padding:3px 8px;border-bottom-right-radius:6px;
   background:#141b2d;color:#fff;font:600 11px/1.4 system-ui,sans-serif;pointer-events:none}
-.tss-edit [data-tss-block]{position:relative}
+.tss-edit [data-tss-block]:not([data-tss-card]){position:relative}
 .tss-edit [data-tss-block]:hover{outline:1px solid rgba(20,27,45,.55);outline-offset:2px}
 .tss-edit [data-tss-block].tss-block-selected{outline:2px solid #141b2d;outline-offset:2px}
+/* Parts of a product card (data-tss-card): outlined by the overlay below (one box per card, so the same part shows on every card) */
+.tss-edit [data-tss-card]:hover{outline:none}
+html:not(.tss-edit) #tss-card-overlay{display:none}
+#tss-card-overlay{position:absolute;top:0;left:0;width:0;height:0;z-index:55;pointer-events:none}
+.tss-ov-box{position:absolute;box-sizing:border-box;border:1px solid #2563eb;pointer-events:none}
+.tss-ov-box.tss-ov-sel{border-width:2px}
+.tss-ov-chip{position:absolute;display:flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:5px 5px 0 0;
+  background:#2563eb;color:#fff;font:600 11px/1 system-ui,sans-serif;white-space:nowrap;pointer-events:none}
+.tss-ov-chip svg{flex:none}
+.tss-ov-plus{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;padding:0;border:0;border-radius:50%;
+  background:#2563eb;color:#fff;font:700 16px/20px system-ui,sans-serif;text-align:center;cursor:pointer;pointer-events:auto;
+  box-shadow:0 1px 4px rgba(0,0,0,.3)}
 .tss-handle{position:absolute;top:10px;right:10px;z-index:50;display:none;align-items:center;gap:6px;
   padding:6px 10px;border:0;border-radius:8px;background:#141b2d;color:#fff;font:600 12px/1 system-ui,sans-serif;
   cursor:grab;touch-action:none;box-shadow:0 4px 12px rgba(20,27,45,.25)}
@@ -594,27 +606,146 @@ PREVIEW_EDITOR = """
     }
     return null;
   }
+  // The product of the card a part belongs to: the id in the card's own link ("/products/<id>")
+  function productOf(el) {
+    var shell = el && el.closest(".product-card-shell");
+    var link = shell && shell.querySelector("a.product-card");
+    var parts = link ? (link.getAttribute("href") || "").split("/products/") : [];
+    return parts.length > 1 ? parts[1].split(/[?#/]/)[0] : "";
+  }
+  // The block under a click. A part of a product card exists once per card, so it is told by its path
+  // ("2.1": block 2, part 1; the card itself is "2") instead of by being the first element with that number.
+  function blockAt(section, target) {
+    var card = target.closest("[data-tss-card]");
+    if (card && section.contains(card)) {
+      var path = card.getAttribute("data-tss-block");
+      return path.indexOf(".") > -1 ? path : Number(path);
+    }
+    var blockEl = target.closest("[data-tss-block]");
+    return blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
+  }
 
   var line = document.createElement("div");
   line.className = "tss-drop-line";
   document.body.appendChild(line);
 
+  // Product card parts (Edit mode): hovering one outlines that part on EVERY card of the section, with a label on the
+  // hovered card and a "+" under it (add a part after this one); a selected part keeps its outlines on every card.
+  // Drawn as boxes in one layer over the page, so nothing inside the cards changes and nothing is clipped.
+  var overlay = document.createElement("div");
+  overlay.id = "tss-card-overlay";
+  document.body.appendChild(overlay);
+  var hoverEl = null;
+  var selectedEl = null;
+  var cardPath = null;
+  var pendingEl = null;
+  var ICONS = {
+    card_image: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/>',
+    card_badge: '<path d="M3 12V4h8l9 9-8 8z"/><path d="M7.5 8h.01"/>',
+    card_vendor: '<path d="M4 9h16l-1 10H5zM4 9l2-5h12l2 5"/>',
+    card_title: '<path d="M5 6h14M12 6v13M9 19h6"/>',
+    card_rating: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+    card_price: '<path d="M3 12V4h8l9 9-8 8z"/><path d="M7.5 8h.01"/>',
+    card_tags: '<path d="M3 12V4h8l9 9-8 8z"/><path d="M7.5 8h.01"/>',
+    card_button: '<rect x="3" y="7" width="18" height="10" rx="3"/>',
+    card_cart_icon: '<path d="M6 8h12l1 12H5z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',
+    card: '<rect x="4" y="3" width="16" height="18" rx="2"/>'
+  };
+  function esc(text) { return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function pageBox(el) {
+    var r = el.getBoundingClientRect();
+    return { left: r.left + window.scrollX, top: r.top + window.scrollY, width: r.width, height: r.height };
+  }
+  // The same part on every card of the section
+  function peersOf(el) {
+    var section = sectionAt(el);
+    return section ? [].slice.call(section.querySelectorAll('[data-tss-card][data-tss-block="' + el.getAttribute("data-tss-block") + '"]')) : [];
+  }
+  function drawOverlay() {
+    if (!editing) { overlay.innerHTML = ""; return; }
+    var html = "";
+    var sel = cardPath && selectedEl && selectedEl.isConnected ? selectedEl : null;
+    var hov = hoverEl && hoverEl.isConnected ? hoverEl : null;
+    function boxes(el, cls) {
+      peersOf(el).forEach(function (peer) {
+        var b = pageBox(peer);
+        if (b.width > 0 && b.height > 0) {
+          html += '<div class="tss-ov-box ' + cls + '" style="left:' + b.left + 'px;top:' + b.top + 'px;width:' + b.width + 'px;height:' + b.height + 'px"></div>';
+        }
+      });
+    }
+    function label(el) {
+      var b = pageBox(el);
+      var path = el.getAttribute("data-tss-block") || "";
+      var name = el.getAttribute("data-tss-name") || "";
+      var icon = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[el.getAttribute("data-tss-kind")] || ICONS.card) + "</svg>";
+      var top = b.top - 22 < window.scrollY ? b.top : b.top - 22;
+      html += '<div class="tss-ov-chip" style="left:' + b.left + 'px;top:' + top + 'px">' + icon + esc(name) + "</div>";
+      var parts = path.split(".");
+      var section = sectionAt(el);
+      if (parts.length === 2 && section) {
+        html += '<button type="button" class="tss-ov-plus" data-section="' + esc(section.getAttribute("data-tss-section")) + '" data-block="' + esc(parts[0]) + '" data-after="' + esc(parts[1]) + '" style="left:' + (b.left + b.width / 2) + 'px;top:' + (b.top + b.height) + 'px" aria-label="Add a block after ' + esc(name) + '">+</button>';
+      }
+    }
+    if (sel) boxes(sel, "tss-ov-sel");
+    if (hov && !(sel && hov.getAttribute("data-tss-block") === sel.getAttribute("data-tss-block"))) boxes(hov, "");
+    if (sel) label(sel);
+    if (hov && hov !== sel) label(hov);
+    overlay.innerHTML = html;
+  }
+  var redrawQueued = false;
+  function redraw() {
+    if (redrawQueued) return;
+    redrawQueued = true;
+    requestAnimationFrame(function () { redrawQueued = false; drawOverlay(); });
+  }
+  document.addEventListener("mouseover", function (e) {
+    if (!editing || !e.target.closest) return;
+    if (e.target.closest("#tss-card-overlay")) return; // moving to the "+" keeps the part hovered
+    var el = e.target.closest("[data-tss-card]");
+    if (el !== hoverEl) { hoverEl = el; drawOverlay(); }
+  });
+  document.documentElement.addEventListener("mouseleave", function () { if (hoverEl) { hoverEl = null; drawOverlay(); } });
+  overlay.addEventListener("click", function (e) {
+    var plus = e.target.closest(".tss-ov-plus");
+    if (!plus) return;
+    e.preventDefault();
+    e.stopPropagation();
+    send({ type: "add-part", id: plus.getAttribute("data-section"), block: Number(plus.getAttribute("data-block")), after: Number(plus.getAttribute("data-after")) });
+  });
+  window.addEventListener("resize", redraw);
+  if (window.ResizeObserver) new ResizeObserver(redraw).observe(document.body);
+
   // Outlines, labels and handles only show with the "tss-edit" class (see the styles above)
   function setMode(on) {
     editing = Boolean(on);
     document.documentElement.classList.toggle("tss-edit", editing);
+    if (!editing) hoverEl = null;
+    drawOverlay();
   }
 
   function select(id, block, scroll) {
     selected = id || "";
-    selectedBlock = block === undefined || block === null ? null : Number(block);
+    selectedBlock = block === undefined || block === null ? null : (typeof block === "string" && block.indexOf(".") > -1 ? block : Number(block));
     all().forEach(function (el) { el.classList.toggle("tss-selected", el.getAttribute("data-tss-section") === selected); });
     document.querySelectorAll(".tss-block-selected").forEach(function (el) { el.classList.remove("tss-block-selected"); });
     var section = selected ? byId(selected) : null;
+    cardPath = null;
     if (section && selectedBlock !== null) {
-      var blockEl = findBlock(section, selectedBlock);
-      if (blockEl) blockEl.classList.add("tss-block-selected");
+      // A product card or one of its parts: the overlay outlines the same part on every card of the section
+      var copies = section.querySelectorAll('[data-tss-card][data-tss-block="' + selectedBlock + '"]');
+      if (copies.length) {
+        cardPath = String(selectedBlock);
+        var kept = selectedEl && selectedEl.isConnected && selectedEl.getAttribute("data-tss-block") === cardPath ? selectedEl : null;
+        selectedEl = pendingEl && pendingEl.getAttribute("data-tss-block") === cardPath ? pendingEl : (kept || copies[0]);
+      } else {
+        var blockEl = findBlock(section, selectedBlock);
+        if (blockEl) blockEl.classList.add("tss-block-selected");
+      }
     }
+    pendingEl = null;
+    hoverEl = null;
+    drawOverlay();
     // Picked in the customizer's sections list: bring it into view
     if (scroll && editing && section) section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -645,6 +776,7 @@ PREVIEW_EDITOR = """
   // except on a product or blog post link, which opens that page (as does any store link with Edit mode off).
   // The customizer opens the page's template itself, so the preview stays editable.
   document.addEventListener("click", function (e) {
+    if (e.target.closest("#tss-card-overlay")) return; // the "+" under a card part (its own handler sends the message)
     if (e.target.closest(".site-header__search-block, .site-header__search, .site-header__search-panel, .collection-search, input[type='search'], input[name='q']")) {
       return;
     }
@@ -657,7 +789,8 @@ PREVIEW_EDITOR = """
       send({ type: "back", fallback: backLink.getAttribute("data-back") || backLink.getAttribute("href") || "" });
       return;
     }
-    var page = storePage(e);
+    // Edit mode: a click on a product card selects it (or its part) instead of opening the product
+    var page = editing && e.target.closest && e.target.closest("[data-tss-card]") ? null : storePage(e);
     if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart|wishlist)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
@@ -670,9 +803,11 @@ PREVIEW_EDITOR = """
     if (e.target.closest(".tss-handle")) return;
     var section = sectionAt(e.target);
     if (!section) { send({ type: "select", id: "", block: null }); return; }
-    var blockEl = e.target.closest("[data-tss-block]");
-    var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
-    send({ type: "select", id: section.getAttribute("data-tss-section"), block: block });
+    var block = blockAt(section, e.target);
+    pendingEl = e.target.closest("[data-tss-card]"); // the card clicked keeps the label once it is selected
+    send({ type: "select", id: section.getAttribute("data-tss-section"), block: block, product: productOf(pendingEl) });
+    // The same part of another card clicked while it is already selected: the customizer has nothing new to say
+    if (pendingEl && selected === section.getAttribute("data-tss-section") && cardPath !== null && String(block) === cardPath) { selectedEl = pendingEl; pendingEl = null; drawOverlay(); }
   }, true);
 
   document.addEventListener("submit", function (e) {
@@ -694,8 +829,7 @@ PREVIEW_EDITOR = """
     e.stopPropagation();
     var section = sectionAt(e.target);
     if (!section) { send({ type: "context", id: "", block: null, x: e.clientX, y: e.clientY }); return; }
-    var blockEl = e.target.closest("[data-tss-block]");
-    var block = blockEl && findBlock(section, blockEl.getAttribute("data-tss-block")) === blockEl ? Number(blockEl.getAttribute("data-tss-block")) : null;
+    var block = blockAt(section, e.target);
     send({ type: "context", id: section.getAttribute("data-tss-section"), block: block, x: e.clientX, y: e.clientY });
   }, true);
   // Also stopped from reaching the theme's own submit script (login/register forms), which would

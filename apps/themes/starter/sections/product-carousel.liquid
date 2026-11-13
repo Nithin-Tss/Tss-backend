@@ -5,6 +5,7 @@
 {%- assign s = section.settings -%}
 {%- comment -%} Nothing to show: shoppers see no empty box (e.g. "You may also like" with no other products); the customizer keeps it as a hint {%- endcomment -%}
 {%- if section.products.size > 0 or design_mode -%}
+{%- if section.card -%}<style>{{ section.card.css }}</style>{%- endif -%}
 <section id="section-{{ section.id }}"
   class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
   data-autoplay="{{ s.autoplay }}"
@@ -33,10 +34,10 @@
     {%- else -%}
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
         {%- if s.layout == 'carousel' %} tabindex="0" role="region" aria-label="{{ s.heading | default: 'Products' | escape }}"{% endif %}>
-        {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
-        {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+        {%- if section.cart_icon or section.card.has_cart -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+        {%- if section.wishlist_heart or section.card.has_wishlist -%}{% render 'wishlist', with_script: true %}{%- endif -%}
         {%- for product in section.products -%}
-          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {%- if section.card -%}{% render 'product-card-blocks', product: product, card: section.card, wishlist_ids: wishlist_ids, return_url: return_url %}{%- else -%}{% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}{%- endif -%}
         {%- endfor -%}
       </div>
     {%- endif -%}

@@ -34,7 +34,7 @@ from apps.catalog.services import (
 from apps.customers.models import Customer, CustomerAddress
 from apps.orders.models import Order, OrderItem
 
-from .schemas import ALL_PRODUCTS_SETTINGS, FONTS, custom_css_problem, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
+from .schemas import ALL_PRODUCTS_SETTINGS, CARD_CHILD_BLOCKS, FONTS, TEXT_PRESETS, custom_css_problem, GENERIC_BLOCK_TYPES, SECTIONS, THEME_SETTINGS, base_page, default_template, resolve, sanitize_embed, sanitize_html
 from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
@@ -462,6 +462,149 @@ _CARD_UNBORDERED = "body .product-card.product-card:not(:where(.cards--bordered)
 _THEME_RATIO = ":not(.product-card__media--square,.product-card__media--portrait,.product-card__media--landscape)"
 CARD_RATIOS = {"square": "1", "portrait": "3/4", "landscape": "4/3"}
 CARD_ALIGN = {"left": "flex-start", "center": "center", "right": "flex-end"}
+
+
+CARD_MAX_WIDTHS = {"narrow": "12em", "normal": "20em"}
+
+
+def _card_css(uid, children):
+    """
+    The CSS of a section's "Product card" block: one rule per part the owner changed, scoped to that section's
+    cards (".pcb-<uid>"), so a setting changes that part on every card of the section. A part left at its
+    defaults adds nothing, so an untouched card looks exactly like the plain card. The selectors start with
+    "body" and the section's class so they beat the theme's own card rules (_panel_css).
+    """
+    scope = f"body .pcb-{uid} .product-card.product-card"
+    rules = []
+
+    def num(settings, key):
+        value = settings.get(key)
+        return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    def hexcolor(settings, key):
+        value = settings.get(key)
+        return value if isinstance(value, str) and _HEX_COLOR.match(value) else ""
+
+    def add(selector, **declarations):
+        decl = [f"{prop.replace('_', '-')}:{value}" for prop, value in declarations.items() if value not in ("", None)]
+        if decl:
+            rules.append(f"{scope} {selector}{{{';'.join(decl)}}}")
+
+    def text(s):
+        """Preset (or custom size), colour: the same for every text part."""
+        size = num(s, "size") or TEXT_PRESETS.get(s.get("preset"), 0)
+        return {"font_size": f"{size}px" if size > 0 else "", "color": hexcolor(s, "color")}
+
+    def box(s, text_align=False):
+        """Width, max width, alignment and padding of a part (what Horizon's Layout and Padding groups say)."""
+        align = s.get("align") if s.get("align") in CARD_ALIGN else ""
+        fit = s.get("width") == "fit"
+        max_width = CARD_MAX_WIDTHS.get(s.get("max_width"), "")
+        decl = {}
+        if fit:
+            decl["width"] = "fit-content"
+        elif max_width:
+            decl["width"] = "100%"
+        decl["max_width"] = max_width
+        if fit or max_width:
+            decl["align_self"] = CARD_ALIGN.get(align, "flex-start")  # a narrower part sits on the left unless told
+        elif align:
+            decl["align_self"] = CARD_ALIGN[align]
+        if text_align and align:
+            decl["text_align"] = align
+        for side in ("top", "bottom", "left", "right"):
+            if num(s, f"padding_{side}") > 0:
+                decl[f"padding_{side}"] = f"{num(s, f'padding_{side}')}px"
+        return decl
+
+    for child in children:
+        kind, s = child["type"], child["settings"]
+        if kind == "card_image":
+            decl = {"border_radius": f"{num(s, 'radius')}px" if num(s, "radius") > 0 else ""}
+            if s.get("border_style") == "solid":
+                decl["border"] = f"{max(num(s, 'border_width'), 1)}px solid {hexcolor(s, 'border_color') or 'var(--line,#ddd)'}"
+            for side in ("top", "bottom", "left", "right"):
+                if num(s, f"padding_{side}") > 0:  # added to the theme's own image padding
+                    decl[f"padding_{side}"] = f"calc(var(--card-media-padding,8px) + {num(s, f'padding_{side}')}px)"
+            add(".product-card__media", **decl)
+            if s.get("hover_image"):
+                # Both pictures sit in the same grid cell; the second one fades in over the first
+                add(".product-card__media--hover", display="grid")
+                add(".product-card__media--hover img", grid_area="1/1")
+                add(".product-card__media--hover .product-card__hover-img", opacity="0", transition="opacity .25s")
+                rules.append(f"{scope}:hover .product-card__media--hover .product-card__hover-img{{opacity:1}}")
+        elif kind == "card_badge":
+            look = text(s)
+            add(".product-card__badge, .product-card__ribbon", font_size=look["font_size"], color=look["color"])
+            add(".product-card__badge:not(.product-card__badge--new), .product-card__ribbon",
+                background=hexcolor(s, "background"))
+            if s.get("align") == "center":
+                add(".product-card__badges", left="50%", transform="translateX(-50%)", align_items="center")
+            elif s.get("align") == "right":
+                add(".product-card__badges", left="auto", right="10px", align_items="flex-end")
+        elif kind == "card_vendor":
+            add(".product-card__vendor", **text(s), **box(s, text_align=True))
+        elif kind == "card_title":
+            lines = num(s, "max_lines") or 2
+            decl = {**text(s), **box(s, text_align=True)}
+            if s.get("background_on"):
+                decl["background"] = hexcolor(s, "background")
+            add(".product-card__title", **decl)
+            if lines != 2:
+                add(".product-card__title", **{"-webkit-line-clamp": str(lines), "min_height": f"{lines * 1.3:g}em"})
+        elif kind == "card_rating":
+            add(".product-card__rating", **text(s), **box(s, text_align=True))
+        elif kind == "card_price":
+            look, layout = text(s), box(s, text_align=True)
+            add(".price:not(.price--compare, .price--muted)", **look)
+            add(".price", **layout)
+            if s.get("show_tax"):
+                add(".product-card__tax", font_size="11px", color="var(--muted,#888)",
+                    align_self=layout.get("align_self"), text_align=layout.get("text_align"),
+                    padding_left=layout.get("padding_left"), padding_right=layout.get("padding_right"))
+        elif kind == "card_tags":
+            add(".product-card__tags span", **text(s))
+            add(".product-card__tags", **box(s), justify_content=CARD_ALIGN.get(s.get("align"), ""))
+        elif kind == "card_button":
+            add(".product-card__cta", **box(s))
+    return "".join(rules)
+
+
+def _build_card(section_id, index, block, editor=False):
+    """
+    What the section's templates get as `section.card`: the visible parts of its "Product card" block, ready for
+    snippets/product-card-blocks.liquid, and the section's card CSS. `index` is the block's place in the section's
+    blocks and every part carries its own place (`index`), for the customizer's click-to-select.
+    """
+    uid = re.sub(r"[^A-Za-z0-9_-]", "", str(section_id)) or "card"
+    parts = [dict(c, index=i) for i, c in enumerate(block.get("children") or []) if not c.get("hidden")]
+
+    def mark(path, kind=None):
+        # In the customizer's preview every card, and every part of it, says which block it is ("2" the card,
+        # "2.1" its second part), what kind and what name (for the label on hover), so a click selects it and
+        # the preview can outline it on every card. The store itself gets nothing.
+        if not editor:
+            return ""
+        name = CARD_CHILD_BLOCKS[kind]["name"] if kind else "Product card"
+        return Markup(f' data-tss-block="{path}" data-tss-card data-tss-kind="{kind or "card"}" data-tss-name="{escape(name)}"')
+
+    first = lambda kind: next((c["settings"] for c in parts if c["type"] == kind), None)
+    body_types = ("card_vendor", "card_title", "card_rating", "card_price", "card_tags", "card_button")
+    return {
+        "uid": uid,
+        "index": index,
+        "image": first("card_image"),
+        "badge": first("card_badge"),
+        "cart": first("card_cart_icon"),
+        "wishlist": first("card_wishlist"),
+        "body": [dict(c["settings"], type=c["type"], index=c["index"], mark=mark(f"{index}.{c['index']}", c["type"]))
+                 for c in parts if c["type"] in body_types],
+        "mark": mark(index),
+        "marks": {c["type"]: mark(f"{index}.{c['index']}", c["type"]) for c in parts},
+        "has_cart": first("card_cart_icon") is not None,
+        "has_wishlist": first("card_wishlist") is not None,
+        "css": Markup(_card_css(uid, parts)),
+    }
 
 
 def _panel_css(settings):
@@ -3873,6 +4016,23 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 # The "Cart icon" block: its settings, or None when the owner hid it (or never added it)
                 cart_block = next((b for b in all_blocks if b["type"] == "cart_icon" and not b.get("hidden")), None)
                 section["cart_icon"] = cart_block["settings"] if cart_block else None
+
+            if "card_layout" in _sec_blocks:
+                # The built-in "Product card" block: every card of the section is drawn from it
+                # (snippets/product-card-blocks.liquid), with the cart icon and heart inside it.
+                card_at = next(((i, b) for i, b in enumerate(all_blocks) if b["type"] == "card_layout"), None)
+                if card_at and "section.card" in (files.get(path) or ""):
+                    section["card"] = _build_card(section_id, card_at[0], card_at[1], editor)
+                    section["cart_icon"] = None
+                    section["wishlist_heart"] = None
+                else:
+                    # The section's code was edited and never calls the block's snippet: it keeps drawing the old card
+                    # (the owner's files are not touched), with the cart icon and heart the block's parts say
+                    section["card"] = None
+                    if card_at:
+                        shown = {c["type"]: c["settings"] for c in card_at[1].get("children") or [] if not c.get("hidden")}
+                        section["cart_icon"] = shown.get("card_cart_icon")
+                        section["wishlist_heart"] = shown.get("card_wishlist")
 
             if _sec_schema.get("uses_products"):
                 ss = section["settings"]

@@ -4,6 +4,7 @@
 {%- endcomment -%}
 {%- assign s = section.settings -%}
 {%- assign first_count = s["limit"] -%}
+{%- if section.card -%}<style>{{ section.card.css }}</style>{%- endif -%}
 <section id="section-{{ section.id }}"
   class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
   data-autoplay="{{ s.autoplay }}"
@@ -32,12 +33,12 @@
     {%- else -%}
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
         {%- if s.layout == 'carousel' %} tabindex="0" aria-label="{{ s.heading | default: 'Products' }}"{% endif %}>
-        {%- if section.cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
-        {%- if section.wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+        {%- if section.cart_icon or section.card.has_cart -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+        {%- if section.wishlist_heart or section.card.has_wishlist -%}{% render 'wishlist', with_script: true %}{%- endif -%}
         {%- for product in section.products -%}
           {%- comment -%} "Load more": cards after the first `limit` wait, hidden, for the button {%- endcomment -%}
           {%- if s.load_more and forloop.index > first_count -%}<div data-more style="display:none">{%- endif -%}
-          {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+          {%- if section.card -%}{% render 'product-card-blocks', product: product, card: section.card, wishlist_ids: wishlist_ids, return_url: return_url %}{%- else -%}{% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}{%- endif -%}
           {%- if s.load_more and forloop.index > first_count -%}</div>{%- endif -%}
         {%- endfor -%}
       </div>

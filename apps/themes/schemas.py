@@ -387,19 +387,28 @@ def _clean_section(page, section_id, raw):
             block_schema = schema["blocks"][block["type"]]
             cleaned = {
                 "type": block["type"],
-                "hidden": block_hidden,
+                "hidden": block_hidden and schema["blocks"][block["type"]].get("child_blocks") is None,
                 "settings": _clean_settings(
                     block_schema["settings"], block.get("settings", {}), f"{where}.blocks[{i}].settings"
                 ),
             }
             if block_schema.get("nests"):
-                cleaned["children"] = _clean_children(schema, block.get("children"), f"{where}.blocks[{i}].children")
+                raw_children = block.get("children")
+                if block_schema.get("child_blocks") is not None and raw_children is None:
+                    # A product card added without children starts as the section's current card
+                    raw_children = seed_card_children(section["settings"], blocks)
+                cleaned["children"] = _clean_children(
+                    schema, raw_children, f"{where}.blocks[{i}].children", block_schema
+                )
             section["blocks"].append(cleaned)
 
         if legacy_heart is True and not any(b["type"] == "wishlist_heart" for b in section["blocks"]):
             section["blocks"].append({"type": "wishlist_heart", "hidden": False, "settings": {}})
         elif legacy_heart is False:
             section["blocks"] = [b for b in section["blocks"] if b["type"] != "wishlist_heart"]
+
+        # The product card holds the cart icon and wishlist heart itself: the section's own ones go
+        section["blocks"] = _without_card_extras(section["blocks"])
 
         # Some block types have their own limit (e.g. at most 8 slides)
         for type_, limit in schema.get("type_limits", {}).items():
@@ -411,12 +420,28 @@ def _clean_section(page, section_id, raw):
 
 
 
-def _clean_children(schema, raw, where):
-    """A group's child blocks: generic blocks only (no nested groups), at most MAX_GROUP_CHILDREN."""
+def _clean_children(schema, raw, where, block_schema=None):
+    """A group's child blocks: generic blocks only (no nested groups), at most MAX_GROUP_CHILDREN.
+    A block with its own "child_blocks" (the product card) accepts exactly those types instead."""
     if raw is None:
         return []
     if not isinstance(raw, list) or len(raw) > MAX_GROUP_CHILDREN:
         raise serializers.ValidationError(f"{where} must be a list of at most {MAX_GROUP_CHILDREN} blocks.")
+    own = (block_schema or {}).get("child_blocks")
+    if own is not None:
+        out = []
+        for i, child in enumerate(raw):
+            if not isinstance(child, dict) or child.get("type") not in own:
+                raise serializers.ValidationError(f"{where}[{i}].type is not valid inside {block_schema['name']}.")
+            hidden = child.get("hidden", False)
+            if not isinstance(hidden, bool):
+                raise serializers.ValidationError(f"{where}[{i}].hidden must be true or false.")
+            out.append({
+                "type": child["type"],
+                "hidden": hidden,
+                "settings": _clean_settings(own[child["type"]]["settings"], child.get("settings", {}), f"{where}[{i}].settings"),
+            })
+        return out
     out = []
     for i, child in enumerate(raw):
         if not isinstance(child, dict) or child.get("type") not in schema["blocks"] or schema["blocks"][child["type"]].get("nests") \
@@ -594,9 +619,10 @@ def resolve(custom_data):
                 section["blocks"] = [
                     {
                         "type": b["type"],
-                        "hidden": bool(b.get("hidden", False)),
+                        "hidden": bool(b.get("hidden", False)) and schema["blocks"][b["type"]].get("child_blocks") is None,
                         "settings": _with_defaults(schema["blocks"][b["type"]]["settings"], b.get("settings", {})),
-                        **({"children": _with_default_children(schema, b.get("children"))} if schema["blocks"][b["type"]].get("nests") else {}),
+                        **({"children": _resolved_children(schema["blocks"][b["type"]], schema, b, section)}
+                           if schema["blocks"][b["type"]].get("nests") else {}),
                     }
                     for b in section.get("blocks", [])
                     if b.get("type") in schema["blocks"]  # block types that no longer exist are dropped
@@ -613,7 +639,12 @@ def resolve(custom_data):
                             "type": type_,
                             "hidden": False,
                             "settings": _with_defaults(schema["blocks"][type_]["settings"], {}),
+                            # the product card: its parts start as the card the section shows now (its cart icon
+                            # and heart blocks move inside it)
+                            **({"children": _resolved_children(schema["blocks"][type_], schema, {}, section)}
+                               if schema["blocks"][type_].get("nests") else {}),
                         })
+                section["blocks"] = _without_card_extras(section["blocks"])
 
     return {
         "settings": resolved_settings,
@@ -1903,8 +1934,255 @@ SECTIONS["main-product"]["type_limits"] = {"product_info": 1, "wishlist_heart": 
 # The cart icon on product cards (see snippets/product-card.liquid and snippets/cart.liquid). Nothing adds it: the
 # owner picks "Cart icon" in "Add block" (one per section), hides it with the block's eye or deletes it, and the
 # cards show the icon on hover while the block is there and visible.
+# ---------------------------------------------------------------------------
+# The product card as blocks (starter theme). Every product section (grid, carousel, collection page, promotions)
+# has a built-in "Product card" block ("card_layout", one per section, see required_blocks below): its children are
+# the card's parts, in order, and every one of the section's cards is drawn from it, so one setting changes that part
+# on every card. resolve() adds the block to a section that was saved without it, with the parts seeded from the
+# section's current card settings, so the cards look as they did. The defaults reproduce the plain card exactly (0
+# and "" mean "as the theme has it"). The block can't be hidden or deleted, only its parts can. The old flat card
+# settings, "Cart icon" and "Wishlist heart" blocks are only read when the block is first built (and by a section
+# whose own code was edited, which keeps drawing the old card: see rendering.py).
+TEXT_PRESETS = {"Small": 14, "Medium": 16, "Large": 20, "Extra large": 28}
+HEADING_PRESETS = {"Small": 20, "Medium": 28, "Large": 40, "Extra large": 56}
+
+# Where "Edit ... in theme settings" links go: a group of the theme settings panel (THEME_GROUPS)
+_PRESETS_LINK = {"label": "Edit presets in theme settings", "group": "typography"}
+_PRICES_LINK = {"label": "Edit price formatting in theme settings", "group": "prices"}
+
+
+def _card_size(label="Custom text size"):
+    return _opt("text", "range", label, 0, min=0, max=48, unit="px", box=True,
+                help="0 uses the preset (or the theme's size).")
+
+
+def _card_preset(link=True):
+    """The theme's own text presets (Small ... Extra large), as sizes; empty follows the theme."""
+    return _choice("text", "Preset", [""] + list(TEXT_PRESETS), "", labels={"": "Theme"},
+                   **({"link": _PRESETS_LINK} if link else {}))
+
+
+def _card_color(label="Text color"):
+    return _opt("style", "color_optional", label, "")
+
+
+_CARD_ALIGN = ["", "left", "center", "right"]
+_CARD_ALIGN_LABELS = {"": "Theme"}
+
+
+def _card_align(group="layout", label="Alignment"):
+    # three icon buttons (left, center, right); none picked follows the theme
+    return _choice(group, label, _CARD_ALIGN, "", ui="icons", labels=_CARD_ALIGN_LABELS)
+
+
+def _card_width():
+    return _choice("layout", "Width", ["fit", "fill"], "fill", ui="segmented", labels={"fit": "Fit", "fill": "Fill"})
+
+
+def _card_padding():
+    return {
+        f"padding_{side}": _opt("padding", "range", side.capitalize(), 0, min=0, max=60, unit="px", box=True)
+        for side in ("top", "bottom", "left", "right")
+    }
+
+
+# What each part is (shown at the top of its panel). Settings left at their defaults leave the card as it was.
+CARD_CHILD_BLOCKS = {
+    "card_image": {
+        "name": "Media",
+        "description": "Displays media from parent product",
+        "settings": {
+            "ratio": _choice("layout", "Aspect ratio", ["", "square", "portrait", "landscape"], "",
+                             labels={"": "Auto", "square": "Square", "portrait": "Portrait", "landscape": "Landscape"},
+                             help="Adjusted in some layouts. Auto follows the shape set in Theme settings > Product cards."),
+            "border_style": _choice("style", "Border style", ["none", "solid"], "none", ui="segmented",
+                                    labels={"none": "None", "solid": "Solid"}),
+            "border_width": _opt("style", "range", "Border thickness", 1, min=1, max=8, unit="px", box=True,
+                                 show_if={"border_style": "solid"}),
+            "border_color": _opt("style", "color_optional", "Border color", "", show_if={"border_style": "solid"}),
+            "radius": _opt("style", "range", "Corner radius", 0, min=0, max=40, unit="px", box=True),
+            "hover_image": _opt("style", "checkbox", "Show the second image on hover", False,
+                                help="Only for products that have a second image."),
+            **_card_padding(),
+        },
+    },
+    "card_badge": {
+        "name": "Badge",
+        "description": "Displays badges from parent product",
+        "settings": {
+            "align": _card_align(),
+            "size": _card_size(),
+            "color": _card_color(),
+            "background": _opt("style", "color_optional", "Background color", ""),
+        },
+    },
+    "card_vendor": {
+        "name": "Vendor",
+        "description": "Displays vendor from parent product",
+        "settings": {
+            "align": _card_align(),
+            "preset": _card_preset(link=False),
+            "size": _card_size(),
+            "color": _card_color(),
+            **_card_padding(),
+        },
+    },
+    "card_title": {
+        "name": "Product title",
+        "description": "Displays title from parent product",
+        "settings": {
+            "width": _card_width(),
+            "max_width": _choice("layout", "Max width", ["narrow", "normal", "none"], "none", ui="segmented",
+                                 labels={"narrow": "Narrow", "normal": "Normal", "none": "None"}),
+            "align": _card_align(),
+            "preset": _card_preset(),
+            "size": _card_size(),
+            "max_lines": _opt("text", "range", "Maximum lines", 2, min=1, max=4),
+            "color": _card_color(),
+            "background_on": _opt("style", "checkbox", "Background", False),
+            "background": _opt("style", "color_optional", "Background color", "", show_if={"background_on": "*"}),
+            **_card_padding(),
+        },
+    },
+    "card_rating": {
+        "name": "Rating",
+        "description": "Displays rating from parent product",
+        "settings": {
+            "align": _card_align(),
+            "preset": _card_preset(link=False),
+            "size": _card_size(),
+            "color": _card_color(),
+            **_card_padding(),
+        },
+    },
+    "card_price": {
+        "name": "Price",
+        "description": "Displays price from parent product",
+        "links": [_PRICES_LINK],
+        "settings": {
+            "sale_first": _opt("content", "checkbox", "Show sale price first", True,
+                               help="Off: the compare-at price comes before the sale price."),
+            "show_compare": _opt("content", "checkbox", "Show the compare-at price", True),
+            "show_tax": _opt("content", "checkbox", "Tax information", False,
+                             help="Shows \"Taxes included\" under the price."),
+            "preset": _card_preset(),
+            "size": _card_size(),
+            "width": _card_width(),
+            "align": _card_align(),
+            "color": _card_color(),
+            **_card_padding(),
+        },
+    },
+    "card_tags": {
+        "name": "Tags",
+        "description": "Displays tags from parent product",
+        "settings": {
+            "align": _card_align(),
+            "preset": _card_preset(link=False),
+            "size": _card_size(),
+            "color": _card_color(),
+            **_card_padding(),
+        },
+    },
+    "card_button": {
+        "name": "Add to cart button",
+        "description": "Shows an Add to cart button that opens the product",
+        "settings": {
+            "label": _opt("content", "text", "Button text", "Add to cart", max=40),
+            "align": _card_align(),
+        },
+    },
+    "card_cart_icon": {
+        "name": "Cart icon",
+        "description": "Shows a quick add-to-cart button over the image",
+        "settings": {
+            "label": _opt("content", "text", "Label (for screen readers)", "Add to cart", max=40),
+            "size": _opt("style", "range", "Icon size", 44, min=32, max=64, step=2, unit="px", box=True),
+        },
+    },
+    "card_wishlist": {
+        "name": "Wishlist heart",
+        "description": "Shows the wishlist heart over the image",
+        "settings": {
+            "label": _opt("content", "text", "Label (tooltip)", "Add to wishlist", max=40),
+            "size": _opt("style", "range", "Icon size", 20, min=16, max=40, step=2, unit="px", box=True),
+        },
+    },
+}
+
+PRODUCT_CARD_BLOCK = {
+    "name": "Product card",
+    "settings": {},
+    "nests": True,
+    "child_blocks": CARD_CHILD_BLOCKS,
+}
+
+
+def seed_card_children(settings, raw_blocks):
+    """
+    The children a new "Product card" block starts with: the card the section shows today, part by part. Parts
+    the section does not show are there too, hidden, so the owner can switch them on. `settings` are the section's
+    own settings (show_vendor, image_ratio, ...), `raw_blocks` its blocks (the old "Cart icon" and "Wishlist
+    heart" blocks become the card's cart icon and heart).
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    legacy = {
+        t: next((b for b in raw_blocks or [] if isinstance(b, dict) and b.get("type") == t), None)
+        for t in ("cart_icon", "wishlist_heart")
+    }
+
+    def child(type_, hidden=False, **values):
+        return {"type": type_, "hidden": hidden, "settings": values}
+
+    def from_block(type_, block, keys):
+        saved = block.get("settings") if isinstance(block, dict) and isinstance(block.get("settings"), dict) else {}
+        return child(type_, hidden=block is None or bool(block.get("hidden")),
+                     **{k: saved[k] for k in keys if k in saved})
+
+    ratio = settings.get("image_ratio")
+    return [
+        child("card_image", ratio=ratio if ratio in ("square", "portrait", "landscape") else ""),
+        child("card_badge"),
+        child("card_vendor", hidden=not settings.get("show_vendor", False)),
+        child("card_title"),
+        child("card_rating", hidden=not settings.get("show_rating", False)),
+        child("card_price", hidden=not settings.get("show_price", True)),
+        child("card_tags", hidden=not settings.get("show_tags", False)),
+        child("card_button", hidden=not settings.get("show_add_to_cart", False)),
+        from_block("card_cart_icon", legacy["cart_icon"], ("label", "size")),
+        from_block("card_wishlist", legacy["wishlist_heart"], ("label", "size")),
+    ]
+
+
+def _without_card_extras(blocks):
+    """A section with a "Product card" block has its cart icon and heart inside it: the section's own are dropped."""
+    if not any(b.get("type") == "card_layout" for b in blocks):
+        return blocks
+    return [b for b in blocks if b.get("type") not in ("cart_icon", "wishlist_heart")]
+
+
+def _resolved_children(block_schema, schema, block, section):
+    """A nested block's children with defaults filled in. A product card saved without any starts as the current card."""
+    own = block_schema.get("child_blocks")
+    if own is None:
+        return _with_default_children(schema, block.get("children"))
+    raw = block.get("children")
+    if raw is None:
+        raw = seed_card_children(section.get("settings"), section.get("blocks"))
+    return [
+        {
+            "type": c["type"],
+            "hidden": bool(c.get("hidden", False)),
+            "settings": _with_defaults(own[c["type"]]["settings"], c.get("settings") if isinstance(c.get("settings"), dict) else {}),
+        }
+        for c in (raw if isinstance(raw, list) else [])
+        if isinstance(c, dict) and c.get("type") in own
+    ][:MAX_GROUP_CHILDREN]
+
+
 for _type in ("product-grid", "product-carousel", "main-collection", "promotions"):
     SECTIONS[_type]["blocks"] = {
+        "card_layout": PRODUCT_CARD_BLOCK,
         "cart_icon": {
             "name": "Cart icon",
             "settings": {
@@ -1924,8 +2202,11 @@ for _type in ("product-grid", "product-carousel", "main-collection", "promotions
         },
         **SECTIONS[_type]["blocks"],
     }
-    SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1, "wishlist_heart": 1}
+    SECTIONS[_type]["type_limits"] = {**SECTIONS[_type].get("type_limits", {}), "cart_icon": 1, "wishlist_heart": 1,
+                                      "card_layout": 1}
 SECTIONS["main-product"]["required_blocks"] = ["product_info"]
+for _type in ("product-grid", "product-carousel", "main-collection", "promotions"):
+    SECTIONS[_type]["required_blocks"] = ["card_layout"]
 
 SECTIONS["custom"]["settings"] = {
     "heading": SECTIONS["custom"]["settings"]["heading"],
@@ -2002,10 +2283,6 @@ _WEIGHTS = ["", "300", "400", "500", "600", "700", "800"]
 _WEIGHT_LABELS = {"": "Theme default", "300": "Light", "400": "Regular", "500": "Medium", "600": "Semi-bold", "700": "Bold", "800": "Extra bold"}
 _TRANSFORMS = ["", "none", "uppercase", "lowercase", "capitalize"]
 _TRANSFORM_LABELS = {"": "Theme default", "none": "As typed", "uppercase": "UPPERCASE", "lowercase": "lowercase", "capitalize": "Capitalize"}
-TEXT_PRESETS = {"Small": 14, "Medium": 16, "Large": 20, "Extra large": 28}
-HEADING_PRESETS = {"Small": 20, "Medium": 28, "Large": 40, "Extra large": 56}
-
-
 def _td(group, type_, label, default, **extra):
     """An option that follows the theme until changed."""
     return _opt(group, type_, label, default, theme_default=True, **extra)
@@ -2491,5 +2768,6 @@ GROUPS[:] = [
     {"id": "button", "label": "Button"},
     {"id": "layout", "label": "Layout"},
     {"id": "style", "label": "Style"},
+    {"id": "padding", "label": "Padding"},
     {"id": "advanced", "label": "Advanced"},
 ]

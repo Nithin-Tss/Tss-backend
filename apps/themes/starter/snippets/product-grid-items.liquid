@@ -14,13 +14,15 @@
 
   products        the products to list
   s               the section's settings (show_vendor, show_price, show_rating, show_tags, show_add_to_cart, image_ratio)
+  card            the section's "Product card" block (section.card), or nothing: then the plain card below is used
   cart_icon       the section's "Cart icon" block settings, or nothing (see snippets/cart.liquid)
   wishlist_heart  the section's "Wishlist heart" block settings, or nothing (see snippets/wishlist.liquid)
   wishlist_ids    the shopper's wishlisted product ids
   return_url      where the wishlist heart sends the shopper back to
 {%- endcomment -%}
-{%- if cart_icon -%}{% render 'cart', mode: 'script' %}{%- endif -%}
-{%- if wishlist_heart -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+{%- if cart_icon or card.has_cart -%}{% render 'cart', mode: 'script' %}{%- endif -%}
+{%- if wishlist_heart or card.has_wishlist -%}{% render 'wishlist', with_script: true %}{%- endif -%}
+{%- if card -%}<style>{{ card.css }}</style>{%- endif -%}
 {%- for product in products -%}
-  {% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: wishlist_heart, show_cart_icon: cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}
+  {%- if card -%}{% render 'product-card-blocks', product: product, card: card, wishlist_ids: wishlist_ids, return_url: return_url %}{%- else -%}{% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: wishlist_heart, show_cart_icon: cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}{%- endif -%}
 {%- endfor -%}

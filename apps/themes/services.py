@@ -52,6 +52,8 @@ REQUIRED_FILES = {
     "templates/article.liquid",
     # Pages (About us, ...)
     "templates/page.liquid",
+    # The product card drawn from the section's "Product card" block
+    "snippets/product-card-blocks.liquid",
     # Wishlist: one snippet with all its markup, the page and the script
     "snippets/wishlist.liquid",
     # Cart: one snippet with the icon, the drawer, the cart page and the script
@@ -105,8 +107,23 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 56
+STARTER_REVISION = 60
 STARTER_UPGRADES = {
+    # Revision 59: every card part carries its place and name in the customizer preview (data-tss-block markers), so hovering
+    # and clicking a part works. Stores that got the first version of the snippet (revision 58) are upgraded if they never edited it.
+    # Revision 60: the price part can show the compare-at price first and "Taxes included" under the price.
+    "snippets/product-card-blocks.liquid": {
+        "1128993c55a2e35ded97df7397faed4545d72ae71939eb02f832f2e6c688a9ad",  # revision 60: before sale-price order and tax information
+        "3d7c6eb33f7e9355d30f6db3a028b788dd2db6229bc1c12202d71467cb6eaeee",  # revision 60: before sale-price order and tax information (CRLF)
+        "3b1d406562c47dad4d89933f4234aee4d2f2f36017adb5bf47190210be9a8801",  # revision 59: before the preview markers
+        "80c71003f929e78e8488c6b5bc0e508d0ff0137367ac1849cc05e4dc3631a9a3",  # revision 59: before the preview markers (CRLF)
+    },
+    # Revision 58: the product card can be drawn from a "Product card" block (sections call product-card-blocks when they have one).
+    # Only copies still equal to an earlier starter version are replaced; a file the owner edited keeps its own code.
+    "snippets/product-grid-items.liquid": {
+        "8861200927088c79ee0762bcd7f4be3ab4597bd66b3de213b7adf33772b2c47e",  # revision 58: before the product card block
+        "2c4f5870658a4b66dc432d7082986e3e311d56ba9ecd175f4405d163eb1fa585",  # revision 58: same, with CRLF line endings
+    },
     # Revision 56: the filters, toolbar, search, heading and pagination are snippets (collection-*), the category links too (blog-filters)
     "sections/main-blog.liquid": {
         "30c262da103a06435fb43913dac7cc97b3060003098fc713452128b9f4965fb0",  # revision 56: before the feature snippets
@@ -179,6 +196,8 @@ STARTER_UPGRADES = {
         "a831a51ab4d6a82271abf32b7238911be9d920471b2b2490dc13dc1b83ad4fe6",  # revision 12: before slideshow accessibility and swipe
     },
     "sections/product-grid.liquid": {
+        "73970df9555d2ff91349c339e8143ebf12129f4c35f8fb104e5f1e2ca7e07f50",  # revision 58: before the product card block
+        "b3f19f53dc675bb3ab27a6e9d7df8fa56f59b9f60f5e6089e6f6f8ba7953ef76",  # revision 58: before the product card block (CRLF)
         "2490f671fe83ecc1cf97fe530ee29a9e147b9e0cd0f0928463481110d521b4e2",  # revision 31: before the wishlist heart became a block
         "1124400a0a1acc01e6bbdc80b0ccf44e1a17ac4969942673c78e44aecff107fe",  # revision 31: before the wishlist heart became a block (CRLF)
         "849a65ea615ec1126270a01748910eed928680a253b1cfc1562641fd52c97a5c",  # revision 27: before the cart icon became a block
@@ -193,6 +212,8 @@ STARTER_UPGRADES = {
         "e6f1c4afcbd4615ea14a2fc5567c6c6af98ba5abdc1205314609b8e19ac9d08c",  # revision 19: same, with CRLF line endings
     },
     "sections/product-carousel.liquid": {
+        "1e91b9b269d8d636e76f6280c1abc43e20dbe89e7f4fd5bd22980e637b181b32",  # revision 58: before the product card block
+        "914398779c62ea0e1840493accba8825f53bc9908e9460f4a377ecbc33f42bfa",  # revision 58: before the product card block (CRLF)
         "85ed27b927b263e8c4bb71256c87070b24cd14bb62d6e69c1694f9a0990af3df",  # revision 31: before the wishlist heart became a block
         "0fec34b8d1deafffbeb9b99f2be253e65469b75a0b56795291ba318a2b9c52cb",  # revision 31: before the wishlist heart became a block (CRLF)
         "6e8c18942a33473eb6d3a62d3ba4885ab73cc48fdb813e83f7609acafb21b473",  # revision 27: before the cart icon became a block
@@ -339,6 +360,8 @@ STARTER_UPGRADES = {
     # Revision 3: "Sold out" badge, "Load more", sort and pages on the all-products page
     # Revision 6: the collection's image and description above its products
     "sections/main-collection.liquid": {
+        "1a56191df58e3e7ca4a95510b56d90a2dcbf1e20e3ef35a2bf2cbb1dac2f061f",  # revision 58: before the product card block
+        "cfd2c74149b4a3909019f3111f3a32ec1b18074ceadd92c16f726be94da60964",  # revision 58: before the product card block (CRLF)
         "ec44f24d9c12d55663679ef96219007819d220865768926f2ce855709158a7f2",  # revision 56: before the feature snippets
         "dd1f5443cf1342ec1bf3158dbe8b692216e88d04c6f06e2ff93e1f4fbcaf4ddb",  # revision 56: same, with CRLF line endings
         "ccf3d4833be7820ed1c60e86ecc807f3ba8b4350e61ffed9eb29d1106ea33c00",  # revision 40: before search results
@@ -358,6 +381,8 @@ STARTER_UPGRADES = {
         "f5741f0851fa01f20743d4d6c0cd8080b19ac1b31f1589af909cfc8a1043a866",  # revision 19: same, with CRLF line endings
     },
     "sections/promotions.liquid": {
+        "320e4ff9b5d1c7c2ce4c20dc74c151a8d1bf29211eb554e42039cccba1ef1031",  # revision 58: before the product card block
+        "a7862907f4e96e9f3c1bdc2c8d601724de5e6054db86fb8f757ba18f6815370e",  # revision 58: before the product card block (CRLF)
         "cd2410ae1fb9c2213d1e549004ebf3e452af8506686638925b0aac16b8563a38",  # revision 36: before the collection's products
         "e08231172a0b48b7759637318a7175e9af93cb47ba1f5f18137b18cf213be7cd",  # revision 36: same, with CRLF line endings
         "908032a6073010b387eb6bb2af8c01c48cc511b2d50a8c6211ae46852eb116cb",  # revision 36: before the cart icon and wishlist heart blocks
@@ -767,16 +792,28 @@ def _convert_footer_social(store_theme):
 
 
 def _card_sections(templates):
-    """Every section of the pages that shows product cards and can have the "Cart icon" block."""
+    """
+    Every section of the pages that shows product cards with the old card and can have the "Cart icon" block.
+    A section with a "Product card" block draws its own card (cart icon inside it), so the card's code and the
+    blocks never touch it: the two ways of drawing a card stay apart.
+    """
     for page in templates.values():
         for section in page["sections"].values():
             blocks = SECTION_SCHEMAS.get(section.get("type"), {}).get("blocks", {})
-            if "cart_icon" in blocks and section.get("type") != "main-product":
+            if "cart_icon" in blocks and section.get("type") != "main-product" \
+                    and not any(b.get("type") == "card_layout" for b in section.get("blocks") or []):
                 yield section
 
 
 def _has_cart_icon_block(templates):
     return any(b["type"] == "cart_icon" for s in _card_sections(templates) for b in s.get("blocks") or [])
+
+
+def _has_product_card_block(templates):
+    return any(
+        b.get("type") == "card_layout"
+        for page in templates.values() for s in page["sections"].values() for b in s.get("blocks") or []
+    )
 
 
 def sync_card_cart_icon(store_theme, before=None):
@@ -792,7 +829,8 @@ def sync_card_cart_icon(store_theme, before=None):
     templates = resolve(store_theme.custom_data)["templates"]
     if _has_cart_icon_block(templates):
         patched = sync.add_card_cart_icon(file.content)
-    elif before is not None and _has_cart_icon_block(before):
+    elif before is not None and _has_cart_icon_block(before) and not _has_product_card_block(templates):
+        # (A section that just moved to a "Product card" block took its icon with it: the card's code is not touched then.)
         patched = sync.remove_card_cart_icon(file.content)
     else:
         return
@@ -1404,7 +1442,8 @@ def _new_file(theme, path, content):
 
 # Product list code (the card every list renders, and the Product grid section) and the Promotions
 # section: code that doesn't compile is refused (with its line), so the saved version keeps the home page working
-CHECKED_FILES = {"snippets/product-card.liquid", "sections/product-grid.liquid", "sections/promotions.liquid"}
+CHECKED_FILES = {"snippets/product-card.liquid", "snippets/product-card-blocks.liquid", "sections/product-grid.liquid",
+                 "sections/promotions.liquid"}
 
 
 def _check_liquid(content):

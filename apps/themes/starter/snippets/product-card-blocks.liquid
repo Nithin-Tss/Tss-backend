@@ -1,0 +1,101 @@
+{%- comment -%}
+  Product card drawn from the section's "Product card" block (see schemas.py, CARD_CHILD_BLOCKS).
+  Same markup and class names as snippets/product-card.liquid, so the theme's card styles apply as they do
+  there; what the owner changes on a part (size, colour, ...) is the section's card CSS (card.css, written once
+  before the cards by the section) and changes that part on every card of the section.
+  Usage: {% render 'product-card-blocks', product: product, card: section.card, wishlist_ids: wishlist_ids, return_url: return_url %}
+
+  card.image / card.badge / card.cart / card.wishlist  the settings of that part, or nothing when it is hidden or removed
+  card.body                                           the other parts in the owner's order (vendor, title, rating, price, tags, button)
+  The badges ride on the image; the cart icon and the wishlist heart sit over it, so they keep their place.
+  The wishlist page does not use this snippet: it keeps snippets/product-card.liquid.
+{%- endcomment -%}
+{%- assign ratio = card.image.ratio -%}
+<div class="product-card-shell pcb-{{ card.uid }}"{{ card.mark }}>
+<a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
+  {%- if card.image -%}
+    {%- assign second_image = nil -%}
+    {%- if card.image.hover_image and product.images.size > 1 -%}{%- assign second_image = product.images[1] -%}{%- endif -%}
+    <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}{% if second_image %} product-card__media--hover{% endif %}"{{ card.marks.card_image }}>
+      {%- if card.badge -%}
+        {%- if product.on_sale -%}
+          <span class="product-card__ribbon"{{ card.marks.card_badge }}>Hot deal</span>
+        {%- endif -%}
+        {%- if product.badges.size > 0 -%}
+          <span class="product-card__badges"{{ card.marks.card_badge }}>
+            {%- for badge in product.badges -%}
+              <span class="product-card__badge{% if badge == 'New' %} product-card__badge--new{% endif %}">{{ badge }}</span>
+            {%- endfor -%}
+          </span>
+        {%- endif -%}
+      {%- endif -%}
+      {%- if product.featured_image -%}
+        <img src="{{ product.featured_image }}" alt="{{ product.title | escape }}" loading="lazy">
+        {%- if second_image -%}
+          <img class="product-card__hover-img" src="{{ second_image }}" alt="" loading="lazy">
+        {%- endif -%}
+      {%- else -%}
+        <div class="placeholder" style="width:100%;height:100%">No image</div>
+      {%- endif -%}
+    </div>
+  {%- endif -%}
+  {%- for part in card.body -%}
+    {%- case part.type -%}
+      {%- when 'card_vendor' -%}
+        {%- if product.vendor != blank -%}
+          <span class="product-card__vendor"{{ part.mark }}>{{ product.vendor }}</span>
+        {%- endif -%}
+      {%- when 'card_title' -%}
+        <span class="product-card__title"{{ part.mark }}>{{ product.title }}</span>
+      {%- when 'card_rating' -%}
+        {%- if product.rating -%}
+          <span class="product-card__rating"{{ part.mark }} aria-label="Rated {{ product.rating }} out of 5">&#9733; {{ product.rating }}{% if product.review_count > 0 %} <span>({{ product.review_count }})</span>{% endif %}</span>
+        {%- endif -%}
+      {%- when 'card_price' -%}
+        {%- comment -%} "Show sale price first" off: the compare-at price comes before the sale price {%- endcomment -%}
+        {%- if part.show_compare and part.sale_first == false and product.on_sale and product.price != nil -%}
+          <span class="price price--compare"{{ part.mark }}>{{ product.compare_at_price | money }}</span>
+        {%- endif -%}
+        {%- if product.price == nil -%}
+          <span class="price price--muted"{{ part.mark }}>Price on request</span>
+        {%- else -%}
+          <span class="price"{{ part.mark }}>{{ product.price | money }}</span>
+        {%- endif -%}
+        {%- if part.show_compare and part.sale_first != false and product.on_sale and product.price != nil -%}
+          <span class="price price--compare"{{ part.mark }}>{{ product.compare_at_price | money }}</span>
+        {%- endif -%}
+        {%- if part.show_tax and product.price != nil -%}
+          <span class="product-card__tax"{{ part.mark }}>Taxes included</span>
+        {%- endif -%}
+      {%- when 'card_tags' -%}
+        {%- if product.tags.size > 0 -%}
+          <span class="product-card__tags"{{ part.mark }}>{% for tag in product.tags limit: 3 %}<span>{{ tag }}</span>{% endfor %}</span>
+        {%- endif -%}
+      {%- when 'card_button' -%}
+        {%- assign card_disable_oos = settings.disable_out_of_stock_add_to_cart -%}
+        {%- if card_disable_oos == nil -%}{%- assign card_disable_oos = true -%}{%- endif -%}
+        {%- assign card_sold_out_text = settings.sold_out_button_label | default: 'Sold out' -%}
+        {%- if product.is_sold_out and card_disable_oos -%}
+          <span class="button product-card__cta"{{ part.mark }} aria-disabled="true" data-sold-out="true">{{ card_sold_out_text }}</span>
+        {%- else -%}
+          <span class="button product-card__cta"{{ part.mark }}>{{ part.label | default: 'Add to cart' }}</span>
+        {%- endif -%}
+    {%- endcase -%}
+  {%- endfor -%}
+</a>
+{%- if card.wishlist -%}
+  {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, size: card.wishlist.size, label_text: card.wishlist.label %}
+{%- endif -%}
+{%- if card.cart and product.is_sold_out != true -%}
+  {%- capture cart_svg -%}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l1 12H5L6 8z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /><path d="M12 12v4M10 14h4" /></svg>{%- endcapture -%}
+  {%- assign cart_size = card.cart.size | default: 44 -%}
+  {%- assign cart_label = card.cart.label | default: 'Add to cart' -%}
+  <div class="product-card__cart-area product-card__cart-area--{{ ratio | default: 'square' }}">
+  {%- if product.variants.size > 1 -%}
+    <a class="product-card__cart"{{ card.marks.card_cart_icon }} href="{{ product.url }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="Choose options for {{ product.title | escape }}" title="Choose options">{{ cart_svg }}</a>
+  {%- else -%}
+    <button class="product-card__cart"{{ card.marks.card_cart_icon }} type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_svg }}</button>
+  {%- endif -%}
+  </div>
+{%- endif -%}
+</div>
