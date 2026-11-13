@@ -108,7 +108,10 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # theme; a copy whose content still matches one of these earlier versions
 # (SHA-256) was never edited, so it is replaced with the current starter file.
 # Edited copies are left alone. Bump STARTER_REVISION when adding entries.
-STARTER_REVISION = 61
+# Revision 62: runs the revision-61 upgrade again. A store opened while revision 61 was only partly in place was marked
+# "done" without getting the new snippet; the upgrade only replaces copies that still equal an earlier starter version,
+# so running it again is safe.
+STARTER_REVISION = 62
 STARTER_UPGRADES = {
     # Revision 59: every card part carries its place and name in the customizer preview (data-tss-block markers), so hovering
     # and clicking a part works. Stores that got the first version of the snippet (revision 58) are upgraded if they never edited it.
