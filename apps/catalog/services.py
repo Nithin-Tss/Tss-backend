@@ -686,39 +686,114 @@ def delete_product(product):
         raise ProductInUse("This product is used by orders or inventory. Set it to Draft instead.")
 
 
-def _protected_product_ids(ids):
-    """Ids among `ids` whose product, or one of its variants, a PROTECT foreign key still points at."""
+class StockConfirmationRequired(Exception):
+    """Some of the products to delete have stock, and the caller did not confirm that it goes with them."""
+
+    def __init__(self, count):
+        self.count = count
+        super().__init__(f"{count} product(s) have stock")
+
+
+# The only PROTECT references a delete may clear on its own: a product's stock levels and stock history
+STOCK_MODELS = frozenset({"InventoryItem", "InventoryHistory"})
+# References that mean the product is part of someone's order, cart, wishlist or discount
+IN_USE_MODELS = frozenset({"OrderItem", "CartItem", "CheckoutItem", "WishlistItem", "DiscountProduct", "DraftOrderDetail"})
+
+
+def _protected_product_ids(ids, ignore=(), only=None):
+    """
+    Ids among `ids` whose product, or one of its variants, a PROTECT foreign key still points at.
+    `ignore` / `only` are sets of referencing model names to leave out / to look at exclusively.
+    """
     children = (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant)
+
+    def counts(model):
+        name = model.__name__
+        return name not in ignore and (only is None or name in only)
+
     blocked = set()
     for rel in Product._meta.related_objects:
-        if rel.on_delete is PROTECT and rel.related_model not in children:
+        if rel.on_delete is PROTECT and rel.related_model not in children and counts(rel.related_model):
             blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids})
                            .values_list(rel.field.name, flat=True))
     for rel in ProductVariant._meta.related_objects:
-        if rel.on_delete is PROTECT:
+        if rel.on_delete is PROTECT and counts(rel.related_model):
             blocked.update(rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
                            .values_list(f"{rel.field.name}__product_id", flat=True))
     return blocked
 
 
-def delete_products(store, ids):
+def _products_with_stock(product_ids):
+    """Ids among `product_ids` with a stock level or stock history on one of their variants."""
+    from apps.inventory.models import InventoryHistory, InventoryItem
+
+    found = set()
+    for model in (InventoryItem, InventoryHistory):
+        found.update(model.objects.filter(variant__product__in=product_ids)
+                     .values_list("variant__product_id", flat=True).distinct())
+    return found
+
+
+def _clear_stock_for_products(product_ids):
     """
-    Delete the store's products with these ids in a handful of queries.
-    Products used by orders or inventory are left alone.
-    Returns (deleted count, titles of those kept).
+    Delete the stock levels and stock history of exactly these products' variants (nothing else).
+    inventory_history is append-only: its trigger allows the delete only while inventory.allow_history_delete
+    is on, which is switched on for this transaction and off again right after.
+    Returns the number of rows removed. Call it inside a transaction.
     """
-    found = list(Product.objects.filter(store=store, pk__in=ids))
-    products = {p.pk: p.title for p in found}
-    blocked = _protected_product_ids(list(products))
-    free = [pk for pk in products if pk not in blocked]
-    if free:
-        note_deleted([p for p in found if p.pk in set(free)])
-        with transaction.atomic():
+    from apps.inventory.models import InventoryHistory, InventoryItem
+
+    product_ids = list(product_ids)
+    if not product_ids:
+        return 0
+
+    def set_history_delete(flag):
+        if connection.vendor == "postgresql":
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('inventory.allow_history_delete', %s, true)", [flag])
+
+    with transaction.atomic():
+        set_history_delete("on")
+        history = InventoryHistory.objects.filter(variant__product__in=product_ids)
+        removed = history._raw_delete(history.db)  # no signals: it is the table's own rows only
+        set_history_delete("off")
+        removed += InventoryItem.objects.filter(variant__product__in=product_ids).delete()[0]
+    return removed
+
+
+def delete_products(store, ids, confirm_stock=True, stats=None):
+    """
+    Delete the store's products with these ids in a handful of queries, all or nothing.
+    A product used by orders, carts, wishlists, discounts or anything else besides its own stock is left alone.
+    A product whose only blockers are stock levels / stock history is deleted along with them, but only once
+    the caller confirmed that (confirm_stock), otherwise StockConfirmationRequired is raised and nothing changes.
+    Returns (deleted count, titles of those kept). `stats`, when given, is filled with stock_rows (removed),
+    blocked_in_use and blocked_other (the kept titles by reason).
+    """
+    with transaction.atomic():
+        found = list(Product.objects.filter(store=store, pk__in=ids))
+        products = {p.pk: p.title for p in found}
+        blocked = _protected_product_ids(list(products), ignore=STOCK_MODELS)
+        free = [pk for pk in products if pk not in blocked]
+        stock_rows = 0
+        if free:
+            with_stock = _products_with_stock(free)
+            if with_stock and not confirm_stock:
+                raise StockConfirmationRequired(len(with_stock))
+            note_deleted([p for p in found if p.pk in set(free)])
+            stock_rows = _clear_stock_for_products(free)
             urls = list(ProductImage.objects.filter(product__in=free).values_list("url", flat=True))
             for model in (ProductCollection, ProductTag, ProductSalesChannel, ProductImage, ProductVariant):
                 model.objects.filter(product__in=free).delete()
             Product.objects.filter(pk__in=free).delete()
             _delete_unused_uploads(store.pk, urls)
+    if stats is not None:
+        in_use = _protected_product_ids(list(blocked), only=IN_USE_MODELS) if blocked else set()
+        stats.update(
+            stock_rows=stock_rows,
+            blocked_in_use=sorted(products[pk] for pk in blocked if pk in in_use),
+            blocked_other=sorted(products[pk] for pk in blocked if pk not in in_use),
+        )
     return len(free), sorted(products[pk] for pk in blocked)
 
 
@@ -728,7 +803,6 @@ def delete_all_products(store):
     stock rows/history, transfers, purchase lines and drafts that point at them.
     Products on placed orders are kept (deleting them would corrupt the order); their titles are returned.
     """
-    from apps.inventory.models import InventoryHistory
     from apps.orders.models import OrderItem
 
     ids = list(Product.objects.filter(store=store).values_list("pk", flat=True))
@@ -739,14 +813,13 @@ def delete_all_products(store):
         for rel in Product._meta.related_objects:
             if rel.on_delete is PROTECT and rel.related_model not in children:
                 rel.related_model.objects.filter(**{f"{rel.field.name}__in": ids}).delete()
+        _clear_stock_for_products(ids)
         for rel in ProductVariant._meta.related_objects:
             if rel.on_delete is not PROTECT or rel.related_model is OrderItem:
                 continue
-            qs = rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids})
-            if rel.related_model is InventoryHistory:
-                qs._raw_delete(qs.db)  # append-only table refuses normal deletes
-            else:
-                qs.delete()
+            if rel.related_model.__name__ in STOCK_MODELS:
+                continue  # cleared just above
+            rel.related_model.objects.filter(**{f"{rel.field.name}__product__in": ids}).delete()
         return delete_products(store, ids)
 
 
