@@ -10,7 +10,12 @@ from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
 
 # Other apps stay at their newest migration so their historical models match the database
-OTHERS = [("identity", "0003_user_is_support_agent"), ("ai_assistant", "0002_conversation_assistant_type")]
+OTHERS = [
+    ("identity", "0003_user_is_support_agent"),
+    ("ai_assistant", "0002_conversation_assistant_type"),
+    # Store gained NOT NULL columns (multi-currency): without this its historical model would miss them on insert
+    ("tenancy", "0022_store_multi_currency"),
+]
 BEFORE = [("helpdesk", "0001_initial"), *OTHERS]
 AFTER = [("helpdesk", "0004_ticket_rules_and_help_articles"), *OTHERS]
 

@@ -40,7 +40,7 @@ from . import cart as cart_data
 from . import section_sync as sync
 from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, Menu, StorePage, ThemeFile, UrlRedirect
-from .services import _editing_theme, card_code_is_starter, get_store_theme, synced_section, theme_files
+from .services import _editing_theme, get_store_theme, starter_files, synced_section, theme_files
 
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
@@ -606,6 +606,87 @@ def _build_card(section_id, index, block, editor=False):
         "has_wishlist": first("card_wishlist") is not None,
         "css": Markup(_card_css(uid, parts)),
     }
+
+
+_CARD_BLOCKS_PATH = "snippets/product-card-blocks.liquid"
+_GRID_ITEMS_PATH = "snippets/product-grid-items.liquid"
+_CARD_TAG = re.compile(r"""\{%-?\s*render\s+(['"])product-card\1\s*,(?P<args>.*?)-?%\}""", re.S)
+_GRID_ITEMS_TAG = re.compile(r"""(?P<head>\{%-?\s*render\s+(['"])product-grid-items\2\s*,)(?P<args>.*?-?%\})""", re.S)
+
+
+def _card_tag_to_blocks(match, card):
+    """`{% render 'product-card', ... %}` -> the "Product card" block's card when the section has one, the original tag otherwise."""
+    args = match.group("args")
+    product = re.search(r"\bproduct\s*:\s*([\w.]+)", args)
+    if not product:
+        return match.group(0)
+    extra = "".join(
+        f", {key}: {found.group(1)}"
+        for key in ("wishlist_ids", "return_url")
+        for found in [re.search(rf"\b{key}\s*:\s*([\w.]+)", args)] if found
+    )
+    blocks = f"{{% render 'product-card-blocks', product: {product.group(1)}, card: {card}{extra} %}}"
+    return f"{{%- if {card} -%}}{blocks}{{%- else -%}}{match.group(0)}{{%- endif -%}}"
+
+
+def _use_card_blocks(source, card):
+    """
+    `source` (a section or the product-grid-items snippet) with its product cards drawn from `card` (the section's
+    "Product card" block) when there is one. Done in memory for the render only: the owner's file is never changed.
+    Returns None when the code has no place we can hook into (it draws its cards some other way).
+    """
+    found = False
+    if "product-card-blocks" not in source:
+        changed = _CARD_TAG.sub(lambda m: _card_tag_to_blocks(m, card), source)
+        if changed != source:
+            found, source = True, changed
+            # The part's CSS and the cart / wishlist scripts normally come from the section's own code
+            head = ""
+            if f"{card}.css" not in source:
+                head += f"{{%- if {card} -%}}<style>{{{{ {card}.css }}}}</style>{{%- endif -%}}"
+            if f"{card}.has_cart" not in source:
+                head += f"{{%- if {card}.has_cart -%}}{{% render 'cart', mode: 'script' %}}{{%- endif -%}}"
+            if f"{card}.has_wishlist" not in source:
+                head += f"{{%- if {card}.has_wishlist -%}}{{% render 'wishlist', with_script: true %}}{{%- endif -%}}"
+            source = head + source
+    if card == "section.card":
+        # The section hands its card on to the snippet that draws the list
+        changed = _GRID_ITEMS_TAG.sub(
+            lambda m: m.group(0) if re.search(r"\bcard\s*:", m.group("args")) else f"{m.group('head')} card: {card},{m.group('args')}",
+            source,
+        )
+        if changed != source:
+            found, source = True, changed
+    return source if found else None
+
+
+def _with_card_blocks(files):
+    """
+    The theme's files as they are rendered: every section with the built-in "Product card" block draws its cards
+    from snippets/product-card-blocks.liquid, whether or not the owner edited snippets/product-card.liquid.
+    A section (or snippets/product-grid-items.liquid) the owner edited keeps their code; the card block is hooked
+    into the places where it calls the plain card. Nothing is saved. A section that draws its cards some other
+    way (its own markup, another snippet) stays as it is: its card settings only add the cart icon and heart.
+    """
+    shown = dict(files)
+    if _CARD_BLOCKS_PATH not in shown:
+        starter = starter_files().get(_CARD_BLOCKS_PATH)
+        if starter is None:
+            return shown
+        shown[_CARD_BLOCKS_PATH] = starter
+    for section_type, schema in SECTIONS.items():
+        path = f"sections/{section_type}.liquid"
+        source = shown.get(path)
+        if source and "card_layout" in schema.get("blocks", {}) and "section.card" not in source:
+            changed = _use_card_blocks(source, "section.card")
+            if changed is not None:
+                shown[path] = changed
+    items = shown.get(_GRID_ITEMS_PATH)
+    if items:
+        changed = _use_card_blocks(items, "card")
+        if changed is not None:
+            shown[_GRID_ITEMS_PATH] = changed
+    return shown
 
 
 def _panel_css(settings):
@@ -2171,18 +2252,22 @@ def product_badges(tags, sold_out, few_left, is_new):
     """
     The labels a product card shows over its image, most important first: "Sold out", "Few left",
     the merchant's own (a tag written "badge:Best seller" shows "Best seller") and "New" for
-    products added in the last NEW_PRODUCT_DAYS days.
+    products added in the last NEW_PRODUCT_DAYS days. A product with a "badge:..." tag of its own
+    does not get the automatic "New".
     """
     badges = []
     if sold_out:
         badges.append("Sold out")
     elif few_left:
         badges.append("Few left")
+    custom = False
     for tag in tags:
         label = tag[6:].strip() if tag.lower().startswith("badge:") else ""
+        if label:
+            custom = True
         if label and label not in badges:
             badges.append(label[:24])
-    if is_new and "New" not in badges:
+    if is_new and not custom and "New" not in badges:
         badges.append("New")
     return badges[:MAX_BADGES]
 
@@ -3576,6 +3661,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         promotions_markup, promotions_schema, _ = sync.split(files[promotions_path])
         if promotions_schema is not None:
             files[promotions_path] = promotions_markup
+    files = _with_card_blocks(files)
     data = resolve(store_theme.custom_data if custom_data is None else custom_data)
     _few_left_at.set(_few_left_threshold(data))
     # A page template whose file is gone shows the base Page template
@@ -4025,15 +4111,14 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
                 # The built-in "Product card" block: every card of the section is drawn from it
                 # (snippets/product-card-blocks.liquid), with the cart icon and heart inside it.
                 card_at = next(((i, b) for i, b in enumerate(all_blocks) if b["type"] == "card_layout"), None)
-                if (card_at and "section.card" in (files.get(path) or "")
-                        and "snippets/product-card-blocks.liquid" in files
-                        and card_code_is_starter(files.get("snippets/product-card.liquid"))):
+                # Whether snippets/product-card.liquid was edited does not matter (_with_card_blocks).
+                if card_at and "section.card" in (files.get(path) or "") and _CARD_BLOCKS_PATH in files:
                     section["card"] = _build_card(section_id, card_at[0], card_at[1], editor)
                     section["cart_icon"] = None
                     section["wishlist_heart"] = None
                 else:
-                    # The section's code, or the card's (snippets/product-card.liquid), was edited by the owner: their code
-                    # keeps drawing the card (their files are not touched), with the cart icon and heart the block's parts say
+                    # The section's own code draws its cards some other way (no place to hook the card block into): it
+                    # keeps drawing them, with the cart icon and heart the block's parts say
                     section["card"] = None
                     if card_at:
                         shown = {c["type"]: c["settings"] for c in card_at[1].get("children") or [] if not c.get("hidden")}

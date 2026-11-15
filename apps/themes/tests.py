@@ -12,6 +12,9 @@ import time
 import uuid
 from urllib.parse import unquote
 
+from datetime import datetime, timedelta, timezone as dt_timezone
+
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from apps.core.tests.test_flow import StoreClientMixin
@@ -3069,6 +3072,10 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertRegex(gone, r"data-add[^>]*\sdisabled>\s*Sold out")
 
 
+@override_settings(  # the default tree (templates/cart.json, ...) is off unless DEFAULT_TREE_ENABLED is set in the environment
+    DEFAULT_TREE_ENABLED=True,
+    DEFAULT_TREE_CUTOFF=datetime(2026, 11, 11, tzinfo=dt_timezone(timedelta(hours=5, minutes=30))),
+)
 class CartUpgradeTest(StoreClientMixin, APITestCase):
     """Existing stores get the cart snippet and the header block safely, and keep what they have."""
 
@@ -4336,18 +4343,32 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
             "order": data["templates"]["index"]["order"], "sections": {"featured": section},
         }}})
 
-    def test_code_save_shows_on_store_preview_and_after_reload(self):
+    def test_an_edited_card_file_does_not_stop_sections_using_the_card_block(self):
         edited = self.files()[CARD].replace(
             '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
         )
         self.save_card(edited)
-        self.assertEqual(self.files()[CARD], edited)  # persisted: what a reload of the editor shows
-        self.assertIn("card-mark", self.page())  # home: grid + carousel
-        self.assertIn("card-mark", self.page("collections/all"))  # collection page
+        self.assertEqual(self.files()[CARD], edited)  # persisted and never overwritten
+        # Sections draw from the "Product card" block now; the edited file is only for the places that still use it
+        for html in (self.page(), self.page("collections/all")):
+            self.assertIn("data-pcb=", html)
+            self.assertNotIn("card-mark", html)
         data = self.ok("get", "/api/v1/themes/settings/")
-        self.assertIn("card-mark", self.ok("post", "/api/v1/themes/preview/", data)["html"])  # customizer preview
+        self.assertIn("data-pcb=", self.ok("post", "/api/v1/themes/preview/", data)["html"])
 
-    def test_settings_change_the_card_and_keep_custom_code(self):
+    def card_parts(self, **changes):
+        """Patch the featured section's "Product card" block parts: {kind: {"hidden": bool, "settings": {...}}}."""
+        data = self.ok("get", "/api/v1/themes/settings/")
+        section = data["templates"]["index"]["sections"]["featured"]
+        for kind, values in changes.items():
+            part = card_part(section, kind)
+            part["hidden"] = values.get("hidden", part.get("hidden", False))
+            part.setdefault("settings", {}).update(values.get("settings", {}))
+        self.ok("patch", "/api/v1/themes/settings/", {"templates": {"index": {
+            "order": data["templates"]["index"]["order"], "sections": {"featured": section},
+        }}})
+
+    def test_card_parts_change_the_card_and_keep_custom_code(self):
         edited = self.files()[CARD].replace(
             '<span class="product-card__title">', '<span class="card-mark">NEW</span><span class="product-card__title">'
         )
@@ -4355,20 +4376,24 @@ class ProductCardSyncTest(StoreClientMixin, APITestCase):
 
         before = self.page()
         self.assertNotIn('class="product-card__vendor"', before)
-        self.grid_settings(show_vendor=True, show_rating=True, show_tags=True,
-                           show_add_to_cart=True, image_ratio="portrait", gap=10)
+        self.card_parts(
+            card_vendor={"hidden": False}, card_rating={"hidden": False}, card_tags={"hidden": False},
+            card_button={"hidden": False}, card_image={"settings": {"ratio": "portrait"}},
+        )
         html = self.page()
-        for marker in ('class="product-card__vendor"', 'class="product-card__tags"', "product-card__cta\"",
-                       "product-card__media product-card__media--portrait", 'class="card-mark"'):
+        for marker in ('class="product-card__vendor"', 'class="product-card__tags"', 'product-card__cta"',
+                       "product-card__media product-card__media--portrait"):
             self.assertIn(marker, html)
+        # Sections draw from the Product card block; the edited card file is kept but not used by them
+        self.assertNotIn("card-mark", html)
         # Price off: the grid's cards have no price (the carousel still shows its own)
         prices = html.count('<span class="price">')
-        self.grid_settings(show_price=False)
+        self.card_parts(card_price={"hidden": True})
         self.assertLess(self.page().count('<span class="price">'), prices)
-        # Persisted on both sides: settings saved, code untouched
+        # Persisted on both sides: card parts saved, code untouched
         featured = self.ok("get", "/api/v1/themes/settings/")["templates"]["index"]["sections"]["featured"]
-        self.assertTrue(featured["settings"]["show_vendor"])
-        self.assertEqual(featured["settings"]["image_ratio"], "portrait")
+        self.assertFalse(card_part(featured, "card_vendor")["hidden"])
+        self.assertEqual(card_part(featured, "card_image")["settings"]["ratio"], "portrait")
         self.assertEqual(self.files()[CARD], edited)
 
     def test_product_page_preview_shows_the_clicked_product(self):
@@ -6826,6 +6851,31 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         self.assertEqual(product_badges(["badge:Best seller", "badge:Organic"], False, True, True), ["Few left", "Best seller"])
         self.assertEqual(product_badges(["x"], True, False, True), ["Sold out", "New"])
         self.assertEqual(product_badges(["badge:"], False, False, False), [])
+
+    def test_a_badge_tag_hides_the_automatic_new_badge(self):
+        from .rendering import product_badges
+
+        self.assertEqual(product_badges(["badge:Best seller"], False, False, True), ["Best seller"])
+        self.assertEqual(product_badges(["badge:Best seller"], True, False, True), ["Sold out", "Best seller"])
+        self.assertEqual(product_badges(["summer", "badge:"], False, False, True), ["New"])  # no label, still "New"
+
+    def test_card_block_is_hooked_into_edited_sections_in_memory(self):
+        from .rendering import _with_card_blocks
+
+        mine = ("<div>{% for product in section.products %}"
+                "{% render 'product-card', product: product, wishlist_ids: wishlist_ids, return_url: return_url %}"
+                "{% endfor %}</div>")
+        own_markup = "<div>{% for product in section.products %}<b>{{ product.title }}</b>{% endfor %}</div>"
+        files = {"sections/product-grid.liquid": mine, "sections/product-carousel.liquid": own_markup,
+                 "snippets/product-card.liquid": "<span>edited</span>"}
+        shown = _with_card_blocks(files)
+        grid = shown["sections/product-grid.liquid"]
+        self.assertIn("product-card-blocks", grid)
+        self.assertIn("section.card.css", grid)
+        self.assertIn("render 'product-card', product: product", grid)  # their own tag stays as the fallback
+        self.assertIn("snippets/product-card-blocks.liquid", shown)  # a missing snippet comes from the starter
+        self.assertEqual(shown["sections/product-carousel.liquid"], own_markup)  # nowhere to hook in: untouched
+        self.assertEqual(files["sections/product-grid.liquid"], mine)  # the owner's file itself is not changed
 
     def test_product_page_has_zoom_and_tier_cards(self):
         from apps.catalog.models import ProductVariant
