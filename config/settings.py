@@ -626,5 +626,5 @@ HELP_ASSISTANT_MODEL = os.getenv('HELP_ASSISTANT_MODEL', '')
 # full-text search. Without an API key everything falls back to plain full-text search.
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'openai/text-embedding-3-small')
 HELP_RAG_ENABLED = os.getenv('HELP_RAG_ENABLED', 'true').lower() in ('1', 'true', 'yes')
-HELP_RAG_RERANK = os.getenv('HELP_RAG_RERANK', 'true').lower() in ('1', 'true', 'yes')
+HELP_RAG_RERANK = os.getenv('HELP_RAG_RERANK', 'false').lower() in ('1', 'true', 'yes')
 REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']['help_assistant'] = os.getenv('HELP_ASSISTANT_THROTTLE_RATE', '60/hour')

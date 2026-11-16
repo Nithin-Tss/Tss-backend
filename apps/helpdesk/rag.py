@@ -10,6 +10,7 @@ Retrieval for the help assistant (the engine behind HELP_SEARCH_BACKEND = RagSea
 Every step after 1 is optional: with no API key, a failing model service or no vectors yet, the answer is the
 lexical result, never an error.
 """
+import hashlib
 import json
 import logging
 import math
@@ -17,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 from django.conf import settings
+from django.core.cache import cache
 
 from apps.ai_assistant import llm
 
@@ -126,11 +128,16 @@ class RagSearch(lexical_search.SearchBackend):
         )
         if not chunks:
             return []
-        try:
-            (vector,) = llm.embed([query])
-        except llm.LLMError as error:
-            logger.warning("help rag: query embedding failed (%s); using full-text search only", error)
-            return []
+        # A repeated question skips the embedding round trip.
+        cache_key = "help_rag_q:" + hashlib.sha1(f"{model}|{query.strip().lower()}".encode()).hexdigest()
+        vector = cache.get(cache_key)
+        if vector is None:
+            try:
+                (vector,) = llm.embed([query])
+            except llm.LLMError as error:
+                logger.warning("help rag: query embedding failed (%s); using full-text search only", error)
+                return []
+            cache.set(cache_key, vector, 3600)
         scored = [(cosine(vector, c.embedding), c) for c in chunks]
         scored = [pair for pair in scored if pair[0] >= MIN_SIMILARITY]
         return sorted(scored, key=lambda pair: -pair[0])
