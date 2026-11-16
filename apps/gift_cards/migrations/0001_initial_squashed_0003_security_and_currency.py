@@ -10,8 +10,8 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
-        ('customers', '0001_initial'),
-        ('customers', '0004_tax_rules'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
         ('payments', '0001_initial_squashed_0006_bank_payout_account'),
         ('tenancy', '0001_initial'),

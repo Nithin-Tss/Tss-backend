@@ -11,9 +11,9 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
-        ('catalog', '0013_inventory_history_and_continue_selling'),
-        ('catalog', '0014_catalogues'),
-        ('catalog', '0019_catalog_integrity'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
         ('tenancy', '0001_initial'),
         ('tenancy', '0005_store_settings'),
         ('tenancy', '0014_shipping_zones'),

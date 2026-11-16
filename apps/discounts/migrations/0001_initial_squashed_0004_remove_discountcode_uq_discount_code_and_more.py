@@ -74,8 +74,6 @@ def validate_existing_discount_integrity(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('discounts', '0001_initial'), ('discounts', '0002_discount_nonnegative_checks'), ('discounts', '0003_discount_rules'), ('discounts', '0004_remove_discountcode_uq_discount_code_and_more')]
-
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
         ('orders', '0001_initial'),

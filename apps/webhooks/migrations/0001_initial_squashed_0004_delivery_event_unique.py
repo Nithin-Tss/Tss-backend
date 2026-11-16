@@ -22,8 +22,6 @@ def refuse_if_duplicates(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('webhooks', '0001_initial'), ('webhooks', '0002_secret_overlap'), ('webhooks', '0003_webhook_hardening'), ('webhooks', '0004_delivery_event_unique')]
-
     dependencies = [
         ('tenancy', '0011_store_ck_store_tax_rate_range'),
     ]

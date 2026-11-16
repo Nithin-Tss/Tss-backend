@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
-        ('customers', '0001_initial'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('tenancy', '0001_initial'),
     ]
 

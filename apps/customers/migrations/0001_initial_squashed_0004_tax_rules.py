@@ -27,8 +27,6 @@ def refuse_if_duplicates(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('customers', '0001_initial'), ('customers', '0002_unique_store_email'), ('customers', '0003_customer_metadata'), ('customers', '0004_tax_rules')]
-
     dependencies = [
         ('tenancy', '0001_initial'),
         ('tenancy', '0006_store_tax_shipping'),

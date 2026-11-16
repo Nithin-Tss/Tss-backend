@@ -7,8 +7,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('themes', '0001_initial'), ('themes', '0002_themeimage'), ('themes', '0002_blogpost'), ('themes', '0003_merge_0002_blogpost_0002_themeimage'), ('themes', '0004_storepage'), ('themes', '0005_menu_menuitem_urlredirect_menu_uq_menu_store_name_and_more'), ('themes', '0006_storepage_template')]
-
     dependencies = [
         ('tenancy', '0001_initial'),
         ('tenancy', '0005_store_settings'),

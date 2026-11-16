@@ -17,7 +17,7 @@ def reset_login(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("themes", "0006_storepage_template"),
+        ('themes', '0001_initial_squashed_0006_storepage_template'),
     ]
 
     operations = [migrations.RunPython(reset_login, migrations.RunPython.noop)]

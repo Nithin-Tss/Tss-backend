@@ -34,7 +34,7 @@ def backfill(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('catalog', '0021_collection_include_collections'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
         ('tenancy', '0022_store_multi_currency'),
     ]
 

@@ -28,8 +28,6 @@ def backfill_handles(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('catalog', '0003_productreview_order_item'), ('catalog', '0004_add_query_indexes'), ('catalog', '0005_product_allergens_product_food_recommendations_and_more'), ('catalog', '0006_product_column1_product_column2_product_column3_and_more'), ('catalog', '0007_collectionsaleschannel'), ('catalog', '0008_collection_conditions_collection_description_and_more'), ('catalog', '0009_brand'), ('catalog', '0010_remove_brand_uq_brand_store_name_ci_product_brand'), ('catalog', '0010_collection_handle_rules'), ('catalog', '0011_merge_20261014_1013'), ('catalog', '0012_category_uq_cat_store_top_name_ci_and_more'), ('catalog', '0013_inventory_history_and_continue_selling'), ('catalog', '0014_catalogues'), ('catalog', '0015_productvariant_metadata'), ('catalog', '0016_productvariant_weight'), ('catalog', '0017_tax_rules'), ('catalog', '0018_variant_compare_at_price'), ('catalog', '0019_catalog_integrity'), ('catalog', '0020_product_options'), ('catalog', '0021_collection_include_collections')]
-
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
         ('orders', '0001_initial'),

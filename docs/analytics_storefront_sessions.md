@@ -5,8 +5,8 @@ visitors, conversion rate, landing pages, referrers, devices and countries. It i
 no page-view table, no rollup table and no change to `store_daily_metrics`. Why it is needed: sales analytics can
 be rebuilt from orders, but visits exist nowhere else.
 
-**Migration.** `orders.0014_storefront_sessions` (creates one table; the `analytics` schema already exists from `orders.0012`).
-`orders.0014_storefront_sessions` only lists "paid" as a referrer type (a Django choice: no SQL, no schema change).
+**Migration.** Originally `orders.0014_storefront_sessions`, now part of `orders.0002_add_query_indexes_squashed_0016_order_fx_fields` (creates one table; the `analytics` schema already exists from the former `orders.0012`).
+That migration (the former `orders.0014_storefront_sessions`) only lists "paid" as a referrer type (a Django choice: no SQL, no schema change).
 
 ## Columns
 

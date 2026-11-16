@@ -9,15 +9,13 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('orders', '0002_add_query_indexes'), ('orders', '0003_draftorder_uq_draft_store_number_and_more'), ('orders', '0004_draftorder_ck_draft_total_nonneg_and_more'), ('orders', '0005_orderidempotencykey'), ('orders', '0005_alter_draftorder_order_alter_draftorder_store_and_more'), ('orders', '0006_merge_20261023_1229'), ('orders', '0007_order_snapshot_fields'), ('orders', '0008_order_checkout'), ('orders', '0009_draftorder_metadata_order_metadata_and_more'), ('orders', '0010_tax_rules'), ('orders', '0011_draftorder_tax_nonneg'), ('orders', '0012_storedailymetric'), ('orders', '0013_background_jobs'), ('orders', '0014_storefront_sessions'), ('orders', '0015_storedailymetric_social_clicks'), ('orders', '0016_order_fx_fields')]
-
     dependencies = [
-        ('catalog', '0006_product_column1_product_column2_product_column3_and_more'),
-        ('catalog', '0013_inventory_history_and_continue_selling'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
+        ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
         ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
-        ('customers', '0001_initial'),
-        ('customers', '0002_unique_store_email'),
-        ('customers', '0004_tax_rules'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
         ('tenancy', '0002_storerole_membershiprole_and_more'),
         ('tenancy', '0006_store_tax_shipping'),

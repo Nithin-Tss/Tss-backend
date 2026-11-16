@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
-        ('customers', '0001_initial'),
+        ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
         ('tenancy', '0001_initial'),
         ('tenancy', '0015_store_domain'),
