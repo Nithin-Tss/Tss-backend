@@ -2019,6 +2019,7 @@ CARD_CHILD_BLOCKS = {
             "size": _card_size(),
             "color": _card_color(),
             "background": _opt("style", "color_optional", "Background color", ""),
+            **_card_padding(),
         },
     },
     "card_vendor": {
@@ -2095,6 +2096,9 @@ CARD_CHILD_BLOCKS = {
         "settings": {
             "label": _opt("content", "text", "Button text", "Add to cart", max=40),
             "align": _card_align(),
+            "color": _card_color(),
+            "background": _opt("style", "color_optional", "Background color", ""),
+            **_card_padding(),
         },
     },
     "card_cart_icon": {
@@ -2103,6 +2107,8 @@ CARD_CHILD_BLOCKS = {
         "settings": {
             "label": _opt("content", "text", "Label (for screen readers)", "Add to cart", max=40),
             "size": _opt("style", "range", "Icon size", 44, min=32, max=64, step=2, unit="px", box=True),
+            "color": _card_color("Icon color"),
+            "background": _opt("style", "color_optional", "Background color", ""),
         },
     },
     "card_wishlist": {

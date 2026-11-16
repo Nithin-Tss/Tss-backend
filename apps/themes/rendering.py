@@ -539,6 +539,8 @@ def _card_css(uid, children):
             add(".product-card__badge, .product-card__ribbon", font_size=look["font_size"], color=look["color"])
             add(".product-card__badge:not(.product-card__badge--new), .product-card__ribbon",
                 background=hexcolor(s, "background"))
+            pad = {k: v for k, v in box(s).items() if k.startswith("padding_")}
+            add(".product-card__badge, .product-card__ribbon", **pad)
             if s.get("align") == "center":
                 add(".product-card__badges", left="50%", transform="translateX(-50%)", align_items="center")
             elif s.get("align") == "right":
@@ -567,7 +569,9 @@ def _card_css(uid, children):
             add(".product-card__tags span", **text(s))
             add(".product-card__tags", **box(s), justify_content=CARD_ALIGN.get(s.get("align"), ""))
         elif kind == "card_button":
-            add(".product-card__cta", **box(s))
+            add(".product-card__cta", color=hexcolor(s, "color"), background=hexcolor(s, "background"), **box(s))
+        elif kind == "card_cart_icon":
+            add(".product-card__cart", color=hexcolor(s, "color"), background=hexcolor(s, "background"))
     return "".join(rules)
 
 
