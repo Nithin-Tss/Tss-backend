@@ -28,8 +28,8 @@ def refuse_if_duplicates(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0001_initial'),
-        ('tenancy', '0006_store_tax_shipping'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
     ]
 
     operations = [

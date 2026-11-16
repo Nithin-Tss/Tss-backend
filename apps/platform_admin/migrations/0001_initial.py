@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('tenancy', '0011_store_ck_store_tax_rate_range'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

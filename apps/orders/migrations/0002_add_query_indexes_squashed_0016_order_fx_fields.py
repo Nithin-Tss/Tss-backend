@@ -17,10 +17,10 @@ class Migration(migrations.Migration):
         ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
-        ('tenancy', '0002_storerole_membershiprole_and_more'),
-        ('tenancy', '0006_store_tax_shipping'),
-        ('tenancy', '0012_taxrate_destination_ci'),
-        ('tenancy', '0014_shipping_zones'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

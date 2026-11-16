@@ -12,8 +12,8 @@ class Migration(migrations.Migration):
         ('catalog', '0003_productreview_order_item_squashed_0021_collection_include_collections'),
         ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('customers', '0001_initial_squashed_0004_tax_rules'),
-        ('tenancy', '0001_initial'),
-        ('tenancy', '0006_store_tax_shipping'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
     ]
 
     operations = [

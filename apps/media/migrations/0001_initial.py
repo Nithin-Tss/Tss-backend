@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('tenancy', '0005_store_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

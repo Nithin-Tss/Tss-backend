@@ -11,8 +11,8 @@ class Migration(migrations.Migration):
         ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
         ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
-        ('tenancy', '0001_initial'),
-        ('tenancy', '0015_store_domain'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
     ]
 
     operations = [

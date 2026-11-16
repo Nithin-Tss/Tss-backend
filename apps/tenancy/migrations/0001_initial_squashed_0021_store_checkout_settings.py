@@ -20,8 +20,6 @@ def backfill_domains(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('tenancy', '0001_initial'), ('tenancy', '0002_storerole_membershiprole_and_more'), ('tenancy', '0003_store_field_labels'), ('tenancy', '0004_access_hardening'), ('tenancy', '0005_store_settings'), ('tenancy', '0006_store_tax_shipping'), ('tenancy', '0007_store_stripe_connect'), ('tenancy', '0008_created_by'), ('tenancy', '0009_shippingrate'), ('tenancy', '0010_tax_rules'), ('tenancy', '0011_store_ck_store_tax_rate_range'), ('tenancy', '0012_taxrate_destination_ci'), ('tenancy', '0013_store_shipping_nonneg'), ('tenancy', '0014_shipping_zones'), ('tenancy', '0015_store_domain'), ('tenancy', '0016_store_stripe_keys'), ('tenancy', '0017_store_policy_rules'), ('tenancy', '0018_store_customer_privacy'), ('tenancy', '0019_store_domains'), ('tenancy', '0020_store_customer_accounts'), ('tenancy', '0021_store_checkout_settings')]
-
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]

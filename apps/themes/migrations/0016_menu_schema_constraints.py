@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0011_store_ck_store_tax_rate_range'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         ('themes', '0015_created_by'),
     ]
 

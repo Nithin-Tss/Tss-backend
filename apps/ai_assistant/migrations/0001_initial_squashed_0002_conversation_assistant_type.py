@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         ('themes', '0017_menuitem_badge_menuitem_is_mega_menuitem_promo_image_and_more'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]

@@ -14,8 +14,8 @@ class Migration(migrations.Migration):
         ('customers', '0001_initial_squashed_0004_tax_rules'),
         ('orders', '0001_initial'),
         ('payments', '0001_initial_squashed_0006_bank_payout_account'),
-        ('tenancy', '0001_initial'),
-        ('tenancy', '0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

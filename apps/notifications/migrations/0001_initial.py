@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('tenancy', '0016_store_stripe_keys'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
     ]
 
     operations = [

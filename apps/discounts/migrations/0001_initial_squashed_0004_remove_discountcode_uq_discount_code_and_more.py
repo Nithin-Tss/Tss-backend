@@ -77,9 +77,9 @@ class Migration(migrations.Migration):
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
         ('orders', '0001_initial'),
-        ('tenancy', '0001_initial'),
-        ('tenancy', '0006_store_tax_shipping'),
-        ('tenancy', '0007_store_stripe_connect'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
+        ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
     ]
 
     operations = [
