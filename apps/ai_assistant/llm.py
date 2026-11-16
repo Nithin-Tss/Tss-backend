@@ -58,3 +58,32 @@ def chat(messages, tools=None, model=None):
         logger.warning("ai_assistant: model=%s returned no choices", model_name())
         raise LLMError("The AI service sent an empty answer. Please try again.")
     return choices[0].message
+
+
+def embedding_model_name():
+    return getattr(settings, "EMBEDDING_MODEL", "openai/text-embedding-3-small")
+
+
+def embed(texts, model=None):
+    """Embed a list of texts. Returns one list of floats per text, in order."""
+    if not texts:
+        return []
+    client = _client()
+    try:
+        response = client.embeddings.create(model=model or embedding_model_name(), input=list(texts))
+    except openai.RateLimitError as error:
+        raise LLMError("The AI service is busy right now. Please try again in a minute.") from error
+    except openai.APITimeoutError as error:
+        raise LLMError("The AI service took too long to answer. Please try again.") from error
+    except openai.AuthenticationError as error:
+        logger.error("ai_assistant: embeddings rejected the API key (401)")
+        raise LLMError("The AI assistant isn't set up correctly on this server.") from error
+    except openai.APIConnectionError as error:
+        raise LLMError("Couldn't reach the AI service. Please try again.") from error
+    except openai.APIStatusError as error:
+        logger.warning("ai_assistant: embeddings API error status=%s", error.status_code)
+        raise LLMError("The AI service returned an error. Please try again.") from error
+    data = getattr(response, "data", None)
+    if not data or len(data) != len(texts):
+        raise LLMError("The AI service sent an empty answer. Please try again.")
+    return [list(item.embedding) for item in sorted(data, key=lambda item: item.index)]

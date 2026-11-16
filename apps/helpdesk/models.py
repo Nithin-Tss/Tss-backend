@@ -203,3 +203,26 @@ class HelpArticle(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class HelpChunk(models.Model):
+    """
+    A passage of a published HelpArticle with its embedding, for retrieval (see rag.py). Rebuilt by indexing.py
+    whenever the article changes; never edited by hand. `embedding` is empty when the embedding call failed: the
+    chunk is then found by full-text search only.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    article = models.ForeignKey(HelpArticle, on_delete=models.CASCADE, db_column="article_id", related_name="chunks")
+    position = models.PositiveIntegerField()
+    heading = models.CharField(max_length=300, blank=True, default="")
+    text = models.TextField()
+    content_hash = models.CharField(max_length=64, db_index=True)
+    embedding = models.JSONField(default=list, blank=True)
+    embedding_model = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = '"helpdesk"."help_chunks"'
+        ordering = ["article_id", "position"]
+        constraints = [models.UniqueConstraint(fields=["article", "position"], name="uq_help_chunk_article_pos")]

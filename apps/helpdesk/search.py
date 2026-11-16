@@ -94,6 +94,9 @@ def get_backend():
     path = getattr(settings, "HELP_SEARCH_BACKEND", "")
     if path:
         return import_string(path)()
+    if getattr(settings, "HELP_RAG_ENABLED", True):
+        from .rag import RagSearch
+        return RagSearch()
     return PostgresSearch() if connection.vendor == "postgresql" else KeywordSearch()
 
 

@@ -47,18 +47,43 @@ def _text(args, key, limit, required=True):
     return value.strip()
 
 
+def _add_source(ctx, article):
+    if all(s["slug"] != article.slug for s in ctx.sources):
+        ctx.sources.append({"title": article.title, "slug": article.slug, "url": article_link(article)})
+
+
 def search_help_articles(ctx, args):
     query = _text(args, "query", search.MAX_QUERY_CHARS)
-    articles = search.get_backend().search(query, limit=ARTICLES_SHOWN)
-    for article in articles:
-        if all(s["slug"] != article.slug for s in ctx.sources):
-            ctx.sources.append({"title": article.title, "slug": article.slug, "url": article_link(article)})
-    if not articles:
+    backend = search.get_backend()
+    if hasattr(backend, "search_passages"):
+        results = _passage_results(ctx, backend.search_passages(query, limit=ARTICLES_SHOWN))
+    else:
+        articles = backend.search(query, limit=ARTICLES_SHOWN)
+        for article in articles:
+            _add_source(ctx, article)
+        results = [
+            {"title": a.title, "category": a.category, "link": article_link(a), "content": a.body[:ARTICLE_CHARS]}
+            for a in articles
+        ]
+    if not results:
         return {"articles": [], "note": "No help article matches. Say so honestly and offer to raise a support ticket."}
-    return {"articles": [
-        {"title": a.title, "category": a.category, "link": article_link(a), "content": a.body[:ARTICLE_CHARS]}
-        for a in articles
-    ]}
+    return {"articles": results}
+
+
+def _passage_results(ctx, passages):
+    """Group the best passages by article, in order: the model reads the relevant parts, not whole articles."""
+    grouped = {}
+    for passage in passages:
+        article = passage.article
+        if article.slug not in grouped:
+            _add_source(ctx, article)
+            grouped[article.slug] = {
+                "title": article.title, "category": article.category, "link": article_link(article), "passages": [],
+            }
+        entry = grouped[article.slug]
+        if sum(len(p["text"]) for p in entry["passages"]) < ARTICLE_CHARS:
+            entry["passages"].append({"section": passage.heading, "text": passage.text})
+    return list(grouped.values())
 
 
 # ------------------------------------------------------------------ get_store_settings
@@ -166,7 +191,7 @@ def tool_definitions():
         }}
 
     return [
-        fn("search_help_articles", "Search the help articles. Returns the best matching articles with their text and link.",
+        fn("search_help_articles", "Search the help articles. Returns the most relevant passages of the best matching articles, with the article title and link.",
            {"query": {"type": "string", "description": "What the merchant wants to know, in a few words."}}, ["query"]),
         fn("get_store_settings", "The merchant's own store settings (currency, tax, shipping, domains, checkout, "
            "whether payments are connected). Read-only; contains no secrets."),

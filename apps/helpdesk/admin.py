@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from . import indexing
 from .models import HelpArticle
 
 
@@ -14,7 +15,16 @@ class HelpArticleAdmin(admin.ModelAdmin):
     @admin.action(description="Publish selected articles")
     def publish(self, request, queryset):
         queryset.update(is_published=True)
+        self._reindex(queryset)
 
     @admin.action(description="Unpublish selected articles")
     def unpublish(self, request, queryset):
         queryset.update(is_published=False)
+        self._reindex(queryset)
+
+    @staticmethod
+    def _reindex(queryset):
+        # queryset.update() sends no save signal, so the passages are rebuilt here
+        if indexing.enabled():
+            for article in queryset.model.objects.filter(pk__in=list(queryset.values_list("pk", flat=True))):
+                indexing.index_article(article)
