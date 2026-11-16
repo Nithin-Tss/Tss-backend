@@ -73,7 +73,10 @@ class PostgresSearchTests(Content, TestCase):
         self.assertIn("to_tsvector", definition)
 
     def test_get_backend_is_postgres_here(self):
-        self.assertIsInstance(search.get_backend(), search.PostgresSearch)
+        from django.test import override_settings
+
+        with override_settings(HELP_SEARCH_BACKEND="", HELP_RAG_ENABLED=False):
+            self.assertIsInstance(search.get_backend(), search.PostgresSearch)
 
 
 class KeywordSearchTests(Content, TestCase):
