@@ -7,8 +7,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('commerce', '0001_initial'), ('commerce', '0002_add_query_indexes'), ('commerce', '0003_alter_cart_is_deleted_alter_cartitem_is_deleted_and_more'), ('commerce', '0004_cart_uq_cart_open_store_customer_and_more'), ('commerce', '0005_gift_card_amount'), ('commerce', '0006_cart_checkout_fx_fields')]
-
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
         ('catalog', '0013_inventory_history_and_continue_selling'),

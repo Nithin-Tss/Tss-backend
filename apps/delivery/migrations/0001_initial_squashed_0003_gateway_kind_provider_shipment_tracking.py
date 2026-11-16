@@ -7,8 +7,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('delivery', '0001_initial'), ('delivery', '0002_deliverygateway_metadata_shipment_metadata'), ('delivery', '0003_gateway_kind_provider_shipment_tracking')]
-
     dependencies = [
         ('fulfillment', '0001_initial'),
         ('orders', '0001_initial'),

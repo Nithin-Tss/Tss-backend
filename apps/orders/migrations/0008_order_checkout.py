@@ -35,7 +35,7 @@ WHERE c.id = o.checkout_id
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('commerce', '0004_cart_uq_cart_open_store_customer_and_more'),
+        ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
         ('orders', '0007_order_snapshot_fields'),
     ]
 

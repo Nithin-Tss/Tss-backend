@@ -8,14 +8,12 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('gift_cards', '0001_initial'), ('gift_cards', '0002_gift_card_transaction_append_only'), ('gift_cards', '0003_security_and_currency')]
-
     dependencies = [
-        ('commerce', '0001_initial'),
+        ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
         ('customers', '0001_initial'),
         ('customers', '0004_tax_rules'),
         ('orders', '0001_initial'),
-        ('payments', '0001_initial'),
+        ('payments', '0001_initial_squashed_0006_bank_payout_account'),
         ('tenancy', '0001_initial'),
         ('tenancy', '0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),

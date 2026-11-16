@@ -8,8 +8,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('identity', '0001_initial'), ('identity', '0002_mfadevice'), ('identity', '0003_user_is_support_agent')]
-
     dependencies = [
     ]
 

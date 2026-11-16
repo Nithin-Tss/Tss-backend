@@ -9,8 +9,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('inventory', '0001_initial'), ('inventory', '0002_add_query_indexes'), ('inventory', '0003_inventory_history_and_continue_selling'), ('inventory', '0004_inventory_history_append_only'), ('inventory', '0005_stock_reservations'), ('inventory', '0006_inventory_integrity_checks'), ('inventory', '0007_history_delete_all_products')]
-
     dependencies = [
         ('catalog', '0002_collection_productimage_productvariant_saleschannel_and_more'),
         ('catalog', '0013_inventory_history_and_continue_selling'),

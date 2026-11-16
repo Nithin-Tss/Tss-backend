@@ -11,7 +11,7 @@ import apps.helpdesk.models
 class Migration(migrations.Migration):
     dependencies = [
         ("helpdesk", "0001_initial"),
-        ("ai_assistant", "0002_conversation_assistant_type"),
+        ("ai_assistant", "0001_initial_squashed_0002_conversation_assistant_type"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

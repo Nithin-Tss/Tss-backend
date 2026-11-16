@@ -8,8 +8,6 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('ai_assistant', '0001_initial'), ('ai_assistant', '0002_conversation_assistant_type')]
-
     dependencies = [
         ('tenancy', '0021_store_checkout_settings'),
         ('themes', '0017_menuitem_badge_menuitem_is_mega_menuitem_promo_image_and_more'),

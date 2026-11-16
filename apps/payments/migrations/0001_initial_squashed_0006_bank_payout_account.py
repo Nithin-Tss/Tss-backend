@@ -7,10 +7,8 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    replaces = [('payments', '0001_initial'), ('payments', '0002_remove_payment_order_id_payment_order'), ('payments', '0003_payment_transaction_append_only'), ('payments', '0004_payment_ledger'), ('payments', '0005_payment_stripe_intent_unique'), ('payments', '0006_bank_payout_account')]
-
     dependencies = [
-        ('commerce', '0001_initial'),
+        ('commerce', '0001_initial_squashed_0006_cart_checkout_fx_fields'),
         ('customers', '0001_initial'),
         ('orders', '0001_initial'),
         ('tenancy', '0001_initial'),
