@@ -51,6 +51,7 @@ from .services import (
     STATUSES as PRODUCT_STATUSES,
 
     ProductInUse,
+    StockConfirmationRequired,
 
     create_variant,
 
@@ -292,8 +293,10 @@ class ProductViewSet(StoreScopedViewSet):
         """
         POST /api/v1/catalog/products/bulk-delete/  {"ids": [id, ...]}  (up to 500)
         or {"filter": {"status": "all", "q": ""}} for every product the list shows
-        -> {"deleted": n, "blocked": ["title", ...]}
-        Products used by orders or inventory are kept and listed in "blocked".
+        -> {"deleted": n, "blocked": ["title", ...], "blocked_in_use": [...], "blocked_other": [...], "stock_rows": n}
+        Products used by orders, carts, wishlists, discounts or other records are kept and listed in "blocked".
+        Products whose only blockers are stock levels / history are deleted with them, but only when the request
+        carries "confirm_stock": true; otherwise it is refused with a "confirm_stock" error and nothing changes.
         """
         data = request.data if isinstance(request.data, dict) else {}
         if data.get("filter") is not None:
@@ -309,8 +312,17 @@ class ProductViewSet(StoreScopedViewSet):
             except ValueError:
                 raise ValidationError({"ids": "Every id must be a valid product id."})
 
-        deleted, blocked = delete_products(request.store, ids)
-        return Response({"deleted": deleted, "blocked": blocked})
+        stats = {}
+        try:
+            deleted, blocked = delete_products(
+                request.store, ids, confirm_stock=data.get("confirm_stock") is True, stats=stats
+            )
+        except StockConfirmationRequired as exc:
+            raise ValidationError({"confirm_stock": (
+                f"{exc.count} selected product{' has' if exc.count == 1 else 's have'} stock on hand. "
+                "Deleting them also permanently removes their stock levels and history."
+            )})
+        return Response({"deleted": deleted, "blocked": blocked, **stats})
 
     @action(detail=False, methods=["post"], url_path="delete-all")
     def delete_all(self, request):

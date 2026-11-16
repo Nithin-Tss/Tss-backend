@@ -93,7 +93,7 @@ class ProductApiTests(APITestCase):
         a, b, c = self.create(title="A"), self.create(title="B"), self.create(title="C")
         r = self.client.post(URL + "bulk-delete/", {"ids": [a["id"], b["id"]]}, format="json")
         self.assertEqual(r.status_code, 200, r.content)
-        self.assertEqual(r.json(), {"deleted": 2, "blocked": []})
+        self.assertEqual(r.json(), {"deleted": 2, "blocked": [], "blocked_in_use": [], "blocked_other": [], "stock_rows": 0})
         self.assertEqual(list(Product.objects.values_list("title", flat=True)), ["C"])
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": []}, format="json").status_code, 400)
         self.assertEqual(self.client.post(URL + "bulk-delete/", {"ids": ["x"]}, format="json").status_code, 400)
@@ -112,9 +112,9 @@ class ProductApiTests(APITestCase):
             self.client.post(URL + "bulk-status/", {"filter": {"status": "bogus"}, "status": "draft"}, format="json").status_code, 400
         )
         r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "archived", "q": shirts[0]["title"]}}, format="json")
-        self.assertEqual(r.json(), {"deleted": 1, "blocked": []})
+        self.assertEqual(r.json(), {"deleted": 1, "blocked": [], "blocked_in_use": [], "blocked_other": [], "stock_rows": 0})
         r = self.client.post(URL + "bulk-delete/", {"filter": {"status": "all", "q": ""}}, format="json")
-        self.assertEqual(r.json(), {"deleted": 3, "blocked": []})
+        self.assertEqual(r.json(), {"deleted": 3, "blocked": [], "blocked_in_use": [], "blocked_other": [], "stock_rows": 0})
         self.assertFalse(Product.objects.exists())
 
     def test_delete_all_removes_stocked_products(self):
@@ -126,13 +126,18 @@ class ProductApiTests(APITestCase):
         self.assertEqual(r.json(), {"deleted": 2, "blocked": []})
         self.assertFalse(Product.objects.exists())
 
-    def test_bulk_delete_keeps_stocked_products(self):
+    def test_bulk_delete_asks_before_removing_stocked_products(self):
         stocked, plain = self.create(title="Stocked", collections=["C"]), self.create(title="Plain")
         variant = ProductVariant.objects.get(pk=stocked["variants"][0]["id"])
         self.stock(variant)
-        r = self.client.post(URL + "bulk-delete/", {"ids": [stocked["id"], plain["id"]]}, format="json")
-        self.assertEqual(r.json(), {"deleted": 1, "blocked": ["Stocked"]})
+        ids = [stocked["id"], plain["id"]]
+        r = self.client.post(URL + "bulk-delete/", {"ids": ids}, format="json")
+        self.assertEqual(r.status_code, 400, r.content)  # not confirmed: nothing is deleted
         self.assertEqual(self.client.get(f"{URL}{stocked['id']}/").json()["collections"], ["C"])
+        self.assertTrue(Product.objects.filter(pk=plain["id"]).exists())
+        r = self.client.post(URL + "bulk-delete/", {"ids": ids, "confirm_stock": True}, format="json")
+        self.assertEqual(r.json()["deleted"], 2)
+        self.assertEqual(r.json()["blocked"], [])
 
     def test_delete_blocked_when_stocked(self):
         p = self.create()
@@ -518,6 +523,182 @@ class CatalogStockDeletionIntegrationTests(StoreClientMixin, APITestCase):
         self.assertEqual(self.ok("get", f"/api/v1/catalog/variants/{ordered_variant['id']}/")["id"], ordered_variant["id"])
         loaded_order = self.ok("get", f"/api/v1/orders/{order['id']}/")
         self.assertEqual(loaded_order["items"][0]["variant"], ordered_variant["id"])
+
+
+class BulkDeleteWithStockTests(StoreClientMixin, APITestCase):
+    """"Delete selected" removes products whose only blockers are stock rows, once the caller confirmed it."""
+
+    BULK = URL + "bulk-delete/"
+
+    def setUp(self):
+        self.token, store = self.sign_up(f"bulk-stock-{self._testMethodName}@example.com", "Bulk stock")
+        self.store_id = store["storeId"]
+        self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        self.n = 0
+
+    def product(self, title, stocked=True):
+        self.n += 1
+        body = {"title": title, "sku": f"BS-{self.n}", "price": "10"}
+        if stocked:
+            body.update(location=self.location, quantity=5)  # creates the stock level and its history row
+        return self.ok("post", URL, body, expect=201)
+
+    def variant(self, product):
+        return ProductVariant.objects.get(pk=product["variants"][0]["id"])
+
+    def rows(self, product):
+        from apps.inventory.models import InventoryHistory
+
+        variant = self.variant(product)
+        return (
+            InventoryItem.objects.filter(variant=variant).count(),
+            InventoryHistory.objects.filter(variant=variant).count(),
+        )
+
+    def bulk(self, ids, **extra):
+        return self.client.post(self.BULK, {"ids": ids, **extra}, format="json")
+
+    def exists(self, product):
+        return Product.objects.filter(pk=product["id"]).exists()
+
+    def order(self, product):
+        self.ok("post", "/api/v1/orders/", {"items": [{"product": product["id"], "quantity": 1}]}, expect=201)
+
+    def test_stock_only_product_needs_confirmation_then_is_deleted_with_its_stock(self):
+        p = self.product("Stocked")
+        self.assertEqual(self.rows(p), (1, 1))
+
+        r = self.bulk([p["id"]])
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("1 selected product has stock on hand", r.json()["confirm_stock"])
+        self.assertTrue(self.exists(p))
+        self.assertEqual(self.rows(p), (1, 1))  # nothing was touched
+
+        r = self.bulk([p["id"]], confirm_stock=True)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {
+            "deleted": 1, "blocked": [], "blocked_in_use": [], "blocked_other": [], "stock_rows": 2,
+        })
+        self.assertFalse(self.exists(p))
+        self.assertFalse(ProductVariant.objects.filter(pk=p["variants"][0]["id"]).exists())
+        from apps.inventory.models import InventoryHistory
+
+        self.assertFalse(InventoryItem.objects.filter(variant_id=p["variants"][0]["id"]).exists())
+        self.assertFalse(InventoryHistory.objects.filter(variant_id=p["variants"][0]["id"]).exists())
+
+    def test_a_product_without_stock_needs_no_confirmation(self):
+        p = self.product("Plain", stocked=False)
+        r = self.bulk([p["id"]])
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["deleted"], 1)
+        self.assertEqual(r.json()["stock_rows"], 0)
+        self.assertFalse(self.exists(p))
+
+    def test_stock_plus_an_order_is_skipped_and_its_stock_is_untouched(self):
+        p = self.product("Ordered")
+        self.order(p)
+        before = self.rows(p)
+        r = self.bulk([p["id"]], confirm_stock=True)
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual((body["deleted"], body["blocked"], body["blocked_in_use"], body["blocked_other"], body["stock_rows"]),
+                         (0, ["Ordered"], ["Ordered"], [], 0))
+        self.assertTrue(self.exists(p))
+        self.assertEqual(self.rows(p), before)
+
+    def test_stock_plus_a_cart_wishlist_or_discount_is_skipped_and_its_stock_is_untouched(self):
+        from django.utils import timezone
+
+        from apps.commerce.models import Cart, CartItem
+        from apps.discounts.models import Discount, DiscountProduct
+        from apps.wishlist.models import Wishlist, WishlistItem
+
+        customer = self.ok("post", "/api/v1/customers/", {"first_name": "Alex", "email": "alex@example.com"}, expect=201)
+
+        def in_cart(p):
+            cart = Cart.objects.create(store_id=self.store_id, session_id="s1", currency="INR", status="open", is_deleted=False)
+            CartItem.objects.create(cart=cart, product_id=p["id"], variant=self.variant(p), quantity=1,
+                                    unit_price=10, is_deleted=False)
+
+        def in_wishlist(p):
+            wishlist = Wishlist.objects.create(store_id=self.store_id, customer_id=customer["id"], name="Mine")
+            WishlistItem.objects.create(wishlist=wishlist, product_id=p["id"], variant=self.variant(p))
+
+        def in_discount(p):
+            discount = Discount.objects.create(store_id=self.store_id, name="Ten", discount_type="percentage", value=10,
+                                               starts_at=timezone.now(), is_active=True, is_deleted=False)
+            DiscountProduct.objects.create(discount=discount, product_id=p["id"], is_deleted=False)
+
+        for name, attach in (("cart", in_cart), ("wishlist", in_wishlist), ("discount", in_discount)):
+            with self.subTest(name):
+                p = self.product(f"In {name}")
+                attach(p)
+                before = self.rows(p)
+                r = self.bulk([p["id"]], confirm_stock=True)
+                self.assertEqual(r.status_code, 200, r.content)
+                self.assertEqual((r.json()["deleted"], r.json()["blocked_in_use"], r.json()["stock_rows"]),
+                                 (0, [f"In {name}"], 0))
+                self.assertTrue(self.exists(p))
+                self.assertEqual(self.rows(p), before)
+
+    def test_a_mixed_selection_deletes_what_it_can_and_reports_the_rest(self):
+        free_stock, ordered, plain = self.product("A stocked"), self.product("B ordered"), self.product("C plain", stocked=False)
+        self.order(ordered)
+        ids = [free_stock["id"], ordered["id"], plain["id"]]
+
+        r = self.bulk(ids)  # only the product that would lose its stock counts toward the confirmation
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("1 selected product has stock on hand", r.json()["confirm_stock"])
+        self.assertTrue(all(self.exists(p) for p in (free_stock, ordered, plain)))
+
+        before = self.rows(ordered)
+        r = self.bulk(ids, confirm_stock=True)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {
+            "deleted": 2, "blocked": ["B ordered"], "blocked_in_use": ["B ordered"], "blocked_other": [], "stock_rows": 2,
+        })
+        self.assertEqual([self.exists(p) for p in (free_stock, ordered, plain)], [False, True, False])
+        self.assertEqual(self.rows(ordered), before)
+
+    def test_another_stores_products_and_stock_are_untouched(self):
+        mine = self.product("Mine")
+        mine_token = self.token
+        self.sign_up("bulk-stock-other@example.com", "Other store")
+        other_location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
+        theirs = self.ok("post", URL, {"title": "Theirs", "sku": "OTHER-1", "price": "10",
+                                       "location": other_location, "quantity": 5}, expect=201)
+        before = self.rows(theirs)
+        self.use(mine_token, self.store_id)
+
+        r = self.client.post(self.BULK, {"filter": {"status": "all", "q": ""}, "confirm_stock": True}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["deleted"], 1)
+        self.assertFalse(self.exists(mine))
+        self.assertTrue(self.exists(theirs))
+        self.assertEqual(self.rows(theirs), before)
+        # and asking for the other store's product by id deletes nothing
+        r = self.bulk([theirs["id"]], confirm_stock=True)
+        self.assertEqual((r.status_code, r.json()["deleted"]), (200, 0))
+        self.assertTrue(self.exists(theirs))
+
+    def test_a_failure_part_way_deletes_nothing(self):
+        from unittest.mock import patch
+
+        a, b = self.product("One"), self.product("Two")
+        before = (self.rows(a), self.rows(b))
+        with patch("apps.catalog.services._delete_unused_uploads", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.bulk([a["id"], b["id"]], confirm_stock=True)
+        self.assertTrue(self.exists(a) and self.exists(b))
+        self.assertEqual((self.rows(a), self.rows(b)), before)
+
+    def test_delete_all_still_removes_every_product_with_its_stock(self):
+        stocked, plain = self.product("Stocked"), self.product("Plain", stocked=False)
+        r = self.client.post(URL + "delete-all/", {"confirm": True}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json(), {"deleted": 2, "blocked": []})
+        self.assertFalse(self.exists(stocked) or self.exists(plain))
+        self.assertEqual(InventoryItem.objects.filter(variant_id=stocked["variants"][0]["id"]).count(), 0)
 
 
 class ProductServiceTests(APITestCase):
@@ -2025,11 +2206,12 @@ class ProductPhotoJourneyTests(JourneyHelpers, APITestCase):
         urls = [self.upload_photo(make_image("PNG", size=(8 + i, 8)), f"b{i}.png", "image/png") for i in range(3)]
         ids = [u.rsplit("/", 1)[-1] for u in urls]
         free = [self.product(f"Bulk {i}", images=[urls[i]], location=None, quantity=None)["id"] for i in range(2)]
-        stocked = self.product("Bulk stocked", images=[urls[2]])  # has stock: it cannot be deleted
+        stocked = self.product("Bulk stocked", images=[urls[2]])  # on a placed order: it cannot be deleted
+        self.client.post("/api/v1/orders/", {"items": [{"product": stocked["id"], "quantity": 1}]}, format="json")
         for url in urls:
             self.assertEqual(self.client.get(urlsplit(url).path).status_code, 200)  # (and now they are cached)
 
-        r = self.client.post(f"{URL}bulk-delete/", {"ids": free + [stocked["id"]]}, format="json")
+        r = self.client.post(f"{URL}bulk-delete/", {"ids": free + [stocked["id"]], "confirm_stock": True}, format="json")
 
         self.assertEqual((r.status_code, r.json()["deleted"], r.json()["blocked"]), (200, 2, ["Bulk stocked"]), r.content)
         self.assertEqual(set(ThemeImage.objects.filter(pk__in=ids).values_list("pk", flat=True)), {UUID(ids[2])})
