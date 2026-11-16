@@ -11,8 +11,8 @@ from django.test import TransactionTestCase
 
 # Other apps stay at their newest migration so their historical models match the database
 OTHERS = [
-    ("identity", "0003_user_is_support_agent"),
-    ("ai_assistant", "0002_conversation_assistant_type"),
+    ("identity", "0001_initial_squashed_0003_user_is_support_agent"),
+    ("ai_assistant", "0001_initial_squashed_0002_conversation_assistant_type"),
     # Store gained NOT NULL columns (multi-currency): without this its historical model would miss them on insert
     ("tenancy", "0022_store_multi_currency"),
 ]
