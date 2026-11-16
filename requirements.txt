@@ -41,3 +41,10 @@ pydantic-core==2.50.4
 sniffio==1.3.1
 truststore==0.10.5
 typing-inspection==0.4.5
+
+# FastAPI front end for the AI assistant (apps/ai_assistant/fastapi_app.py, mounted in config/asgi.py)
+fastapi==0.163.1
+starlette==1.10.0
+annotated-doc==0.0.6
+opentelemetry-api==1.45.2
+uvicorn==0.54.0
