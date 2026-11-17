@@ -19,8 +19,6 @@ def drop_file_unique(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    replaces = [('media', '0001_initial'), ('media', '0002_store_image_bytes'), ('media', '0003_mediaasset_storage_key')]
-
     dependencies = [
         ('tenancy', '0001_initial_squashed_0021_store_checkout_settings'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
