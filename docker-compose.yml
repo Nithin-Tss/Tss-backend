@@ -1,0 +1,96 @@
+# Self-contained dev stack: PostgreSQL + automatic migrations + Django API + shop and helpdesk frontends.
+#   API http://localhost:8000 | shop http://localhost:5173 | helpdesk http://localhost:5174
+#
+#   docker compose up --build        # creates the DB, runs migrations, starts the API on :8000
+#   docker compose down              # stop (data is kept in the pgdata volume)
+#   docker compose down -v           # stop and wipe the database volume too
+#
+# Optional: create an admin user once it is up
+#   docker compose exec web python manage.py createsuperuser
+#
+# Every setting below has a default; override any of them with shell env vars or a .env file.
+# Separate project name so volumes (tss-dev_pgdata) never collide with deploy/docker-compose.yml (tss_pgdata).
+name: tss-dev
+
+x-backend: &backend
+  build:
+    context: .
+  environment:
+    DATABASE_URL: postgresql://${POSTGRES_USER:-tss}:${POSTGRES_PASSWORD:-tss_password}@db:5432/${POSTGRES_DB:-tss}
+    DB_SSLMODE: disable            # local Postgres container has no SSL (settings default is "require")
+    DJANGO_DEBUG: "True"
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-insecure-secret-key-change-me}
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    # Browsers call the API from the frontends' origins (host ports below)
+    CORS_ALLOWED_ORIGINS: http://localhost:${SHOP_PORT:-5173},http://127.0.0.1:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174},http://127.0.0.1:${HELPDESK_PORT:-5174}
+    CSRF_TRUSTED_ORIGINS: http://localhost:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174}
+  volumes:
+    - media:/app/media
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tss}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tss_password}
+      POSTGRES_DB: ${POSTGRES_DB:-tss}       # created automatically on first start
+    # No host port is published, so it can't clash with a Postgres already on your machine.
+    # The containers reach it at db:5432. To use psql/a GUI from your Mac, add:
+    #   ports: ["5434:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot job: waits for a healthy DB, applies all migrations, then exits.
+  migrate:
+    <<: *backend
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *backend
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Storefront / admin UI (React + Vite, built then served by nginx) -> http://localhost:5173
+  shop:
+    build:
+      context: ../Tss-shop
+      args:
+        # Inlined at build time and used by YOUR BROWSER, so it must be the host-published API address
+        VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "${SHOP_PORT:-5173}:80"
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  # Help desk UI -> http://localhost:5174
+  helpdesk:
+    build:
+      context: ../Tss-helpdesk
+      args:
+        VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "${HELPDESK_PORT:-5174}:80"
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:
