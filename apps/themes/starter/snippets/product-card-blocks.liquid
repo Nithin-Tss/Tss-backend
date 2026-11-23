@@ -11,15 +11,18 @@
   The wishlist page does not use this snippet: it keeps snippets/product-card.liquid.
 {%- endcomment -%}
 {%- assign ratio = card.image.ratio -%}
+{%- comment -%} Theme settings > Product cards: elements on/off and order (CSS), sale badge text, second image, button text {%- endcomment -%}
+{%- assign pc_el = ',' | append: settings.product_card_elements | append: ',' -%}
+{%- assign pc_button_drawn = false -%}
 <div class="product-card-shell" data-pcb="{{ card.uid }}"{{ card.mark }}>
 <a class="product-card{% if product.is_sold_out %} product-card--sold-out{% endif %}" href="{{ product.url }}">
   {%- if card.image -%}
     {%- assign second_image = nil -%}
-    {%- if card.image.hover_image and product.images.size > 1 -%}{%- assign second_image = product.images[1] -%}{%- endif -%}
+    {%- if card.image.hover_image or settings.product_card_hover_image -%}{%- if product.images.size > 1 -%}{%- assign second_image = product.images[1] -%}{%- endif -%}{%- endif -%}
     <div class="product-card__media{% if ratio != blank %} product-card__media--{{ ratio }}{% endif %}{% if second_image %} product-card__media--hover{% endif %}"{{ card.marks.card_image }}>
       {%- if card.badge -%}
         {%- if product.on_sale -%}
-          <span class="product-card__ribbon"{{ card.marks.card_badge }}>Hot deal</span>
+          <span class="product-card__ribbon"{{ card.marks.card_badge }}>{{ settings.sale_badge_label | default: 'Hot deal' }}</span>
         {%- endif -%}
         {%- if product.badges.size > 0 -%}
           <span class="product-card__badges"{{ card.marks.card_badge }}>
@@ -75,15 +78,26 @@
         {%- assign card_disable_oos = settings.disable_out_of_stock_add_to_cart -%}
         {%- if card_disable_oos == nil -%}{%- assign card_disable_oos = true -%}{%- endif -%}
         {%- assign card_sold_out_text = settings.sold_out_button_label | default: 'Sold out' -%}
+        {%- assign pc_button_drawn = true -%}
         {%- if product.is_sold_out and card_disable_oos -%}
           <span class="button product-card__cta"{{ part.mark }} aria-disabled="true" data-sold-out="true">{{ card_sold_out_text }}</span>
         {%- else -%}
-          <span class="button product-card__cta"{{ part.mark }}>{{ part.label | default: 'Add to cart' }}</span>
+          <span class="button product-card__cta"{{ part.mark }}>{{ part.label | default: settings.product_card_button_text | default: 'Add to cart' }}</span>
         {%- endif -%}
     {%- endcase -%}
   {%- endfor -%}
+  {%- if pc_el contains ',stock,' -%}
+    <span class="product-card__stock{% if product.is_sold_out %} product-card__stock--out{% endif %}">{% if product.is_sold_out %}Out of stock{% else %}In stock{% endif %}</span>
+  {%- endif -%}
+  {%- if pc_el contains ',button,' and pc_button_drawn == false -%}
+    {%- if product.is_sold_out and settings.disable_out_of_stock_add_to_cart != false -%}
+      <span class="button product-card__cta" aria-disabled="true" data-sold-out="true">{{ settings.sold_out_button_label | default: 'Sold out' }}</span>
+    {%- else -%}
+      <span class="button product-card__cta">{{ settings.product_card_button_text | default: 'Add to cart' }}</span>
+    {%- endif -%}
+  {%- endif -%}
 </a>
-{%- if card.wishlist -%}
+{%- if card.wishlist or pc_el contains ',wishlist,' -%}
   {% render 'wishlist', mode: 'button', product: product, wishlist_ids: wishlist_ids, return_url: return_url, size: card.wishlist.size, label_text: card.wishlist.label %}
 {%- endif -%}
 {%- if card.cart and product.is_sold_out != true -%}

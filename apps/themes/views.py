@@ -614,6 +614,17 @@ html:not(.tss-edit) #tss-card-overlay{display:none}
     var parts = link ? (link.getAttribute("href") || "").split("/products/") : [];
     return parts.length > 1 ? parts[1].split(/[?#/]/)[0] : "";
   }
+  // Which element of a product card was clicked (image, title, price, ...), for the theme's card settings
+  var CARD_ELEMENTS = [
+    [".product-card__media", "image"], [".product-card__vendor", "vendor"], [".product-card__title", "title"],
+    [".product-card__rating", "rating"], [".price, .product-card__tax", "price"], [".product-card__stock", "stock"],
+    [".product-card__cta", "button"], [".product-card__wishlist-form, .product-card__wishlist-add", "wishlist"],
+    [".product-card__ribbon, .product-card__badge", "badge"]
+  ];
+  function cardElementOf(target) {
+    for (var i = 0; i < CARD_ELEMENTS.length; i++) if (target.closest(CARD_ELEMENTS[i][0])) return CARD_ELEMENTS[i][1];
+    return "";
+  }
   // The block under a click. A part of a product card exists once per card, so it is told by its path
   // ("2.1": block 2, part 1; the card itself is "2") instead of by being the first element with that number.
   function blockAt(section, target) {
@@ -792,7 +803,7 @@ html:not(.tss-edit) #tss-card-overlay{display:none}
     }
     var page = storePage(e);
     // Edit mode: a click on a product card selects it (or its part) instead of opening the product
-    if (editing && e.target.closest && e.target.closest("[data-tss-card]")) page = null;
+    if (editing && e.target.closest && e.target.closest("[data-tss-card], .product-card-shell")) page = null;
     if (page && (!editing || /^\\/(products|blog|pages|collections|search)(\\/[^/]+)?/.test(page) || /^\\/account/.test(page) || /^\\/(checkout|cart|wishlist)/.test(page))) {
       e.preventDefault();
       e.stopPropagation();
@@ -803,6 +814,13 @@ html:not(.tss-edit) #tss-card-overlay{display:none}
     e.preventDefault();
     e.stopPropagation();
     if (e.target.closest(".tss-handle")) return;
+    // A card without its own "Product card" block (the wishlist page, a section with its own code): the theme's
+    // card settings open instead, for the part clicked
+    var plainCard = e.target.closest(".product-card-shell");
+    if (plainCard && !e.target.closest("[data-tss-card]")) {
+      var element = cardElementOf(e.target);
+      if (element) { send({ type: "card-element", element: element, product: productOf(plainCard) }); return; }
+    }
     var section = sectionAt(e.target);
     if (!section) { send({ type: "select", id: "", block: null }); return; }
     var block = blockAt(section, e.target);

@@ -435,7 +435,9 @@ PANEL_KEYS = (
     "price_weight",
     "card_bg", "card_border_width", "card_border_color", "card_radius", "card_padding", "card_shadow", "card_image_ratio",
     "card_image_fit", "card_image_padding", "card_text_align", "card_title_size", "card_title_size_mobile",
-    "card_title_weight", "card_zoom",
+    "card_title_weight", "card_zoom", "card_title_color", "card_title_lines", "card_title_align", "product_card_gap",
+    "product_card_hover_image", "product_card_button_bg", "product_card_button_color", "product_card_button_width",
+    "product_card_elements", "sale_badge_position", "sale_badge_style",
     "badge_bg", "badge_text", "badge_new_bg", "badge_corners", "sale_badge_show", "sale_badge_bg", "sale_badge_text",
     "logo_height_mobile", "page_width", "animations_enabled", "animation_speed", "button_press",
     "cart_count_bg", "cart_count_text", "drawer_width", "drawer_bg", "drawer_overlay", "search_submit_bg",
@@ -466,6 +468,45 @@ CARD_ALIGN = {"left": "flex-start", "center": "center", "right": "flex-end"}
 
 
 CARD_MAX_WIDTHS = {"narrow": "12em", "normal": "20em"}
+
+# The card's elements (Theme settings > Product cards > Card elements) and what each one is in the card's markup
+CARD_ELEMENT_SELECTORS = {
+    "image": ".product-card__media",
+    "vendor": ".product-card__vendor",
+    "title": ".product-card__title",
+    "rating": ".product-card__rating",
+    "price": ".product-card .price,.product-card .product-card__tax",
+    "stock": ".product-card__stock",
+    "button": ".product-card__cta",
+    "wishlist": ".product-card__wishlist-form",
+}
+
+
+def _card_elements_css(value):
+    """The order and visibility of the card's elements as CSS: flex `order` on the card, display:none for the ones off."""
+    names = [part for part in (value or "").split(",") if part]
+    if not names:
+        return []
+    rules = [
+        "body .product-card__stock{font-size:12px;color:#2f7d4f}"
+        "body .product-card__stock--out{color:#a51c30}",
+    ]
+    place = 0
+    for part in names:
+        name = part.lstrip("-")
+        selector = CARD_ELEMENT_SELECTORS.get(name)
+        if not selector:
+            continue
+        scoped = ",".join(f"body {sel.strip()}" if name != "wishlist" else f"body {sel.strip()}" for sel in selector.split(","))
+        if part.startswith("-"):
+            rules.append(f"{scoped}{{display:none!important}}")
+            continue
+        place += 1
+        if name != "wishlist":
+            rules.append(f"{scoped}{{order:{place * 10}}}")
+            if name == "price":
+                rules.append(f"body .product-card__tags{{order:{place * 10 + 1}}}")
+    return rules
 
 
 def _card_css(uid, children):
@@ -707,6 +748,8 @@ def _panel_css(settings):
             return value if value in spec["options"] else spec["default"]
         if spec["type"] == "checkbox":
             return value if isinstance(value, bool) else spec["default"]
+        if spec["type"] == "card_elements":
+            return value if isinstance(value, str) and re.fullmatch(r"[a-z,\-]*", value) else ""
         return value if isinstance(value, int) and not isinstance(value, bool) else spec["default"]
 
     settings = {key: ok(key) for key in PANEL_KEYS}
@@ -828,6 +871,48 @@ def _panel_css(settings):
         rules.append(f"body {img}{{transform:{f'scale({zoom / 100:g})' if zoom > 100 else 'none'}}}"
                      f"body .card-hover--none {img},body .card-hover--lift {img}{{transform:none}}"
                      f"@media (prefers-reduced-motion:reduce){{body {img}{{transform:none}}}}")
+
+    # Title colour, lines and alignment; space between the parts; the second image on hover
+    title = []
+    if settings.get("card_title_color"):
+        title.append(f"color:{settings['card_title_color']}")
+    if settings.get("card_title_align") in CARD_ALIGN:
+        title.append(f"text-align:{settings['card_title_align']}")
+    if settings.get("card_title_lines") in ("1", "3"):
+        lines = int(settings["card_title_lines"])
+        title.append(f"-webkit-line-clamp:{lines};min-height:{lines * 1.3:g}em")
+    if title:
+        rules.append(f"{_CARD} .product-card__title{{{';'.join(title)}}}")
+    if settings.get("product_card_gap"):
+        vars_["--card-gap"] = f"{int(settings['product_card_gap'])}px"
+    if settings.get("product_card_hover_image") is True:
+        rules.append("body .product-card__media--hover{display:grid}body .product-card__media--hover img{grid-area:1/1}"
+                     "body .product-card__media--hover .product-card__hover-img{opacity:0;transition:opacity .25s}"
+                     "body .product-card:hover .product-card__media--hover .product-card__hover-img{opacity:1}")
+    # The card's button: colours and width (the text is in snippets/product-card.liquid)
+    cta = []
+    if settings.get("product_card_button_bg"):
+        cta += [f"background:{settings['product_card_button_bg']}", f"border-color:{settings['product_card_button_bg']}"]
+    if settings.get("product_card_button_color"):
+        cta.append(f"color:{settings['product_card_button_color']}")
+    if settings.get("product_card_button_width") == "full":
+        cta.append("align-self:stretch;width:100%;justify-content:center;text-align:center")
+    if cta:
+        rules.append(f"{_CARD} .product-card__cta{{{';'.join(cta)}}}")
+    rules.extend(_card_elements_css(settings.get("product_card_elements")))
+
+    # The sale badge: where it sits and its shape (its text is in the card's markup)
+    badge_at = settings.get("sale_badge_position")
+    badge_style = settings.get("sale_badge_style")
+    ribbon = "body .product-card .product-card__ribbon"
+    if badge_style == "pill":
+        side = "left:auto;right:10px" if badge_at == "top-right" else "left:10px;right:auto"
+        rules.append(f"{ribbon}{{top:10px;{side};width:auto;padding:3px 10px;border-radius:999px;transform:none;"
+                     "text-transform:none;letter-spacing:0}"
+                     f"body .product-card__ribbon~.product-card__badges{{top:{10 if badge_at == 'top-right' else 42}px}}")
+    elif badge_at == "top-right":
+        rules.append(f"{ribbon}{{left:auto;right:-34px;transform:rotate(45deg)}}"
+                     "body .product-card__ribbon~.product-card__badges{top:10px}")
 
     def colours(selector, *pairs):
         decl = [f"{prop}:{settings[key]}" for key, prop in pairs if settings.get(key)]
@@ -2063,7 +2148,8 @@ def _catalog(store):
     )
 
 
-def _best_sellers(store, base_url, limit):
+def _sold_count():
+    """How many of the product were ordered (cancelled orders do not count)."""
     sold = (
         OrderItem.objects.filter(product=OuterRef("pk"))
         .exclude(order__status="cancelled")
@@ -2071,10 +2157,101 @@ def _best_sellers(store, base_url, limit):
         .annotate(total=Sum("quantity"))
         .values("total")
     )
-    qs = _catalog(store).annotate(
-        sold=Coalesce(Subquery(sold, output_field=IntegerField()), Value(0))
-    ).order_by("-sold", "-created_at")
+    return Coalesce(Subquery(sold, output_field=IntegerField()), Value(0))
+
+
+def _best_sellers(store, base_url, limit):
+    qs = _catalog(store).annotate(sold=_sold_count()).order_by("-sold", "-created_at")
     return [product_drop(p, base_url) for p in qs[:limit]]
+
+
+# Products a product section looks at before it filters and sorts them
+LISTING_SCAN = 400
+
+
+def _section_products(store, base_url, ss, limit, exclude=None, product=None):
+    """
+    The products of a product grid / carousel from its settings: source, filters (on sale, stock, price) and sort.
+    A section that only uses what it had before (a source from the first four, the manual order, no filter) is
+    read exactly as it always was, so existing stores show the same products.
+    """
+    source = ss.get("source") or "collection"
+    chosen = ss.get("products") or []
+    sort = ss.get("sort") or "manual"
+    only_sale = bool(ss.get("only_on_sale")) or source == "on_sale"
+    stock = ss.get("stock_filter") or "all"
+    low, high = _number(ss.get("price_min")), _number(ss.get("price_max"))
+    low, high = (low or None), (high or None)  # 0 = no limit
+    legacy_source = source in ("collection", "products", "newest", "best_sellers")
+    plain = sort == "manual" and not only_sale and stock == "all" and low is None and high is None
+
+    if legacy_source and plain:
+        if source == "products" or (source == "collection" and chosen and not ss.get("collection")):
+            return _chosen_products(store, base_url, chosen, limit)
+        if source == "best_sellers":
+            return _best_sellers(store, base_url, limit)
+        collection_obj = _find_collection(store, ss.get("collection")) if source == "collection" else None
+        return _products(store, base_url, collection=collection_obj, limit=limit, exclude=exclude)
+
+    qs = _catalog(store).annotate(sold=_sold_count())
+    if exclude is not None:
+        qs = qs.exclude(pk=exclude)
+    picked = None
+    if source == "products" or (source == "collection" and chosen and not ss.get("collection")):
+        picked = [str(i) for i in chosen]
+        qs = qs.filter(pk__in=picked)
+    elif source == "collection":
+        collection_obj = _find_collection(store, ss.get("collection"))
+        if collection_obj is not None:
+            qs = qs.filter(pk__in=collection_product_ids(collection_obj))
+    elif source == "featured":
+        qs = qs.filter(product_tags__tag__name__iexact="featured").distinct()
+    elif source == "new_arrivals":
+        days = ss.get("new_days") or 14
+        qs = qs.filter(created_at__gte=timezone.now() - timedelta(days=int(days)))
+    elif source == "related":
+        if product is None:
+            return []
+        tag_ids = list(product.product_tags.values_list("tag_id", flat=True))
+        related = Q(pk__in=[])
+        if product.category_id:
+            related |= Q(category_id=product.category_id)
+        if tag_ids:
+            related |= Q(product_tags__tag_id__in=tag_ids)
+        qs = qs.filter(related).distinct()
+    if source == "best_sellers":
+        qs = qs.order_by("-sold", "-created_at")
+
+    rows = list(qs[:LISTING_SCAN])
+    if picked is not None:
+        order = {pid: i for i, pid in enumerate(picked)}
+        rows.sort(key=lambda p: order.get(str(p.pk), len(order)))
+    drops = [(p, product_drop(p, base_url)) for p in rows]
+
+    if only_sale:
+        drops = [(p, d) for p, d in drops if d["on_sale"]]
+    if stock == "in_stock":
+        drops = [(p, d) for p, d in drops if not d["is_sold_out"]]
+    elif stock == "out_of_stock":
+        drops = [(p, d) for p, d in drops if d["is_sold_out"]]
+    if low is not None:
+        drops = [(p, d) for p, d in drops if d["price"] is not None and d["price"] >= low]
+    if high is not None:
+        drops = [(p, d) for p, d in drops if d["price"] is not None and d["price"] <= high]
+
+    if sort == "newest":
+        drops.sort(key=lambda x: x[0].created_at, reverse=True)
+    elif sort == "oldest":
+        drops.sort(key=lambda x: x[0].created_at)
+    elif sort == "price-asc":
+        drops.sort(key=lambda x: (x[1]["price"] is None, x[1]["price"] or 0))
+    elif sort == "price-desc":
+        drops.sort(key=lambda x: (x[1]["price"] is None, -(x[1]["price"] or 0)))
+    elif sort in ("name-asc", "name-desc"):
+        drops.sort(key=lambda x: (x[1]["title"] or "").casefold(), reverse=sort == "name-desc")
+    elif sort == "best_selling":
+        drops.sort(key=lambda x: (-(x[0].sold or 0), -x[0].created_at.timestamp()))
+    return [d for _, d in drops[:limit]]
 
 
 # Products a "Load more" grid can reveal, and products per all-products page
@@ -2324,6 +2501,7 @@ def product_drop(product, base_url):
         "tags": tags,
         "badges": product_badges(tags, sold_out, few_left, is_new),
         "is_new": is_new,
+        "created_at": created,
         "category_id": category_id,
         "category_name": category_name,
         "options": product.options or [],
@@ -4131,23 +4309,16 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
 
             if _sec_schema.get("uses_products"):
                 ss = section["settings"]
-                source = ss.get("source", "collection")
-                chosen = ss.get("products") or []
                 limit = ss.get("limit")
                 # "Load more": render more cards than `limit`; the template shows `limit` first
-                if ss.get("load_more") and ss.get("layout") == "grid" and source != "products":
+                if ss.get("load_more") and ss.get("layout") == "grid" and ss.get("source") != "products":
                     limit = LOAD_MORE_MAX
-                exclude = product.pk if product else None
-                # Products picked before "source" existed still show
-                if source == "products" or (source == "collection" and chosen and not ss.get("collection")):
-                    section["products"] = _chosen_products(store, base_url, chosen, limit)
-                elif source == "best_sellers":
-                    section["products"] = _best_sellers(store, base_url, limit)
-                else:
-                    collection_obj = _find_collection(store, ss.get("collection")) if source == "collection" else None
-                    section["products"] = _products(
-                        store, base_url, collection=collection_obj, limit=limit, exclude=exclude,
-                    )
+                # Pages of products: every page's cards are drawn, the template shows one page at a time
+                if ss.get("pagination") and ss.get("layout") in ("grid", "list"):
+                    limit = int(ss.get("per_page") or 8) * int(ss.get("max_pages") or 3)
+                section["products"] = _section_products(
+                    store, base_url, ss, limit, exclude=product.pk if product else None, product=product,
+                )
 
             if _sec_schema.get("uses_articles"):
                 ss = section["settings"]

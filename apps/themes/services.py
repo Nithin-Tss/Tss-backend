@@ -110,13 +110,17 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # Revision 62: runs the revision-61 upgrade again. A store opened while revision 61 was only partly in place was marked
 # "done" without getting the new snippet; the upgrade only replaces copies that still equal an earlier starter version,
 # so running it again is safe.
-STARTER_REVISION = 62
+# Revision 63: product grid / carousel: sources, filters, sort, list layout, pages, "no products" text; the card: sale badge text,
+# second image on hover, stock status, button text and the card elements (order and visibility) from Theme settings.
+STARTER_REVISION = 63
 STARTER_UPGRADES = {
     # Revision 59: every card part carries its place and name in the customizer preview (data-tss-block markers), so hovering
     # and clicking a part works. Stores that got the first version of the snippet (revision 58) are upgraded if they never edited it.
     # Revision 61: the card's shell keeps its plain class (product-card-shell); the section's card CSS finds it by data-pcb.
     # Revision 60: the price part can show the compare-at price first and "Taxes included" under the price.
     "snippets/product-card-blocks.liquid": {
+        "fef90834f78760133e2ff4d4ad07de1960a235d90417d35ed7e429a08d9c3baf",  # revision 63: before the product grid settings and card elements
+        "c1ed4d68b43a882445afb61e6d2b67b4406dcbf47ce7a63d4724bf4b16e5bbef",  # revision 63: same, with CRLF line endings
         "e909cdf4c37cb3b00dafc3f871ae37c69164d37ce95f450e0926317120e7f7ff",  # revision 61: before the shell's data-pcb attribute
         "4109e553a6656bed33125bae3911e2b77427373108962be2940f122874716235",  # revision 61: before the shell's data-pcb attribute (CRLF)
         "1128993c55a2e35ded97df7397faed4545d72ae71939eb02f832f2e6c688a9ad",  # revision 60: before sale-price order and tax information
@@ -202,6 +206,8 @@ STARTER_UPGRADES = {
         "a831a51ab4d6a82271abf32b7238911be9d920471b2b2490dc13dc1b83ad4fe6",  # revision 12: before slideshow accessibility and swipe
     },
     "sections/product-grid.liquid": {
+        "6a08a766f1dc43287283f12abbdb77f4a651afc7ada3d8db987dbcf9bb751f96",  # revision 63: before the product grid settings and card elements
+        "b1efa1763ba4bdc935814944c7eff6df27d158ffe5594eb6699520510a05e68d",  # revision 63: same, with CRLF line endings
         "73970df9555d2ff91349c339e8143ebf12129f4c35f8fb104e5f1e2ca7e07f50",  # revision 58: before the product card block
         "b3f19f53dc675bb3ab27a6e9d7df8fa56f59b9f60f5e6089e6f6f8ba7953ef76",  # revision 58: before the product card block (CRLF)
         "2490f671fe83ecc1cf97fe530ee29a9e147b9e0cd0f0928463481110d521b4e2",  # revision 31: before the wishlist heart became a block
@@ -218,6 +224,8 @@ STARTER_UPGRADES = {
         "e6f1c4afcbd4615ea14a2fc5567c6c6af98ba5abdc1205314609b8e19ac9d08c",  # revision 19: same, with CRLF line endings
     },
     "sections/product-carousel.liquid": {
+        "21d7f0548c1f1886e83dadfa006f33531fe87b532ac63a7aeebc06ff0bf85e49",  # revision 63: before the product grid settings and card elements
+        "179fde14aa236f6caf1a8b23aca8e997a907dd002dbe7383d825c9d88052d77d",  # revision 63: same, with CRLF line endings
         "1e91b9b269d8d636e76f6280c1abc43e20dbe89e7f4fd5bd22980e637b181b32",  # revision 58: before the product card block
         "914398779c62ea0e1840493accba8825f53bc9908e9460f4a377ecbc33f42bfa",  # revision 58: before the product card block (CRLF)
         "85ed27b927b263e8c4bb71256c87070b24cd14bb62d6e69c1694f9a0990af3df",  # revision 31: before the wishlist heart became a block
@@ -239,6 +247,8 @@ STARTER_UPGRADES = {
         "1a5b5ca920bb489f2047302eda3da0179b9b5b270c26e4b0a4d693f4afc61746",  # revision 12: before image description
     },
     "snippets/product-card.liquid": {
+        "60bddb443e88ae82349336b982e3ae7cc610207abdfb6bcb5983460e5eae06e5",  # revision 63: before the product grid settings and card elements
+        "e9d82a48203350e5e24dac33dcb6d1b00088c16e064d8c125d955c9e422c8172",  # revision 63: same, with CRLF line endings
         "398d8d724bab5ad97065bd9b16a31145d181518600b8ed553b1e0011c47f6cf7",  # revision 40: before product badges
         "c44ea98c359fa9e3b1b9ae047ed460245c9b095042fb0b6579524ef3a157b762",  # revision 40: before product badges (CRLF)
         "341a3a0163521377c7875e8a3cfdf8e08fd9dd62706e571f1694fb92b5904a55",  # revision 34: before the heart was always visible
@@ -1180,6 +1190,7 @@ def _parse_json(path, content):
         )
 
 
+_ERROR_THEME_SETTING = re.compile(r"(?<![A-Za-z0-9_.])settings\.([A-Za-z0-9_]+)|unknown settings: ([A-Za-z0-9_]+)")
 _ERROR_WHERE = re.compile(r"sections\.([A-Za-z0-9_-]+)(?:\.blocks\[(\d+)\])?(?:\.settings\.([A-Za-z0-9_]+))?")
 
 
@@ -1187,7 +1198,12 @@ def _json_error_line(content, message):
     """The line of the section, block or setting a validation message is about (None when it can't be found)."""
     found = _ERROR_WHERE.search(message)
     if not found:
-        return None
+        # config/settings_data.json: "settings.<key> must be ..." points at that key's line
+        theme_setting = _ERROR_THEME_SETTING.search(message)
+        if not theme_setting:
+            return None
+        key = re.search(r'"%s"\s*:' % re.escape(theme_setting.group(1) or theme_setting.group(2)), content)
+        return content.count("\n", 0, key.start()) + 1 if key else None
     section_id, block_index, setting = found.group(1), found.group(2), found.group(3)
     unknown = re.search(r"unknown settings: ([A-Za-z0-9_]+)", message)
     if setting is None and unknown:
@@ -1199,6 +1215,10 @@ def _json_error_line(content, message):
     if not key_at:
         return None
     at = key_at.start()
+    if block_index is None and setting:
+        inside = re.compile(r'"%s"\s*:' % re.escape(setting)).search(content, at)
+        if inside:
+            return content.count("\n", 0, inside.start()) + 1
     if block_index is not None:
         key = content.find('"blocks"', at)
         start = content.find("[", key) if key >= 0 else -1

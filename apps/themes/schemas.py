@@ -1003,6 +1003,32 @@ def _clean_css(spec, value, where):
 VALUE_CLEANERS["css"] = _clean_css
 
 
+# The product card's elements, in order. "-vendor" is switched off. "" keeps each section's own card as it is.
+CARD_ELEMENTS = ["image", "vendor", "title", "rating", "price", "stock", "button", "wishlist"]
+
+
+def _clean_card_elements(spec, value, where):
+    if not isinstance(value, str):
+        raise serializers.ValidationError(f"{where} must be text.")
+    seen, out = set(), []
+    for part in value.split(","):
+        part = part.strip()
+        name = part.lstrip("-")
+        if not part:
+            continue
+        if name not in CARD_ELEMENTS:
+            raise serializers.ValidationError(f"{where}: {name} is not a card element.")
+        if name not in seen:
+            seen.add(name)
+            out.append(part)
+    # Elements missing from the list go at the end, switched off, so the list is always complete
+    out += [f"-{name}" for name in CARD_ELEMENTS if name not in seen] if out else []
+    return ",".join(out)
+
+
+VALUE_CLEANERS["card_elements"] = _clean_card_elements
+
+
 def _opt(group, type_, label, default, **extra):
     return {"type": type_, "label": label, "default": default, "group": group, **extra}
 
@@ -1173,26 +1199,64 @@ SECTIONS["slideshow"]["blocks"]["slide"]["settings"] = {
 }
 
 
+# Where a product section gets its products, and how it can sort them (rendering._section_products)
+LISTING_SOURCES = ["collection", "products", "newest", "best_sellers", "all", "featured", "on_sale", "new_arrivals", "related"]
+LISTING_SORTS = ["manual", "newest", "oldest", "price-asc", "price-desc", "name-asc", "name-desc", "best_selling"]
+
+
 def _product_list_settings(layout, limit, heading):
     return {
         "heading": _opt("content", "text", "Section heading", heading),
         "subheading": _opt("content", "textarea", "Sub-text", ""),
         "source": _choice(
-            "content", "Products to show", ["collection", "products", "newest", "best_sellers"], "collection",
-            labels={"collection": "From a collection", "products": "Choose products", "best_sellers": "Best sellers"},
+            "content", "Products to show", LISTING_SOURCES, "collection",
+            labels={
+                "collection": "From a collection", "products": "Hand-picked products", "best_sellers": "Best sellers",
+                "newest": "Newest products", "all": "All products", "featured": "Featured",
+                "on_sale": "On sale", "new_arrivals": "New arrivals", "related": "Related products (product page only)",
+            },
+            help='"Featured" shows products tagged "featured". "Related products" shows products from the same '
+                 "category or with the same tags, on the product page.",
         ),
         "collection": dict(_COLLECTION, group="content", label="Collection", show_if={"source": "collection"}),
         "products": _opt("content", "products", "Products", [], max=12, show_if={"source": "products"}),
+        "new_days": _opt("content", "range", "New arrivals: added in the last", 14, min=1, max=90, unit=" days",
+                         show_if={"source": "new_arrivals"}),
+        "sort": _choice(
+            "content", "Sort by", LISTING_SORTS, "manual",
+            labels={
+                "manual": "Manual (as picked / source order)", "newest": "Newest", "oldest": "Oldest",
+                "price-asc": "Price, low to high", "price-desc": "Price, high to low",
+                "name-asc": "Name, A-Z", "name-desc": "Name, Z-A", "best_selling": "Best selling",
+            },
+        ),
+        "only_on_sale": _opt("content", "checkbox", "Only products on sale", False),
+        "stock_filter": _choice(
+            "content", "Stock status", ["all", "in_stock", "out_of_stock"], "all", ui="segmented",
+            labels={"all": "All", "in_stock": "In stock", "out_of_stock": "Out of stock"},
+        ),
+        "price_min": _opt("content", "number", "Lowest price", 0, min=0, max=1000000, help="0 means no lowest price."),
+        "price_max": _opt("content", "number", "Highest price", 0, min=0, max=1000000, help="0 means no highest price."),
         "limit": _opt("content", "range", "Number of products", limit, min=2, max=12),
+        "pagination": _opt(
+            "content", "checkbox", "Paginate the products", False, show_if={"layout": ["grid", "list"]},
+            help="Shows page numbers under the products instead of one long list.",
+        ),
+        "per_page": _opt("content", "range", "Products per page", 8, min=2, max=48, show_if={"pagination": True}),
+        "max_pages": _opt("content", "range", "Maximum pages", 3, min=1, max=10, show_if={"pagination": True}),
+        "empty_text": _opt("content", "text", "Text when no products are found", "No products found.", max=200),
         "load_more": _opt(
             "content", "checkbox", "Show \"Load more\" button", False,
             help="Shows the number of products above first, then more on each click.",
         ),
         "view_all_label": _opt("content", "text", "\"View all\" button text", "", help="Leave empty to hide it."),
         "view_all_link": _opt("content", "url", "\"View all\" link", "/collections/all"),
-        "layout": _choice("layout", "Display as", ["grid", "carousel"], layout, ui="segmented"),
-        "columns": _opt("layout", "range", "Products per row (desktop)", 5, min=2, max=6),
-        "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3),
+        "layout": _choice("layout", "Display as", ["grid", "list", "carousel"], layout, ui="segmented",
+                          labels={"grid": "Grid", "list": "List", "carousel": "Carousel"}),
+        "columns": _opt("layout", "range", "Products per row (desktop)", 5, min=2, max=6,
+                        show_if={"layout": ["grid", "carousel"]}),
+        "columns_mobile": _opt("layout", "range", "Products per row (mobile)", 2, min=1, max=3,
+                               show_if={"layout": ["grid", "carousel"]}),
         "gap": _opt("layout", "range", "Gap between cards", 8, min=0, max=48, step=2, unit="px"),
         "image_ratio": _choice("layout", "Image shape", ["", "square", "portrait", "landscape"], "", ui="segmented",
                                labels={"": "Theme"}, help="Theme uses the shape set in Theme settings > Product cards."),
@@ -1218,6 +1282,8 @@ def _product_list_settings(layout, limit, heading):
 
 SECTIONS["product-carousel"]["settings"] = _product_list_settings("carousel", 10, "Trending now")
 SECTIONS["product-grid"]["settings"] = _product_list_settings("grid", 8, "Featured products")
+SECTIONS["product-grid"]["settings"]["empty_text"]["default"] = "No products yet."
+SECTIONS["product-carousel"]["settings"]["empty_text"]["default"] = "Products you publish will appear here."
 
 SECTIONS["rich-text"]["settings"] = {
     "heading": _opt("content", "text", "Section heading", "About us"),
@@ -2094,7 +2160,8 @@ CARD_CHILD_BLOCKS = {
         "name": "Add to cart button",
         "description": "Shows an Add to cart button that opens the product",
         "settings": {
-            "label": _opt("content", "text", "Button text", "Add to cart", max=40),
+            "label": _opt("content", "text", "Button text", "", max=40,
+                           help="Empty uses the text set in Theme settings > Product cards."),
             "align": _card_align(),
             "color": _card_color(),
             "background": _opt("style", "color_optional", "Background color", ""),
@@ -2657,6 +2724,26 @@ THEME_SETTINGS.update({
     "card_zoom": _theme_opt("cards", "range", "Image zoom on hover", 104, min=100, max=115, unit="%",
                             help="100% is off. Sections with the Lift or None hover effect don't zoom. "
                                  "Off for shoppers who ask for reduced motion."),
+    "card_title_color": _theme_opt("cards", "color_optional", "Title colour", "", help="None keeps the theme's dark text."),
+    "card_title_lines": _theme_opt("cards", "select", "Title maximum lines", "2", options=["1", "2", "3"], ui="segmented",
+                                   help="Longer titles end with ...."),
+    "card_title_align": _theme_opt("cards", "select", "Title alignment", "", options=["", "left", "center", "right"],
+                                   ui="segmented", labels={"": "Same as card"}),
+    "product_card_gap": _theme_opt("cards", "range", "Space between the parts of a card", 0, min=0, max=32, unit="px",
+                                   help="0 keeps the theme's spacing. (The gap between cards is set on each section.)"),
+    "product_card_hover_image": _theme_opt("cards", "checkbox", "Show the second image on hover", False,
+                                           help="Only for products that have a second image."),
+    "product_card_button_text": _theme_opt("cards", "text", "Button text", "Add to cart", max=40,
+                                           help="A section's own Product card button text wins."),
+    "product_card_button_bg": _theme_opt("cards", "color_optional", "Button colour", "", palette="Accent"),
+    "product_card_button_color": _theme_opt("cards", "color_optional", "Button text colour", "", palette="Background"),
+    "product_card_button_width": _theme_opt("cards", "select", "Button width", "auto", options=["auto", "full"],
+                                            ui="segmented", labels={"auto": "Auto", "full": "Full width"}),
+    "product_card_elements": _theme_opt(
+        "cards", "card_elements", "Card elements", "",
+        help="Switch parts of the card on or off and drag to change their order. A section's own "
+             "Product card block wins for what it changes.",
+    ),
 })
 
 # Badges, logo, page, animations, cart, drawers, search, icons, inputs, popovers (rendering._panel_css).
@@ -2671,6 +2758,12 @@ THEME_SETTINGS.update({
                                   help='The "Hot deal" ribbon on products with a compare-at price.'),
     "sale_badge_bg": _theme_opt("badges", "color_optional", "Sale ribbon colour", "", help="None is deep red."),
     "sale_badge_text": _theme_opt("badges", "color_optional", "Sale ribbon text colour", "", help="None is white."),
+    "sale_badge_label": _theme_opt("badges", "text", "Sale badge text", "Hot deal", max=30),
+    "sale_badge_position": _theme_opt("badges", "select", "Sale badge position", "top-left",
+                                      options=["top-left", "top-right"], ui="segmented",
+                                      labels={"top-left": "Top left", "top-right": "Top right"}),
+    "sale_badge_style": _theme_opt("badges", "select", "Sale badge style", "ribbon", options=["ribbon", "pill"],
+                                   ui="segmented", labels={"ribbon": "Corner ribbon", "pill": "Pill"}),
     "favicon_url": _theme_opt("logo", "image", "Favicon", "", help="The small icon in the browser tab. A square PNG, 32 x 32 px or larger."),
     "logo_height_mobile": _theme_opt("logo", "range", "Logo image height (mobile)", 0, min=0, max=80, step=2, unit="px",
                                      help="0 keeps the header's logo height."),

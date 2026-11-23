@@ -6,6 +6,23 @@
 {%- comment -%} Nothing to show: shoppers see no empty box (e.g. "You may also like" with no other products); the customizer keeps it as a hint {%- endcomment -%}
 {%- if section.products.size > 0 or design_mode -%}
 {%- if section.card -%}<style>{{ section.card.css }}</style>{%- endif -%}
+{%- if s.layout == 'list' -%}
+<style>
+  #section-{{ section.id }}.product-list--list .product-list__grid { grid-template-columns: minmax(0, 1fr); }
+  #section-{{ section.id }}.product-list--list .product-card { display: grid; grid-template-columns: 110px minmax(0, 1fr); column-gap: 16px; row-gap: 4px; align-content: start; align-items: start; height: auto; }
+  #section-{{ section.id }}.product-list--list .product-card > :not(.product-card__media) { grid-column: 2; }
+  #section-{{ section.id }}.product-list--list .product-card__media { grid-column: 1; grid-row: 1 / span 12; }
+  @media (min-width: 750px) { #section-{{ section.id }}.product-list--list .product-card { grid-template-columns: 180px minmax(0, 1fr); } }
+</style>
+{%- endif -%}
+{%- if s.pagination and s.layout != 'carousel' -%}
+<style>
+  #section-{{ section.id }} .product-list__pages { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 24px; }
+  #section-{{ section.id }} .product-list__page { min-width: 38px; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
+  #section-{{ section.id }} .product-list__page[aria-current="page"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+  #section-{{ section.id }} .product-list__page:disabled { opacity: .4; cursor: default; }
+</style>
+{%- endif -%}
 <section id="section-{{ section.id }}"
   class="section product-list product-list--{{ s.layout }} card-hover--{{ s.card_hover }}{% if s.card_border %} cards--bordered{% endif %}"
   data-autoplay="{{ s.autoplay }}"
@@ -30,7 +47,7 @@
     </div>
 
     {%- if section.products.size == 0 -%}
-      <div class="empty-state">Products you publish will appear here.</div>
+      <div class="empty-state">{{ s.empty_text | default: 'No products found.' }}</div>
     {%- else -%}
       <div class="{% if s.layout == 'carousel' %}carousel__track product-list__track{% else %}product-list__grid{% endif %}"
         {%- if s.layout == 'carousel' %} tabindex="0" role="region" aria-label="{{ s.heading | default: 'Products' | escape }}"{% endif %}>
@@ -40,9 +57,46 @@
           {%- if section.card -%}{% render 'product-card-blocks', product: product, card: section.card, wishlist_ids: wishlist_ids, return_url: return_url %}{%- else -%}{% render 'product-card', product: product, wishlist_ids: wishlist_ids, show_wishlist: section.wishlist_heart, show_cart_icon: section.cart_icon, return_url: return_url, show_vendor: s.show_vendor, show_price: s.show_price, show_rating: s.show_rating, show_tags: s.show_tags, show_add_to_cart: s.show_add_to_cart, ratio: s.image_ratio %}{%- endif -%}
         {%- endfor -%}
       </div>
+      {%- if s.pagination and s.layout != 'carousel' and section.products.size > s.per_page -%}
+        <nav class="product-list__pages" data-pages aria-label="Pages"></nav>
+      {%- endif -%}
     {%- endif -%}
   </div>
 </section>
+{%- if s.pagination and s.layout != 'carousel' and section.products.size > s.per_page -%}
+<script>
+  (function () {
+    var root = document.getElementById("section-{{ section.id }}");
+    var nav = root && root.querySelector("[data-pages]");
+    var grid = root && root.querySelector(".product-list__grid");
+    if (!nav || !grid) return;
+    var per = {{ s.per_page }};
+    var cards = Array.prototype.slice.call(grid.children).filter(function (el) { return el.classList.contains("product-card-shell"); });
+    var pages = Math.ceil(cards.length / per);
+    var current = 1;
+    function button(label, page, extra) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "product-list__page";
+      b.textContent = label;
+      b.setAttribute("aria-label", extra || "Page " + label);
+      if (page === current && !extra) b.setAttribute("aria-current", "page");
+      if (extra && (page < 1 || page > pages)) b.disabled = true;
+      b.addEventListener("click", function () { show(page); });
+      return b;
+    }
+    function show(page) {
+      current = Math.min(Math.max(page, 1), pages);
+      cards.forEach(function (el, i) { el.style.display = Math.floor(i / per) + 1 === current ? "" : "none"; });
+      nav.innerHTML = "";
+      nav.appendChild(button("‹", current - 1, "Previous page"));
+      for (var p = 1; p <= pages; p++) nav.appendChild(button(String(p), p));
+      nav.appendChild(button("›", current + 1, "Next page"));
+    }
+    show(1);
+  })();
+</script>
+{%- endif -%}
 {%- if s.layout == 'carousel' and section.products.size > 0 -%}
 <script>
   (function () {
