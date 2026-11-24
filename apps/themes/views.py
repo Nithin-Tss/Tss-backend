@@ -1391,6 +1391,50 @@ class StorePageView(StoreThemeView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class StorePagesBulkView(StoreThemeView):
+    """
+    POST /api/v1/themes/pages/bulk/  {ids: [...], action: "visible" | "hidden" | "delete"}
+
+    Same permission as editing a page (themes.manage) and only the current store's pages: an id of another
+    store, or one that no longer exists, is skipped. Each page goes through the same steps as the single
+    save / delete (the publish date on first visible; Model.delete()). -> {action, count, skipped}
+    """
+
+    MAX_IDS = 200
+
+    def post(self, request):
+        action = request.data.get("action")
+        if action not in ("visible", "hidden", "delete"):
+            raise ValidationError({"action": "Use visible, hidden or delete."})
+        raw_ids = request.data.get("ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise ValidationError({"ids": "Choose at least one page."})
+        if len(raw_ids) > self.MAX_IDS:
+            raise ValidationError({"ids": f"Choose at most {self.MAX_IDS} pages at a time."})
+        ids = set()
+        for raw in raw_ids:
+            try:
+                ids.add(uuid.UUID(str(raw)))
+            except ValueError:
+                raise ValidationError({"ids": "Each id must be a page id."})
+
+        count = 0
+        with transaction.atomic():
+            pages = StorePage.objects.select_for_update().filter(store=request.store, pk__in=ids)
+            for page in pages:
+                if action == "delete":
+                    page.delete()
+                elif page.status != action:
+                    page.status = action
+                    update_fields = ["status", "updated_at"]
+                    if action == StorePage.VISIBLE and not page.published_at:
+                        page.published_at = timezone.now()
+                        update_fields.append("published_at")
+                    page.save(update_fields=update_fields)
+                count += 1
+        return Response({"action": action, "count": count, "skipped": len(ids) - count})
+
+
 # ---------------------------------------------------------------- menus & redirects
 
 class MenuItemSerializer(serializers.ModelSerializer):

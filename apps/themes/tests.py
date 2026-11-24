@@ -4942,6 +4942,32 @@ class StorePagesTest(StoreClientMixin, APITestCase):
         self.ok("get", f"/api/v1/themes/pages/{about['id']}/", expect=404)
         self.assertEqual(self.ok("get", "/api/v1/themes/pages/"), [])
 
+    def test_bulk_visible_hidden_and_delete(self):
+        a = self.create(title="Alpha", status="hidden")
+        b = self.create(title="Beta", status="hidden")
+        c = self.create(title="Gamma")
+        url = "/api/v1/themes/pages/bulk/"
+        r = self.ok("post", url, {"ids": [a["id"], b["id"]], "action": "visible"})
+        self.assertEqual((r["count"], r["skipped"]), (2, 0))
+        self.assertIn("Alpha", self.page("pages/alpha"))
+        self.assertTrue(self.ok("get", f"/api/v1/themes/pages/{a['id']}/")["published_at"])
+        self.ok("post", url, {"ids": [a["id"], c["id"]], "action": "hidden"})
+        self.page("pages/alpha", expect=404)
+        self.page("pages/gamma", expect=404)
+        r = self.ok("post", url, {"ids": [a["id"], b["id"]], "action": "delete"})
+        self.assertEqual(r["count"], 2)
+        self.assertEqual([p["id"] for p in self.ok("get", "/api/v1/themes/pages/")], [c["id"]])
+
+    def test_bulk_rejects_bad_input_and_other_stores_pages(self):
+        about = self.create()
+        url = "/api/v1/themes/pages/bulk/"
+        self.ok("post", url, {"ids": [about["id"]], "action": "burn"}, expect=400)
+        self.ok("post", url, {"ids": [], "action": "delete"}, expect=400)
+        self.ok("post", url, {"ids": ["nope"], "action": "delete"}, expect=400)
+        self.sign_up("other-bulk@example.com", "Other Bulk Store")
+        r = self.ok("post", url, {"ids": [about["id"]], "action": "delete"})
+        self.assertEqual((r["count"], r["skipped"]), (0, 1))
+
 
 class PageTemplatesTest(StoreClientMixin, APITestCase):
     """Alternate page templates (page.contact, ...): picker, code editor, and the pages that use them."""

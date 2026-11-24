@@ -19,6 +19,7 @@ from .views import (
     ThemeRenameView,
     PageTemplatesView,
     StorePagesView,
+    StorePagesBulkView,
     StorePageView,
     ThemeSchemaView,
     ThemeSettingsView,
@@ -135,6 +136,12 @@ urlpatterns = [
         "pages/",
         StorePagesView.as_view(),
         name="theme_pages",
+    ),
+
+    path(
+        "pages/bulk/",
+        StorePagesBulkView.as_view(),
+        name="theme_pages_bulk",
     ),
 
     path(
