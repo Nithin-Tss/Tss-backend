@@ -364,6 +364,8 @@ h1,h2,h3,h4,h5,.section-heading,.site-header__logo{font-family:var(--tss-heading
   transition:background var(--b-sp) ease,color var(--b-sp) ease,border-color var(--b-sp) ease,transform var(--b-sp) ease,filter var(--b-sp) ease}
 .button:hover,.tss-btn .button:hover{background:var(--b-hbg);color:var(--b-htx);border-color:var(--b-hbd);transform:var(--b-ht);filter:var(--b-hf);opacity:1}
 .button:disabled,.button[disabled],.button.button--disabled,.button[aria-disabled="true"],.tss-btn .button:disabled,.tss-btn .button[disabled],.tss-btn .button.button--disabled,.tss-btn .button[aria-disabled="true"]{opacity:var(--b-dis-op,.55);cursor:not-allowed;pointer-events:none;transform:none !important;box-shadow:none !important}
+body a.button:not(.button--outline){color:var(--b-tx);text-decoration:var(--b-dec,none)}
+body a.button:not(.button--outline):hover,body a.button:not(.button--outline):focus-visible{color:var(--b-htx,var(--b-tx))}
 .button.button--outline{background:var(--b2-bg,transparent);color:var(--b2-tx,var(--b-bd));border-color:var(--b2-bd,var(--b-bd))}
 .hero--image .button.button--outline,.hero .button.button--outline{background:transparent;color:inherit;border-color:currentColor}
 .tss-bi .button{gap:.5em}
