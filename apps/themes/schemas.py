@@ -682,8 +682,41 @@ _VOID_TAGS = {"br"}
 _EMBED_TAGS = _RICH_TAGS | {
     "div", "span", "img", "iframe", "h1", "h2", "h5", "h6", "hr", "figure", "figcaption",
     "small", "sup", "sub", "code", "pre", "table", "thead", "tbody", "tr", "td", "th",
+    # Simple forms (see _EmbedCleaner.form_attributes): the storefront sends them by email
+    "form", "label", "input", "textarea", "select", "option", "button",
 }
-_EMBED_VOID = _VOID_TAGS | {"img", "hr"}
+_EMBED_VOID = _VOID_TAGS | {"img", "hr", "input"}
+
+# style="" in page and blog content: only these properties, only plain values
+_STYLE_PROPS = frozenset({
+    "color", "background", "background-color",
+    "font-size", "font-weight", "font-family", "font-style", "text-align", "text-decoration", "text-transform",
+    "line-height", "letter-spacing", "cursor",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "margin-block-start", "margin-block-end",
+    "margin-inline-start", "margin-inline-end",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left", "padding-block-start",
+    "padding-block-end", "padding-inline-start", "padding-inline-end",
+    "border", "border-top", "border-right", "border-bottom", "border-left", "border-width", "border-style",
+    "border-color", "border-radius", "border-top-left-radius", "border-top-right-radius",
+    "border-bottom-left-radius", "border-bottom-right-radius",
+    "width", "max-width", "min-width", "height", "max-height", "min-height", "box-sizing", "overflow-wrap",
+    "display", "grid-template-columns", "grid-template-rows", "grid-column", "grid-row", "grid-auto-flow",
+    "gap", "row-gap", "column-gap", "flex", "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
+    "align-items", "align-self", "align-content", "justify-content", "justify-items", "justify-self",
+})
+# Values: letters, digits and the characters of lengths, colors, functions, lists and font names
+_STYLE_VALUE = re.compile(r"^[\w\s.,%#()\-+/'\"!*]+$")
+# url(), scripts, imports, comments and escapes never pass; neither do negative margins (they cover other content)
+_STYLE_BAD = re.compile(r"url\s*\(|expression|javascript|vbscript|@|image-set|behavior|binding|\\|/\*|attr\s*\(", re.I)
+_NEGATIVE = re.compile(r"(^|[\s(,])-\s*\.?\d")
+_CLASS = re.compile(r"^[A-Za-z0-9_ -]{1,200}$")
+_FIELD_NAME = re.compile(r"^[A-Za-z0-9_.\[\]-]{1,64}$")
+_FIELD_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_AUTOCOMPLETE = re.compile(r"^[a-z-]{1,30}$")
+_NUMBER = re.compile(r"^-?\d{1,9}(\.\d{1,6})?$")
+_MAILTO = re.compile(r"^mailto:[^\s\"'<>?&#]{3,200}$", re.I)
+_INPUT_TYPES = {"text", "email", "tel", "number"}
+_BUTTON_TYPES = {"submit", "button"}
 _SAFE_LINK = re.compile(r"^(https?://|mailto:|/(?!/))", re.IGNORECASE)
 _SAFE_SRC = re.compile(r"^(https://|http://|/(?!/))", re.IGNORECASE)
 # Embeds may only frame these sites (music, maps, forms, booking)
@@ -693,6 +726,7 @@ _IFRAME_HOSTS = re.compile(
     re.IGNORECASE,
 )
 _SIZE = re.compile(r"^\d{1,4}%?$")
+_ALIGN_VALUES = {"left", "center", "right"}
 
 
 class _RichTextCleaner(HTMLParser):
@@ -707,7 +741,14 @@ class _RichTextCleaner(HTMLParser):
 
     def attributes(self, tag, attrs):
         """Allowed attributes for `tag`, already escaped. None drops the tag."""
+        # The editor's block toolbar aligns a button or image through its line: <p align="center">
+        if tag == "p" and (attrs.get("align") or "").strip().lower() in _ALIGN_VALUES:
+            return f' align="{attrs["align"].strip().lower()}"'
         return ""
+
+    def link_attributes(self, attrs):
+        """Extra attributes of a safe link. The editor's Button block is a link with class="button"."""
+        return ' class="button"' if (attrs.get("class") or "").strip() == "button" else ""
 
     def _tag(self, tag):
         # Browser editors wrap new lines in <div>; in rich text that's a paragraph
@@ -723,7 +764,8 @@ class _RichTextCleaner(HTMLParser):
         if tag == "a":
             href = (dict(attrs).get("href") or "").strip()
             if _SAFE_LINK.match(href):
-                self.out.append(f'<a href="{html_escape(href, quote=True)}" rel="noopener noreferrer">')
+                css = self.link_attributes(dict(attrs))
+                self.out.append(f'<a href="{html_escape(href, quote=True)}"{css} rel="noopener noreferrer">')
             else:
                 self.out.append("<a>")
         else:
@@ -756,14 +798,93 @@ class _RichTextCleaner(HTMLParser):
         return "".join(self.out) + "".join(f"</{t}>" for t in reversed(self.open))
 
 
+def _clean_style(value):
+    """The safe part of a style="" value: listed properties with plain values, the rest dropped."""
+    kept = []
+    for declaration in str(value or "")[:2000].split(";"):
+        prop, _, val = declaration.partition(":")
+        prop, val = prop.strip().lower(), val.strip()
+        if prop not in _STYLE_PROPS or not val or len(val) > 200:
+            continue
+        if _STYLE_BAD.search(val) or not _STYLE_VALUE.match(val):
+            continue
+        if prop.startswith(("margin", "padding")) and _NEGATIVE.search(val):
+            continue
+        kept.append(f"{prop}: {val}")
+    return "; ".join(kept)
+
+
+def _clean_class(value):
+    value = " ".join(str(value or "").split())
+    return value if _CLASS.match(value) else ""
+
+
 class _EmbedCleaner(_RichTextCleaner):
     tags = _EMBED_TAGS
     void = _EMBED_VOID
 
-    def attributes(self, tag, attrs):
-        def attr(name, value):
-            return f' {name}="{html_escape(value, quote=True)}"'
+    @staticmethod
+    def _attr(name, value):
+        return f' {name}="{html_escape(value, quote=True)}"'
 
+    def common_attributes(self, attrs):
+        """class and style, which any tag can carry."""
+        out = ""
+        css = _clean_class(attrs.get("class"))
+        if css:
+            out += self._attr("class", css)
+        style = _clean_style(attrs.get("style"))
+        if style:
+            out += self._attr("style", style)
+        return out
+
+    def link_attributes(self, attrs):
+        return self.common_attributes(attrs)
+
+    def form_attributes(self, tag, attrs):
+        """Attributes of a form control; None drops the tag (a type or button kind that is not allowed)."""
+        attr = self._attr
+        out = ""
+        name, ident = (attrs.get("name") or "").strip(), (attrs.get("id") or "").strip()
+        if name and _FIELD_NAME.match(name) and tag in ("input", "textarea", "select"):
+            out += attr("name", name)
+        if ident and _FIELD_ID.match(ident) and tag in ("input", "textarea", "select"):
+            out += attr("id", "ce-" + ident)  # prefixed so it never matches an id the theme uses
+        if tag == "form":
+            action = (attrs.get("action") or "").strip()
+            out += attr("action", action) if _MAILTO.match(action) else ""
+            return out + " data-content-form novalidate"
+        if tag == "label":
+            target = (attrs.get("for") or "").strip()
+            return out + (attr("for", "ce-" + target) if _FIELD_ID.match(target) else "")
+        if tag == "option":
+            if attrs.get("value") is not None:
+                out += attr("value", str(attrs["value"])[:200])
+            return out + (" selected" if "selected" in attrs else "")
+        if tag == "button":
+            kind = (attrs.get("type") or "submit").strip().lower()
+            return out + attr("type", kind) if kind in _BUTTON_TYPES else None
+        # input, textarea, select
+        if tag == "input":
+            kind = (attrs.get("type") or "text").strip().lower()
+            if kind not in _INPUT_TYPES:
+                return None
+            out += attr("type", kind)
+            if attrs.get("value") is not None:
+                out += attr("value", str(attrs["value"])[:200])
+        if tag in ("input", "textarea") and attrs.get("placeholder"):
+            out += attr("placeholder", str(attrs["placeholder"])[:200])
+        auto = (attrs.get("autocomplete") or "").strip().lower()
+        if tag == "input" and _AUTOCOMPLETE.match(auto):
+            out += attr("autocomplete", auto)
+        for key in ("rows", "cols", "maxlength", "minlength", "min", "max", "step"):
+            value = str(attrs.get(key) or "").strip()
+            if value and _NUMBER.match(value) and (key in ("rows", "cols", "maxlength", "minlength") or tag == "input"):
+                out += attr(key, value)
+        return out + (" required" if "required" in attrs else "")
+
+    def attributes(self, tag, attrs):
+        attr = self._attr
         size = "".join(
             attr(name, attrs[name]) for name in ("width", "height") if _SIZE.match(str(attrs.get(name) or ""))
         )
@@ -772,7 +893,7 @@ class _EmbedCleaner(_RichTextCleaner):
             src = (attrs.get("src") or "").strip()
             if not _SAFE_SRC.match(src):
                 return None
-            return attr("src", src) + attr("alt", attrs.get("alt") or "") + size + ' loading="lazy"'
+            return attr("src", src) + attr("alt", attrs.get("alt") or "") + size + ' loading="lazy"' + self.common_attributes(attrs)
 
         if tag == "iframe":
             src = (attrs.get("src") or "").strip()
@@ -781,12 +902,17 @@ class _EmbedCleaner(_RichTextCleaner):
             title = attr("title", attrs.get("title") or "Embedded content")
             return attr("src", src) + title + size + ' loading="lazy" referrerpolicy="strict-origin-when-cross-origin"'
 
+        if tag in ("form", "label", "input", "textarea", "select", "option", "button"):
+            specific = self.form_attributes(tag, attrs)
+            return None if specific is None else specific + self.common_attributes(attrs)
+
         if tag in ("td", "th"):
-            return "".join(
+            span = "".join(
                 attr(name, attrs[name]) for name in ("colspan", "rowspan") if str(attrs.get(name) or "").isdigit()
             )
+            return span + self.common_attributes(attrs)
 
-        return ""
+        return (super().attributes(tag, attrs) or "") + self.common_attributes(attrs)
 
 
 def _run_cleaner(cleaner, value):

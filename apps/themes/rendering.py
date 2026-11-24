@@ -3399,7 +3399,7 @@ def _post_drop(post, base_url):
         "handle": post.handle,
         "url": f"{base_url}/blog/{post.handle}",
         "excerpt": post.excerpt,
-        "body": Markup(sanitize_embed(post.body or "")),
+        "body": content_html(post.body, post.store),
         "cover_image": post.cover_image or None,
         "published_at": post.published_at,
         "date": _date_text(post.published_at),
@@ -3491,14 +3491,78 @@ def published_pages(store):
     return StorePage.objects.filter(store=store, status=StorePage.VISIBLE)
 
 
-def _page_drop(page, base_url):
+# Forms built in the page/blog editor work without any theme code: one script (added only when the content has
+# form fields) checks the required fields and opens the shopper's email app with the answers. The address is the
+# form's own mailto: action, else a data-contact-email on the page's wrapper, else the store's contact email.
+# Fields outside a <form> (the editor can drop the wrapper) are grouped by their submit button's nearest container.
+_CONTENT_FORM_JS = r"""(function(){
+var root=document.currentScript&&document.currentScript.parentNode;if(!root)return;
+var STORE_TO=__TO__;
+function group(btn){var f=btn.closest("form");if(f)return f;var n=btn.parentElement;
+while(n&&n!==root&&!n.querySelector("input,textarea,select"))n=n.parentElement;return n&&n!==root?n:null}
+function labelOf(f){var l=f.id&&root.querySelector('label[for="'+f.id+'"]');l=l||f.closest("label");
+var t=l?l.textContent:(f.getAttribute("placeholder")||f.name||"");return t.replace(/[\s*:]+$/,"").trim()}
+function note(g){var n=g.nextElementSibling;if(!n||!n.hasAttribute("data-content-note")){n=document.createElement("p");
+n.setAttribute("data-content-note","");n.setAttribute("role","status");g.parentNode.insertBefore(n,g.nextSibling)}return n}
+function send(g){var fields=[].slice.call(g.querySelectorAll("input,textarea,select"));var missing=false,bad=false,lines=[],subject="";
+fields.forEach(function(f){var v=(f.value||"").trim();if(f.hasAttribute("required")&&!v)missing=true;
+if(f.type==="email"&&v&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v))bad=true;
+if(v)lines.push(labelOf(f)+": "+v);if(/subject/i.test((f.name||"")+(f.id||"")))subject=v});
+var n=note(g);n.hidden=false;
+if(missing||bad){n.textContent="Please fill in all required fields with a valid email.";return}
+var to=((g.getAttribute&&g.getAttribute("action"))||"").replace(/^mailto:/i,"");
+if(!to){var w=root.closest("[data-contact-email]");to=(w&&w.getAttribute("data-contact-email"))||STORE_TO}
+if(!to){n.textContent="This form has no email address set up yet.";return}
+n.textContent="Opening your email app to send the message...";
+window.location.href="mailto:"+encodeURIComponent(to).replace("%40","@")+"?subject="+
+encodeURIComponent(subject||"Message from "+location.hostname)+"&body="+encodeURIComponent(lines.join("\n"))}
+root.addEventListener("submit",function(e){var f=e.target;if(f&&f.hasAttribute&&f.hasAttribute("data-content-form")){e.preventDefault();send(f)}});
+root.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button");
+if(!b||b.type==="button"||b.closest("form"))return;var g=group(b);if(g){e.preventDefault();send(g)}});
+})();"""
+
+
+# Root-relative links in page/blog content ("/", "/collections/all") mean "this store", like menu links. On the
+# platform itself these paths belong to the platform, not the store, so they are left alone (same list as the
+# store-domain middleware's passthrough, plus uploaded media).
+_PLATFORM_PATHS = ("/media/", "/static/", "/api/", "/admin/", "/s/", "/healthz", "/readyz")
+_CONTENT_LINK = re.compile(r'(<(?:a|img)\b[^>]*?\s(?:href|src)=")(/(?!/)[^"]*)"')
+
+
+def _store_links(html, base_url):
+    """Point the content's single-slash links at the store (/s/<slug>/...). A store on its own domain has the
+    /s/<slug> prefix removed again from the response by StoreDomainMiddleware, so they come out as "/..."."""
+    def fix(match):
+        path = match.group(2)
+        if path.startswith(_PLATFORM_PATHS):
+            return match.group(0)
+        return f'{match.group(1)}{base_url}{path}"'
+
+    return _CONTENT_LINK.sub(fix, html)
+
+
+def content_html(value, store=None):
+    """Page or blog content for the storefront: cleaned (sanitize_embed), links pointed inside the store, plus the
+    form script if it has form fields."""
+    html = sanitize_embed(value or "")
+    if store is not None:
+        html = _store_links(html, shop_url(store))
+    if "<input" not in html and "<textarea" not in html:
+        return Markup(html)
+    to = (getattr(store, "contact_email", "") or "").strip()
+    to = to if re.fullmatch(r"[^\s@<>\"'?&#,;]+@[^\s@<>\"'?&#,;]+", to) else ""
+    script = _CONTENT_FORM_JS.replace("__TO__", json.dumps(to).replace("</", "<\\/"))
+    return Markup(html + "<script>" + script + "</script>")
+
+
+def _page_drop(page, base_url, store=None):
     """A saved page as the theme sees `page`."""
     return {
         "id": str(page.pk),
         "title": page.title,
         "handle": page.handle,
         "url": f"{base_url}/pages/{page.handle}",
-        "body": Markup(sanitize_embed(page.body or "")),
+        "body": content_html(page.body, store or page.store),
         "published_at": page.published_at,
         "updated_at": page.updated_at,
         "date": _date_text(page.updated_at),
@@ -3528,7 +3592,7 @@ def page_content(store, base_url, handle, editor, template="page"):
         ordered = pages.order_by("created_at")
         page = ordered.filter(template="" if template == "page" else template).first() or ordered.first()
     if page is not None:
-        return _page_drop(page, base_url)
+        return _page_drop(page, base_url, store)
     return _sample_page_drop(base_url) if editor else None
 
 

@@ -275,6 +275,11 @@
   .article__body a:hover {
     opacity: 0.8;
   }
+  /* A Button block from the editor: the theme's button, not a text link */
+  .article__body a.button {
+    color: var(--b-tx);
+    text-decoration: none;
+  }
   .article__body ul, .article__body ol {
     margin: 0 0 1.6em;
     padding-left: 1.6em;
@@ -292,6 +297,9 @@
     display: block;
   }
   .article__body iframe {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    height: auto;
     max-width: 100%;
     border-radius: var(--radius);
     margin: 1.8em 0;
