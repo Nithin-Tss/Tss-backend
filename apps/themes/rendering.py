@@ -257,6 +257,96 @@ html.cart-open{overflow:hidden}
 .rich-text__button{margin-top:8px}
 </style>""")
 
+
+def _build_content_mobile_css():
+    """
+    Page and blog content (main-page's .page__body and main-article's .article__body) on phones, whatever the owner
+    pasted: side-by-side layouts stack, media and tables never pass the screen, big inline sizes shrink, buttons are
+    easy to tap. CSS only, scoped to those two wrappers; the saved HTML is not changed.
+
+    sanitize_embed() writes every style="" as normalised "prop: value" pairs, so attribute selectors can find them.
+    Inline styles beat any stylesheet, hence !important. A size counts as big by its first digits (40px+, 3rem+);
+    the :not() keeps small pixel values (4px..12px) out of it.
+    """
+    c = "body :is(.page__body,.article__body)"
+
+    def sel(*tails):
+        return ",".join(f"{c} {t}" for t in tails)
+
+    def style(text):
+        return f'[style*="{text}"]'
+
+    def src(text):
+        return f'iframe[src*="{text}"]'
+
+    def big(prop, prefixes, extra=""):
+        return [f'{style(f"{prop}: {p}")}:not({style(f"{prop}: {p}px")}){extra}' for p in prefixes]
+
+    sizes = [*"456789", "10", "11", "12"]
+    # The editor's video box (height: 0 and a percentage padding-bottom) keeps its 16:9 ratio
+    not_ratio_box = ':not(.responsive-video):not([style*="height: 0"])'
+    flex = f":is({style('display: flex')},{style('display: inline-flex')})"
+    row = f"{flex}:not({style('flex-direction: column')}):not({style('flex-wrap: wrap')})"
+    wrapping = f"{flex}{style('flex-wrap: wrap')}"
+    grid = f":is({style('display: grid')},{style('display: inline-grid')})"
+    vertical, horizontal, margin = "clamp(16px,5vw,24px)", "16px", "clamp(12px,4vw,20px)"
+
+    rules = [
+        # Text
+        f"{c}{{font-size:16.5px;line-height:1.7;min-width:0}}",
+        f"{sel('h1')}{{font-size:clamp(24px,7vw,32px);line-height:1.2}}",
+        f"{sel('blockquote')}{{margin-left:0;margin-right:0;padding:16px 18px}}",
+        f"{sel('figure')}{{margin-left:0;margin-right:0}}",
+        f"{sel('pre')}{{max-width:100%;overflow-x:auto}}",
+        # Side-by-side layouts stack: flex rows (rows that wrap by themselves keep wrapping), then grids
+        f"{sel(row)}{{flex-direction:column!important;align-items:stretch!important;"
+        "justify-content:flex-start!important;gap:16px!important}",
+        f"{sel(row + ' > *')}{{width:100%!important;max-width:100%!important;min-width:0!important;flex:0 0 auto!important}}",
+        f"{sel(wrapping + ' > *')}{{max-width:100%!important;min-width:0!important}}",
+        f"{sel(grid)}{{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:none!important;"
+        "grid-auto-flow:row!important;gap:16px!important}",
+        f"{sel(grid + ' > *')}{{grid-column:auto!important;grid-row:auto!important;min-width:0!important}}",
+        # Nothing wider than the screen
+        f"{sel(style('width'))}{{max-width:100%!important;box-sizing:border-box}}",
+        f"{sel(':not(td):not(th)' + style('min-width'))}{{min-width:0!important}}",
+        f"{sel('img')}{{max-width:100%!important;height:auto!important}}",
+        f"{sel('iframe')}{{width:100%!important;max-width:100%!important;height:auto!important;aspect-ratio:16/9}}",
+        # ...but a booking page or a form is not a video, and a map is squarer
+        f"{sel(src('calendly'), src('docs.google.com'))}{{aspect-ratio:auto!important;height:600px!important}}",
+        f"{sel(src('spotify'), src('soundcloud'))}{{aspect-ratio:auto!important;height:352px!important}}",
+        f"{sel(src('maps'))}{{aspect-ratio:4/3!important}}",
+        f"{sel('table')}{{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}}",
+        f"{sel('th', 'td')}{{padding:10px 12px}}",
+        # Big inline font sizes (30px+, 2rem+) shrink; small ones are not matched
+        f"{sel(*big('font-size', ['3']), style('font-size: 2.'), style('font-size: 2rem'), style('font-size: 2em'))}"
+        "{font-size:clamp(22px,6.5vw,30px)!important;line-height:1.25!important}",
+        f"{sel(*big('font-size', sizes))}{{font-size:clamp(24px,8vw,34px)!important;line-height:1.2!important}}",
+    ]
+    # Big inline padding and margins (40px+) shrink
+    for prop in ("padding", "padding-top", "padding-bottom"):
+        rules.append(f"{sel(*big(prop, sizes, not_ratio_box))}{{{prop}:{vertical}!important}}")
+    for prop in ("padding-left", "padding-right"):
+        rules.append(f"{sel(*big(prop, sizes, not_ratio_box))}{{{prop}:{horizontal}!important}}")
+    for prop in ("margin-top", "margin-bottom"):
+        rules.append(f"{sel(*big(prop, sizes))}{{{prop}:{margin}!important}}")
+    rules.append(f"{sel(*big('margin', sizes))}{{margin-top:{margin}!important;margin-bottom:{margin}!important}}")
+    for prop in ("margin-left", "margin-right"):
+        rules.append(f"{sel(*big(prop, sizes))}{{{prop}:0!important}}")
+    rules += [
+        # Buttons (a.button is the editor's Button block) and form fields are easy to tap
+        f"{sel('a.button', 'button.button')}{{display:flex!important;align-items:center;justify-content:center;"
+        "width:100%!important;max-width:100%!important;min-height:48px;box-sizing:border-box!important;"
+        "margin-left:0!important;margin-right:0!important;text-align:center}",
+        f"{sel('a.button + a.button')}{{margin-top:10px!important}}",
+        f"{sel('input:not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button])', 'textarea', 'select')}"
+        "{width:100%!important;max-width:100%!important;box-sizing:border-box;font-size:16px;min-height:44px}",
+        f"{sel('button')}{{min-height:44px}}",
+    ]
+    return "<style>@media (max-width:749px){" + "".join(rules) + "}</style>"
+
+
+CONTENT_MOBILE_CSS = Markup(_build_content_mobile_css())
+
 FONT_BY_KEY = {key: (stack, family, weights) for key, _, stack, family, weights in FONTS}
 
 # Buttons and text: one set of rules driven by CSS variables. The theme
@@ -4250,7 +4340,10 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
     real_ids = set(template_data["sections"])
     theme_button = _theme_button(settings)
     tokens = (store_theme.theme.theme_data or {}).get("tokens")
-    html = [google_fonts_link(_collect_fonts(data)), theme_css(settings, tokens), SECTION_CSS, TYPE_CSS]
+    # The phone rules for page and blog content: only on pages that show it (always in the preview, where sections come and go)
+    shows_content = editor or any(sec.get("type") in ("main-page", "main-article") for _, sec in visible)
+    html = [google_fonts_link(_collect_fonts(data)), theme_css(settings, tokens), SECTION_CSS,
+            *([CONTENT_MOBILE_CSS] if shows_content else []), TYPE_CSS]
 
     html.append(CUSTOM_CSS)
     if page != "checkout":
