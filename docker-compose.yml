@@ -1,30 +1,41 @@
-# Self-contained dev stack: PostgreSQL + automatic migrations + Django API + shop and helpdesk frontends.
-#   API http://localhost:8000 | shop http://localhost:5173 | helpdesk http://localhost:5174
-#
-#   docker compose up --build        # creates the DB, runs migrations, starts the API on :8000
-#   docker compose down              # stop (data is kept in the pgdata volume)
-#   docker compose down -v           # stop and wipe the database volume too
-#
-# Optional: create an admin user once it is up
+# DEVELOPMENT (default; every setting has a safe default, no .env needed)
+#   docker compose up --build         # Postgres + migrations + API :8000 + shop :5173 + helpdesk :5174
+#   docker compose down               # stop (data kept in the pgdata volume)
+#   docker compose down -v            # stop and wipe the database volume too
 #   docker compose exec web python manage.py createsuperuser
 #
-# Every setting below has a default; override any of them with shell env vars or a .env file.
-# Separate project name so volumes (tss-dev_pgdata) never collide with deploy/docker-compose.yml (tss_pgdata).
-name: tss-dev
+# PRODUCTION (adds Redis, Celery worker/beat and Nginx with TLS; skips the frontends)
+#   cp .env.example deploy/.env       # then set the values listed under "production" below
+#   docker compose --env-file deploy/.env --profile prod up -d --build nginx worker beat
+#   (nginx pulls in web, migrate, db and redis; certificates go in deploy/certs/)
+#
+# Production values to put in deploy/.env (override the dev defaults used below):
+#   COMPOSE_PROJECT_NAME=tss  POSTGRES_PASSWORD  DJANGO_SECRET_KEY  DJANGO_ALLOWED_HOSTS
+#   DJANGO_DEBUG=False  DJANGO_BEHIND_PROXY=True  DB_SSLMODE=disable
+#   REDIS_URL=redis://redis:6379/1  CELERY_BROKER_URL=redis://redis:6379/0
+#   CORS_ALLOWED_ORIGINS  CSRF_TRUSTED_ORIGINS  FRONTEND_URL
+#
+# COMPOSE_PROJECT_NAME keeps dev (tss-dev_pgdata) and prod (tss_pgdata) volumes separate.
+name: ${COMPOSE_PROJECT_NAME:-tss-dev}
 
 x-backend: &backend
   build:
     context: .
   environment:
     DATABASE_URL: postgresql://${POSTGRES_USER:-tss}:${POSTGRES_PASSWORD:-tss_password}@db:5432/${POSTGRES_DB:-tss}
-    DB_SSLMODE: disable            # local Postgres container has no SSL (settings default is "require")
-    DJANGO_DEBUG: "True"
+    DB_SSLMODE: ${DB_SSLMODE:-disable}   # the Postgres container has no SSL (settings default is "require")
+    DJANGO_DEBUG: ${DJANGO_DEBUG:-True}
+    DJANGO_BEHIND_PROXY: ${DJANGO_BEHIND_PROXY:-False}
     DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-insecure-secret-key-change-me}
     DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    REDIS_URL: ${REDIS_URL:-}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
     OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
+    FRONTEND_URL: ${FRONTEND_URL:-}
     # Browsers call the API from the frontends' origins (host ports below)
-    CORS_ALLOWED_ORIGINS: http://localhost:${SHOP_PORT:-5173},http://127.0.0.1:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174},http://127.0.0.1:${HELPDESK_PORT:-5174}
-    CSRF_TRUSTED_ORIGINS: http://localhost:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174}
+    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:${SHOP_PORT:-5173},http://127.0.0.1:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174},http://127.0.0.1:${HELPDESK_PORT:-5174}}
+    CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:${SHOP_PORT:-5173},http://localhost:${HELPDESK_PORT:-5174}}
   volumes:
     - media:/app/media
 
@@ -40,10 +51,24 @@ services:
     #   ports: ["5434:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Production only: cache and Celery broker.
+  redis:
+    profiles: ["prod"]
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
       retries: 10
     restart: unless-stopped
 
@@ -64,6 +89,50 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 15s
+      retries: 5
+    restart: unless-stopped
+
+  # Production only: background jobs.
+  worker:
+    <<: *backend
+    profiles: ["prod"]
+    command: ["celery", "-A", "config", "worker", "-l", "info"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Production only: scheduled jobs.
+  beat:
+    <<: *backend
+    profiles: ["prod"]
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Production only: TLS termination; serves uploaded media directly from the shared volume.
+  nginx:
+    profiles: ["prod"]
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+      - media:/srv/media:ro
+    depends_on:
+      web:
+        condition: service_healthy
     restart: unless-stopped
 
   # Storefront / admin UI (React + Vite, built then served by nginx) -> http://localhost:5173
@@ -93,4 +162,5 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   media:
