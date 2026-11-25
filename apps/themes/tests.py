@@ -3603,6 +3603,79 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn('class="product-card__wishlist-add"', collection_after_remove)
         self.assertNotIn('class="product-card__wishlist-add is-wishlisted"', collection_after_remove)
 
+    # ---- the customizer's preview of the Wishlist page behaves like the live store
+    def preview(self, extra=""):
+        data = self.ok("get", "/api/v1/themes/settings/")
+        return self.ok("post", f"/api/v1/themes/preview/?page=wishlist{extra}", data)["html"]
+
+    @staticmethod
+    def shown(html):
+        """The page as a visitor sees it: without <script>, <style> and <template> (inert text)."""
+        import re
+
+        return re.sub(r"<(script|style|template)\b.*?</\1>", "", html, flags=re.S | re.I)
+
+    def preview_cart(self, html):
+        import re
+
+        return re.search(r'data-cart-session="([0-9a-f]{32})"', html).group(1)
+
+    def preview_post(self, cart, action):
+        return self.client.post(f"{self.base}/wishlist/items/", {
+            "action": action, "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
+
+    def test_preview_wishlist_is_empty_like_the_live_store_not_sample_products(self):
+        html = self.preview()
+        self.assertIn("Your wishlist is empty.", html)
+        self.assertIn("Continue shopping", html)
+        self.assertNotIn("Blue mug", html)
+        self.assertNotIn("Sample products (preview only)", html)
+
+    def test_preview_wishlist_shows_the_real_list_and_remove_stays_removed_after_reload(self):
+        cart = self.preview_cart(self.preview())
+        self.assertEqual(self.preview_post(cart, "add").json()["count"], 1)
+        html = self.preview()
+        self.assertIn("Blue mug", html)
+        self.assertNotIn("wishlist-page__empty", self.shown(html))
+        self.assertIn("wishlist-page__grid", self.shown(html))
+        self.assertIn('data-wishlist-count aria-live="polite">1</span>', html[html.index("<header"):html.index("</header>")])
+        self.assertEqual(self.preview_post(cart, "remove").json(), {
+            "saved": False, "count": 0, "product_id": self.product["id"]})
+        html = self.preview()  # "reload"
+        self.assertIn('class="wishlist-page__empty"', self.shown(html))
+        self.assertNotIn("wishlist-page__grid", self.shown(html))
+        self.assertNotIn("Blue mug", html)
+        self.assertIn('data-wishlist-count aria-live="polite">0</span>', html[html.index("<header"):html.index("</header>")])
+
+    def test_preview_removing_the_last_product_shows_the_empty_state_without_a_reload(self):
+        self.preview_post(self.preview_cart(self.preview()), "add")
+        html = self.preview()
+        # The page shows the product, not the empty state; the empty state waits, inert, for the script
+        self.assertNotIn("Your wishlist is empty.", self.shown(html))
+        self.assertRegex(html, r'(?s)<template id="tss-wishlist-empty"><div class="wishlist-page__empty">.*?Your wishlist is empty\..*?</template>')
+        self.assertIn('document.getElementById("tss-wishlist-empty")', html)
+        # an empty list needs no template: the page itself shows the empty state
+        self.preview_post(self.preview_cart(html), "remove")
+        self.assertNotIn('id="tss-wishlist-empty"', self.preview())
+
+    def test_sample_products_only_when_switched_on_and_never_over_a_real_list(self):
+        self.assertNotIn("Sample products (preview only)", self.preview())
+        sample = self.preview("&sample_products=1")
+        self.assertIn("Sample products (preview only)", sample)
+        self.assertIn("Blue mug", sample)
+        self.assertNotIn("wishlist-page__empty", self.shown(sample))
+        self.assertIn("wishlist-page__grid--sample", sample)
+        self.assertIn("pointer-events:none", sample)
+        self.preview_post(self.preview_cart(sample), "add")
+        real = self.preview("&sample_products=1")
+        self.assertNotIn("Sample products (preview only)", real)
+        self.assertIn("Blue mug", real)
+
+    def test_the_live_store_never_shows_sample_products(self):
+        html = self.client.get(f"{self.base}/wishlist/?sample_products=1").content.decode()
+        self.assertIn("Your wishlist is empty.", html)
+        self.assertNotIn("Sample products (preview only)", html)
+
     def test_the_theme_has_exactly_one_wishlist_file(self):
         """snippets/wishlist.liquid is the only wishlist file; the page needs no template."""
         from .services import REQUIRED_FILES, starter_files

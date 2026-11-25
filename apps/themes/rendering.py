@@ -42,6 +42,40 @@ from .customizer import _UNSAFE as _UNSAFE_TOKEN
 from .models import BlogPost, Menu, StorePage, ThemeFile, UrlRedirect
 from .services import _editing_theme, get_store_theme, starter_files, synced_section, theme_files
 
+# The customizer's preview is a saved snapshot of the page: when the last wishlist card is removed the snippet's
+# window.location.reload() would replay that snapshot (the removed products come back). Show the live store's
+# empty state in place instead (the same markup as snippets/wishlist.liquid).
+WISHLIST_PREVIEW_JS = """<script>
+(function () {
+  if (!window.fetch) return;
+  var original = window.fetch.bind(window);
+  // Runs before the snippet's own handler sees the reply: on "count 0" the grid becomes the empty state, and a
+  // hidden stand-in card keeps the snippet from reloading (the reload is what replays the old snapshot)
+  window.fetch = function (url, options) {
+    var request = original(url, options);
+    if (!/\\/wishlist\\/items\\/?$/.test(String(url))) return request;
+    return request.then(function (response) {
+      return response.clone().json().then(function (data) {
+        var grid = document.querySelector(".wishlist-page__grid");
+        if (data && data.count === 0 && grid && !grid.classList.contains("wishlist-page__grid--sample")) {
+          var template = document.getElementById("tss-wishlist-empty");
+          if (!template || !template.content.firstElementChild) return response;
+          var empty = template.content.firstElementChild.cloneNode(true);
+          var stub = document.createElement("div");
+          stub.className = "wishlist-page__grid";
+          stub.hidden = true;
+          stub.innerHTML = '<div class="product-card-shell"></div>';
+          grid.replaceWith(empty);
+          empty.after(stub);
+        }
+        return response;
+      }, function () { return response; });
+    });
+  };
+})();
+</script>"""
+WISHLIST_SAMPLE_CSS = "<style>.wishlist-page__grid--sample{pointer-events:none;opacity:.85}</style>"
+
 # Shown on the home page when every section has been removed or hidden
 FALLBACK_INDEX = [
     ("fallback-hero", {"type": "hero", "settings": {"height": "small"}}),
@@ -3977,7 +4011,7 @@ def render_page(*args, **kwargs):
 
 def _render_page(store, page, product=None, collection=None, custom_data=None, editor=False, only_section=None,
                  sort=DEFAULT_SORT, page_number=1, article=None, blog_filter=None, request=None,
-                 wishlist_page_ids=None, wishlist_products=None, page_handle=None, cart_page=False, cart_id=None,
+                 wishlist_page_ids=None, wishlist_products=None, wishlist_samples=False, page_handle=None, cart_page=False, cart_id=None,
                  filters=None, customer_page=None, customer=None, customer_user=None,
                  auth_error=None, auth_success=None, order_completed=False, order=None):
     """
@@ -4037,7 +4071,9 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         request._cart_session = (cart_session, True)
 
     wishlist_ids = []
-    if request is not None:
+    # The customizer's preview has no shopper request but does have the preview cart id: its header count and
+    # hearts then show that cart's real list, as the live store does (not an always-empty one)
+    if request is not None or (editor and cart_id):
         stored_ids = cart_data.get_wishlist(store, request, cart_session)
         if isinstance(stored_ids, list):
             for value in stored_ids:
@@ -4056,6 +4092,8 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
             for product_id in published_products(store).filter(pk__in=wishlist_ids).values_list("pk", flat=True)
         )
         wishlist_ids = [product_id for product_id in wishlist_ids if product_id in available_ids]
+    if wishlist_page_ids is not None:
+        wishlist_ids = list(wishlist_page_ids)  # the wishlist page and its header count / hearts agree
 
     cart_count = cart_data.item_count(store, cart_session)
 
@@ -4565,10 +4603,35 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         # The wishlist page is the wishlist snippet in 'page' mode (see snippets/wishlist.liquid): no template file
         products = wishlist_products or {}
         saved = [product_drop(products[pid], base_url) for pid in wishlist_page_ids if pid in products]
+        # Sample products: only in the customizer, only when the owner switched them on, and only while the real
+        # list is empty (a real list is always shown as it is)
+        sample = bool(editor and wishlist_samples and not saved)
+        if sample:
+            saved = [product_drop(p, base_url) for p in published_products(store).order_by("-created_at")[:4]]
+            sample = bool(saved)
         wishlist_content = env.from_string(
             "{%- assign back_to = shop.url | append: '/wishlist/' -%}"
             "{% render 'wishlist', mode: 'page', items: wishlist_items, wishlist_ids: wishlist_ids, return_url: back_to %}"
-        ).render(**{**common, "wishlist_items": saved, "wishlist_ids": wishlist_page_ids})
+        ).render(**{**common, "wishlist_items": saved, "wishlist_ids": [] if sample else wishlist_page_ids})
+        if editor:
+            # Done here, not in the theme's snippet, so every store's own copy of it behaves the same
+            if saved and not sample:
+                # The empty state the script puts in when the last card is removed: the snippet's own markup,
+                # kept in an inert <template> (never visible text), so it always matches what the store shows
+                empty_page = env.from_string(
+                    "{% render 'wishlist', mode: 'page', items: wishlist_items, wishlist_ids: wishlist_ids %}"
+                ).render(**{**common, "wishlist_items": [], "wishlist_ids": []})
+                found = re.search(r'<div class="wishlist-page__empty">.*?</div>', str(empty_page), re.S)
+                if found:
+                    wishlist_content = Markup(
+                        str(wishlist_content) + f'<template id="tss-wishlist-empty">{found.group(0)}</template>'
+                        + WISHLIST_PREVIEW_JS)
+            if sample:
+                wishlist_content = Markup(
+                    WISHLIST_SAMPLE_CSS + str(wishlist_content).replace(
+                        '<div class="wishlist-page__grid">',
+                        '<p class="wishlist-page__sample-note" style="margin:0 0 12px;color:var(--muted)">'
+                        'Sample products (preview only)</p><div class="wishlist-page__grid wishlist-page__grid--sample">', 1))
         content = Markup("".join((
             str(theme_css(settings, tokens)),
             str(SECTION_CSS),

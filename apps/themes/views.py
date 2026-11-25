@@ -1971,6 +1971,8 @@ def _preview_target(request):
         return "index", {
             "wishlist_page_ids": visible_ids,
             "wishlist_products": ordered_products,
+            # Only the owner's explicit "Sample products (preview only)" option; never on its own
+            "wishlist_samples": request.query_params.get("sample_products") == "1",
         }, None
     if not is_page_key(page):
         raise ValidationError({"page": f"page must be one of: {', '.join(PAGES)}, or a page.<name> template."})
