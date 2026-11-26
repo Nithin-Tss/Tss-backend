@@ -17,6 +17,8 @@ from .logging_utils import request_id_var
 access_log = logging.getLogger("tss.access")
 
 API_PREFIX = "/api/"
+# The host polls these every few seconds: logging them would bury the real traffic
+QUIET_PATHS = ("/api/v1/health/live/", "/api/v1/health/ready/")
 VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -36,7 +38,7 @@ class RequestLogMiddleware:
             response.headers["X-Request-ID"] = request_id
             return response
         finally:
-            if request.path_info.startswith(API_PREFIX):
+            if request.path_info.startswith(API_PREFIX) and request.path_info not in QUIET_PATHS:
                 self.log(request, status, (time.monotonic() - started) * 1000)
             request_id_var.reset(token)
 

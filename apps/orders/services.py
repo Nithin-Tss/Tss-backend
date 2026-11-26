@@ -413,7 +413,7 @@ def settle_after_refund(order):
 
 # --- Storefront visit tracking (analytics.storefront_sessions) ---------------------------------------
 #
-# The storefront layout's script posts one beacon per page load to POST /s/<store_slug>/_track
+# The storefront layout's script posts one beacon per page load to POST /api/v1/storefront/<store_slug>/track/
 # (apps.themes.views.storefront_track), which calls record_pageview(). The cart and checkout code call
 # mark_cart_event() so a visit also knows whether it added to the cart, reached checkout and ordered.
 # A visit starts after 30 minutes without activity, or when the day changes in the store's timezone.

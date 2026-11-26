@@ -1921,6 +1921,11 @@ def shop_url(store):
     return f"/s/{store.store_slug}"
 
 
+def shop_api_url(store):
+    """Where the theme's scripts reach the store's JSON endpoints ({{ shop.api_url }}/cart/add, ...): see storefront_api_urls."""
+    return f"/api/v1/storefront/{store.store_slug}"
+
+
 def _resolve_link(base_url, value):
     """Store-relative links ("/collections/all") point inside this store."""
     value = str(value or "")
@@ -3411,7 +3416,7 @@ def render_synced_section_fast(store, name, custom_data):
     settings["currency_symbol"] = currency_symbol(store, settings["currency_symbol"])
     base_url = shop_url(store)
     env = _environment({}, base_url, settings["currency_symbol"])
-    context = {"shop": {"name": store.store_name, "url": base_url}, "settings": settings, "template": "index"}
+    context = {"shop": {"name": store.store_name, "url": base_url, "api_url": shop_api_url(store)}, "settings": settings, "template": "index"}
     if "collections" in sync.SYNCED_SECTIONS[name]["context"]:
         context["collections"] = _LazyList(lambda: _nav(store, base_url))
     try:
@@ -3651,7 +3656,7 @@ if(!b||b.type==="button"||b.closest("form"))return;var g=group(b);if(g){e.preven
 # Root-relative links in page/blog content ("/", "/collections/all") mean "this store", like menu links. On the
 # platform itself these paths belong to the platform, not the store, so they are left alone (same list as the
 # store-domain middleware's passthrough, plus uploaded media).
-_PLATFORM_PATHS = ("/media/", "/static/", "/api/", "/admin/", "/s/", "/healthz", "/readyz")
+_PLATFORM_PATHS = ("/media/", "/static/", "/api/", "/admin/", "/s/")
 _CONTENT_LINK = re.compile(r'(<(?:a|img)\b[^>]*?\s(?:href|src)=")(/(?!/)[^"]*)"')
 
 
@@ -3730,7 +3735,7 @@ def render_cart_html(store, data, opts):
     currency = currency_symbol(store, resolve(store_theme.custom_data)["settings"]["currency_symbol"])
     env = _environment(files, base_url, currency)
     return env.from_string("{% render 'cart', mode: 'lines', cart: cart, settings: opts %}").render(
-        shop={"name": store.store_name, "url": base_url}, cart=data, opts=opts,
+        shop={"name": store.store_name, "url": base_url, "api_url": shop_api_url(store)}, cart=data, opts=opts,
     )
 
 
@@ -4058,7 +4063,7 @@ def _render_page(store, page, product=None, collection=None, custom_data=None, e
         overrides[template_path] = slots
     env = _environment(files, base_url, settings["currency_symbol"], overrides or None)
 
-    shop = {"name": store.store_name, "url": base_url}
+    shop = {"name": store.store_name, "url": base_url, "api_url": shop_api_url(store)}
     nav = _nav(store, base_url)
     product_drop_ = product_drop(product, base_url) if product else None
     if product_drop_:

@@ -26,7 +26,7 @@
   {%- assign kind = 'product-card' -%}
   {%- if placement == 'product' -%}{%- assign kind = 'product' -%}{%- endif -%}
   {%- assign add_text = label_text | default: 'Add to wishlist' -%}
-  <form class="{{ kind }}__wishlist-form" method="post" action="{{ shop.url }}/wishlist/items/" data-wishlist-form data-cart-session="{{ cart_session }}"{% if placement == 'product' and align != blank %} style="text-align:{{ align }}"{% endif %}>
+  <form class="{{ kind }}__wishlist-form" method="post" action="{{ shop.api_url }}/wishlist/items/" data-wishlist-form data-cart-session="{{ cart_session }}"{% if placement == 'product' and align != blank %} style="text-align:{{ align }}"{% endif %}>
     <input type="hidden" name="product_id" value="{{ product.id }}">
     <input type="hidden" name="action" value="{% if is_wishlisted %}remove{% else %}add{% endif %}" data-wishlist-action>
     <input type="hidden" name="return_to" value="{{ return_url | default: product.url }}">

@@ -112,13 +112,17 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 # so running it again is safe.
 # Revision 63: product grid / carousel: sources, filters, sort, list layout, pages, "no products" text; the card: sale badge text,
 # second image on hover, stock status, button text and the card elements (order and visibility) from Theme settings.
-STARTER_REVISION = 63
+# Revision 64: the theme's JSON calls (cart, newsletter, wishlist hearts, visit beacon) use the versioned API at
+# {{ shop.api_url }} (/api/v1/storefront/<store_slug>/...). Edited copies are rewritten by migration 0018 instead.
+STARTER_REVISION = 64
 STARTER_UPGRADES = {
     # Revision 59: every card part carries its place and name in the customizer preview (data-tss-block markers), so hovering
     # and clicking a part works. Stores that got the first version of the snippet (revision 58) are upgraded if they never edited it.
     # Revision 61: the card's shell keeps its plain class (product-card-shell); the section's card CSS finds it by data-pcb.
     # Revision 60: the price part can show the compare-at price first and "Taxes included" under the price.
     "snippets/product-card-blocks.liquid": {
+        "43decee009c763403a22169ec8452bb16711985625dbcb8938c63e4b517db577",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "e19bc951a917b2fbc011ff8d330e301b1abf94b0858ff43a0e73ff6f831e03a3",  # revision 63: same, with CRLF line endings
         "fef90834f78760133e2ff4d4ad07de1960a235d90417d35ed7e429a08d9c3baf",  # revision 63: before the product grid settings and card elements
         "c1ed4d68b43a882445afb61e6d2b67b4406dcbf47ce7a63d4724bf4b16e5bbef",  # revision 63: same, with CRLF line endings
         "e909cdf4c37cb3b00dafc3f871ae37c69164d37ce95f450e0926317120e7f7ff",  # revision 61: before the shell's data-pcb attribute
@@ -177,6 +181,8 @@ STARTER_UPGRADES = {
     },
     # Revision 30: the heart and the navbar link carry the shopper's cart id (the sandboxed page cannot send cookies)
     "snippets/wishlist.liquid": {
+        "d4c7d908ffe231da78928d12f18dc3e0f28bc66a03e88f366e2dd72b4d37962a",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "64b9e6493274933d698dec83f6ebd953c1931dc0bde8659b87785c4fb290cb7a",  # revision 63: same, with CRLF line endings
         "81f0d8ce1e90b5ab748dad8930cf4a713f6479f523fa349adced708e26a7a762",  # revision 46: before every store link carried the cart id (CRLF)
         "6130a9dd14a1f6261a71ff5812dc036304933b6e658114225732a9857fb9f6c1",  # revision 46: before every store link carried the cart id
         "bacf2337cd2d3e93a4ab383cb933621ab0d032e6e1dc8c7cd43355da5e06aff6",  # revision 35: before the heart script read form.getAttribute("action")
@@ -284,6 +290,8 @@ STARTER_UPGRADES = {
     # Revision 54: the "In stock" / "Only a few left" message is back on the product page
     # Revision 55: a gift card product shows "for myself / for someone else" recipient fields
     "sections/main-product.liquid": {
+        "8a4dfe37c2047369d5a1306e291ef54208326f4e7a1eb32424e6d935ca20dce5",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "c8251350db9eeb64e4a622f04868fdfa71d96c599d92461d5efca5dc43a40878",  # revision 63: same, with CRLF line endings
         "4ffa9bb1baa12d274ae272fccccdd78d14d23a6373289a62f64f82874c616512",  # revision 55: before the gift card recipient fields
         "beea8f1d6eb1610d57583cc18db5ad385c4cbdc4f49a8b0e2f702ac059b2583f",  # revision 55: same, with CRLF line endings
         "b7cc7c3ab5b4d28277fddf652f5eb145b1018167856f1712905a142a22f82a62",  # revision 54: before "Only a few left" skipped options that keep selling
@@ -331,6 +339,8 @@ STARTER_UPGRADES = {
     # Revision 22: the cart script also keeps a header's own cart icon and badge up to date
     # Revision 55: add-to-cart forwards data-meta fields (a gift card's recipient) as line metadata
     "snippets/cart.liquid": {
+        "e58236db96f9effd39dd63e91c54cde4fa261e100e15b9f7d32daf5310831308",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "1f37b1a99f057ed6c27906dad3f0c47f55cda0554a1eb17b9d1f205f34d227ec",  # revision 63: same, with CRLF line endings
         "020c3da88a33b73edd4e0a3efc5f14d9efbaab5907f0653d7b22c9a5a2753ecc",  # revision 55: before data-meta fields were forwarded
         "156ccc2554e4ba3b9b35ab5d393db2ac38e5b483c097d9c0505c19bf1842a496",  # revision 55: same, with CRLF line endings
         "bf6180d6c1db029759afe489ea7f753f99897e16d0394f296736abe101704a31",  # revision 43: before "Check out" went to the checkout page
@@ -346,6 +356,8 @@ STARTER_UPGRADES = {
     },
     # Revision 7: announcement bar, header (logo, menu) and footer follow the Theme settings
     "layout/theme.liquid": {
+        "5180c6be6697514b1eae41678e04c142b4e5024b42bc5e8898e52fb7a702516e",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "7dd5d79e3fc5fa1bc8f23f455b975d99f8971de7616d22627f3e1cb5f14fed1d",  # revision 63: same, with CRLF line endings
         "5d3ad0d605d0aa39aeedaa75491d8bfa746cf9f41d6a65b508aa3651c869b8b9",
         "1e15fb022e606f4564860490a7b4e62843f4cbba02475d210af15c77e8ca7c3f",  # revision 40: before the utility bar
         "4dba4b04f36e6b14a9b43dc8ced1387eda1d44a0c78d6dd4d86d9f89df15cc2d",  # revision 40: before the utility bar (CRLF)
@@ -407,6 +419,11 @@ STARTER_UPGRADES = {
     "snippets/account-profile.liquid": {
         "0e7113af12897548e8b99d9b42c0e5802fd385db3c14895174462047f584b3e6",  # revision 48: before the 10-digit mobile number
         "8f3610dfd87295c6e39f5342acc7cf7e8044e3e72cbb3bda15b7a12e759f3e16",  # revision 48: same, with CRLF line endings
+    },
+    # Revision 64: the newsletter form posts to {{ shop.api_url }}/newsletter/
+    "sections/newsletter.liquid": {
+        "ff2ea56d10246a6d850ee029b8cbf1742516cb1a4a8452d44273566890ccea8d",  # revision 63: before the cart/newsletter/wishlist/beacon calls moved to /api/v1/storefront/
+        "45a6596052f4ba147b8dba9d4317db8479caa21a075044e37b81368e04b11b54",  # revision 63: same, with CRLF line endings
     },
 }
 

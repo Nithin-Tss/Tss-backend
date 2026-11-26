@@ -15,7 +15,7 @@
 {%- if mode == 'icon' -%}
   {%- assign opens = settings.opens | default: 'drawer' -%}
   {%- assign items = count | default: 0 -%}
-  <a class="site-header__cart" href="{{ shop.url }}/cart" aria-label="{{ settings.label | default: 'Cart' }}" title="{{ settings.label | default: 'Cart' }}" data-cart-open data-cart-opens="{{ opens }}" data-cart-items="{{ items }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}"{{ attrs }}>
+  <a class="site-header__cart" href="{{ shop.url }}/cart" aria-label="{{ settings.label | default: 'Cart' }}" title="{{ settings.label | default: 'Cart' }}" data-cart-open data-cart-opens="{{ opens }}" data-cart-items="{{ items }}" data-cart-base="{{ shop.api_url }}/cart" data-cart-session="{{ session }}"{{ attrs }}>
     <svg viewBox="0 0 24 24" aria-hidden="true"{% if settings.size %} style="width:{{ settings.size }}px;height:{{ settings.size }}px"{% endif %}>
       <circle cx="9" cy="20" r="1.5" /><circle cx="18" cy="20" r="1.5" /><path d="M2 3h3l2.6 12.4a2 2 0 0 0 2 1.6h8.8a2 2 0 0 0 2-1.6L22 7H6" />
     </svg>
@@ -24,7 +24,7 @@
     {%- endif -%}
   </a>
   {%- if opens == 'drawer' -%}
-    <div class="cart-drawer" data-cart-drawer data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}" hidden>
+    <div class="cart-drawer" data-cart-drawer data-cart-base="{{ shop.api_url }}/cart" data-cart-session="{{ session }}" hidden>
       <div class="cart-drawer__overlay" data-cart-close></div>
       <aside class="cart-drawer__panel" role="dialog" aria-modal="true" aria-label="{{ title }}">
         <div class="cart-drawer__head">
@@ -89,7 +89,7 @@
     </div>
   {%- endif -%}
 {%- elsif mode == 'page' -%}
-  <section class="cart-page"><div class="page-width" data-cart-root data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ session }}">
+  <section class="cart-page"><div class="page-width" data-cart-root data-cart-base="{{ shop.api_url }}/cart" data-cart-session="{{ session }}">
     {%- if cart.lines.size > 0 -%}<h1>{{ title }}</h1>{%- endif -%}
     <div data-cart-body>{% render 'cart', mode: 'lines', cart: cart, settings: settings %}</div>
   </div></section>
@@ -260,7 +260,7 @@
     if (checkoutBtn) {
       event.preventDefault();
       var ctx = context(checkoutBtn);
-      var base = ctx && ctx.base ? ctx.base.replace(/\/cart\/?$/, "") : "";
+      var base = "{{ shop.url }}";
       var href = checkoutBtn.getAttribute("href") || (base ? base + "/checkout" : "/checkout");
       var session = ctx && ctx.session ? ctx.session : cartId();
       if (session && !/[?&]cart=/.test(href)) {

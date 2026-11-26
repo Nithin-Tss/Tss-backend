@@ -1,4 +1,4 @@
-"""Request ids, access log, JSON log format and the /healthz and /readyz checks."""
+"""Request ids, access log, JSON log format and the /api/v1/health/live/ and /api/v1/health/ready/ checks."""
 import json
 import logging
 from unittest import mock
@@ -10,15 +10,15 @@ from apps.core.logging_utils import JsonFormatter, RequestIdFilter, request_id_v
 
 class RequestLogTests(TestCase):
     def test_response_carries_a_generated_request_id(self):
-        response = self.client.get("/healthz")
+        response = self.client.get("/api/v1/health/live/")
         self.assertEqual(len(response.headers["X-Request-ID"]), 32)
 
     def test_a_sane_incoming_request_id_is_kept(self):
-        response = self.client.get("/healthz", HTTP_X_REQUEST_ID="proxy-abc.123")
+        response = self.client.get("/api/v1/health/live/", HTTP_X_REQUEST_ID="proxy-abc.123")
         self.assertEqual(response.headers["X-Request-ID"], "proxy-abc.123")
 
     def test_a_bad_incoming_request_id_is_replaced(self):
-        response = self.client.get("/healthz", HTTP_X_REQUEST_ID="bad id\twith spaces")
+        response = self.client.get("/api/v1/health/live/", HTTP_X_REQUEST_ID="bad id\twith spaces")
         self.assertNotIn(" ", response.headers["X-Request-ID"])
         self.assertEqual(len(response.headers["X-Request-ID"]), 32)
 
@@ -29,9 +29,11 @@ class RequestLogTests(TestCase):
         self.assertEqual((line.method, line.status), ("GET", 401))
         self.assertNotIn("secret", line.getMessage())
 
-    def test_non_api_requests_are_not_access_logged(self):
+    def test_non_api_requests_and_health_checks_are_not_access_logged(self):
         with self.assertNoLogs("tss.access", level="INFO"):
-            self.client.get("/healthz")
+            self.client.get("/s/no-such-store/")
+            self.client.get("/api/v1/health/live/")
+            self.client.get("/api/v1/health/ready/")
 
     @override_settings(LOG_SLOW_REQUEST_SECONDS=0)
     def test_slow_request_is_a_warning(self):
@@ -43,7 +45,7 @@ class RequestLogTests(TestCase):
     def test_request_id_is_available_while_the_request_runs_and_cleared_after(self):
         seen = []
         with mock.patch("apps.core.health._probe_cache", side_effect=lambda: seen.append(request_id_var.get())):
-            self.client.get("/readyz", HTTP_X_REQUEST_ID="trace-1")
+            self.client.get("/api/v1/health/ready/", HTTP_X_REQUEST_ID="trace-1")
         self.assertEqual(seen, ["trace-1"])
         self.assertEqual(request_id_var.get(), "-")
 
@@ -78,24 +80,24 @@ class LogFormatTests(SimpleTestCase):
 
 class HealthTests(TestCase):
     def test_healthz(self):
-        self.assertEqual(self.client.get("/healthz").json(), {"status": "ok"})
+        self.assertEqual(self.client.get("/api/v1/health/live/").json(), {"status": "ok"})
 
     def test_healthz_is_get_only(self):
-        self.assertEqual(self.client.post("/healthz").status_code, 405)
+        self.assertEqual(self.client.post("/api/v1/health/live/").status_code, 405)
 
     def test_readyz_ok(self):
-        response = self.client.get("/readyz")
+        response = self.client.get("/api/v1/health/ready/")
         self.assertEqual((response.status_code, response.json()), (200, {"status": "ok", "failing": []}))
 
     def test_readyz_reports_a_failing_cache_without_the_cause(self):
         with mock.patch("apps.core.health.cache.get", return_value=None), self.assertLogs("apps.core.health", "ERROR"):
-            response = self.client.get("/readyz")
+            response = self.client.get("/api/v1/health/ready/")
         self.assertEqual((response.status_code, response.json()["failing"]), (503, ["cache"]))
 
     def test_readyz_reports_a_failing_database(self):
         with mock.patch("apps.core.health.connection.cursor", side_effect=RuntimeError("db password=hunter2")), \
                 self.assertLogs("apps.core.health", "ERROR"):
-            response = self.client.get("/readyz")
+            response = self.client.get("/api/v1/health/ready/")
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("hunter2", response.content.decode())
 
@@ -104,5 +106,5 @@ class HealthTests(TestCase):
         from django.middleware.security import SecurityMiddleware
 
         redirected = SecurityMiddleware(lambda r: None).process_request(mock.Mock(
-            path_info="/healthz", path="/healthz", is_secure=lambda: False, META={}, get_host=lambda: "x", get_full_path=lambda: "/healthz"))
+            path_info="/api/v1/health/live/", path="/api/v1/health/live/", is_secure=lambda: False, META={}, get_host=lambda: "x", get_full_path=lambda: "/api/v1/health/live/"))
         self.assertIsNone(redirected)

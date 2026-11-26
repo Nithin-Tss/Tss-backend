@@ -685,7 +685,14 @@ class RouteAuditTest(StoreClientMixin, APITestCase):
         "MFAStatusView", "MFASetupView", "MFAEnableView", "MFADisableView",
     }
     # Plain function views, outside DRF
-    FUNCTION_VIEWS = {"theme_css"}
+    FUNCTION_VIEWS = {
+        "theme_css",
+        # Health checks (/api/v1/health/live/, /api/v1/health/ready/)
+        "healthz", "readyz",
+        # The storefront theme's JSON endpoints (/api/v1/storefront/<store_slug>/...): public, keyed by the cart id
+        "storefront_cart_fragment", "storefront_cart_add", "storefront_cart_change", "storefront_cart_clear",
+        "storefront_newsletter", "storefront_track", "storefront_wishlist_item",
+    }
     METHODS = ("get", "post", "put", "patch", "delete")
     STORE_PERMISSIONS = ["IsAuthenticated", "IsStoreMember", "HasStorePermission"]
     PLATFORM_PERMISSIONS = ["IsAuthenticated", "IsPlatformAdmin"]

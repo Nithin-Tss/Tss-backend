@@ -108,7 +108,7 @@
   {%- if product.variants.size > 1 -%}
     <a class="product-card__cart"{{ card.marks.card_cart_icon }} href="{{ product.url }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="Choose options for {{ product.title | escape }}" title="Choose options">{{ cart_svg }}</a>
   {%- else -%}
-    <button class="product-card__cart"{{ card.marks.card_cart_icon }} type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_svg }}</button>
+    <button class="product-card__cart"{{ card.marks.card_cart_icon }} type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.api_url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_svg }}</button>
   {%- endif -%}
   </div>
 {%- endif -%}

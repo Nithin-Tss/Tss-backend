@@ -1536,7 +1536,7 @@ class HeaderSyncTest(SyncedSectionMixin, APITestCase):
         """The cart's lines as the page's script asks for them (a shopper's browser, not the owner's)."""
         from rest_framework.test import APIClient
 
-        return APIClient().get(f"/s/{self.store['storeSlug']}/cart/fragment", HTTP_X_CART_SESSION=session).json()
+        return APIClient().get(f"/api/v1/storefront/{self.store['storeSlug']}/cart/fragment", HTTP_X_CART_SESSION=session).json()
 
     def test_cart_icon_is_in_the_add_block_list_with_its_options(self):
         spec = self.section()["spec"]["blocks"]["cart"]
@@ -2490,6 +2490,7 @@ class HeaderWishlistBlockPatchTest(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, self.store = self.sign_up("headerpatch@example.com", "Patch Store")
         self.base = f"/s/{self.store['storeSlug']}"
+        self.api_base = f"/api/v1/storefront/{self.store['storeSlug']}"
 
     def theme(self):
         from .services import get_store_theme
@@ -2630,7 +2631,7 @@ class CartTest(StoreClientMixin, APITestCase):
     def call(self, method, path, body=None, session=None, client=None, slug=None):
         client = client or self.shopper
         kwargs = {"HTTP_X_CART_SESSION": self.session if session is None else session}
-        url = f"/s/{slug or self.slug}/cart/{path}"
+        url = f"/api/v1/storefront/{slug or self.slug}/cart/{path}"
         if method == "get":
             return client.get(url, **kwargs)
         return client.post(url, json.dumps(body or {}), content_type="application/json", **kwargs)
@@ -2651,7 +2652,7 @@ class CartTest(StoreClientMixin, APITestCase):
         # The storefront page has origin "null" and sends X-Cart-Session: the browser asks first (preflight)
         # and blocks "Add to cart" ("Failed to fetch") unless this answer carries the CORS headers.
         r = self.shopper.options(
-            f"/s/{self.slug}/cart/add", HTTP_ORIGIN="null",
+            f"/api/v1/storefront/{self.slug}/cart/add", HTTP_ORIGIN="null",
             HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
             HTTP_ACCESS_CONTROL_REQUEST_HEADERS="content-type,x-cart-session",
         )
@@ -3002,7 +3003,7 @@ class CartTest(StoreClientMixin, APITestCase):
     def test_the_endpoints_answer_cors_for_the_sandboxed_page(self):
         from rest_framework.test import APIClient
 
-        preflight = APIClient().options(f"/s/{self.slug}/cart/add", HTTP_ORIGIN="null",
+        preflight = APIClient().options(f"/api/v1/storefront/{self.slug}/cart/add", HTTP_ORIGIN="null",
                                          HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
                                          HTTP_ACCESS_CONTROL_REQUEST_HEADERS="x-cart-session,content-type")
         self.assertEqual(preflight.status_code, 204)
@@ -3065,7 +3066,7 @@ class CartTest(StoreClientMixin, APITestCase):
         self.assertNotIn("Cart and checkout are coming soon", page)
         self.assertIn("data-cart-add", page)
         self.assertIn(f'name="product" value="{self.mug["id"]}"', page)
-        self.assertIn(f'data-cart-base="/s/{self.slug}/cart"', page)
+        self.assertIn(f'data-cart-base="/api/v1/storefront/{self.slug}/cart"', page)
         self.assertIn(f'data-cart-session="{self.session}"', page)
         # a sold-out product's button is disabled, and the server refuses it anyway
         gone = self.shopper.get(f"/s/{self.slug}/products/{self.gone['id']}").content.decode()
@@ -3087,6 +3088,7 @@ class CartUpgradeTest(StoreClientMixin, APITestCase):
         self.token, self.store = self.sign_up("cartupgrade@example.com", "Cart Upgrade Store")
         self.record = Store.objects.get(store_id=self.store["storeId"])
         self.base = f"/s/{self.store['storeSlug']}"
+        self.api_base = f"/api/v1/storefront/{self.store['storeSlug']}"
 
     def theme(self):
         from .services import get_store_theme
@@ -3516,6 +3518,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
             "location": location, "quantity": 5,
         }, expect=201)
         self.base = f"/s/{self.store['storeSlug']}"
+        self.api_base = f"/api/v1/storefront/{self.store['storeSlug']}"
 
     def show_hearts(self):
         """What an owner does to get hearts: the card's Wishlist heart part on every card section, and the block on the product page."""
@@ -3550,7 +3553,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
             url="/media/blue-mug.png",
             position=0,
         )
-        add = self.client.post(f"{self.base}/wishlist/items/", {
+        add = self.client.post(f"{self.api_base}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
         })
         self.assertEqual(add.status_code, 302)
@@ -3585,13 +3588,13 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         refreshed = self.client.get(f"{self.base}/wishlist/")
         self.assertIn("Blue mug", refreshed.content.decode())
         self.assertIn('data-wishlist-count aria-live="polite">1</span>', refreshed.content.decode())
-        duplicate = self.client.post(f"{self.base}/wishlist/items/", {
+        duplicate = self.client.post(f"{self.api_base}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
         })
         self.assertEqual(duplicate.status_code, 302)
         self.assertEqual(len(self.client.session[f"wishlist:{self.store['storeId']}"]), 1)
 
-        remove = self.client.post(f"{self.base}/wishlist/items/", {
+        remove = self.client.post(f"{self.api_base}/wishlist/items/", {
             "action": "remove", "product_id": self.product["id"], "return_to": f"{self.base}/wishlist/",
         })
         self.assertEqual(remove.status_code, 302)
@@ -3621,7 +3624,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         return re.search(r'data-cart-session="([0-9a-f]{32})"', html).group(1)
 
     def preview_post(self, cart, action):
-        return self.client.post(f"{self.base}/wishlist/items/", {
+        return self.client.post(f"{self.api_base}/wishlist/items/", {
             "action": action, "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
 
     def test_preview_wishlist_is_empty_like_the_live_store_not_sample_products(self):
@@ -3691,7 +3694,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         other = self.ok("post", "/api/v1/catalog/products/", {
             "title": "Red mug", "sku": "SKU-RED", "status": "active", "price": "9.00",
         }, expect=201)
-        url = f"{self.base}/wishlist/items/"
+        url = f"{self.api_base}/wishlist/items/"
         headers = {"HTTP_ACCEPT": "application/json"}
         first = self.client.post(url, {"action": "add", "product_id": self.product["id"]}, **headers)
         self.assertEqual(first.status_code, 200)
@@ -3715,7 +3718,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
 
     def post(self, slug, action, product_id, json=True):
         headers = {"HTTP_ACCEPT": "application/json"} if json else {}
-        return self.client.post(f"/s/{slug}/wishlist/items/", {"action": action, "product_id": product_id}, **headers)
+        return self.client.post(f"/api/v1/storefront/{slug}/wishlist/items/", {"action": action, "product_id": product_id}, **headers)
 
     def test_click_a_heart_then_remove_it(self):
         """Save a product: the count goes up and /wishlist shows it with Add to cart. Remove: it goes and the count drops."""
@@ -3747,7 +3750,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertNotIn("?cart=", home[home.index("<header"):home.index("</header>")])  # the id is added by the script
 
         # a click from the sandboxed page: no cookies at all, only the id from the page
-        saved = APIClient().post(f"/s/{slug}/wishlist/items/", {
+        saved = APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(saved.json()["count"], 1)
         self.assertEqual(saved["Access-Control-Allow-Origin"], "*")  # the page is a foreign origin
@@ -3759,7 +3762,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         # another shopper sees nothing
         self.assertNotIn("Blue mug", APIClient().get(f"/s/{slug}/wishlist/").content.decode())
         # a heart posted as a plain form (no script) comes back to the page with the shopper's id
-        plain = APIClient().post(f"/s/{slug}/wishlist/items/", {
+        plain = APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "cart": cart, "return_to": f"/s/{slug}/collections/all"})
         self.assertEqual(plain["Location"], f"/s/{slug}/collections/all?cart={cart}")
         from .services import starter_files
@@ -3771,7 +3774,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn("history.replaceState", script)
         self.assertIn("event.persisted", script)
         # and a click can remove it again
-        gone = APIClient().post(f"/s/{slug}/wishlist/items/", {
+        gone = APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "remove", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(gone.json()["count"], 0)
         self.assertNotIn("Blue mug", APIClient().get(f"/s/{slug}/wishlist/?cart={cart}").content.decode())
@@ -3803,7 +3806,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         cart = re.search(r'data-cart-session="([0-9a-f]{32})"', home).group(1)
 
         # the click: no cookie, only the cart id
-        saved = APIClient().post(f"/s/{slug}/wishlist/items/", {
+        saved = APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(saved.json()["count"], 1)
         item = WishlistItem.objects.get(wishlist__store_id=self.store["storeId"])
@@ -3811,13 +3814,13 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertEqual(item.wishlist.customer.email, "wish-cust@example.com")
 
         # adding it twice keeps one row; the page shows it
-        APIClient().post(f"/s/{slug}/wishlist/items/", {
+        APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(WishlistItem.objects.count(), 1)
         self.assertIn("Blue mug", shopper.get(f"/s/{slug}/wishlist/?cart={cart}").content.decode())
 
         # removing deletes the row (the customer keeps their wishlist)
-        gone = APIClient().post(f"/s/{slug}/wishlist/items/", {
+        gone = APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "remove", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(gone.json()["count"], 0)
         self.assertEqual(WishlistItem.objects.count(), 0)
@@ -3825,7 +3828,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
 
         # signed out (a page load without the cookie): the same cart id is a guest again, nothing reaches the tables
         APIClient().get(f"/s/{slug}/?cart={cart}")
-        APIClient().post(f"/s/{slug}/wishlist/items/", {
+        APIClient().post(f"/api/v1/storefront/{slug}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "cart": cart}, HTTP_ACCEPT="application/json")
         self.assertEqual(WishlistItem.objects.count(), 0)
 
@@ -3882,7 +3885,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertNotIn("<script>alert(1)</script>", page)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         # a return address outside the store is ignored
-        r = self.client.post(f"/s/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"],
+        r = self.client.post(f"/api/v1/storefront/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"],
                                                              "return_to": "javascript:alert(1)"})
         self.assertEqual(r["Location"], f"/s/{slug}/wishlist/")
 
@@ -3894,7 +3897,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
             self.assertNotIn('class="product-card__wishlist-form"', html, path)
             self.assertNotIn('class="product__wishlist-form"', html, path)
         # ...yet the header icon is there, and a saved product can be removed on the wishlist page
-        self.client.post(f"/s/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
+        self.client.post(f"/api/v1/storefront/{slug}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
         page = self.client.get(f"/s/{slug}/wishlist/").content.decode()
         self.assertIn("Blue mug", page)
         self.assertNotIn('class="product-card__wishlist-remove"', page)
@@ -3921,7 +3924,7 @@ class StorefrontWishlistTest(StoreClientMixin, APITestCase):
         self.assertIn('class="product__wishlist-form"', product_page.content.decode())
         collection_page = self.client.get(f"{self.base}/collections/all")
         self.assertIn('class="product-card__wishlist-form"', collection_page.content.decode())
-        response = self.client.post(f"{self.base}/wishlist/items/", {
+        response = self.client.post(f"{self.api_base}/wishlist/items/", {
             "action": "add", "product_id": self.product["id"], "return_to": "https://example.com/",
         })
         self.assertEqual(response["Location"], f"{self.base}/wishlist/")
@@ -4152,6 +4155,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
         }, expect=201)
         self.record = Store.objects.get(store_id=self.store["storeId"])
         self.base = f"/s/{self.store['storeSlug']}"
+        self.api_base = f"/api/v1/storefront/{self.store['storeSlug']}"
 
     def theme(self):
         from .services import get_store_theme
@@ -4346,7 +4350,7 @@ class WishlistUpgradeTest(StoreClientMixin, APITestCase):
                 "</form></div>\n")
         self.theme().theme.files.filter(file_path="snippets/product-card.liquid").update(content=mine, file_size=len(mine))
         self.assertEqual(self.file("snippets/product-card.liquid"), mine)  # the upgrade does not touch it
-        self.client.post(f"{self.base}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
+        self.client.post(f"{self.api_base}/wishlist/items/", {"action": "add", "product_id": self.product["id"]})
         page = self.client.get(f"{self.base}/wishlist/").content.decode()
         self.assertIn("<!-- my card -->", page)
         self.assertIn("Clay mug", page)
@@ -5614,6 +5618,7 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.token, self.store = self.sign_up("owner-auth@example.com", "Auth Store")
         self.slug = self.store["storeSlug"]
         self.base = f"/s/{self.slug}"
+        self.api_base = f"/api/v1/storefront/{self.slug}"
         self.client.logout()
 
     def test_login_page_renders_cleanly(self):
@@ -6065,6 +6070,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         self.token, self.store = self.sign_up("owner-checkout@example.com", "Checkout Test Store")
         self.slug = self.store["storeSlug"]
         self.base = f"/s/{self.slug}"
+        self.api_base = f"/api/v1/storefront/{self.slug}"
         self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Main"}, expect=201)["id"]
         self.product = self.ok("post", "/api/v1/catalog/products/", {
             "title": "Minimalist Lamp", "sku": "LAMP-1", "status": "active", "price": "49.99",
@@ -6180,7 +6186,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         home = self.shopper.get(f"{self.base}/")
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
         self.shopper.post(
-            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            f"{self.api_base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
             content_type="application/json", HTTP_X_CART_SESSION=session_id,
         )
         form = {
@@ -6205,7 +6211,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         home = self.shopper.get(f"{self.base}/")
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
         self.shopper.post(
-            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            f"{self.api_base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
             content_type="application/json", HTTP_X_CART_SESSION=session_id,
         )
         return session_id
@@ -6264,7 +6270,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         home = self.shopper.get(f"{self.base}/")
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
         self.shopper.post(
-            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            f"{self.api_base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
             content_type="application/json", HTTP_X_CART_SESSION=session_id,
         )
         self.shopper.post(f"{self.base}/checkout/", data=json.dumps({"action": "apply_discount", "discount_code": ""}),
@@ -6289,7 +6295,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
 
         # Add item to cart
         add_resp = self.shopper.post(
-            f"{self.base}/cart/add",
+            f"{self.api_base}/cart/add",
             data=json.dumps({"product": self.product["id"], "quantity": 2}),
             content_type="application/json",
             HTTP_X_CART_SESSION=session_id
@@ -6356,7 +6362,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         home = self.shopper.get(f"{self.base}/")
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
         added = self.shopper.post(
-            f"{self.base}/cart/add",
+            f"{self.api_base}/cart/add",
             data=json.dumps({"product": self.product["id"], "quantity": 2}),
             content_type="application/json",
             HTTP_X_CART_SESSION=session_id,
@@ -6389,7 +6395,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
         home = self.shopper.get(f"{self.base}/")
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode()).group(1)
         self.shopper.post(
-            f"{self.base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
+            f"{self.api_base}/cart/add", data=json.dumps({"product": self.product["id"], "quantity": 1}),
             content_type="application/json", HTTP_X_CART_SESSION=session_id,
         )
 
@@ -6430,7 +6436,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
 
         # 2. Add product to cart
         add_resp = self.shopper.post(
-            f"{self.base}/cart/add",
+            f"{self.api_base}/cart/add",
             data=json.dumps({"product": self.product["id"], "quantity": 3}),
             content_type="application/json",
             HTTP_X_CART_SESSION=session_id
@@ -6439,7 +6445,7 @@ class StorefrontThemeCheckoutTest(StoreClientMixin, APITestCase):
 
         # 3. Request cart fragment (the content inside the cart drawer)
         frag_resp = self.shopper.get(
-            f"{self.base}/cart/fragment",
+            f"{self.api_base}/cart/fragment",
             HTTP_X_CART_SESSION=session_id
         )
         self.assertEqual(frag_resp.status_code, 200)
@@ -6475,6 +6481,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
     def setUp(self):
         self.token, self.store = self.sign_up("blocks@example.com", "Blocks Store")
         self.base = f"/s/{self.store['storeSlug']}"
+        self.api_base = f"/api/v1/storefront/{self.store['storeSlug']}"
         self.mug = self.ok("post", "/api/v1/catalog/products/", {
             "title": "Blue mug", "sku": "SKU-MUG", "status": "active", "price": "12.50",
         }, expect=201)
@@ -6496,7 +6503,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
         })
         html = self.client.get(f"{self.base}/").content.decode()
         self.assertIn("Stay in touch", html)
-        self.assertIn(f'action="{self.base}/newsletter"', html)
+        self.assertIn(f'action="{self.api_base}/newsletter/"', html)
         self.assertIn("Please drink responsibly", html)
         self.assertIn('role="note"', html)
 
@@ -6839,7 +6846,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
     def test_newsletter_subscribes_an_email_once_and_rejects_a_bad_one(self):
         from apps.customers.models import Customer
 
-        url = f"{self.base}/newsletter"
+        url = f"{self.api_base}/newsletter/"
         bad = self.client.post(url, {"email": "nope"}, format="json")
         self.assertEqual(bad.status_code, 400)
         for _ in range(2):
@@ -6855,7 +6862,7 @@ class StorefrontBlocksTest(StoreClientMixin, APITestCase):
 
         store = Store.objects.get(store_slug=self.store["storeSlug"])
         Customer.objects.create(store=store, email="back@example.com", email_subscription_status="unsubscribed")
-        self.assertEqual(self.client.post(f"{self.base}/newsletter", {"email": "back@example.com"}, format="json").status_code, 200)
+        self.assertEqual(self.client.post(f"{self.api_base}/newsletter/", {"email": "back@example.com"}, format="json").status_code, 200)
         self.assertEqual(Customer.objects.get(store=store, email="back@example.com").email_subscription_status, "subscribed")
 
     def test_utility_bar_is_part_of_the_footer_section(self):
@@ -7623,9 +7630,12 @@ class SocialClickLayoutUpgradeTest(StoreClientMixin, APITestCase):
         return get_store_theme(Store.objects.get(store_id=self.store["storeId"])).theme
 
     def previous_starter_file(self):
+        from .api_urls_rewrite import REWRITES
         from .services import starter_files
 
         text = starter_files()[self.PATH]
+        for old, new in REWRITES:  # revision 64 moved the beacon to {{ shop.api_url }}/track/
+            text = text.replace(new, old)
         for new, old in self.CHANGES:
             self.assertEqual(text.count(new), 1, new[:60])
             text = text.replace(new, old)
@@ -9184,6 +9194,7 @@ class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
         self.token, self.store = self.sign_up("stocktest@example.com", "Stock Test Store")
         self.slug = self.store["storeSlug"]
         self.base = f"/s/{self.slug}"
+        self.api_base = f"/api/v1/storefront/{self.slug}"
         self.location = self.ok("post", "/api/v1/inventory/locations/", {"name": "Warehouse"}, expect=201)["id"]
 
         self.in_stock_prod = self.ok("post", "/api/v1/catalog/products/", {
@@ -9286,7 +9297,7 @@ class OutOfStockAddToCartTest(StoreClientMixin, APITestCase):
         match = re.search(r'data-cart-session="([0-9a-f]{32})"', home.content.decode())
         session_id = match.group(1) if match else "a" * 32
         res = self.client.post(
-            f"{self.base}/cart/add",
+            f"{self.api_base}/cart/add",
             data={"product": self.out_stock_prod["id"], "quantity": 1},
             format="json",
             HTTP_X_CART_SESSION=session_id,

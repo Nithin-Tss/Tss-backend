@@ -1,8 +1,8 @@
 """
 Health checks.
 
-* GET /healthz  liveness: the process answers. No database call, so a slow database never gets the app restarted.
-* GET /readyz   readiness: PostgreSQL and the cache respond; 503 otherwise. Point the host's health check here.
+* GET /api/v1/health/live/   liveness: the process answers. No database call, so a slow database never gets the app restarted.
+* GET /api/v1/health/ready/  readiness: PostgreSQL and the cache respond; 503 otherwise. Point the host's health check here.
 * GET /api/v1/health/jobs/  background jobs (apps/core/monitoring.py), for an uptime pinger.
 """
 import hmac

@@ -1533,7 +1533,7 @@ CARD_CART_MARKUP = """{%- if show_cart_icon and product.is_sold_out != true -%}
   {%- if product.variants.size > 1 -%}
     <a class="product-card__cart" href="{{ product.url }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="Choose options for {{ product.title | escape }}" title="Choose options">{{ cart_icon }}</a>
   {%- else -%}
-    <button class="product-card__cart" type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_icon }}</button>
+    <button class="product-card__cart" type="button" data-card-add data-product="{{ product.id }}" data-variant="{{ product.variants.first.id }}" data-cart-base="{{ shop.api_url }}/cart" data-cart-session="{{ cart_session }}" style="width:{{ cart_size }}px;height:{{ cart_size }}px" aria-label="{{ cart_label | escape }}: {{ product.title | escape }}" title="{{ cart_label | escape }}">{{ cart_icon }}</button>
   {%- endif -%}
   </div>
 {%- endif -%}

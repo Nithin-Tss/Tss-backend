@@ -97,7 +97,7 @@ LOGGING = {
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 # The host's health checks must not be redirected to https
-SECURE_REDIRECT_EXEMPT = [r'^healthz$', r'^readyz$']
+SECURE_REDIRECT_EXEMPT = [r'^api/v1/health/(live|ready)/$']
 
 
 # Application definition
@@ -420,7 +420,11 @@ CORS_ALLOW_HEADERS = [
 # CORS themselves (apps/themes/views.py CART_API_HEADERS). Leave them out of django-cors-headers, which
 # would otherwise answer their preflight first, without the cart headers, and the browser would
 # report "Failed to fetch" on Add to cart.
-CORS_URLS_REGEX = r'^/(?!s/).*$'
+# The storefront pages (/s/) and the theme's own JSON endpoints answer CORS themselves: the sandboxed page calls
+# them from an opaque origin (Origin: null), which no allow-list can name (apps/themes/storefront_api_urls.py).
+CORS_URLS_REGEX = (
+    r'^/(?!s/|api/v1/storefront/[^/]+/(?:cart/(?:fragment|add|change|clear)|newsletter|track|wishlist/items)/?$).*$'
+)
 
 
 # Request validation (apps/core/middleware.py): applies to /api/ only.

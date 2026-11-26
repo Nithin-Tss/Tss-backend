@@ -1,15 +1,18 @@
-"""Public storefront pages, rendered from each store's theme."""
+"""
+Public storefront pages, rendered from each store's theme, and the forms they post to.
+
+The theme's JSON endpoints (cart, newsletter, wishlist, visit beacon) are versioned API routes:
+/api/v1/storefront/<store_slug>/... (storefront_api_urls.py).
+"""
 from django.urls import path
 
 from .sitemap_views import storefront_robots_txt_view, storefront_sitemap_view
 from .privacy_views import storefront_cookie_consent, storefront_data_opt_out, storefront_marketing_confirm
 from .views import (
     storefront_not_found, storefront_account, storefront_account_address, storefront_account_profile,
-    storefront_article, storefront_blog, storefront_cart, storefront_cart_add, storefront_cart_change, storefront_cart_clear,
-    storefront_cart_fragment, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_gift_card,
-    storefront_gift_card_balance, storefront_home, storefront_login, storefront_logout, storefront_newsletter, storefront_page,
-    storefront_product, storefront_register, storefront_search, storefront_track,
-    storefront_wishlist, storefront_wishlist_item, theme_image,
+    storefront_article, storefront_blog, storefront_cart, storefront_checkout, storefront_checkout_order, storefront_collection, storefront_gift_card,
+    storefront_gift_card_balance, storefront_home, storefront_login, storefront_logout, storefront_page,
+    storefront_product, storefront_register, storefront_search, storefront_wishlist, theme_image,
 )
 
 
@@ -27,12 +30,6 @@ urlpatterns = [
     path("<slug:store_slug>/account/", storefront_account, name="storefront-account"),
     path("<slug:store_slug>/cart", storefront_cart, name="storefront-cart-page-noslash"),
     path("<slug:store_slug>/cart/", storefront_cart, name="storefront-cart-page"),
-    path("<slug:store_slug>/cart/fragment", storefront_cart_fragment, name="storefront-cart-fragment"),
-    path("<slug:store_slug>/cart/add", storefront_cart_add, name="storefront-cart-add"),
-    path("<slug:store_slug>/_track", storefront_track, name="storefront-track"),
-    path("<slug:store_slug>/newsletter", storefront_newsletter, name="storefront-newsletter"),
-    path("<slug:store_slug>/cart/change", storefront_cart_change, name="storefront-cart-change"),
-    path("<slug:store_slug>/cart/clear", storefront_cart_clear, name="storefront-cart-clear"),
     path("<slug:store_slug>/checkout", storefront_checkout, name="storefront-checkout-page-noslash"),
     path("<slug:store_slug>/checkout/", storefront_checkout, name="storefront-checkout-page"),
     path("<slug:store_slug>/checkout/order/<uuid:order_id>/", storefront_checkout_order, name="storefront-checkout-order"),
@@ -42,7 +39,6 @@ urlpatterns = [
     path("<slug:store_slug>/gift-card", storefront_gift_card, name="storefront-gift-card"),
     path("<slug:store_slug>/gift-card/balance", storefront_gift_card_balance, name="storefront-gift-card-balance"),
     path("<slug:store_slug>/wishlist/", storefront_wishlist, name="storefront-wishlist"),
-    path("<slug:store_slug>/wishlist/items/", storefront_wishlist_item, name="storefront-wishlist-item"),
     path("<slug:store_slug>/", storefront_home, name="storefront-home"),
     path("<slug:store_slug>/products/<uuid:product_id>", storefront_product, name="storefront-product"),
     path("<slug:store_slug>/collections/all", storefront_collection, name="storefront-collection-all"),

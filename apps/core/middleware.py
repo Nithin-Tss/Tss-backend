@@ -5,9 +5,12 @@ Request validation and security headers for the JSON API (paths under /api/).
   null bytes in the URL, bodies over the size limit, and body types the API does not read.
 - SecurityHeadersMiddleware adds hardening headers to API responses.
 
-Both leave the public storefront (/s/...) and /admin/ alone: those render HTML and the
-storefront cart does its own CORS and content handling.
+Both leave the public storefront pages (/s/...) and /admin/ alone: those render HTML. The storefront
+theme's JSON endpoints (/api/v1/storefront/<store_slug>/cart/add/ ...) are API routes like any other,
+except that the visit beacon may send text/plain (BEACON_PATH).
 """
+import re
+
 from django.conf import settings
 from django.http import JsonResponse
 
@@ -22,6 +25,8 @@ DOCS_CSP = (
     "connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'"
 )
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# The storefront's visit beacon (navigator.sendBeacon) can only send text/plain without a CORS preflight
+BEACON_PATH = re.compile(r"^/api/v1/storefront/[^/]+/track/?$")
 
 
 def _is_api(request):
@@ -61,7 +66,8 @@ class RequestValidationMiddleware:
             return _error(411, "Uploads must declare their size (Content-Length).")
 
         if request.method in WRITE_METHODS and (length not in ("", "0")):
-            if content_type not in settings.API_ALLOWED_CONTENT_TYPES:
+            beacon = content_type == "text/plain" and BEACON_PATH.match(request.path_info)
+            if content_type not in settings.API_ALLOWED_CONTENT_TYPES and not beacon:
                 return _error(415, "Unsupported content type.")
         return None
 

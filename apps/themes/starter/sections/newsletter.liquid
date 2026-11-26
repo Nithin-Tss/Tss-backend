@@ -11,7 +11,7 @@
     <div class="newsletter__content">
       {%- if s.heading != blank -%}<h2 class="section-heading">{{ s.heading }}</h2>{%- endif -%}
       {%- if s.subheading != blank -%}<p class="newsletter__sub">{{ s.subheading }}</p>{%- endif -%}
-      <form class="newsletter__form" data-newsletter-form data-success="{{ s.success_message | escape }}" action="{{ shop.url }}/newsletter" method="post" novalidate>
+      <form class="newsletter__form" data-newsletter-form data-success="{{ s.success_message | escape }}" action="{{ shop.api_url }}/newsletter/" method="post" novalidate>
         <label class="newsletter__label" for="newsletter-{{ section.id }}">Email address</label>
         <input id="newsletter-{{ section.id }}" class="newsletter__input" type="email" name="email" required autocomplete="email" placeholder="{{ s.placeholder | escape }}">
         <button class="button newsletter__button" type="submit">{{ s.button_label }}</button>

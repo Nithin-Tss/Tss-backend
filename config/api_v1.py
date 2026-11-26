@@ -6,7 +6,7 @@ v1 keeps working unchanged.
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
-from apps.core.health import JobsHealthView
+from apps.core.health import JobsHealthView, healthz, readyz
 from apps.core.report_views import ReportDetailView, ReportListView
 from apps.core.reports import AnalyticsView, DailyMetricsView, LiveView, OverviewView
 from apps.core.support import SupportContactView
@@ -17,6 +17,9 @@ urlpatterns = [
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("docs/", SpectacularSwaggerView.as_view(url_name="schema", template_name="docs/swagger.html"), name="swagger-ui"),
     path("redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    # Liveness (no database call) and readiness (database + cache) for the host's health checks
+    path("health/live/", healthz, name="healthz"),
+    path("health/ready/", readyz, name="readyz"),
     path("health/jobs/", JobsHealthView.as_view(), name="health-jobs"),
     # Help Center "Contact support": emails SUPPORT_EMAIL, stores nothing
     path("support/contact/", SupportContactView.as_view(), name="support-contact"),
@@ -58,4 +61,6 @@ urlpatterns = [
     path("", include("apps.commerce.urls")),
     # Shoppers: /api/v1/storefront/<store_slug>/cart/ ...
     path("storefront/", include("apps.commerce.storefront_urls")),
+    # The storefront theme's scripts: /api/v1/storefront/<store_slug>/cart/add/, newsletter/, track/, wishlist/items/ ...
+    path("storefront/", include("apps.themes.storefront_api_urls")),
 ]

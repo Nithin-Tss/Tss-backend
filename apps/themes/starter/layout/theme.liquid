@@ -31,7 +31,7 @@
     function sendClick(e) {
       var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
       if (!a || !/^https?:$/.test(a.protocol) || a.hostname === location.hostname) return;
-      navigator.sendBeacon("{{ shop.url }}/_track", new Blob([JSON.stringify({ type: "social_click", url: a.href })], { type: "text/plain;charset=UTF-8" }));
+      navigator.sendBeacon("{{ shop.api_url }}/track/", new Blob([JSON.stringify({ type: "social_click", url: a.href })], { type: "text/plain;charset=UTF-8" }));
     }
     document.addEventListener("click", sendClick);
     document.addEventListener("auxclick", sendClick);
@@ -57,7 +57,7 @@
       utm_source: q.get("utm_source") || "", utm_medium: q.get("utm_medium") || "", utm_campaign: q.get("utm_campaign") || "",
       cart_session: cart
     });
-    navigator.sendBeacon("{{ shop.url }}/_track", new Blob([body], { type: "text/plain;charset=UTF-8" }));
+    navigator.sendBeacon("{{ shop.api_url }}/track/", new Blob([body], { type: "text/plain;charset=UTF-8" }));
   })();
   </script>
   {%- endif -%}

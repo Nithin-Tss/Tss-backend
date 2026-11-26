@@ -12,6 +12,8 @@ import sqlite3
 
 from django.db.backends.sqlite3 import base
 
+from .creation import DatabaseCreation
+
 SCHEMAS = (
     "identity", "tenancy", "customers", "catalog", "inventory", "purchasing",
     "commerce", "payments", "orders", "delivery", "wishlist", "metafields", "discounts",
@@ -62,5 +64,7 @@ class CursorWrapper(base.SQLiteCursorWrapper):
 
 
 class DatabaseWrapper(base.DatabaseWrapper):
+    creation_class = DatabaseCreation
+
     def create_cursor(self, name=None):
         return self.connection.cursor(factory=CursorWrapper)

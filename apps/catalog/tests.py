@@ -2445,7 +2445,7 @@ class UnavailableProductJourneyTests(JourneyHelpers, APITestCase):
             "sections": {"offers": {"type": "promotions", "settings": {"view_all_collection": self.shelf["handle"]}, "blocks": []}},
         }}}, format="json")
         self.assertEqual(r.status_code, 200, r.content)
-        added = self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": self.gadget["id"]},
+        added = self.client.post(f"/api/v1/storefront/{self.slug}/wishlist/items/", {"action": "add", "product_id": self.gadget["id"]},
                                  HTTP_ACCEPT="application/json")
         self.assertEqual(added.json()["count"], 1)
 
@@ -2509,7 +2509,7 @@ class UnavailableProductJourneyTests(JourneyHelpers, APITestCase):
         from .models import Product
 
         second = self.product("Gadget omega")
-        self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
+        self.client.post(f"/api/v1/storefront/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
         Product.objects.filter(pk=self.gadget["id"]).update(status="draft")
 
         page = self.html("wishlist/")
@@ -2517,13 +2517,13 @@ class UnavailableProductJourneyTests(JourneyHelpers, APITestCase):
         self.assertNotIn("Gadget zeta", page)  # not shown while it is not for sale
         header = page[page.index("<header"):page.index("</header>")]
         self.assertNotIn("Gadget zeta", header)
-        count = self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
+        count = self.client.post(f"/api/v1/storefront/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]}, HTTP_ACCEPT="application/json")
         self.assertEqual(count.json()["count"], 1)  # and not counted
 
         Product.objects.filter(pk=self.gadget["id"]).update(status="active")
         page = self.html("wishlist/")
         self.assertLess(page.index("Gadget zeta"), page.index("Gadget omega"))  # back, where it was saved
-        self.assertEqual(self.client.post(f"/s/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]},
+        self.assertEqual(self.client.post(f"/api/v1/storefront/{self.slug}/wishlist/items/", {"action": "add", "product_id": second["id"]},
                                           HTTP_ACCEPT="application/json").json()["count"], 2)
 
     def test_8_a_hidden_product_stays_out_of_a_filtered_page(self):

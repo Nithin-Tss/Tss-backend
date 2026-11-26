@@ -729,7 +729,7 @@ class TrackingBase(RbacTestBase):
         headers = {k: v for k, v in extra.items() if k.startswith("HTTP_")}
         with (mock.patch("django.utils.timezone.now", return_value=self.at(local)) if local else contextlib.nullcontext()):
             return self.shopper.post(
-                f"/s/{store.store_slug}/_track", data=json.dumps(body), content_type="text/plain;charset=UTF-8",
+                f"/api/v1/storefront/{store.store_slug}/track/", data=json.dumps(body), content_type="text/plain;charset=UTF-8",
                 HTTP_USER_AGENT=ua, HTTP_ORIGIN=origin, **headers)
 
     def other_store(self):
@@ -844,15 +844,15 @@ class CollectingTest(TrackingBase):
     def test_the_editor_and_store_staff_previews_do_not_load_the_script(self):
         request = RequestFactory().get("/")
         request.session = {}
-        self.assertIn("/_track", render_page(self.shop, "index", request=request))
-        self.assertNotIn("/_track", render_page(self.shop, "index", request=request, editor=True))  # the customizer
+        self.assertIn('/track/"', render_page(self.shop, "index", request=request))
+        self.assertNotIn('/track/"', render_page(self.shop, "index", request=request, editor=True))  # the customizer
         staff = RequestFactory().get("/")
         staff.session = {}
         staff._no_track = True  # a store member who opened the store from the admin (View store, Open theme)
-        self.assertNotIn("/_track", render_page(self.shop, "index", request=staff))
+        self.assertNotIn('/track/"', render_page(self.shop, "index", request=staff))
 
         page = self.shopper.get(f"/s/{self.shop.store_slug}/").content.decode()
-        self.assertIn(f'sendBeacon("/s/{self.shop.store_slug}/_track"', page)
+        self.assertIn(f'sendBeacon("/api/v1/storefront/{self.shop.store_slug}/track/"', page)
         self.assertRegex(page, r'data-cart-session="[0-9a-f]{32}"')
 
     def remove_the_cart_from_the_store(self):
@@ -876,7 +876,7 @@ class CollectingTest(TrackingBase):
         self.assertRegex(cart, r"^[0-9a-f]{32}$")
         self.assertIn(f'data-cart-session="{cart}"', page)
         self.assertIn(f'data-visit-cart="{cart}"', page)  # the tracking script is given the same id
-        self.assertIn(f'sendBeacon("/s/{self.shop.store_slug}/_track"', page)
+        self.assertIn(f'sendBeacon("/api/v1/storefront/{self.shop.store_slug}/track/"', page)
 
         self.assertEqual(self.beacon("2026-10-02 10:00", cart_session=cart).headers["X-Visit-Tracking"], "counted")
         self.assertEqual(self.sessions().get().cart_session, cart)
@@ -894,7 +894,7 @@ class CollectingTest(TrackingBase):
             self.assertIn('data-visit-cart=""', page)  # the script still counts the visit by its own visitor id
             script = re.search(r"<script data-visit-beacon.*?</script>", page, re.S).group(0)
             self.assertNotRegex(script, r"[0-9a-f]{32}")
-            self.assertIn(f'sendBeacon("/s/{self.shop.store_slug}/_track"', page)
+            self.assertIn(f'sendBeacon("/api/v1/storefront/{self.shop.store_slug}/track/"', page)
 
         # a browser that already has a cart keeps it: the cookie is not replaced and the script is given that id
         returning = Client()
@@ -913,7 +913,7 @@ class CollectingTest(TrackingBase):
         self.assertEqual(self.beacon("2026-10-02 10:00", origin=f"http://testserver").status_code, 204)  # the store's own site
         self.assertEqual(self.sessions().count(), 1)
 
-        url = f"/s/{self.shop.store_slug}/_track"
+        url = f"/api/v1/storefront/{self.shop.store_slug}/track/"
         for body in ("not json", "[1, 2]", json.dumps({"path": "/"}), json.dumps({"visitor_id": "x", "path": "/"}),
                      json.dumps({"visitor_id": "bad id with spaces!!", "path": "/"}), "x" * 5000):
             response = self.shopper.post(url, data=body, content_type="text/plain", HTTP_USER_AGENT=DESKTOP, HTTP_ORIGIN="null")
@@ -921,7 +921,7 @@ class CollectingTest(TrackingBase):
         self.assertEqual(self.sessions().count(), 1)
         self.assertEqual(self.shopper.get(url).status_code, 405)
         self.assertEqual(self.shopper.options(url, HTTP_ORIGIN="null").status_code, 204)
-        self.assertEqual(self.shopper.post("/s/no-such-store/_track", data="{}", content_type="text/plain",
+        self.assertEqual(self.shopper.post("/api/v1/storefront/no-such-store/track/", data="{}", content_type="text/plain",
                                            HTTP_USER_AGENT=DESKTOP, HTTP_ORIGIN="null").status_code, 204)
 
     def test_the_storefront_rate_limit_applies(self):
@@ -935,6 +935,7 @@ class CollectingTest(TrackingBase):
             "title": "Lamp", "sku": "LAMP-1", "status": "active", "price": "49.99", "location": self.location,
             "quantity": 10}, expect=201)
         base = f"/s/{self.shop.store_slug}"
+        api_base = f"/api/v1/storefront/{self.shop.store_slug}"
         session_id = re.search(r'data-cart-session="([0-9a-f]{32})"', self.shopper.get(f"{base}/").content.decode()).group(1)
 
         self.beacon(None, cart_session=session_id)
@@ -945,7 +946,7 @@ class CollectingTest(TrackingBase):
         s.refresh_from_db()
         self.assertFalse(s.reached_checkout)
 
-        add = self.shopper.post(f"{base}/cart/add", data=json.dumps({"product": product["id"], "quantity": 1}),
+        add = self.shopper.post(f"{api_base}/cart/add", data=json.dumps({"product": product["id"], "quantity": 1}),
                                 content_type="application/json", HTTP_X_CART_SESSION=session_id)
         self.assertEqual(add.status_code, 200)
         s.refresh_from_db()
@@ -1169,7 +1170,7 @@ class SocialClickTest(TrackingBase):
         store = store or self.shop
         with mock.patch("django.utils.timezone.now", return_value=self.at(local)):
             return self.shopper.post(
-                f"/s/{store.store_slug}/_track", data=json.dumps({"type": "social_click", "url": url}),
+                f"/api/v1/storefront/{store.store_slug}/track/", data=json.dumps({"type": "social_click", "url": url}),
                 content_type="text/plain;charset=UTF-8", HTTP_USER_AGENT=ua, HTTP_ORIGIN=origin)
 
     def clicks(self, store=None):
@@ -1225,7 +1226,7 @@ class SocialClickTest(TrackingBase):
         self.assertEqual(self.click("2026-10-02 10:00", "https://example.org/").headers["X-Visit-Tracking"], "ignored")
         self.assertEqual(self.click("2026-10-02 10:00", "http://testserver/").headers["X-Visit-Tracking"], "ignored")  # our own site
         self.assertEqual(self.click("2026-10-02 10:00", "https://facebook.com/x", origin="https://evil.example").status_code, 403)
-        self.assertEqual(self.shopper.post(f"/s/{self.shop.store_slug}/_track", data="{not json", content_type="text/plain",
+        self.assertEqual(self.shopper.post(f"/api/v1/storefront/{self.shop.store_slug}/track/", data="{not json", content_type="text/plain",
                                            HTTP_USER_AGENT=DESKTOP, HTTP_ORIGIN="null").status_code, 204)
         self.assertEqual(self.clicks(), {})
 

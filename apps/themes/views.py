@@ -2729,6 +2729,7 @@ def _cart_api(view):
     """JSON endpoints of one store's cart: view(request, store, cart_id) -> JsonResponse; ValidationError -> 400."""
 
     @csrf_exempt
+    @wraps(view)
     def wrapper(request, store_slug):
         if request.method == "OPTIONS":
             response = HttpResponse(status=204)
@@ -2804,7 +2805,7 @@ def _track_origin_ok(request):
 @csrf_exempt
 def storefront_track(request, store_slug):
     """
-    POST /s/<store_slug>/_track: one page load of the storefront (or, with {"type": "social_click", "url": ...},
+    POST /api/v1/storefront/<store_slug>/track/: one page load of the storefront (or, with {"type": "social_click", "url": ...},
     one click on a social link), sent by the layout's script with navigator.sendBeacon. Always answers 204 and nothing else, whatever the body: bots, editor previews
     and bad payloads are dropped quietly. See apps.orders.orders_services.
     """

@@ -11,6 +11,7 @@ class StorefrontPrivacyTest(StoreClientMixin, APITestCase):
         self.token, self.store = self.sign_up("privacy@example.com", "Privacy Store")
         self.slug = self.store["storeSlug"]
         self.base = f"/s/{self.slug}"
+        self.api_base = f"/api/v1/storefront/{self.slug}"
 
     def configure(self, **fields):
         Store.objects.filter(store_slug=self.slug).update(**fields)
@@ -56,7 +57,7 @@ class StorefrontPrivacyTest(StoreClientMixin, APITestCase):
 
     def test_newsletter_double_opt_in(self):
         self.configure(double_opt_in_email=True)
-        r = APIClient().post(f"{self.base}/newsletter", {"email": "n@example.com"}, format="json")
+        r = APIClient().post(f"{self.api_base}/newsletter/", {"email": "n@example.com"}, format="json")
         self.assertEqual(r.status_code, 200)
         customer = Customer.objects.get(store_id=self.store["storeId"], email="n@example.com")
         self.assertNotEqual(customer.email_subscription_status, "subscribed")
@@ -70,7 +71,7 @@ class StorefrontPrivacyTest(StoreClientMixin, APITestCase):
 
     def test_newsletter_single_opt_in(self):
         self.configure(double_opt_in_email=False)
-        APIClient().post(f"{self.base}/newsletter", {"email": "s@example.com"}, format="json")
+        APIClient().post(f"{self.api_base}/newsletter/", {"email": "s@example.com"}, format="json")
         customer = Customer.objects.get(store_id=self.store["storeId"], email="s@example.com")
         self.assertEqual(customer.email_subscription_status, "subscribed")
 

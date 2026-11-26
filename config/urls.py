@@ -1,18 +1,15 @@
 """
 URL configuration for config project.
 
-The API is versioned in the path: /api/v1/... lives in config/api_v1.py.
+Every API route is versioned in the path: /api/v1/... lives in config/api_v1.py (health checks included).
+Outside it are only the Django admin and the storefront's HTML pages (/s/<store_slug>/...).
 """
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
-from apps.core.health import healthz, readyz
-
 urlpatterns = [
-    path('healthz', healthz, name='healthz'),
-    path('readyz', readyz, name='readyz'),
     path('admin/', admin.site.urls),
     path("api/v1/", include("config.api_v1")),
     # Public storefronts, rendered from each store's theme

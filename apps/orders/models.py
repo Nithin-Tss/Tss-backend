@@ -449,7 +449,7 @@ class StoreDailyMetric(models.Model):
 class StorefrontSession(models.Model):
     """
     One visit to a store's storefront. Written by apps.orders.services from the storefront's page
-    beacon (POST /s/<store_slug>/_track); read only by the analytics reports. A visit ends after
+    beacon (POST /api/v1/storefront/<store_slug>/track/); read only by the analytics reports. A visit ends after
     30 minutes without activity or at midnight in the store's timezone. No IP address is stored.
     Lives in the "analytics" schema, next to StoreDailyMetric.
     """
