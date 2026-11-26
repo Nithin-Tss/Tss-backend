@@ -17,6 +17,10 @@ can never be more permissive than /api/v1/ai-assistant/. Send the same headers: 
 token>` and `X-Store-Id: <store uuid>`.
 
 Endpoints are plain `def` (FastAPI runs them in its thread pool), because the Django ORM is synchronous.
+
+Under gunicorn + WSGI (the Procfile and Dockerfile) this app isn't loaded: config/wsgi.py sends the same paths to the
+DRF views in views.py instead, which run the same code (chat.py, services.py) and return the same JSON. Only the
+OpenAPI pages (/docs, /openapi.json) need the ASGI server.
 """
 import uuid
 from contextlib import contextmanager
@@ -45,11 +49,10 @@ from apps.platform_admin.permissions import feature_required
 from apps.themes.views import StorePageSerializer
 
 from . import chat, llm, services
-from .models import AiPageDraft, Message
 from .views import FLAG, NoApiKeys, StoreThrottle
 
 PREFIX = "/fastapi/ai-assistant"
-MAX_LIST = 100
+MAX_LIST = chat.MAX_LIST
 
 
 # ------------------------------------------------------------------ the bridge to the DRF rules
@@ -234,57 +237,25 @@ def post_chat(body: ChatIn, request: Request):
 @app.get("/conversations", response_model=list[ConversationOut])
 def list_conversations(request: Request, limit: int = 30):
     with session(request) as who:
-        rows = list(chat.own_conversations(who.store, who.user).order_by("-updated_at")[: max(1, min(limit, MAX_LIST))])
-        out = []
-        for conversation in rows:
-            messages = conversation.messages.all()
-            first = messages.filter(role=Message.USER).first()
-            out.append(ConversationOut(
-                id=str(conversation.pk), escalated=conversation.escalated,
-                created_at=conversation.created_at, updated_at=conversation.updated_at,
-                message_count=messages.count(), preview=(first.content[:120] if first else ""),
-            ))
-        return out
-
-
-def _conversation(who: Access, conversation_id: str):
-    conversation = chat.own_conversations(who.store, who.user).filter(pk=_uuid(conversation_id, "conversation")).first()
-    if conversation is None:
-        raise exceptions.NotFound("That conversation doesn't exist.")
-    return conversation
+        return chat.list_conversations(who.store, who.user, limit)
 
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(conversation_id: str, request: Request):
     with session(request) as who:
-        conversation = _conversation(who, conversation_id)
-        return ConversationDetail(
-            id=str(conversation.pk), created_at=conversation.created_at, updated_at=conversation.updated_at,
-            messages=[
-                MessageOut(id=str(m.pk), role=m.role, content=m.content, changes=m.changes, created_at=m.created_at)
-                for m in conversation.messages.all()
-            ],
-        )
+        return chat.conversation_detail(chat.own_conversation(who.store, who.user, conversation_id))
 
 
 @app.delete("/conversations/{conversation_id}", status_code=204)
 def delete_conversation(conversation_id: str, request: Request):
     with session(request) as who:
-        _conversation(who, conversation_id).delete()
+        chat.own_conversation(who.store, who.user, conversation_id).delete()
 
 
 @app.get("/drafts", response_model=list[DraftOut])
 def list_drafts(request: Request):
     with session(request) as who:
-        drafts = AiPageDraft.objects.filter(store=who.store).select_related("page").order_by("-created_at")[:MAX_LIST]
-        return [
-            DraftOut(
-                page_id=str(d.page_id), handle=d.page.handle, title=d.page.title, status=d.page.status,
-                created_by_ai=d.created_by_ai, conversation_id=str(d.conversation_id) if d.conversation_id else None,
-                created_at=d.created_at,
-            )
-            for d in drafts
-        ]
+        return services.list_drafts(who.store, MAX_LIST)
 
 
 @app.post("/drafts/{page_id}/publish")

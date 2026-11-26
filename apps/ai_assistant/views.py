@@ -1,7 +1,14 @@
 """
-POST /api/v1/ai-assistant/chat/                       {message, conversation_id?} -> {reply, conversation_id, changes}
-POST /api/v1/ai-assistant/drafts/<page_id>/publish/   make an assistant draft visible
-POST /api/v1/ai-assistant/drafts/<page_id>/discard/   delete (or restore) an assistant draft
+POST   /api/v1/ai-assistant/chat/                       {message, conversation_id?} -> {reply, conversation_id, changes}
+GET    /api/v1/ai-assistant/conversations/?limit=30     this person's chats in this store, newest first
+GET    /api/v1/ai-assistant/conversations/<id>/         one chat with its messages
+DELETE /api/v1/ai-assistant/conversations/<id>/         delete a chat (drafts it made stay, they just lose the link)
+GET    /api/v1/ai-assistant/drafts/                     pages the assistant made or edited that aren't published yet
+POST   /api/v1/ai-assistant/drafts/<page_id>/publish/   make an assistant draft visible
+POST   /api/v1/ai-assistant/drafts/<page_id>/discard/   delete (or restore) an assistant draft
+
+The same endpoints answer at /fastapi/ai-assistant/... too: config/wsgi.py maps those paths here, and under ASGI
+the FastAPI app (fastapi_app.py) serves them with the same code.
 
 Needs the themes.manage permission and the ai_page_builder feature flag (off by default: 403 while off).
 """
@@ -41,7 +48,7 @@ class AiView(APIView):
     permission_classes = [IsAuthenticated, NoApiKeys, IsStoreMember, HasStorePermission, feature_required(FLAG)]
     permission_resource = "themes"
     # Building pages needs the same permission as editing the theme, whatever the HTTP method
-    action_permissions = {"POST": "themes.manage"}
+    action_permissions = {"POST": "themes.manage", "DELETE": "themes.manage"}
 
 
 class ChatView(AiView):
@@ -54,6 +61,25 @@ class ChatView(AiView):
         except llm.LLMError as error:
             return Response({"detail": str(error)}, status=503)
         return Response(result)
+
+
+class ConversationListView(AiView):
+    def get(self, request):
+        return Response(chat.list_conversations(request.store, request.user, request.query_params.get("limit", 30)))
+
+
+class ConversationDetailView(AiView):
+    def get(self, request, conversation_id):
+        return Response(chat.conversation_detail(chat.own_conversation(request.store, request.user, conversation_id)))
+
+    def delete(self, request, conversation_id):
+        chat.own_conversation(request.store, request.user, conversation_id).delete()
+        return Response(status=204)
+
+
+class DraftListView(AiView):
+    def get(self, request):
+        return Response(services.list_drafts(request.store, chat.MAX_LIST))
 
 
 class DraftPublishView(AiView):

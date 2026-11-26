@@ -4,8 +4,12 @@ ASGI config for config project.
 It exposes the ASGI callable as a module-level variable named ``application``.
 
 Django serves everything, except the AI assistant's FastAPI app, which is mounted under /fastapi/ai-assistant
-(apps/ai_assistant/fastapi_app.py). Run this with an ASGI server, e.g. `uvicorn config.asgi:application`;
-gunicorn + config.wsgi (the Procfile) serves Django only, so those FastAPI routes are not there.
+(apps/ai_assistant/fastapi_app.py). Run this with an ASGI server, e.g. `uvicorn config.asgi:application`.
+Production runs gunicorn + config.wsgi (Procfile, Dockerfile), which maps the same paths onto the DRF views instead,
+so the endpoints work either way; only FastAPI's /docs and /openapi.json need this ASGI entry point.
+
+Don't switch production to this file without testing the theme live-sync stream (apps/themes/views.py
+ThemeEventsView): under ASGI, Django reads a sync StreamingHttpResponse to the end before sending any of it.
 
 For more information on this file, see
 https://docs.djangoproject.com/en/6.1/howto/deployment/asgi/

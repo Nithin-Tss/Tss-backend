@@ -1,4 +1,4 @@
-"""Publish or discard a draft the assistant made. Only merchants can do this; the model has no tool for it."""
+"""List, publish or discard the drafts the assistant made. Only merchants can do this; the model has no tool for it."""
 import copy
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -20,6 +20,19 @@ def _draft(store, page_id):
     if draft is None:
         raise exceptions.NotFound("That draft wasn't made by the assistant, or it's already published or discarded.")
     return draft
+
+
+def list_drafts(store, limit=100):
+    """Pages the assistant made or edited that aren't published or discarded yet, newest first."""
+    drafts = AiPageDraft.objects.filter(store=store).select_related("page").order_by("-created_at")[:limit]
+    return [
+        {
+            "page_id": str(d.page_id), "handle": d.page.handle, "title": d.page.title, "status": d.page.status,
+            "created_by_ai": d.created_by_ai, "conversation_id": str(d.conversation_id) if d.conversation_id else None,
+            "created_at": d.created_at,
+        }
+        for d in drafts
+    ]
 
 
 @transaction.atomic
