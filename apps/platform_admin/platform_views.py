@@ -426,3 +426,95 @@ class PlatformAuditView(PlatformView):
             entries = entries.filter(action__startswith="platform.")
         entries = filtered(request, entries)
         return paged(request, entries, lambda e: {**entry_json(e), "store": e.store.store_name if e.store else None})
+
+
+# ---------------------------------------------------------------- blog CMS
+
+class PlatformBlogPostListView(PlatformView):
+    """GET /api/v1/platform/blog/posts/  (?status, ?category, ?q, ?limit, ?offset)
+       POST /api/v1/platform/blog/posts/
+    """
+
+    def get(self, request):
+        posts = PlatformBlogPost.objects.all().order_by("-created_at")
+        if status_param := request.query_params.get("status"):
+            posts = posts.filter(status=status_param)
+        if category_param := request.query_params.get("category"):
+            posts = posts.filter(category__iexact=category_param)
+        if q := request.query_params.get("q"):
+            posts = posts.filter(Q(title__icontains=q) | Q(excerpt__icontains=q) | Q(content__icontains=q))
+
+        if request.query_params.get("paginate") == "false":
+            return Response(PlatformBlogPostAdminSerializer(posts, many=True).data)
+        return paged(request, posts, lambda p: PlatformBlogPostAdminSerializer(p).data)
+
+    def post(self, request):
+        serializer = PlatformBlogPostAdminSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        post = serializer.save(created_by=request.user)
+        note(request, "blog_post_created", object_id=str(post.pk), object_repr=post.title)
+        return Response(PlatformBlogPostAdminSerializer(post).data, status=status.HTTP_201_CREATED)
+
+
+class PlatformBlogPostDetailView(PlatformView):
+    """GET /api/v1/platform/blog/posts/<id>/
+       PATCH /api/v1/platform/blog/posts/<id>/
+       DELETE /api/v1/platform/blog/posts/<id>/
+    """
+
+    def get_object(self, post_id):
+        return get_object_or_404(PlatformBlogPost, pk=post_id)
+
+    def get(self, request, post_id):
+        post = self.get_object(post_id)
+        return Response(PlatformBlogPostAdminSerializer(post).data)
+
+    def patch(self, request, post_id):
+        post = self.get_object(post_id)
+        serializer = PlatformBlogPostAdminSerializer(post, data=request.data, partial=True, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        post = serializer.save()
+        note(request, "blog_post_updated", object_id=str(post.pk), object_repr=post.title)
+        return Response(PlatformBlogPostAdminSerializer(post).data)
+
+    def delete(self, request, post_id):
+        post = self.get_object(post_id)
+        title = post.title
+        post.delete()
+        note(request, "blog_post_deleted", object_id=str(post_id), object_repr=title)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PlatformBlogPostPublishView(PlatformView):
+    """POST /api/v1/platform/blog/posts/<id>/publish/"""
+
+    def post(self, request, post_id):
+        post = get_object_or_404(PlatformBlogPost, pk=post_id)
+        errors = {}
+        if not (post.title or "").strip():
+            errors["title"] = "Title is required to publish."
+        if not (post.slug or "").strip():
+            errors["slug"] = "Slug is required to publish."
+        if not (post.content or "").strip():
+            errors["content"] = "Content is required to publish."
+        if errors:
+            raise ValidationError(errors)
+
+        post.status = PlatformBlogPost.PUBLISHED
+        if not post.published_at:
+            post.published_at = timezone.now()
+        post.save(update_fields=["status", "published_at", "updated_at"])
+        note(request, "blog_post_published", object_id=str(post.pk), object_repr=post.title)
+        return Response(PlatformBlogPostAdminSerializer(post).data)
+
+
+class PlatformBlogPostUnpublishView(PlatformView):
+    """POST /api/v1/platform/blog/posts/<id>/unpublish/"""
+
+    def post(self, request, post_id):
+        post = get_object_or_404(PlatformBlogPost, pk=post_id)
+        post.status = PlatformBlogPost.DRAFT
+        post.save(update_fields=["status", "updated_at"])
+        note(request, "blog_post_unpublished", object_id=str(post.pk), object_repr=post.title)
+        return Response(PlatformBlogPostAdminSerializer(post).data)
+

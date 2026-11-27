@@ -90,6 +90,7 @@ class FeatureFlagSerializer(serializers.ModelSerializer):
 
 class PlatformBlogPostAdminSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
+    slug = serializers.SlugField(required=False, allow_blank=True)
 
     class Meta:
         model = PlatformBlogPost
@@ -115,7 +116,10 @@ class PlatformBlogPostAdminSerializer(serializers.ModelSerializer):
 
     def validate_slug(self, value):
         from django.utils.text import slugify
-        slug = slugify(value or "").strip("-")[:255]
+        raw = (value or "").strip()
+        if not raw:
+            return ""
+        slug = slugify(raw).strip("-")[:255]
         if not slug:
             raise serializers.ValidationError("Valid slug is required.")
         qs = PlatformBlogPost.objects.filter(slug=slug)
@@ -129,8 +133,8 @@ class PlatformBlogPostAdminSerializer(serializers.ModelSerializer):
         from django.utils.text import slugify
         import re
 
-        # Auto-generate slug from title if not provided
-        if "slug" not in attrs and not (self.instance and self.instance.slug):
+        # Auto-generate slug from title if not provided or empty
+        if not attrs.get("slug") and not (self.instance and self.instance.slug):
             title = attrs.get("title") or (self.instance.title if self.instance else "")
             base_slug = slugify(title)[:200].strip("-") or "article"
             slug = base_slug
