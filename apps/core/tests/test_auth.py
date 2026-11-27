@@ -173,6 +173,24 @@ class AuthFlowTest(APITestCase):
         self.assertEqual(r.status_code, 429)
         self.assertIn("Retry-After", r)
 
+    def test_five_wrong_passwords_lock_the_account_for_ten_minutes(self):
+        from unittest import mock
+        self.signup()
+        self.assertEqual((settings.LOGIN_MAX_FAILURES, settings.LOGIN_LOCKOUT_SECONDS), (5, 600))
+        codes = [self.login(password="wrong-guess-123").status_code for _ in range(5)]
+        self.assertEqual(codes, [400, 400, 400, 400, 429])  # the 5th failure says the account is now locked
+        locked = self.login()  # right password, still locked
+        self.assertEqual(locked.status_code, 429)
+        self.assertIn("locked for 10 minutes", locked.json()["detail"])
+        self.assertEqual(locked["Retry-After"], "600")
+
+        import time
+        now = time.time()
+        with mock.patch("django.core.cache.backends.locmem.time.time", return_value=now + 599):
+            self.assertEqual(self.login().status_code, 429)
+        with mock.patch("django.core.cache.backends.locmem.time.time", return_value=now + 601):
+            self.assertEqual(self.login().status_code, 200)
+
     def test_successful_login_resets_the_failure_count(self):
         from apps.identity import lockout
         self.signup()
@@ -191,6 +209,30 @@ class AuthFlowTest(APITestCase):
         # the legitimate holder's newest token and access token died with it
         self.assertEqual(self.client.post("/api/v1/auth/refresh/", {"refresh": newer["refresh"]}, format="json").status_code, 401)
         self.assertEqual(self.me(newer["access"]).status_code, 401)
+
+    def test_reusing_an_old_refresh_token_is_refused(self):
+        """Sign in (R1), rotate R1 -> R2, then replay R1: refused and the token family revoked."""
+        self.signup()
+        self.client.cookies.clear()  # tokens only, no session from sign-up
+
+        def refresh(raw):
+            return self.client.post("/api/v1/auth/refresh/", {"refresh": raw}, format="json")
+
+        r = self.login()
+        self.assertEqual(r.status_code, 200, r.content)
+        r1 = r.json()["refresh"]
+
+        r = refresh(r1)
+        self.assertEqual(r.status_code, 200, r.content)
+        r2, r2_access = r.json()["refresh"], r.json()["access"]
+        self.assertNotEqual(r2, r1)  # rotated
+        self.assertEqual(self.me(r2_access).status_code, 200)
+
+        self.assertEqual(refresh(r1).status_code, 401)  # reuse of R1 is refused
+
+        # the whole family is revoked: R2 and its access token stop working too
+        self.assertEqual(refresh(r2).status_code, 401)
+        self.assertEqual(self.me(r2_access).status_code, 401)
 
     def test_refresh_token_is_single_use(self):
         refresh = self.signup().json()["refresh"]
@@ -257,6 +299,35 @@ class AuthFlowTest(APITestCase):
         self.assertEqual(self.me(tokens["access"]).status_code, 401)             # old tokens: out
         self.assertEqual(other_device.get("/api/v1/auth/me/").status_code, 401)  # other sessions: out
         self.assertEqual(self.login(password="Brand-new-pass-789").status_code, 200)
+
+    def test_change_password_signs_out_the_other_browser(self):
+        """Signed in on browsers A and B; A changes the password -> B is out, A stays in."""
+        self.signup()
+        browser_a = self.login().json()
+        browser_b = self.login().json()
+        self.assertEqual(self.me(browser_b["access"]).status_code, 200)
+
+        def refresh(raw):
+            return self.client.post("/api/v1/auth/refresh/", {"refresh": raw}, format="json")
+
+        r = self.client.post(
+            "/api/v1/auth/password/",
+            {"currentPassword": "Sturdy-pass-123", "newPassword": "Brand-new-pass-789",
+             "confirmPassword": "Brand-new-pass-789"},
+            format="json", HTTP_AUTHORIZATION=f"Bearer {browser_a['access']}",
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        browser_a = r.json()
+
+        # Browser B: any API call, or its next refresh, signs it out.
+        self.assertEqual(self.me(browser_b["access"]).status_code, 401)
+        self.assertEqual(refresh(browser_b["refresh"]).status_code, 401)
+
+        # Browser A: still signed in, and keeps refreshing.
+        self.assertEqual(self.me(browser_a["access"]).status_code, 200)
+        r = refresh(browser_a["refresh"])
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.me(r.json()["access"]).status_code, 200)
 
 
 @override_settings(PASSWORD_HASHERS=REAL_HASHERS)

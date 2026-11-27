@@ -59,10 +59,34 @@ class ExistingScopesTest(APITestCase):
         self.addCleanup(cache.clear)
 
     def test_sign_in_attempts_are_limited(self):
-        codes = [self.client.post("/api/v1/auth/login/", {"email": "x@example.com", "password": "nope"},
-                                  format="json").status_code for _ in range(12)]
+        # A different email each time, so this is the per-IP limit and not the per-account lockout
+        codes = [self.client.post("/api/v1/auth/login/", {"email": f"x{i}@example.com", "password": "nope"},
+                                  format="json").status_code for i in range(12)]
         self.assertIn(429, codes)
         self.assertNotIn(429, codes[:10])
+
+    def test_eleventh_sign_in_in_a_minute_is_429_until_the_window_passes(self):
+        # Correct password every time, so the per-account lockout (failures only) can't be what blocks it
+        import time
+        from rest_framework.throttling import SimpleRateThrottle
+        get_user_model().objects.create_user(email="limit@example.com", password="Right-pass-123")
+        self.assertEqual(api_settings.DEFAULT_THROTTLE_RATES["auth"], "10/min")
+
+        def sign_in():
+            return self.client.post("/api/v1/auth/login/", {"email": "limit@example.com", "password": "Right-pass-123"},
+                                    format="json")
+
+        now = time.time()
+        with mock.patch.object(SimpleRateThrottle, "timer", lambda self: now):
+            codes = [sign_in().status_code for _ in range(10)]
+            eleventh = sign_in()
+        self.assertEqual(codes, [200] * 10)
+        self.assertEqual(eleventh.status_code, 429)
+        self.assertIn("Retry-After", eleventh)
+        self.assertTrue(0 < int(eleventh["Retry-After"]) <= 60)
+
+        with mock.patch.object(SimpleRateThrottle, "timer", lambda self: now + 61):
+            self.assertEqual(sign_in().status_code, 200)
 
     def test_every_scope_has_a_rate(self):
         for scope in ("auth", "email", "storefront", "storefront_checkout", "media_upload", "product_image_upload"):

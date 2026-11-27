@@ -17,6 +17,7 @@ PUBLIC_PREFIXES = (
     "/api/v1/payments/stripe/webhook/",
     "/api/v1/delivery/webhooks/",  # couriers; the per-gateway secret is the credential
     "/api/v1/assistant/",  # answers 404 unless ASSISTANT_REAL_MODE is set
+    "/api/v1/blog/",  # marketing-site blog: published posts only, read-only
 )
 # Answers 503 on purpose when the third-party service isn't configured
 UNCONFIGURED_503 = {

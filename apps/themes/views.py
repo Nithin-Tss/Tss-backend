@@ -43,6 +43,7 @@ from apps.catalog.services import published_collections, published_products
 from apps.core.origin import _origin_allowed
 from apps.core.permissions import HasStorePermission, IsStoreMember
 from apps.core.tokens import PASSWORD_CLAIM, fingerprint_matches, password_fingerprint
+from apps.identity import lockout
 from django.contrib.auth import authenticate, get_user_model
 from apps.customers.models import Customer, CustomerAddress
 from apps.customers import services as customer_services
@@ -3512,11 +3513,16 @@ def storefront_login(request, store_slug):
 
         if not email or not password:
             error = "Email and password are required."
+        elif lockout.is_locked(email):
+            # Shares the per-email lockout with the API sign-in: refused even with the right password
+            error = lockout.locked_message()
         else:
             user = authenticate(request, username=email, password=password)
             if user is None:
-                error = "Invalid email or password."
+                lockout.record_failure(email)
+                error = lockout.locked_message() if lockout.is_locked(email) else "Invalid email or password."
             else:
+                lockout.clear(email)
                 customer = Customer.objects.filter(store=store, email__iexact=user.email).first()
                 if customer is None:
                     try:
@@ -3593,7 +3599,11 @@ def storefront_register(request, store_slug):
             User = get_user_model()
             existing_user = User.objects.filter(email__iexact=email).first()
             if existing_user:
-                if existing_user.check_password(password):
+                # Signing up again with an existing email checks its password, so it shares the sign-in lockout
+                if lockout.is_locked(email):
+                    error = lockout.locked_message()
+                elif existing_user.check_password(password):
+                    lockout.clear(email)
                     user = existing_user
                     customer = Customer.objects.filter(store=store, email__iexact=email).first()
                     if customer is None:
@@ -3623,6 +3633,7 @@ def storefront_register(request, store_slug):
                     _drop_foreign_cart_cookie(response, request, store, customer)
                     return _auth_json(request, True, redirect=response["Location"]) or response
                 else:
+                    lockout.record_failure(email)
                     error = "An account with this email already exists."
             else:
                 try:

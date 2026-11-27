@@ -167,18 +167,19 @@ class SignupView(PublicAuthView):
 class LoginView(PublicAuthView):
     """POST /api/v1/auth/login/  {email, password, rememberMe} -> {user, stores, access, refresh}"""
 
+    @staticmethod
+    def locked(request, email):
+        audit_record("auth.login_locked", request=request, resource="auth", status_code=429, email=email)
+        response = Response({"detail": lockout.locked_message()}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        response["Retry-After"] = str(settings.LOGIN_LOCKOUT_SECONDS)
+        return response
+
     def post(self, request):
         raw_email = request.data.get("email", "") if hasattr(request.data, "get") else ""
         email = raw_email.strip().lower()[:254] if isinstance(raw_email, str) else ""
 
         if email and lockout.is_locked(email):
-            audit_record("auth.login_locked", request=request, resource="auth", status_code=429, email=email)
-            response = Response(
-                {"detail": "Too many failed sign-in attempts. Try again later or reset your password."},
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-            response["Retry-After"] = str(settings.LOGIN_LOCKOUT_SECONDS)
-            return response
+            return self.locked(request, email)
 
         serializer = LoginSerializer(
             data=request.data,
@@ -193,6 +194,8 @@ class LoginView(PublicAuthView):
                 "auth.login_failed", request=request, resource="auth", status_code=400,
                 email=str(request.data.get("email", "") if hasattr(request.data, "get") else "")[:254],
             )
+            if email and lockout.is_locked(email):
+                return self.locked(request, email)  # that was the last allowed attempt
             return Response(
                 serializer.errors,
                 status=status.HTTP_400_BAD_REQUEST,
@@ -212,6 +215,8 @@ class LoginView(PublicAuthView):
             if not isinstance(code, str) or not mfa.verify(user, code):
                 lockout.record_failure(email)
                 audit_record("auth.mfa_failed", request=request, user=user, resource="auth", status_code=400)
+                if lockout.is_locked(email):
+                    return self.locked(request, email)
                 return Response({"mfaCode": ["Invalid code."]}, status=status.HTTP_400_BAD_REQUEST)
 
         lockout.clear(user.email)

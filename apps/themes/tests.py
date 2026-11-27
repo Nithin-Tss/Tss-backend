@@ -5758,6 +5758,38 @@ class StorefrontCustomerAuthAndAccountTest(StoreClientMixin, APITestCase):
         self.assertTrue(ok.url.startswith(f"{self.base}/account?ct="))
         self.assertIn(f"tss_cust_{self.slug}", ok.cookies)
 
+    def test_storefront_login_locks_after_five_wrong_passwords(self):
+        from django.contrib.auth import get_user_model
+        from django.core.cache import cache
+        from apps.identity import lockout
+        cache.clear()
+        self.addCleanup(cache.clear)
+        get_user_model().objects.create_user(
+            email="locked@example.com", password="SecretPassword123!", first_name="L", last_name="K",
+        )
+        url = f"{self.base}/account/login"
+        for _ in range(4):
+            bad = self.client.post(url, {"email": "locked@example.com", "password": "Wrong!"})
+            self.assertIn("Invalid email or password", bad.content.decode())
+        fifth = self.client.post(url, {"email": "locked@example.com", "password": "Wrong!"})
+        self.assertIn("locked for 10 minutes", fifth.content.decode())
+
+        # Right password is refused while locked
+        right = {"email": "locked@example.com", "password": "SecretPassword123!"}
+        refused = self.client.post(url, right)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("locked for 10 minutes", refused.content.decode())
+
+        # Signing up with the same email can't be used to keep guessing
+        again = self.client.post(f"{self.base}/account/register", {
+            "first_name": "L", "last_name": "K", "email": "locked@example.com",
+            "password": "SecretPassword123!", "confirm_password": "SecretPassword123!", "agree_terms": "true",
+        })
+        self.assertIn("locked for 10 minutes", again.content.decode())
+
+        lockout.clear("locked@example.com")  # the 10 minutes are up
+        self.assertEqual(self.client.post(url, right).status_code, 302)
+
     def test_sign_in_works_without_the_cookie(self):
         """The storefront is sandboxed: the redirect's token, not the cookie, signs the shopper in."""
         self.client.post(f"{self.base}/account/register", {

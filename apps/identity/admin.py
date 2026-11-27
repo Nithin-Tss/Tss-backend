@@ -15,7 +15,7 @@ class LockoutAdminAuthenticationForm(AdminAuthenticationForm):
         email = (self.cleaned_data.get("username") or "").strip().lower()
         if email and lockout.is_locked(email):
             raise forms.ValidationError(
-                "Too many failed sign-in attempts. Try again later or reset your password.",
+                lockout.locked_message(),
                 code="locked",
             )
         try:

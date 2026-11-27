@@ -566,8 +566,8 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': False,
 }
 # Wrong passwords per email before sign-in is locked for that long (apps/identity/lockout.py)
-LOGIN_MAX_FAILURES = int(os.getenv('LOGIN_MAX_FAILURES', '10'))
-LOGIN_LOCKOUT_SECONDS = int(os.getenv('LOGIN_LOCKOUT_SECONDS', '900'))
+LOGIN_MAX_FAILURES = int(os.getenv('LOGIN_MAX_FAILURES', '5'))
+LOGIN_LOCKOUT_SECONDS = int(os.getenv('LOGIN_LOCKOUT_SECONDS', '600'))
 # "Remember me" keeps the refresh token for longer (see apps/core/tokens.py)
 JWT_REMEMBER_ME_REFRESH_LIFETIME = timedelta(days=int(os.getenv('JWT_REMEMBER_ME_DAYS', '90')))
 

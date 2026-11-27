@@ -255,3 +255,31 @@ class EmailLinkTests(TestCase):
         with mock.patch.object(email_links, "send_email_async", side_effect=RuntimeError("smtp down")):
             email_links.send_password_reset_email(self.user)
             email_links.send_verification_email(self.user)
+
+
+class LockoutWindowTest(TestCase):
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_lock_lasts_the_full_period_from_the_last_failure(self):
+        import time
+        from unittest import mock
+        from django.conf import settings
+        from apps.identity import lockout
+
+        start = time.time()
+        clock = "django.core.cache.backends.locmem.time.time"
+        with mock.patch(clock, return_value=start):
+            lockout.record_failure("a@example.com")
+        later = start + settings.LOGIN_LOCKOUT_SECONDS - 60
+        with mock.patch(clock, return_value=later):
+            for _ in range(settings.LOGIN_MAX_FAILURES - 1):
+                lockout.record_failure("a@example.com")
+            self.assertTrue(lockout.is_locked("a@example.com"))
+        # Still locked well after the first failure's window would have ended
+        with mock.patch(clock, return_value=later + settings.LOGIN_LOCKOUT_SECONDS - 1):
+            self.assertTrue(lockout.is_locked("a@example.com"))
+        with mock.patch(clock, return_value=later + settings.LOGIN_LOCKOUT_SECONDS + 1):
+            self.assertFalse(lockout.is_locked("a@example.com"))
