@@ -29,4 +29,8 @@ urlpatterns = [
         p.FeatureFlagOverrideDetailView.as_view(), name="platform_flag_override",
     ),
     path("platform/audit/", p.PlatformAuditView.as_view(), name="platform_audit"),
+    path("platform/blog/posts/", p.PlatformBlogPostListView.as_view(), name="platform_blog_posts"),
+    path("platform/blog/posts/<uuid:post_id>/", p.PlatformBlogPostDetailView.as_view(), name="platform_blog_post"),
+    path("platform/blog/posts/<uuid:post_id>/publish/", p.PlatformBlogPostPublishView.as_view(), name="platform_blog_post_publish"),
+    path("platform/blog/posts/<uuid:post_id>/unpublish/", p.PlatformBlogPostUnpublishView.as_view(), name="platform_blog_post_unpublish"),
 ] + router.urls

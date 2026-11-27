@@ -24,6 +24,7 @@ urlpatterns = [
     # Help Center "Contact support": emails SUPPORT_EMAIL, stores nothing
     path("support/contact/", SupportContactView.as_view(), name="support-contact"),
     path("auth/", include("apps.identity.urls")),
+    path("blog/", include("apps.platform_admin.public_urls")),
     path("stores/", include("apps.tenancy.urls")),
     path("members/", include(members_urlpatterns)),
     path("roles/", include(roles_urlpatterns)),

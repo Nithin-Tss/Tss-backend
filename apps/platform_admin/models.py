@@ -101,3 +101,49 @@ class ApiKey(models.Model):
         if self.expires_at and self.expires_at <= timezone.now():
             return "expired"
         return "active"
+
+
+class PlatformBlogPost(models.Model):
+    """
+    A blog post on the public TSS platform marketing site (/blog).
+    Managed exclusively by platform administrators; visible publicly once published.
+    """
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    STATUS_CHOICES = [(DRAFT, "Draft"), (PUBLISHED, "Published")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, unique=True)
+    category = models.CharField(max_length=100, blank=True, default="General")
+    excerpt = models.TextField(blank=True, default="")
+    content = models.TextField(blank=True, default="")
+    featured_image = models.TextField(blank=True, default="")
+    author = models.CharField(max_length=120, blank=True, default="TSS Team")
+    read_time = models.CharField(max_length=30, blank=True, default="5 min read")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DRAFT)
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="platform_blog_posts",
+        db_column="created_by_id",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = '"platform_admin"."blog_posts"'
+        verbose_name = "Platform Blog Post"
+        verbose_name_plural = "Platform Blog Posts"
+        ordering = ["-published_at", "-created_at"]
+        indexes = [
+            models.Index(fields=["status", "-published_at"], name="idx_pblog_status_pub"),
+        ]
+
+    def __str__(self):
+        return self.title
+

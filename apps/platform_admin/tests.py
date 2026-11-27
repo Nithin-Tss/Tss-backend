@@ -531,3 +531,192 @@ class PlatformAuditTest(Base):
         self.assertEqual({e["action"] for e in only["results"]}, {"platform.store_suspended"})
         self.assertEqual(only["results"][0]["store"], "Shop")
         self.assertEqual(self.ok("get", "/api/v1/platform/audit/?store=00000000-0000-0000-0000-000000000000")["count"], 0)
+
+
+class PlatformBlogCmsTest(Base):
+    def test_admin_blog_crud_and_sanitization(self):
+        admin_token = self.admin()
+        self.as_admin(admin_token)
+
+        # 1. Create a draft post with XSS attempt
+        payload = {
+            "title": "Welcome to TSS Platform",
+            "category": "Product Updates",
+            "excerpt": "A short summary of our platform.",
+            "content": "<p>Hello world!</p><script>alert('xss')</script><b>Bold content</b>",
+            "author": "TSS Team",
+        }
+        res = self.ok("post", "/api/v1/platform/blog/posts/", payload, expect=201)
+        post_id = res["id"]
+        self.assertEqual(res["title"], "Welcome to TSS Platform")
+        self.assertEqual(res["slug"], "welcome-to-tss-platform")
+        self.assertEqual(res["status"], "draft")
+        self.assertIn("min read", res["read_time"])
+        # Verify script tag was stripped
+        self.assertNotIn("<script>", res["content"])
+        self.assertIn("<p>Hello world!</p>", res["content"])
+
+        # 2. Get detail
+        detail = self.ok("get", f"/api/v1/platform/blog/posts/{post_id}/")
+        self.assertEqual(detail["id"], post_id)
+
+        # 3. Patch post
+        patched = self.ok(
+            "patch",
+            f"/api/v1/platform/blog/posts/{post_id}/",
+            {"excerpt": "Updated summary.", "category": "Announcements"},
+        )
+        self.assertEqual(patched["excerpt"], "Updated summary.")
+        self.assertEqual(patched["category"], "Announcements")
+
+        # 4. List posts
+        listing = self.ok("get", "/api/v1/platform/blog/posts/")
+        self.assertGreaterEqual(listing["count"], 1)
+        self.assertTrue(any(p["id"] == post_id for p in listing["results"]))
+
+        # 5. Delete post
+        self.ok("delete", f"/api/v1/platform/blog/posts/{post_id}/", expect=204)
+        self.ok("get", f"/api/v1/platform/blog/posts/{post_id}/", expect=404)
+
+    def test_slug_uniqueness_and_autogen(self):
+        self.as_admin(self.admin())
+
+        # Create first post
+        res1 = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {"title": "E-Commerce Trends", "content": "<p>Trends</p>"},
+            expect=201,
+        )
+        self.assertEqual(res1["slug"], "e-commerce-trends")
+
+        # Create second post with same title - slug gets auto-suffixed
+        res2 = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {"title": "E-Commerce Trends", "content": "<p>More trends</p>"},
+            expect=201,
+        )
+        self.assertEqual(res2["slug"], "e-commerce-trends-2")
+
+        # Explicitly assigning duplicate slug fails
+        self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {"title": "Another Post", "slug": "e-commerce-trends", "content": "<p>Content</p>"},
+            expect=400,
+        )
+
+    def test_publish_and_unpublish_workflow(self):
+        self.as_admin(self.admin())
+
+        # Create draft
+        res = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {
+                "title": "Launch Day",
+                "content": "<p>We have launched!</p>",
+                "category": "News",
+            },
+            expect=201,
+        )
+        post_id = res["id"]
+        self.assertEqual(res["status"], "draft")
+        self.assertIsNone(res["published_at"])
+
+        # Publish post
+        pub = self.ok("post", f"/api/v1/platform/blog/posts/{post_id}/publish/")
+        self.assertEqual(pub["status"], "published")
+        self.assertIsNotNone(pub["published_at"])
+
+        # Unpublish post
+        unpub = self.ok("post", f"/api/v1/platform/blog/posts/{post_id}/unpublish/")
+        self.assertEqual(unpub["status"], "draft")
+
+    def test_permissions_guard(self):
+        # 1. Anonymous user cannot access admin endpoints
+        anon_client = APIClient()
+        r = anon_client.get("/api/v1/platform/blog/posts/")
+        self.assertEqual(r.status_code, 401)
+
+        # 2. Regular merchant/owner (not platform admin) cannot access admin endpoints
+        self.as_owner()  # Store owner, but is_owner on User is False
+        r = self.client.get("/api/v1/platform/blog/posts/")
+        self.assertEqual(r.status_code, 403)
+
+    def test_public_endpoints(self):
+        admin_token = self.admin()
+        self.as_admin(admin_token)
+
+        # Create 1 published post
+        p1 = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {
+                "title": "Public Article 1",
+                "category": "Guides",
+                "content": "<p>This is public guide.</p>",
+                "status": "published",
+            },
+            expect=201,
+        )
+
+        # Create 1 draft post
+        p2 = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {
+                "title": "Draft Article",
+                "category": "Guides",
+                "content": "<p>Secret draft.</p>",
+                "status": "draft",
+            },
+            expect=201,
+        )
+
+        # Create 1 future post
+        future_date = (timezone.now() + timedelta(days=5)).isoformat()
+        p3 = self.ok(
+            "post",
+            "/api/v1/platform/blog/posts/",
+            {
+                "title": "Future Article",
+                "category": "Updates",
+                "content": "<p>Coming soon.</p>",
+                "status": "published",
+                "published_at": future_date,
+            },
+            expect=201,
+        )
+
+        # Anonymous client accesses public endpoints
+        anon = APIClient()
+
+        # Public list
+        res = anon.get("/api/v1/blog/").json()
+        slugs = [p["slug"] for p in res["posts"]]
+        self.assertIn("public-article-1", slugs)
+        self.assertNotIn("draft-article", slugs)
+        self.assertNotIn("future-article", slugs)
+
+        # Public categories
+        cat_res = anon.get("/api/v1/blog/categories/").json()
+        self.assertIn("Guides", cat_res["categories"])
+        self.assertNotIn("Updates", cat_res["categories"])  # Future post category not visible if no published post
+
+        # Detail for published article
+        d_res = anon.get(f"/api/v1/blog/{p1['slug']}/")
+        self.assertEqual(d_res.status_code, 200)
+        self.assertEqual(d_res.json()["title"], "Public Article 1")
+        # Ensure admin-only fields are NOT in public detail
+        self.assertNotIn("created_by", d_res.json())
+
+        # Detail for draft article returns 404
+        d_draft = anon.get(f"/api/v1/blog/{p2['slug']}/")
+        self.assertEqual(d_draft.status_code, 404)
+
+        # Detail for future article returns 404
+        d_future = anon.get(f"/api/v1/blog/{p3['slug']}/")
+        self.assertEqual(d_future.status_code, 404)
+
